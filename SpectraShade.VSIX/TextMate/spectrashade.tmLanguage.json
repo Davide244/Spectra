@@ -1,0 +1,162 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "SpectraShade",
+  "scopeName": "source.spectrashade",
+  "fileTypes": [".spectrashade"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#attributes" },
+    { "include": "#shader-declaration" },
+    { "include": "#struct-declaration" },
+    { "include": "#cbuffer-declaration" },
+    { "include": "#import-directive" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.spectrashade",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.spectrashade",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.spectrashade",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.spectrashade",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "attributes": {
+      "begin": "\\[",
+      "end": "\\]",
+      "beginCaptures": { "0": { "name": "punctuation.definition.attribute.begin.spectrashade" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.attribute.end.spectrashade" } },
+      "patterns": [
+        {
+          "match": "\\b(Vertex|Fragment|Geometry|Compute|Location|Binding|Position|Target)\\b",
+          "name": "entity.name.function.attribute.spectrashade"
+        },
+        { "include": "#numbers" }
+      ]
+    },
+    "shader-declaration": {
+      "match": "\\b(shader)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.shader.spectrashade" },
+        "2": { "name": "entity.name.type.shader.spectrashade" }
+      }
+    },
+    "struct-declaration": {
+      "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.struct.spectrashade" },
+        "2": { "name": "entity.name.type.struct.spectrashade" }
+      }
+    },
+    "cbuffer-declaration": {
+      "match": "\\b(cbuffer)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.cbuffer.spectrashade" },
+        "2": { "name": "entity.name.type.cbuffer.spectrashade" }
+      }
+    },
+    "import-directive": {
+      "match": "\\b(import)\\s+",
+      "captures": {
+        "1": { "name": "keyword.control.import.spectrashade" }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(struct|cbuffer|import|var|new|in|out|const)\\b",
+          "name": "keyword.declaration.spectrashade"
+        },
+        {
+          "match": "\\b(if|else|for|while|return|break|continue|discard)\\b",
+          "name": "keyword.control.spectrashade"
+        },
+        {
+          "match": "\\b(true|false)\\b",
+          "name": "constant.language.boolean.spectrashade"
+        },
+        {
+          "match": "\\b(Math)\\b",
+          "name": "support.class.builtin.spectrashade"
+        },
+        {
+          "match": "\\b(Sample)\\b",
+          "name": "support.function.builtin.spectrashade"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "match": "\\b(void|bool|int|uint|float|double)\\b",
+          "name": "storage.type.scalar.spectrashade"
+        },
+        {
+          "match": "\\b(vec[234]|ivec[234]|uvec[234]|bvec[234])\\b",
+          "name": "storage.type.vector.spectrashade"
+        },
+        {
+          "match": "\\b(mat[234])\\b",
+          "name": "storage.type.matrix.spectrashade"
+        },
+        {
+          "match": "\\b(sampler2D|sampler3D|samplerCube)\\b",
+          "name": "storage.type.sampler.spectrashade"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "match": "\\b[0-9]+\\.[0-9]*f?\\b",
+          "name": "constant.numeric.float.spectrashade"
+        },
+        {
+          "match": "\\b[0-9]+f\\b",
+          "name": "constant.numeric.float.spectrashade"
+        },
+        {
+          "match": "\\b[0-9]+\\b",
+          "name": "constant.numeric.integer.spectrashade"
+        }
+      ]
+    },
+    "operators": {
+      "match": "(==|!=|<=|>=|&&|\\|\\||\\+=|-=|\\*=|/=|<<|>>|->|[+\\-*/%=<>!&|^~])",
+      "name": "keyword.operator.spectrashade"
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "match": "[{}()\\[\\]]",
+          "name": "punctuation.bracket.spectrashade"
+        },
+        {
+          "match": "[;,.]",
+          "name": "punctuation.delimiter.spectrashade"
+        }
+      ]
+    }
+  }
+}

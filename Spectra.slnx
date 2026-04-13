@@ -1,5 +1,10 @@
 <Solution>
   <Folder Name="/Test/" />
+  <Folder Name="/SpectraShade/">
+    <Project Path="SpectraShade.Compiler/SpectraShade.Compiler.csproj" />
+    <Project Path="SpectraShade.LSP/SpectraShade.LSP.csproj" />
+    <Project Path="SpectraShade.VSIX/SpectraShade.VSIX.csproj" />
+  </Folder>
   <Project Path="SpectraEngine.Core/SpectraEngine.Core.csproj" Id="03c564bb-5c77-4da7-93f2-b02c6fe6c2dc" />
   <Project Path="SpectraEngine.Executable/SpectraEngine.Executable.csproj" Id="78f3c10f-f49b-4abe-809d-bec4cfd19994" />
 </Solution>

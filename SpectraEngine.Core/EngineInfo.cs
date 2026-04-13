@@ -30,8 +30,9 @@ namespace SpectraEngine.Core
         // Asset format versions
         public const int ModelFormatVersion = 1;
         public const int TextureFormatVersion = 1;
-
-
         public const int MapFormatVersion = 1;
+
+        // Shader format version — must match CompiledShaderFile.FormatVersion to load
+        public const ushort ShaderFormatVersion = 1;
     }
 }
