@@ -1,0 +1,6 @@
+// $fileinputname$.spectrashade
+// SpectraShade shader file
+
+shader $safeitemname$
+{
+}

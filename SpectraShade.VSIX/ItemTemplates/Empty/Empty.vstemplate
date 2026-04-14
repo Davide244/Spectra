@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Item" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>SpectraShade File</Name>
+    <Description>An empty SpectraShade (.spectrashade) shader file.</Description>
+    <Icon>LogoSpectra.ico</Icon>
+    <ProjectType>CSharp</ProjectType>
+    <DefaultName>Shader.spectrashade</DefaultName>
+    <SortOrder>10</SortOrder>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <ShowByDefault>true</ShowByDefault>
+    <TemplateID>SpectraShade.Empty</TemplateID>
+  </TemplateData>
+  <TemplateContent>
+    <References />
+    <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.spectrashade">File.spectrashade</ProjectItem>
+  </TemplateContent>
+</VSTemplate>

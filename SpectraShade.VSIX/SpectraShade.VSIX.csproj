@@ -21,10 +21,49 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="TextMate\spectrashade.tmLanguage.json">
+    <Content Include="Grammars\spectrashade\spectrashade.tmLanguage.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
+    <Content Include="LogoSpectra.ico">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="LogoSpectra.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
   </ItemGroup>
+
+  <ItemGroup>
+    <VSTemplate Include="ItemTemplates\Empty\Empty.vstemplate">
+      <OutputSubPath>ItemTemplates\SpectraShade</OutputSubPath>
+    </VSTemplate>
+    <VSTemplate Include="ItemTemplates\Vertex\Vertex.vstemplate">
+      <OutputSubPath>ItemTemplates\SpectraShade</OutputSubPath>
+    </VSTemplate>
+    <VSTemplate Include="ItemTemplates\Fragment\Fragment.vstemplate">
+      <OutputSubPath>ItemTemplates\SpectraShade</OutputSubPath>
+    </VSTemplate>
+  </ItemGroup>
+
+  <PropertyGroup>
+    <SpectraShadeLspProject>$(MSBuildThisFileDirectory)..\SpectraShade.LSP\SpectraShade.LSP.csproj</SpectraShadeLspProject>
+    <SpectraShadeLspPublishDir>$(MSBuildThisFileDirectory)..\SpectraShade.LSP\bin\$(Configuration)\net10.0\win-x64\publish\</SpectraShadeLspPublishDir>
+  </PropertyGroup>
+
+  <Target Name="PublishSpectraShadeLsp" BeforeTargets="BeforeBuild;GetVsixSourceItems">
+    <Exec Command="dotnet publish &quot;$(SpectraShadeLspProject)&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=false" />
+  </Target>
+
+  <Target Name="IncludeSpectraShadeLspInVsix" AfterTargets="PublishSpectraShadeLsp" BeforeTargets="GetVsixSourceItems">
+    <ItemGroup>
+      <_SpectraShadeLspFiles Include="$(SpectraShadeLspPublishDir)**\*.*" />
+      <Content Include="@(_SpectraShadeLspFiles)">
+        <Link>spectrashade-lsp\%(RecursiveDir)%(Filename)%(Extension)</Link>
+        <IncludeInVSIX>true</IncludeInVSIX>
+        <VSIXSubPath>spectrashade-lsp\%(RecursiveDir)</VSIXSubPath>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+    </ItemGroup>
+  </Target>
 
 </Project>

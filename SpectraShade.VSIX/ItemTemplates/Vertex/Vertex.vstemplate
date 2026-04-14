@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<VSTemplate Version="3.0.0" Type="Item" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+  <TemplateData>
+    <Name>SpectraShade Vertex Shader</Name>
+    <Description>A SpectraShade vertex shader template.</Description>
+    <Icon>LogoSpectra.ico</Icon>
+    <ProjectType>CSharp</ProjectType>
+    <DefaultName>VertexShader.spectrashade</DefaultName>
+    <SortOrder>20</SortOrder>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <ShowByDefault>true</ShowByDefault>
+    <TemplateID>SpectraShade.Vertex</TemplateID>
+  </TemplateData>
+  <TemplateContent>
+    <References />
+    <ProjectItem ReplaceParameters="true" TargetFileName="$fileinputname$.spectrashade">File.spectrashade</ProjectItem>
+  </TemplateContent>
+</VSTemplate>
