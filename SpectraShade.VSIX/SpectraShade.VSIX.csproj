@@ -1,12 +1,16 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project>
+
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
 
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
 
     <!-- VSIX extension properties -->
-    <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <CreateVsixContainer>true</CreateVsixContainer>
+    <DeployExtension>false</DeployExtension>
+    <GeneratePkgDefFile>false</GeneratePkgDefFile>
     <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
     <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
     <IncludeDebugSymbolsInLocalVSIXDeployment>false</IncludeDebugSymbolsInLocalVSIXDeployment>
@@ -15,6 +19,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <PackageReference Include="Microsoft.VisualStudio.LanguageServer.Client" Version="17.12.8" />
     <PackageReference Include="Microsoft.VisualStudio.Shell.15.0" Version="17.12.40504" />
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.12.2123" />
@@ -45,24 +50,24 @@
     </VSTemplate>
   </ItemGroup>
 
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+  <Import Project="$(VsSDKInstall)\Microsoft.VsSDK.targets" />
+
   <PropertyGroup>
     <SpectraShadeLspProject>$(MSBuildThisFileDirectory)..\SpectraShade.LSP\SpectraShade.LSP.csproj</SpectraShadeLspProject>
     <SpectraShadeLspPublishDir>$(MSBuildThisFileDirectory)..\SpectraShade.LSP\bin\$(Configuration)\net10.0\win-x64\publish\</SpectraShadeLspPublishDir>
   </PropertyGroup>
 
-  <Target Name="PublishSpectraShadeLsp" BeforeTargets="BeforeBuild;GetVsixSourceItems">
+  <Target Name="PublishSpectraShadeLsp" BeforeTargets="GetVsixSourceItems">
     <Exec Command="dotnet publish &quot;$(SpectraShadeLspProject)&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=false" />
   </Target>
 
   <Target Name="IncludeSpectraShadeLspInVsix" AfterTargets="PublishSpectraShadeLsp" BeforeTargets="GetVsixSourceItems">
     <ItemGroup>
       <_SpectraShadeLspFiles Include="$(SpectraShadeLspPublishDir)**\*.*" />
-      <Content Include="@(_SpectraShadeLspFiles)">
-        <Link>spectrashade-lsp\%(RecursiveDir)%(Filename)%(Extension)</Link>
-        <IncludeInVSIX>true</IncludeInVSIX>
+      <VSIXSourceItem Include="@(_SpectraShadeLspFiles)">
         <VSIXSubPath>spectrashade-lsp\%(RecursiveDir)</VSIXSubPath>
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </Content>
+      </VSIXSourceItem>
     </ItemGroup>
   </Target>
 
