@@ -2,13 +2,15 @@
 <VSTemplate Version="3.0.0" Type="Item" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
   <TemplateData>
     <Name>SpectraShade Fragment Shader</Name>
-    <Description>A SpectraShade fragment shader template.</Description>
+    <Description>A SpectraShade shader with texture sampling in the fragment stage.</Description>
     <Icon>LogoSpectra.ico</Icon>
     <ProjectType>CSharp</ProjectType>
     <DefaultName>FragmentShader.spectrashade</DefaultName>
     <SortOrder>30</SortOrder>
     <ProvideDefaultName>true</ProvideDefaultName>
     <ShowByDefault>true</ShowByDefault>
+    <CreateInPlace>true</CreateInPlace>
+    <TemplateGroupID>SpectraShade</TemplateGroupID>
     <TemplateID>SpectraShade.Fragment</TemplateID>
   </TemplateData>
   <TemplateContent>

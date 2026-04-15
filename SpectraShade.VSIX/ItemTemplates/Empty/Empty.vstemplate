@@ -9,6 +9,8 @@
     <SortOrder>10</SortOrder>
     <ProvideDefaultName>true</ProvideDefaultName>
     <ShowByDefault>true</ShowByDefault>
+    <CreateInPlace>true</CreateInPlace>
+    <TemplateGroupID>SpectraShade</TemplateGroupID>
     <TemplateID>SpectraShade.Empty</TemplateID>
   </TemplateData>
   <TemplateContent>

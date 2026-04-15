@@ -2,13 +2,15 @@
 <VSTemplate Version="3.0.0" Type="Item" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
   <TemplateData>
     <Name>SpectraShade Vertex Shader</Name>
-    <Description>A SpectraShade vertex shader template.</Description>
+    <Description>A SpectraShade shader with vertex transform, normals, and UVs.</Description>
     <Icon>LogoSpectra.ico</Icon>
     <ProjectType>CSharp</ProjectType>
     <DefaultName>VertexShader.spectrashade</DefaultName>
     <SortOrder>20</SortOrder>
     <ProvideDefaultName>true</ProvideDefaultName>
     <ShowByDefault>true</ShowByDefault>
+    <CreateInPlace>true</CreateInPlace>
+    <TemplateGroupID>SpectraShade</TemplateGroupID>
     <TemplateID>SpectraShade.Vertex</TemplateID>
   </TemplateData>
   <TemplateContent>

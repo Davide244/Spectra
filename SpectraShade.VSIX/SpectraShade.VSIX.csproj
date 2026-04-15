@@ -40,13 +40,13 @@
 
   <ItemGroup>
     <VSTemplate Include="ItemTemplates\Empty\Empty.vstemplate">
-      <OutputSubPath>ItemTemplates\SpectraShade</OutputSubPath>
+      <OutputSubPath>SpectraShade</OutputSubPath>
     </VSTemplate>
     <VSTemplate Include="ItemTemplates\Vertex\Vertex.vstemplate">
-      <OutputSubPath>ItemTemplates\SpectraShade</OutputSubPath>
+      <OutputSubPath>SpectraShade</OutputSubPath>
     </VSTemplate>
     <VSTemplate Include="ItemTemplates\Fragment\Fragment.vstemplate">
-      <OutputSubPath>ItemTemplates\SpectraShade</OutputSubPath>
+      <OutputSubPath>SpectraShade</OutputSubPath>
     </VSTemplate>
   </ItemGroup>
 
@@ -60,6 +60,15 @@
 
   <Target Name="PublishSpectraShadeLsp" BeforeTargets="GetVsixSourceItems">
     <Exec Command="dotnet publish &quot;$(SpectraShadeLspProject)&quot; -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=false" />
+  </Target>
+
+  <Target Name="IncludeTemplatesInVsix" AfterTargets="ZipItems" BeforeTargets="GetVsixSourceItems">
+    <ItemGroup>
+      <_TemplateZips Include="$(OutputPath)ItemTemplates\**\*.zip" />
+      <VSIXSourceItem Include="@(_TemplateZips)">
+        <VSIXSubPath>ItemTemplates\%(RecursiveDir)</VSIXSubPath>
+      </VSIXSourceItem>
+    </ItemGroup>
   </Target>
 
   <Target Name="IncludeSpectraShadeLspInVsix" AfterTargets="PublishSpectraShadeLsp" BeforeTargets="GetVsixSourceItems">
