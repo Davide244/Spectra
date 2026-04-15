@@ -14,13 +14,13 @@ struct FragmentInput {
     vec2 uv;
 }
 
-[Binding(0)] cbuffer Camera {
-    mat4 viewProjection;
-}
-
-[Binding(1)] sampler2D mainTex;
-
 shader $safeitemname$ {
+    [Binding(0)] cbuffer Camera {
+        mat4 viewProjection;
+    }
+
+    [Binding(1)] sampler2D mainTex;
+
     [Vertex]
     VertexOutput VertexMain(VertexInput input) {
         var output = new VertexOutput();

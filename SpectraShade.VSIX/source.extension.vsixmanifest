@@ -28,6 +28,7 @@
     </Prerequisites>
     <Assets>
         <Asset Type="Microsoft.VisualStudio.MefComponent" d:Source="Project" d:ProjectName="SpectraShade.VSIX" Path="|SpectraShade.VSIX|" />
+        <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="File" Path="spectrashade.pkgdef" />
         <Asset Type="Microsoft.VisualStudio.ItemTemplate" d:Source="Project" d:ProjectName="SpectraShade.VSIX" d:TargetPath="|SpectraShade.VSIX;TemplateProjectOutputGroup|" Path="ItemTemplates" d:VsixSubPath="ItemTemplates" />
     </Assets>
 </PackageManifest>

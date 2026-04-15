@@ -17,11 +17,11 @@ struct FragmentInput {
     vec2 uv;
 }
 
-[Binding(0)] cbuffer Camera {
-    mat4 viewProjection;
-}
-
 shader $safeitemname$ {
+    [Binding(0)] cbuffer Camera {
+        mat4 viewProjection;
+    }
+
     [Vertex]
     VertexOutput VertexMain(VertexInput input) {
         var output = new VertexOutput();

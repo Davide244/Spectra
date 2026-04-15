@@ -10,6 +10,7 @@
     { "include": "#shader-declaration" },
     { "include": "#struct-declaration" },
     { "include": "#cbuffer-declaration" },
+    { "include": "#function-declaration" },
     { "include": "#import-directive" },
     { "include": "#keywords" },
     { "include": "#types" },
@@ -74,6 +75,13 @@
       "captures": {
         "1": { "name": "keyword.declaration.cbuffer.spectrashade" },
         "2": { "name": "entity.name.type.cbuffer.spectrashade" }
+      }
+    },
+    "function-declaration": {
+      "match": "\\b(void|bool|int|uint|float|double|vec[234]|ivec[234]|uvec[234]|bvec[234]|mat[234]|[A-Z][A-Za-z0-9_]*)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(",
+      "captures": {
+        "1": { "name": "storage.type.spectrashade" },
+        "2": { "name": "entity.name.function.spectrashade" }
       }
     },
     "import-directive": {
