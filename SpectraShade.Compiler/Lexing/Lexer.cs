@@ -72,6 +72,7 @@ public sealed class Lexer
 
         // Sampler types
         ["sampler2D"] = TokenKind.Sampler2D,
+        ["sampler2DArray"] = TokenKind.Sampler2DArray,
         ["sampler3D"] = TokenKind.Sampler3D,
         ["samplerCube"] = TokenKind.SamplerCube,
 

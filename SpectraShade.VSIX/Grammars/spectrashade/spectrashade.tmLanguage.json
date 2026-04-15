@@ -50,7 +50,7 @@
       "endCaptures": { "0": { "name": "punctuation.definition.attribute.end.spectrashade" } },
       "patterns": [
         {
-          "match": "\\b(Vertex|Fragment|Geometry|Compute|Location|Binding|Position|Target)\\b",
+          "match": "\\b(Vertex|Fragment|Geometry|Compute|Location|Binding|Position|Target|NumThreads|MaxVertexCount|InputPrimitive|OutputPrimitive|EarlyDepthStencil|DepthWrite)\\b",
           "name": "entity.name.function.attribute.spectrashade"
         },
         { "include": "#numbers" }
@@ -109,8 +109,12 @@
           "name": "support.class.builtin.spectrashade"
         },
         {
-          "match": "\\b(Sample)\\b",
+          "match": "\\b(Sample|EmitVertex|EndPrimitive|Barrier|MemoryBarrier)\\b",
           "name": "support.function.builtin.spectrashade"
+        },
+        {
+          "match": "\\b(Position|PrimitiveID|GlobalInvocationID|LocalInvocationID|WorkGroupID|LocalInvocationIndex|NumWorkGroups|WorkGroupSize)\\b",
+          "name": "variable.language.builtin.spectrashade"
         }
       ]
     },
@@ -129,7 +133,7 @@
           "name": "storage.type.matrix.spectrashade"
         },
         {
-          "match": "\\b(sampler2D|sampler3D|samplerCube)\\b",
+          "match": "\\b(sampler2D|sampler2DArray|sampler3D|samplerCube)\\b",
           "name": "storage.type.sampler.spectrashade"
         }
       ]

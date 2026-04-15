@@ -51,11 +51,18 @@ Paths are quoted string literals, resolved relative to the compiler's import roo
 `mat2`, `mat3`, `mat4` (column-major, float)
 
 ### Samplers
-`sampler2D`, `sampler3D`, `samplerCube`
+`sampler2D`, `sampler2DArray`, `sampler3D`, `samplerCube`
 
 ### Arrays
-`T[N]` fixed-size array syntax is accepted by the parser; see FEATURES.md for the currently
-supported uniform/texture-array subset.
+`T[N]` fixed-size array syntax. Supported for uniform fields and sampler declarations:
+
+```
+[Binding(0)] cbuffer Lights {
+    vec3 lightPositions[8];
+    vec4 lightColors[8];
+}
+[Binding(1)] sampler2D textures[4];
+```
 
 ### User structs
 Declared with `struct Name { field; field; }`. Instantiate with `new Name()` — the expression
@@ -79,15 +86,20 @@ Attributes use C# bracket syntax and attach to the declaration that immediately 
 |---|---|---|
 | `[Vertex]` | function | Vertex stage entry point |
 | `[Fragment]` | function | Fragment stage entry point |
+| `[Geometry]` | function | Geometry stage entry point (return void, take array param) |
+| `[Compute]` | function | Compute stage entry point (return void) |
 | `[Location(N)]` | struct field / parameter | Vertex input location / varying slot |
 | `[Binding(N)]` | `cbuffer`, sampler | Descriptor binding index |
-| `[Target(N)]` | function / field | Fragment output render-target index |
+| `[Target(N)]` | struct field | Fragment output render-target index (for MRT) |
+| `[NumThreads(x,y,z)]` | `[Compute]` function | Compute workgroup dimensions |
+| `[MaxVertexCount(N)]` | `[Geometry]` function | Max output vertices |
+| `[InputPrimitive(T)]` | `[Geometry]` function | Input: Points, Lines, LinesAdjacency, Triangles, TrianglesAdjacency |
+| `[OutputPrimitive(T)]` | `[Geometry]` function | Output: Points, LineStrip, TriangleStrip |
+| `[EarlyDepthStencil]` | `[Fragment]` function | Enable early fragment tests |
+| `[DepthWrite(mode)]` | `[Fragment]` function | Depth write hint: Less, Greater, Unchanged |
+| `[Position]` | struct field | Marks clip-space position output (vertex/geometry) |
 
 Multiple attributes stack: `[Fragment] [Target(0)] vec4 Main(...) { ... }`.
-
-Additional stage and qualifier attributes (`[Geometry]`, `[Compute]`, `[NumThreads]`,
-`[DepthWrite]`, interpolation qualifiers, precision qualifiers, etc.) are on the roadmap — see
-FEATURES.md.
 
 ---
 
@@ -134,13 +146,52 @@ vec4 FragmentMain(FragmentInput input) { ... }
   parameters each carrying `[Location(N)]`.
 - **Varyings** between vertex and fragment flow through the vertex return struct — its fields
   are matched to the fragment input struct by name.
-- **Fragment output** is either a single `vec4` annotated with `[Target(N)]` on the function,
-  or a struct whose fields each carry `[Target(N)]` (roadmap: MRT).
+- **Fragment output** is either a single `vec4`, or a struct whose fields each carry
+  `[Target(N)]` for multiple render targets (MRT). Target indices must be unique.
+
+### Geometry stage
+
+The geometry stage takes an array of vertex outputs and emits primitives:
+
+```
+[Geometry]
+[InputPrimitive(Triangles)]
+[OutputPrimitive(TriangleStrip)]
+[MaxVertexCount(3)]
+void GeometryMain(VertexOutput[] vertices) {
+    for (int i = 0; i < 3; i = i + 1) {
+        Position = vertices[i].position;
+        // set varying outputs...
+        EmitVertex();
+    }
+    EndPrimitive();
+}
+```
+
+### Compute stage
+
+Compute shaders run general-purpose GPU workloads without rasterization:
+
+```
+[Compute]
+[NumThreads(8, 8, 1)]
+void ComputeMain() {
+    var id = GlobalInvocationID;
+    // ...
+    Barrier();
+}
+```
+
+Compute built-in variables: `GlobalInvocationID`, `LocalInvocationID`, `WorkGroupID`,
+`LocalInvocationIndex`, `NumWorkGroups`, `WorkGroupSize`.
+
+Synchronization: `Barrier()`, `MemoryBarrier()`.
 
 ### Built-in outputs
 
-- `Position` — assignable `vec4` inside `[Vertex]` functions; corresponds to clip-space
-  position (`gl_Position` / `SV_POSITION`).
+- `Position` — assignable `vec4` inside `[Vertex]` and `[Geometry]` functions; corresponds
+  to clip-space position (`gl_Position` / `SV_POSITION`).
+- `PrimitiveID` — readable `int` in `[Geometry]` functions.
 
 ### Shared helpers
 Ordinary functions declared in the shader body are callable from any stage:

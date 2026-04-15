@@ -28,6 +28,14 @@ public sealed class GlslGenerator : ICodeGenerator
 
     private CompilationUnit _unit = null!;
 
+    // Current emit context — set before emitting each stage, used by EmitExpression/EmitStatement
+    private bool _isVertex;
+    private bool _isGeometry;
+    private bool _isCompute;
+    private StructDeclaration? _inputStruct;
+    private string? _inputParam;
+    private StructDeclaration? _geometryOutputStruct;
+
     // Built-in Math.X → GLSL function name mapping
     private static readonly Dictionary<string, string> MathBuiltins = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -83,6 +91,8 @@ public sealed class GlslGenerator : ICodeGenerator
 
         var vertexFunc = functions.FirstOrDefault(f => f.HasAttribute("Vertex"));
         var fragmentFunc = functions.FirstOrDefault(f => f.HasAttribute("Fragment"));
+        var geometryFunc = functions.FirstOrDefault(f => f.HasAttribute("Geometry"));
+        var computeFunc = functions.FirstOrDefault(f => f.HasAttribute("Compute"));
         var helperFunctions = functions.Where(f =>
             !f.HasAttribute("Vertex") && !f.HasAttribute("Fragment")
             && !f.HasAttribute("Geometry") && !f.HasAttribute("Compute")).ToList();
@@ -91,11 +101,21 @@ public sealed class GlslGenerator : ICodeGenerator
         var allStructs = new List<StructDeclaration>(unit.Structs);
         allStructs.AddRange(shader.Members.OfType<StructDeclaration>());
 
+        byte[]? geometryData = null;
+        byte[]? computeData = null;
+
         if (vertexFunc is not null)
         {
             vertexData = Encoding.UTF8.GetBytes(
                 EmitVertexStage(vertexFunc, cbuffers, samplers, helperFunctions, allStructs));
             stages |= ShaderStageFlags.Vertex;
+        }
+
+        if (geometryFunc is not null)
+        {
+            geometryData = Encoding.UTF8.GetBytes(
+                EmitGeometryStage(geometryFunc, vertexFunc, fragmentFunc, cbuffers, samplers, helperFunctions, allStructs));
+            stages |= ShaderStageFlags.Geometry;
         }
 
         if (fragmentFunc is not null)
@@ -105,6 +125,13 @@ public sealed class GlslGenerator : ICodeGenerator
             stages |= ShaderStageFlags.Fragment;
         }
 
+        if (computeFunc is not null)
+        {
+            computeData = Encoding.UTF8.GetBytes(
+                EmitComputeStage(computeFunc, cbuffers, samplers, helperFunctions, allStructs));
+            stages |= ShaderStageFlags.Compute;
+        }
+
         return new PipelineBlob
         {
             Backend = Backend,
@@ -112,6 +139,8 @@ public sealed class GlslGenerator : ICodeGenerator
             Stages = stages,
             VertexData = vertexData,
             FragmentData = fragmentData,
+            GeometryData = geometryData,
+            ComputeData = computeData,
         };
     }
 
@@ -200,6 +229,31 @@ public sealed class GlslGenerator : ICodeGenerator
             sb.AppendLine();
         }
 
+        // Depth testing hints
+        if (func.HasAttribute("EarlyDepthStencil"))
+            sb.AppendLine("layout(early_fragment_tests) in;");
+
+        var depthWriteAttr = func.Attributes.FirstOrDefault(a =>
+            string.Equals(a.Name, "DepthWrite", StringComparison.OrdinalIgnoreCase));
+        if (depthWriteAttr is not null)
+        {
+            string depthCondition = "depth_any";
+            if (depthWriteAttr.Arguments.Count > 0 && depthWriteAttr.Arguments[0] is IdentifierExpression depthId)
+            {
+                depthCondition = depthId.Name switch
+                {
+                    "Less" => "depth_less",
+                    "Greater" => "depth_greater",
+                    "Unchanged" => "depth_unchanged",
+                    _ => "depth_any",
+                };
+            }
+            sb.AppendLine($"layout({depthCondition}) out float gl_FragDepth;");
+        }
+
+        if (func.HasAttribute("EarlyDepthStencil") || depthWriteAttr is not null)
+            sb.AppendLine();
+
         // Fragment output
         // If return type is vec4 or a struct with [Target] attributes
         var returnStruct = FindStruct(func.ReturnType.Name, structs);
@@ -239,9 +293,165 @@ public sealed class GlslGenerator : ICodeGenerator
         return sb.ToString();
     }
 
+    private string EmitGeometryStage(
+        FunctionDeclaration func,
+        FunctionDeclaration? vertexFunc,
+        FunctionDeclaration? fragmentFunc,
+        List<CBufferDeclaration> cbuffers,
+        List<SamplerDeclaration> samplers,
+        List<FunctionDeclaration> helpers,
+        List<StructDeclaration> structs)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#version 330 core");
+        sb.AppendLine();
+
+        // Input primitive layout
+        string inputPrimitive = "triangles";
+        var inputPrimAttr = func.Attributes.FirstOrDefault(a =>
+            string.Equals(a.Name, "InputPrimitive", StringComparison.OrdinalIgnoreCase));
+        if (inputPrimAttr is not null && inputPrimAttr.Arguments.Count > 0
+            && inputPrimAttr.Arguments[0] is IdentifierExpression inputPrimId)
+        {
+            inputPrimitive = inputPrimId.Name switch
+            {
+                "Points" => "points",
+                "Lines" => "lines",
+                "LinesAdjacency" => "lines_adjacency",
+                "Triangles" => "triangles",
+                "TrianglesAdjacency" => "triangles_adjacency",
+                _ => "triangles",
+            };
+        }
+        sb.AppendLine($"layout({inputPrimitive}) in;");
+
+        // Output primitive layout + max vertices
+        string outputPrimitive = "triangle_strip";
+        var outputPrimAttr = func.Attributes.FirstOrDefault(a =>
+            string.Equals(a.Name, "OutputPrimitive", StringComparison.OrdinalIgnoreCase));
+        if (outputPrimAttr is not null && outputPrimAttr.Arguments.Count > 0
+            && outputPrimAttr.Arguments[0] is IdentifierExpression outputPrimId)
+        {
+            outputPrimitive = outputPrimId.Name switch
+            {
+                "Points" => "points",
+                "LineStrip" => "line_strip",
+                "TriangleStrip" => "triangle_strip",
+                _ => "triangle_strip",
+            };
+        }
+
+        var maxVertAttr = func.Attributes.FirstOrDefault(a =>
+            string.Equals(a.Name, "MaxVertexCount", StringComparison.OrdinalIgnoreCase));
+        string maxVerts = maxVertAttr is not null && maxVertAttr.Arguments.Count > 0
+            ? EmitExpression(maxVertAttr.Arguments[0])
+            : "3";
+        sb.AppendLine($"layout({outputPrimitive}, max_vertices = {maxVerts}) out;");
+        sb.AppendLine();
+
+        // Geometry inputs: vertex output struct fields as in arrays
+        StructDeclaration? inputStruct = null;
+        string inputParamName = "vertices";
+        if (func.Parameters.Count > 0)
+        {
+            inputStruct = FindStruct(func.Parameters[0].Type.Name, structs);
+            inputParamName = func.Parameters[0].Name;
+        }
+
+        if (inputStruct is not null)
+        {
+            sb.AppendLine($"in VS_OUT {{");
+            foreach (var field in inputStruct.Fields)
+            {
+                if (HasAttribute(field.Attributes, "Position"))
+                    continue;
+                sb.AppendLine($"    {GlslType(field.Type.Name)} {field.Name};");
+            }
+            sb.AppendLine($"}} gs_in[];");
+            sb.AppendLine();
+        }
+
+        // Geometry outputs: fragment input struct fields
+        StructDeclaration? outputStruct = null;
+        if (fragmentFunc is not null && fragmentFunc.Parameters.Count > 0)
+            outputStruct = FindStruct(fragmentFunc.Parameters[0].Type.Name, structs);
+
+        if (outputStruct is not null)
+        {
+            foreach (var field in outputStruct.Fields)
+            {
+                if (HasAttribute(field.Attributes, "Position"))
+                    continue;
+                sb.AppendLine($"out {GlslType(field.Type.Name)} v_{field.Name};");
+            }
+            sb.AppendLine();
+        }
+
+        // Uniforms
+        EmitUniforms(sb, cbuffers);
+        EmitSamplerUniforms(sb, samplers);
+
+        // Helper functions
+        foreach (var helper in helpers)
+            EmitFunction(sb, helper);
+
+        // Main function
+        sb.AppendLine("void main()");
+        sb.AppendLine("{");
+        EmitGeometryBody(sb, func, inputStruct, inputParamName, outputStruct, 1);
+        sb.AppendLine("}");
+
+        return sb.ToString();
+    }
+
+    private string EmitComputeStage(
+        FunctionDeclaration func,
+        List<CBufferDeclaration> cbuffers,
+        List<SamplerDeclaration> samplers,
+        List<FunctionDeclaration> helpers,
+        List<StructDeclaration> structs)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("#version 430 core");
+        sb.AppendLine();
+
+        // Local size from [NumThreads(x, y, z)]
+        var numThreadsAttr = func.Attributes.FirstOrDefault(a =>
+            string.Equals(a.Name, "NumThreads", StringComparison.OrdinalIgnoreCase));
+        string x = "1", y = "1", z = "1";
+        if (numThreadsAttr is not null)
+        {
+            if (numThreadsAttr.Arguments.Count >= 1)
+                x = EmitExpression(numThreadsAttr.Arguments[0]);
+            if (numThreadsAttr.Arguments.Count >= 2)
+                y = EmitExpression(numThreadsAttr.Arguments[1]);
+            if (numThreadsAttr.Arguments.Count >= 3)
+                z = EmitExpression(numThreadsAttr.Arguments[2]);
+        }
+        sb.AppendLine($"layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;");
+        sb.AppendLine();
+
+        // Uniforms
+        EmitUniforms(sb, cbuffers);
+        EmitSamplerUniforms(sb, samplers);
+
+        // Helper functions
+        foreach (var helper in helpers)
+            EmitFunction(sb, helper);
+
+        // Main function
+        sb.AppendLine("void main()");
+        sb.AppendLine("{");
+        EmitComputeBody(sb, func, 1);
+        sb.AppendLine("}");
+
+        return sb.ToString();
+    }
+
     private void EmitVertexBody(StringBuilder sb, FunctionDeclaration func, StructDeclaration? returnStruct, int indent)
     {
         string pad = new(' ', indent * 4);
+        SetStageContext(isVertex: true);
 
         foreach (var stmt in func.Body.Statements)
         {
@@ -259,14 +469,17 @@ public sealed class GlslGenerator : ICodeGenerator
             }
             else
             {
-                EmitStatement(sb, stmt, indent, isVertex: true);
+                EmitStatement(sb, stmt, indent);
             }
         }
+
+        SetStageContext();
     }
 
     private void EmitFragmentBody(StringBuilder sb, FunctionDeclaration func, StructDeclaration? inputStruct, string inputParam, StructDeclaration? returnStruct, int indent)
     {
         string pad = new(' ', indent * 4);
+        SetStageContext(inputStruct: inputStruct, inputParam: inputParam);
 
         foreach (var stmt in func.Body.Statements)
         {
@@ -281,14 +494,43 @@ public sealed class GlslGenerator : ICodeGenerator
                 else
                 {
                     // Simple return: out fragColor = expr
-                    sb.AppendLine($"{pad}fragColor = {EmitExpression(ret.Value, inputStruct, inputParam)};");
+                    sb.AppendLine($"{pad}fragColor = {EmitExpression(ret.Value)};");
                 }
             }
             else
             {
-                EmitStatement(sb, stmt, indent, inputStruct: inputStruct, inputParam: inputParam);
+                EmitStatement(sb, stmt, indent);
             }
         }
+
+        SetStageContext();
+    }
+
+    private void SetStageContext(bool isVertex = false, bool isGeometry = false, bool isCompute = false,
+        StructDeclaration? inputStruct = null, string? inputParam = null, StructDeclaration? geometryOutputStruct = null)
+    {
+        _isVertex = isVertex;
+        _isGeometry = isGeometry;
+        _isCompute = isCompute;
+        _inputStruct = inputStruct;
+        _inputParam = inputParam;
+        _geometryOutputStruct = geometryOutputStruct;
+    }
+
+    private void EmitGeometryBody(StringBuilder sb, FunctionDeclaration func, StructDeclaration? inputStruct, string inputParam, StructDeclaration? outputStruct, int indent)
+    {
+        SetStageContext(isVertex: true, isGeometry: true, inputStruct: inputStruct, inputParam: inputParam, geometryOutputStruct: outputStruct);
+        foreach (var stmt in func.Body.Statements)
+            EmitStatement(sb, stmt, indent);
+        SetStageContext();
+    }
+
+    private void EmitComputeBody(StringBuilder sb, FunctionDeclaration func, int indent)
+    {
+        SetStageContext(isCompute: true);
+        foreach (var stmt in func.Body.Statements)
+            EmitStatement(sb, stmt, indent);
+        SetStageContext();
     }
 
     // ─── Shared emit ─────────────────────────────────────────
@@ -299,15 +541,15 @@ public sealed class GlslGenerator : ICodeGenerator
         {
             sb.AppendLine($"// cbuffer {cbuffer.Name}");
             foreach (var field in cbuffer.Fields)
-                sb.AppendLine($"uniform {GlslType(field.Type.Name)} {field.Name};");
+                sb.AppendLine($"uniform {GlslType(field.Type.Name)} {field.Name}{EmitArraySuffix(field.Type)};");
             sb.AppendLine();
         }
     }
 
-    private static void EmitSamplerUniforms(StringBuilder sb, List<SamplerDeclaration> samplers)
+    private void EmitSamplerUniforms(StringBuilder sb, List<SamplerDeclaration> samplers)
     {
         foreach (var sampler in samplers)
-            sb.AppendLine($"uniform {GlslType(sampler.Type.Name)} {sampler.Name};");
+            sb.AppendLine($"uniform {GlslType(sampler.Type.Name)} {sampler.Name}{EmitArraySuffix(sampler.Type)};");
         if (samplers.Count > 0)
             sb.AppendLine();
     }
@@ -321,16 +563,16 @@ public sealed class GlslGenerator : ICodeGenerator
         sb.AppendLine();
     }
 
-    private void EmitBlock(StringBuilder sb, BlockStatement block, int indent, bool isVertex = false, StructDeclaration? inputStruct = null, string? inputParam = null)
+    private void EmitBlock(StringBuilder sb, BlockStatement block, int indent)
     {
         string pad = new(' ', indent * 4);
         sb.AppendLine($"{pad}{{");
         foreach (var stmt in block.Statements)
-            EmitStatement(sb, stmt, indent + 1, isVertex, inputStruct, inputParam);
+            EmitStatement(sb, stmt, indent + 1);
         sb.AppendLine($"{pad}}}");
     }
 
-    private void EmitStatement(StringBuilder sb, SyntaxNode node, int indent, bool isVertex = false, StructDeclaration? inputStruct = null, string? inputParam = null)
+    private void EmitStatement(StringBuilder sb, SyntaxNode node, int indent)
     {
         string pad = new(' ', indent * 4);
 
@@ -344,26 +586,26 @@ public sealed class GlslGenerator : ICodeGenerator
                     varType = GlslType(ctor.Type.Name);
                 else if (v.Type.Name == "var" && v.Initializer is NewExpression newExpr)
                     varType = v.Initializer is NewExpression ne ? ne.Type.Name : "auto";
-                string init = v.Initializer is not null ? $" = {EmitExpression(v.Initializer, inputStruct, inputParam)}" : "";
+                string init = v.Initializer is not null ? $" = {EmitExpression(v.Initializer)}" : "";
                 sb.AppendLine($"{pad}{varType} {v.Name}{init};");
                 break;
 
             case ReturnStatement r:
-                string val = r.Value is not null ? $" {EmitExpression(r.Value, inputStruct, inputParam)}" : "";
+                string val = r.Value is not null ? $" {EmitExpression(r.Value)}" : "";
                 sb.AppendLine($"{pad}return{val};");
                 break;
 
             case ExpressionStatement e:
-                sb.AppendLine($"{pad}{EmitExpression(e.Expression, inputStruct, inputParam, isVertex)};");
+                sb.AppendLine($"{pad}{EmitExpression(e.Expression)};");
                 break;
 
             case IfStatement i:
-                sb.AppendLine($"{pad}if ({EmitExpression(i.Condition, inputStruct, inputParam)})");
-                EmitStatementOrBlock(sb, i.ThenBranch, indent, isVertex, inputStruct, inputParam);
+                sb.AppendLine($"{pad}if ({EmitExpression(i.Condition)})");
+                EmitStatementOrBlock(sb, i.ThenBranch, indent);
                 if (i.ElseBranch is not null)
                 {
                     sb.AppendLine($"{pad}else");
-                    EmitStatementOrBlock(sb, i.ElseBranch, indent, isVertex, inputStruct, inputParam);
+                    EmitStatementOrBlock(sb, i.ElseBranch, indent);
                 }
                 break;
 
@@ -372,26 +614,26 @@ public sealed class GlslGenerator : ICodeGenerator
                 if (f.Initializer is VariableDeclaration fv)
                 {
                     string fType = fv.Type.Name == "var" ? "float" : GlslType(fv.Type.Name);
-                    string fInit = fv.Initializer is not null ? $" = {EmitExpression(fv.Initializer, inputStruct, inputParam)}" : "";
+                    string fInit = fv.Initializer is not null ? $" = {EmitExpression(fv.Initializer)}" : "";
                     sb.Append($"{fType} {fv.Name}{fInit}");
                 }
                 sb.Append("; ");
                 if (f.Condition is not null)
-                    sb.Append(EmitExpression(f.Condition, inputStruct, inputParam));
+                    sb.Append(EmitExpression(f.Condition));
                 sb.Append("; ");
                 if (f.Increment is not null)
-                    sb.Append(EmitExpression(f.Increment, inputStruct, inputParam));
+                    sb.Append(EmitExpression(f.Increment));
                 sb.AppendLine(")");
-                EmitStatementOrBlock(sb, f.Body, indent, isVertex, inputStruct, inputParam);
+                EmitStatementOrBlock(sb, f.Body, indent);
                 break;
 
             case WhileStatement w:
-                sb.AppendLine($"{pad}while ({EmitExpression(w.Condition, inputStruct, inputParam)})");
-                EmitStatementOrBlock(sb, w.Body, indent, isVertex, inputStruct, inputParam);
+                sb.AppendLine($"{pad}while ({EmitExpression(w.Condition)})");
+                EmitStatementOrBlock(sb, w.Body, indent);
                 break;
 
             case BlockStatement b:
-                EmitBlock(sb, b, indent, isVertex, inputStruct, inputParam);
+                EmitBlock(sb, b, indent);
                 break;
 
             case DiscardStatement:
@@ -408,17 +650,28 @@ public sealed class GlslGenerator : ICodeGenerator
         }
     }
 
-    private void EmitStatementOrBlock(StringBuilder sb, Statement stmt, int indent, bool isVertex = false, StructDeclaration? inputStruct = null, string? inputParam = null)
+    private void EmitStatementOrBlock(StringBuilder sb, Statement stmt, int indent)
     {
         if (stmt is BlockStatement block)
-            EmitBlock(sb, block, indent, isVertex, inputStruct, inputParam);
+            EmitBlock(sb, block, indent);
         else
-            EmitStatement(sb, stmt, indent + 1, isVertex, inputStruct, inputParam);
+            EmitStatement(sb, stmt, indent + 1);
     }
 
     // ─── Expression emit ─────────────────────────────────────
 
-    private string EmitExpression(Expression expr, StructDeclaration? inputStruct = null, string? inputParam = null, bool isVertex = false)
+    // Compute built-in variable mappings
+    private static readonly Dictionary<string, string> ComputeBuiltins = new(StringComparer.Ordinal)
+    {
+        ["GlobalInvocationID"] = "gl_GlobalInvocationID",
+        ["LocalInvocationID"] = "gl_LocalInvocationID",
+        ["WorkGroupID"] = "gl_WorkGroupID",
+        ["LocalInvocationIndex"] = "gl_LocalInvocationIndex",
+        ["NumWorkGroups"] = "gl_NumWorkGroups",
+        ["WorkGroupSize"] = "gl_WorkGroupSize",
+    };
+
+    private string EmitExpression(Expression expr)
     {
         switch (expr)
         {
@@ -432,38 +685,44 @@ public sealed class GlslGenerator : ICodeGenerator
                 return b.Value ? "true" : "false";
 
             case IdentifierExpression id:
-                // Position → gl_Position in vertex stage
-                if (id.Name == "Position" && isVertex)
+                // Position → gl_Position in vertex/geometry stage
+                if (id.Name == "Position" && (_isVertex || _isGeometry))
                     return "gl_Position";
+                // Compute built-in variables
+                if (_isCompute && ComputeBuiltins.TryGetValue(id.Name, out string? computeBuiltin))
+                    return computeBuiltin;
+                // Geometry built-in: PrimitiveID → gl_PrimitiveIDIn
+                if (_isGeometry && id.Name == "PrimitiveID")
+                    return "gl_PrimitiveIDIn";
                 return id.Name;
 
             case BinaryExpression bin:
-                return $"({EmitExpression(bin.Left, inputStruct, inputParam, isVertex)} {MapOperator(bin.Operator)} {EmitExpression(bin.Right, inputStruct, inputParam, isVertex)})";
+                return $"({EmitExpression(bin.Left)} {MapOperator(bin.Operator)} {EmitExpression(bin.Right)})";
 
             case UnaryExpression un:
-                return $"({MapOperator(un.Operator)}{EmitExpression(un.Operand, inputStruct, inputParam, isVertex)})";
+                return $"({MapOperator(un.Operator)}{EmitExpression(un.Operand)})";
 
             case ConstructorExpression ctor:
-                string ctorArgs = string.Join(", ", ctor.Arguments.Select(a => EmitExpression(a, inputStruct, inputParam, isVertex)));
+                string ctorArgs = string.Join(", ", ctor.Arguments.Select(a => EmitExpression(a)));
                 return $"{GlslType(ctor.Type.Name)}({ctorArgs})";
 
             case NewExpression newExpr:
                 // new Struct() → Struct() — GLSL doesn't have 'new', structs are constructed by name
-                string newArgs = string.Join(", ", newExpr.Arguments.Select(a => EmitExpression(a, inputStruct, inputParam, isVertex)));
+                string newArgs = string.Join(", ", newExpr.Arguments.Select(a => EmitExpression(a)));
                 return $"{newExpr.Type.Name}({newArgs})";
 
             case CallExpression call:
-                return EmitCall(call, inputStruct, inputParam, isVertex);
+                return EmitCall(call);
 
             case MemberAccessExpression ma:
-                return EmitMemberAccess(ma, inputStruct, inputParam, isVertex);
+                return EmitMemberAccess(ma);
 
             case IndexExpression idx:
-                return $"{EmitExpression(idx.Object, inputStruct, inputParam, isVertex)}[{EmitExpression(idx.Index, inputStruct, inputParam, isVertex)}]";
+                return EmitIndexExpression(idx);
 
             case AssignmentExpression assign:
-                string target = EmitExpression(assign.Target, inputStruct, inputParam, isVertex);
-                string value = EmitExpression(assign.Value, inputStruct, inputParam, isVertex);
+                string target = EmitExpression(assign.Target);
+                string value = EmitExpression(assign.Value);
                 return $"{target} {MapOperator(assign.Operator)} {value}";
 
             default:
@@ -471,14 +730,14 @@ public sealed class GlslGenerator : ICodeGenerator
         }
     }
 
-    private string EmitCall(CallExpression call, StructDeclaration? inputStruct, string? inputParam, bool isVertex)
+    private string EmitCall(CallExpression call)
     {
         // Math.Func(args) → func(args)
         if (call.Target is MemberAccessExpression ma && ma.Object is IdentifierExpression obj && obj.Name == "Math")
         {
             if (MathBuiltins.TryGetValue(ma.Member, out string? glslFunc))
             {
-                string args = string.Join(", ", call.Arguments.Select(a => EmitExpression(a, inputStruct, inputParam, isVertex)));
+                string args = string.Join(", ", call.Arguments.Select(a => EmitExpression(a)));
                 return $"{glslFunc}({args})";
             }
         }
@@ -486,31 +745,57 @@ public sealed class GlslGenerator : ICodeGenerator
         // tex.Sample(uv) → texture(tex, uv)
         if (call.Target is MemberAccessExpression sampleAccess && sampleAccess.Member == "Sample")
         {
-            string texName = EmitExpression(sampleAccess.Object, inputStruct, inputParam, isVertex);
-            string args = string.Join(", ", call.Arguments.Select(a => EmitExpression(a, inputStruct, inputParam, isVertex)));
+            string texName = EmitExpression(sampleAccess.Object);
+            string args = string.Join(", ", call.Arguments.Select(a => EmitExpression(a)));
             return $"texture({texName}, {args})";
         }
 
+        // Geometry: EmitVertex() / EndPrimitive() are direct GLSL calls
+        // Compute: Barrier() → barrier(), MemoryBarrier() → memoryBarrier()
+        if (call.Target is IdentifierExpression funcId)
+        {
+            if (funcId.Name == "Barrier" && _isCompute)
+                return "barrier()";
+            if (funcId.Name == "MemoryBarrier" && _isCompute)
+                return "memoryBarrier()";
+        }
+
         // Regular function call
-        string callTarget = EmitExpression(call.Target, inputStruct, inputParam, isVertex);
-        string callArgs = string.Join(", ", call.Arguments.Select(a => EmitExpression(a, inputStruct, inputParam, isVertex)));
+        string callTarget = EmitExpression(call.Target);
+        string callArgs = string.Join(", ", call.Arguments.Select(a => EmitExpression(a)));
         return $"{callTarget}({callArgs})";
     }
 
-    private string EmitMemberAccess(MemberAccessExpression ma, StructDeclaration? inputStruct, string? inputParam, bool isVertex)
+    private string EmitMemberAccess(MemberAccessExpression ma)
     {
-        // input.field → v_field (fragment reading vertex outputs)
-        if (inputStruct is not null && inputParam is not null
-            && ma.Object is IdentifierExpression id && id.Name == inputParam)
+        // Fragment: input.field → v_field (reading vertex/geometry outputs)
+        if (!_isGeometry && _inputStruct is not null && _inputParam is not null
+            && ma.Object is IdentifierExpression id && id.Name == _inputParam)
         {
-            // Check if the field exists in the input struct and isn't [Position]
-            var field = inputStruct.Fields.FirstOrDefault(f => f.Name == ma.Member);
+            var field = _inputStruct.Fields.FirstOrDefault(f => f.Name == ma.Member);
             if (field is not null && !HasAttribute(field.Attributes, "Position"))
                 return $"v_{ma.Member}";
         }
 
+        // Geometry: vertices[i].field → gs_in[i].field or gl_in[i].gl_Position
+        if (_isGeometry && _inputStruct is not null && _inputParam is not null
+            && ma.Object is IndexExpression idx
+            && idx.Object is IdentifierExpression arrayId && arrayId.Name == _inputParam)
+        {
+            string index = EmitExpression(idx.Index);
+            var field = _inputStruct.Fields.FirstOrDefault(f => f.Name == ma.Member);
+            if (field is not null && HasAttribute(field.Attributes, "Position"))
+                return $"gl_in[{index}].gl_Position";
+            return $"gs_in[{index}].{ma.Member}";
+        }
+
         // Swizzle or regular member access
-        return $"{EmitExpression(ma.Object, inputStruct, inputParam, isVertex)}.{ma.Member}";
+        return $"{EmitExpression(ma.Object)}.{ma.Member}";
+    }
+
+    private string EmitIndexExpression(IndexExpression idx)
+    {
+        return $"{EmitExpression(idx.Object)}[{EmitExpression(idx.Index)}]";
     }
 
     // ─── Helpers ─────────────────────────────────────────────
@@ -556,6 +841,15 @@ public sealed class GlslGenerator : ICodeGenerator
         _ => "?"
     };
 
+    private string EmitArraySuffix(TypeSyntax type)
+    {
+        if (!type.IsArray)
+            return "";
+        if (type.ArraySize is not null)
+            return $"[{EmitExpression(type.ArraySize)}]";
+        return "[]";
+    }
+
     private static string GlslType(string name) => name switch
     {
         "void" => "void",
@@ -574,6 +868,7 @@ public sealed class GlslGenerator : ICodeGenerator
         "mat3" => "mat3",
         "mat4" => "mat4",
         "sampler2D" => "sampler2D",
+        "sampler2DArray" => "sampler2DArray",
         "sampler3D" => "sampler3D",
         "samplerCube" => "samplerCube",
         _ => name,

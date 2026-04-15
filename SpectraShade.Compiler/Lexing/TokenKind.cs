@@ -64,6 +64,7 @@ public enum TokenKind
 
     // Sampler types
     Sampler2D,
+    Sampler2DArray,
     Sampler3D,
     SamplerCube,
 

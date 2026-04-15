@@ -21,12 +21,12 @@
 - [x] Multi-pipeline compiled shader format (.specshadecomp)
 
 ## High Priority — Required for Real Rendering
-- [ ] Geometry stage ([Geometry] attribute)
-- [ ] Compute shaders ([Compute] attribute, [NumThreads(x,y,z)])
-- [ ] Multiple render targets (struct with multiple [Target(N)] fields)
-- [ ] Depth testing hints ([DepthWrite], [EarlyDepthStencil])
-- [ ] Array uniforms (float[] values, sampler2D[] textures)
-- [ ] Texture arrays
+- [x] Geometry stage ([Geometry], [MaxVertexCount(N)], [InputPrimitive(...)], [OutputPrimitive(...)])
+- [x] Compute shaders ([Compute] attribute, [NumThreads(x,y,z)], Barrier(), MemoryBarrier())
+- [x] Multiple render targets (struct with multiple [Target(N)] fields, index uniqueness validation)
+- [x] Depth testing hints ([DepthWrite], [EarlyDepthStencil])
+- [x] Array uniforms (float[] values, sampler2D[] textures in cbuffers and samplers)
+- [x] Texture arrays (sampler2DArray type)
 
 ## Medium Priority — Competitive Rendering
 - [ ] Storage buffers / SSBOs (read/write GPU buffers for compute)

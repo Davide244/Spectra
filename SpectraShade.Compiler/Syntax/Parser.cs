@@ -691,7 +691,7 @@ public sealed class Parser
         kind is TokenKind.Assign or TokenKind.PlusAssign or TokenKind.MinusAssign or TokenKind.StarAssign or TokenKind.SlashAssign;
 
     private static bool IsSamplerType(TokenKind kind) =>
-        kind is TokenKind.Sampler2D or TokenKind.Sampler3D or TokenKind.SamplerCube;
+        kind is TokenKind.Sampler2D or TokenKind.Sampler2DArray or TokenKind.Sampler3D or TokenKind.SamplerCube;
 
     private static bool IsBuiltinType(TokenKind kind) =>
         kind is TokenKind.Vec2 or TokenKind.Vec3 or TokenKind.Vec4
@@ -699,7 +699,7 @@ public sealed class Parser
             or TokenKind.UVec2 or TokenKind.UVec3 or TokenKind.UVec4
             or TokenKind.BVec2 or TokenKind.BVec3 or TokenKind.BVec4
             or TokenKind.Mat2 or TokenKind.Mat3 or TokenKind.Mat4
-            or TokenKind.Sampler2D or TokenKind.Sampler3D or TokenKind.SamplerCube;
+            or TokenKind.Sampler2D or TokenKind.Sampler2DArray or TokenKind.Sampler3D or TokenKind.SamplerCube;
 
     private static bool IsTypeToken(TokenKind kind) =>
         kind is TokenKind.Void or TokenKind.Bool or TokenKind.Int or TokenKind.UInt

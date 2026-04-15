@@ -14,9 +14,14 @@ public sealed class SemanticAnalyzer
     public bool Analyze(CompilationUnit unit)
     {
         var shader = unit.Shader;
+        var allStructs = new List<StructDeclaration>(unit.Structs);
+        allStructs.AddRange(shader.Members.OfType<StructDeclaration>());
+
         ValidateStages(shader);
         ValidateBindings(shader);
         ValidatePositionAssignment(shader);
+        ValidateRenderTargets(shader, allStructs);
+        ValidateDepthHints(shader);
         return !_diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
     }
 
@@ -55,6 +60,34 @@ public sealed class SemanticAnalyzer
                 _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
                     "[Fragment] function must return a value (the render target output)", func.Span));
         }
+
+        // Validate geometry function
+        foreach (var func in stageFunctions.Where(f => f.HasAttribute("Geometry")))
+        {
+            if (func.ReturnType.Name != "void")
+                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                    "[Geometry] function must return void (use EmitVertex() to output vertices)", func.Span));
+
+            if (!func.HasAttribute("MaxVertexCount"))
+                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                    "[Geometry] function requires a [MaxVertexCount(N)] attribute", func.Span));
+
+            if (func.Parameters.Count < 1 || !func.Parameters[0].Type.IsArray)
+                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                    "[Geometry] function must take an array parameter as input (e.g. VertexOutput[] vertices)", func.Span));
+        }
+
+        // Validate compute function
+        foreach (var func in stageFunctions.Where(f => f.HasAttribute("Compute")))
+        {
+            if (!func.HasAttribute("NumThreads"))
+                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                    "[Compute] function requires a [NumThreads(x, y, z)] attribute", func.Span));
+
+            if (func.ReturnType.Name != "void")
+                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                    "[Compute] function must return void", func.Span));
+        }
     }
 
     private void ValidateBindings(ShaderDeclaration shader)
@@ -90,6 +123,50 @@ public sealed class SemanticAnalyzer
             if (!ContainsPositionAssignment(func.Body))
                 _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Warning,
                     "[Vertex] function should assign 'Position'", func.Span));
+        }
+    }
+
+    private void ValidateDepthHints(ShaderDeclaration shader)
+    {
+        foreach (var func in shader.Members.OfType<FunctionDeclaration>())
+        {
+            bool hasDepthHint = func.HasAttribute("EarlyDepthStencil") || func.HasAttribute("DepthWrite");
+            if (hasDepthHint && !func.HasAttribute("Fragment"))
+                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                    "[EarlyDepthStencil] and [DepthWrite] are only valid on [Fragment] functions",
+                    func.Span));
+        }
+    }
+
+    private void ValidateRenderTargets(ShaderDeclaration shader, List<StructDeclaration> allStructs)
+    {
+        var fragmentFuncs = shader.Members
+            .OfType<FunctionDeclaration>()
+            .Where(f => f.HasAttribute("Fragment"));
+
+        foreach (var func in fragmentFuncs)
+        {
+            var returnStruct = allStructs.FirstOrDefault(s => s.Name == func.ReturnType.Name);
+            if (returnStruct is null)
+                continue;
+
+            // Validate Target index uniqueness
+            var targetIndices = new HashSet<int>();
+            foreach (var field in returnStruct.Fields)
+            {
+                var targetAttr = field.Attributes.FirstOrDefault(a =>
+                    string.Equals(a.Name, "Target", StringComparison.OrdinalIgnoreCase));
+                if (targetAttr is null)
+                    continue;
+
+                if (targetAttr.Arguments.Count > 0 && targetAttr.Arguments[0] is IntLiteralExpression indexExpr)
+                {
+                    if (!targetIndices.Add(indexExpr.Value))
+                        _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                            $"Duplicate [Target({indexExpr.Value})] in render target struct '{returnStruct.Name}'",
+                            field.Span));
+                }
+            }
         }
     }
 
