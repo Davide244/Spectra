@@ -99,9 +99,11 @@ public sealed class Parser
         var members = new List<SyntaxNode>();
         while (!Check(TokenKind.RightBrace) && !Check(TokenKind.EndOfFile))
         {
+            int before = _pos;
             var member = ParseShaderMember();
             if (member is not null)
                 members.Add(member);
+            if (_pos == before) Advance();
         }
 
         Expect(TokenKind.RightBrace, "Expected '}'");
@@ -155,9 +157,11 @@ public sealed class Parser
         {
             while (!Check(TokenKind.RightParen) && !Check(TokenKind.EndOfFile))
             {
+                int before = _pos;
                 args.Add(ParseExpression());
                 if (!Check(TokenKind.RightParen))
                     Expect(TokenKind.Comma, "Expected ',' between attribute arguments");
+                if (_pos == before) Advance();
             }
             Expect(TokenKind.RightParen, "Expected ')'");
         }
@@ -178,12 +182,14 @@ public sealed class Parser
         var fields = new List<FieldDeclaration>();
         while (!Check(TokenKind.RightBrace) && !Check(TokenKind.EndOfFile))
         {
+            int before = _pos;
             var fieldStart = Current.Span;
             var fieldAttrs = ParseAttributes();
             var type = ParseType();
             string fieldName = Expect(TokenKind.Identifier, "Expected field name").Text;
             Expect(TokenKind.Semicolon, "Expected ';'");
             fields.Add(new FieldDeclaration(fieldAttrs, type, fieldName, Span(fieldStart)));
+            if (_pos == before) Advance();
         }
 
         Expect(TokenKind.RightBrace, "Expected '}'");
@@ -200,12 +206,14 @@ public sealed class Parser
         var fields = new List<FieldDeclaration>();
         while (!Check(TokenKind.RightBrace) && !Check(TokenKind.EndOfFile))
         {
+            int before = _pos;
             var fieldStart = Current.Span;
             var fieldAttrs = ParseAttributes();
             var type = ParseType();
             string fieldName = Expect(TokenKind.Identifier, "Expected field name").Text;
             Expect(TokenKind.Semicolon, "Expected ';'");
             fields.Add(new FieldDeclaration(fieldAttrs, type, fieldName, Span(fieldStart)));
+            if (_pos == before) Advance();
         }
 
         Expect(TokenKind.RightBrace, "Expected '}'");
@@ -231,6 +239,7 @@ public sealed class Parser
         var parameters = new List<ParameterSyntax>();
         while (!Check(TokenKind.RightParen) && !Check(TokenKind.EndOfFile))
         {
+            int before = _pos;
             var paramStart = Current.Span;
             var paramAttrs = ParseAttributes();
             var paramType = ParseType();
@@ -239,6 +248,7 @@ public sealed class Parser
 
             if (!Check(TokenKind.RightParen))
                 Expect(TokenKind.Comma, "Expected ',' between parameters");
+            if (_pos == before) Advance();
         }
 
         Expect(TokenKind.RightParen, "Expected ')'");
@@ -257,9 +267,11 @@ public sealed class Parser
         var statements = new List<SyntaxNode>();
         while (!Check(TokenKind.RightBrace) && !Check(TokenKind.EndOfFile))
         {
+            int before = _pos;
             var stmt = ParseStatement();
             if (stmt is not null)
                 statements.Add(stmt);
+            if (_pos == before) Advance();
         }
 
         Expect(TokenKind.RightBrace, "Expected '}'");
@@ -607,9 +619,11 @@ public sealed class Parser
         var args = new List<Expression>();
         while (!Check(TokenKind.RightParen) && !Check(TokenKind.EndOfFile))
         {
+            int before = _pos;
             args.Add(ParseExpression());
             if (!Check(TokenKind.RightParen))
                 Expect(TokenKind.Comma, "Expected ',' between arguments");
+            if (_pos == before) Advance();
         }
         Expect(TokenKind.RightParen, "Expected ')'");
         return args;

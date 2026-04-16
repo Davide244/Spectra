@@ -9,7 +9,7 @@ var server = await LanguageServer.From(options =>
         .WithOutput(Console.OpenStandardOutput())
         .ConfigureLogging(logging =>
         {
-            logging.SetMinimumLevel(LogLevel.Debug);
+            logging.SetMinimumLevel(LogLevel.Warning);
         })
         .WithHandler<TextDocumentSyncHandler>()
         .WithHandler<CompletionHandler>();

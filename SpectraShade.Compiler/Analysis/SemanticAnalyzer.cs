@@ -19,7 +19,7 @@ public sealed class SemanticAnalyzer
 
         ValidateStages(shader);
         ValidateBindings(shader);
-        ValidatePositionAssignment(shader);
+        ValidatePositionAssignment(shader, allStructs);
         ValidateRenderTargets(shader, allStructs);
         ValidateDepthHints(shader);
         return !_diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
@@ -110,19 +110,30 @@ public sealed class SemanticAnalyzer
         }
     }
 
-    private void ValidatePositionAssignment(ShaderDeclaration shader)
+    private void ValidatePositionAssignment(ShaderDeclaration shader, List<StructDeclaration> allStructs)
     {
-        // Check that vertex stage assigns Position
-        // This is a basic check — just looks for "Position" as an assignment target
         var vertexFuncs = shader.Members
             .OfType<FunctionDeclaration>()
             .Where(f => f.HasAttribute("Vertex"));
 
         foreach (var func in vertexFuncs)
         {
-            if (!ContainsPositionAssignment(func.Body))
+            var returnStruct = allStructs.FirstOrDefault(s => s.Name == func.ReturnType.Name);
+            if (returnStruct is null)
+                continue;
+
+            var positionField = returnStruct.Fields.FirstOrDefault(f =>
+                f.Attributes.Any(a => string.Equals(a.Name, "Position", StringComparison.OrdinalIgnoreCase)));
+            if (positionField is null)
+            {
                 _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Warning,
-                    "[Vertex] function should assign 'Position'", func.Span));
+                    $"[Vertex] return type '{returnStruct.Name}' has no field marked [Position]", func.Span));
+                continue;
+            }
+
+            if (!ContainsPositionAssignment(func.Body, positionField.Name))
+                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Warning,
+                    $"[Vertex] function should assign '{positionField.Name}' (the [Position] field)", func.Span));
         }
     }
 
@@ -170,26 +181,26 @@ public sealed class SemanticAnalyzer
         }
     }
 
-    private static bool ContainsPositionAssignment(BlockStatement block)
+    private static bool ContainsPositionAssignment(BlockStatement block, string fieldName)
     {
         foreach (var stmt in block.Statements)
         {
             if (stmt is ExpressionStatement exprStmt
                 && exprStmt.Expression is AssignmentExpression assign
-                && assign.Target is IdentifierExpression id
-                && id.Name == "Position")
+                && assign.Target is MemberAccessExpression member
+                && string.Equals(member.Member, fieldName, StringComparison.Ordinal))
             {
                 return true;
             }
 
-            if (stmt is BlockStatement inner && ContainsPositionAssignment(inner))
+            if (stmt is BlockStatement inner && ContainsPositionAssignment(inner, fieldName))
                 return true;
 
             if (stmt is IfStatement ifStmt)
             {
-                if (ifStmt.ThenBranch is BlockStatement thenBlock && ContainsPositionAssignment(thenBlock))
+                if (ifStmt.ThenBranch is BlockStatement thenBlock && ContainsPositionAssignment(thenBlock, fieldName))
                     return true;
-                if (ifStmt.ElseBranch is BlockStatement elseBlock && ContainsPositionAssignment(elseBlock))
+                if (ifStmt.ElseBranch is BlockStatement elseBlock && ContainsPositionAssignment(elseBlock, fieldName))
                     return true;
             }
         }
