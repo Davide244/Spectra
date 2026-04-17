@@ -26,7 +26,15 @@ public sealed class HlslGenerator : ICodeGenerator
 
     private bool _isVertex;
     private bool _isFragment;
+    private bool _isGeometry;
     private bool _isCompute;
+
+    // Geometry-stage context. Set when emitting a [Geometry] function body.
+    private StructDeclaration? _geomOutputStruct;
+    private string? _geomPositionField;
+    private HashSet<string>? _geomOutputFieldNames;
+    private const string GeomOutLocal = "_out";
+    private const string GeomStreamParam = "_stream";
 
     // Name → SpectraShade type name. Populated with globals (cbuffer fields, samplers),
     // function parameters, and local var declarations. Used to decide when a binary
@@ -52,6 +60,7 @@ public sealed class HlslGenerator : ICodeGenerator
         var fragmentFunc = functions.FirstOrDefault(f => f.HasAttribute("Fragment"));
         var geometryFunc = functions.FirstOrDefault(f => f.HasAttribute("Geometry"));
         var computeFunc = functions.FirstOrDefault(f => f.HasAttribute("Compute"));
+        byte[]? geometryData = null;
         _helpers = functions.Where(f =>
             !f.HasAttribute("Vertex") && !f.HasAttribute("Fragment")
             && !f.HasAttribute("Geometry") && !f.HasAttribute("Compute")).ToList();
@@ -81,7 +90,10 @@ public sealed class HlslGenerator : ICodeGenerator
         }
 
         if (geometryFunc is not null)
-            throw new NotImplementedException("HLSL geometry stage is not yet implemented");
+        {
+            geometryData = Encoding.UTF8.GetBytes(EmitGeometryStage(geometryFunc, vertexFunc));
+            stages |= ShaderStageFlags.Geometry;
+        }
 
         return new PipelineBlob
         {
@@ -90,7 +102,7 @@ public sealed class HlslGenerator : ICodeGenerator
             Stages = stages,
             VertexData = vertexData,
             FragmentData = fragmentData,
-            GeometryData = null,
+            GeometryData = geometryData,
             ComputeData = computeData,
         };
     }
@@ -136,6 +148,104 @@ public sealed class HlslGenerator : ICodeGenerator
             entrySem = $": SV_Target{GetIntArg(func.Attributes, "Target", 0)}";
         EmitEntryPoint(sb, func, entrySem);
         return sb.ToString();
+    }
+
+    private string EmitGeometryStage(FunctionDeclaration func, FunctionDeclaration? vertexFunc)
+    {
+        ResetEnv();
+        SetStage(isGeometry: true);
+        var sb = new StringBuilder();
+
+        // Input: first parameter must be T[] where T is the vertex output struct.
+        var inputParam = func.Parameters.Count > 0 ? func.Parameters[0] : null;
+        var inputStruct = inputParam is not null ? FindStruct(inputParam.Type.Name) : null;
+
+        // Output: the vertex stage return struct (has [Position]). The geometry
+        // stream outputs this same struct so it reaches the rasterizer/fragment.
+        var outputStruct = vertexFunc is not null ? FindStruct(vertexFunc.ReturnType.Name) : inputStruct;
+        _geomOutputStruct = outputStruct;
+        _geomPositionField = outputStruct?.Fields
+            .FirstOrDefault(f => HasAttr(f.Attributes, "Position"))?.Name;
+        _geomOutputFieldNames = outputStruct is not null
+            ? new HashSet<string>(outputStruct.Fields.Select(f => f.Name), StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+
+        // Emit structs with varying semantics on the output (shared with the vertex stage).
+        var emitted = new HashSet<string>(StringComparer.Ordinal);
+        if (inputStruct is not null)
+        {
+            EmitStruct(sb, inputStruct, InterfaceKind.Varying);
+            emitted.Add(inputStruct.Name);
+        }
+        if (outputStruct is not null && !emitted.Contains(outputStruct.Name))
+        {
+            EmitStruct(sb, outputStruct, InterfaceKind.Varying);
+            emitted.Add(outputStruct.Name);
+        }
+        foreach (var s in _structs)
+        {
+            if (emitted.Contains(s.Name)) continue;
+            EmitStruct(sb, s, InterfaceKind.None);
+            emitted.Add(s.Name);
+        }
+
+        EmitCBuffers(sb);
+        EmitSamplers(sb);
+        EmitHelpers(sb);
+
+        int maxVerts = GetIntArg(func.Attributes, "MaxVertexCount", 3);
+        string inPrim = GeomInputPrimitive(func.Attributes, out int inArrSize);
+        string streamType = GeomOutputStreamType(func.Attributes);
+        string outTypeName = outputStruct?.Name ?? "float4";
+        string inTypeName = inputStruct?.Name ?? "float4";
+        string inName = inputParam?.Name ?? "vertices";
+
+        PopulateGlobalEnv();
+        _env[inName] = inTypeName;
+        _env[GeomOutLocal] = outTypeName;
+
+        sb.AppendLine($"[maxvertexcount({maxVerts})]");
+        sb.AppendLine($"void main({inPrim} {inTypeName} {inName}[{inArrSize}], uint PrimitiveID : SV_PrimitiveID, inout {streamType}<{outTypeName}> {GeomStreamParam})");
+        sb.AppendLine("{");
+        sb.AppendLine($"    {outTypeName} {GeomOutLocal} = ({outTypeName})0;");
+        foreach (var stmt in func.Body.Statements)
+            EmitStatement(sb, stmt, 1);
+        sb.AppendLine("}");
+
+        _geomOutputStruct = null;
+        _geomPositionField = null;
+        _geomOutputFieldNames = null;
+        return sb.ToString();
+    }
+
+    private static string GeomInputPrimitive(IReadOnlyList<AttributeSyntax> attrs, out int arraySize)
+    {
+        var attr = GetAttribute(attrs, "InputPrimitive");
+        string name = "Triangles";
+        if (attr is not null && attr.Arguments.Count > 0 && attr.Arguments[0] is IdentifierExpression id)
+            name = id.Name;
+        switch (name)
+        {
+            case "Points": arraySize = 1; return "point";
+            case "Lines": arraySize = 2; return "line";
+            case "LinesAdjacency": arraySize = 4; return "lineadj";
+            case "TrianglesAdjacency": arraySize = 6; return "triangleadj";
+            default: arraySize = 3; return "triangle";
+        }
+    }
+
+    private static string GeomOutputStreamType(IReadOnlyList<AttributeSyntax> attrs)
+    {
+        var attr = GetAttribute(attrs, "OutputPrimitive");
+        string name = "TriangleStrip";
+        if (attr is not null && attr.Arguments.Count > 0 && attr.Arguments[0] is IdentifierExpression id)
+            name = id.Name;
+        return name switch
+        {
+            "Points" => "PointStream",
+            "LineStrip" => "LineStream",
+            _ => "TriangleStream",
+        };
     }
 
     private string EmitComputeStage(FunctionDeclaration func)
@@ -322,6 +432,8 @@ public sealed class HlslGenerator : ICodeGenerator
                 break;
 
             case ExpressionStatement e:
+                if (_isGeometry && TryEmitGeometryStmt(sb, e.Expression, pad))
+                    break;
                 sb.AppendLine($"{pad}{EmitExpression(e.Expression)};");
                 break;
 
@@ -377,6 +489,27 @@ public sealed class HlslGenerator : ICodeGenerator
                 sb.AppendLine($"{pad}continue;");
                 break;
         }
+    }
+
+    private bool TryEmitGeometryStmt(StringBuilder sb, Expression expr, string pad)
+    {
+        // Assignment rewrites: `Position = X;` → `_out.<posField> = X;`
+        // and bare `<fieldName> = X;` where fieldName is a geometry output field.
+        if (expr is AssignmentExpression a && a.Target is IdentifierExpression lhs)
+        {
+            string? mapped = null;
+            if (lhs.Name == "Position" && _geomPositionField is not null)
+                mapped = _geomPositionField;
+            else if (_geomOutputFieldNames is not null && _geomOutputFieldNames.Contains(lhs.Name))
+                mapped = lhs.Name;
+
+            if (mapped is not null)
+            {
+                sb.AppendLine($"{pad}{GeomOutLocal}.{mapped} {MapOperator(a.Operator)} {EmitExpression(a.Value)};");
+                return true;
+            }
+        }
+        return false;
     }
 
     private void EmitVarDecl(StringBuilder sb, VariableDeclaration v, string pad)
@@ -503,6 +636,13 @@ public sealed class HlslGenerator : ICodeGenerator
         {
             if (fid.Name == "Barrier") return "GroupMemoryBarrierWithGroupSync()";
             if (fid.Name == "MemoryBarrier") return "GroupMemoryBarrier()";
+        }
+
+        // Geometry-stage stream primitives
+        if (_isGeometry && call.Target is IdentifierExpression gid)
+        {
+            if (gid.Name == "EmitVertex") return $"{GeomStreamParam}.Append({GeomOutLocal})";
+            if (gid.Name == "EndPrimitive") return $"{GeomStreamParam}.RestartStrip()";
         }
 
         string target = EmitExpression(call.Target);
@@ -664,10 +804,11 @@ public sealed class HlslGenerator : ICodeGenerator
         foreach (var kv in snapshot) _env[kv.Key] = kv.Value;
     }
 
-    private void SetStage(bool isVertex = false, bool isFragment = false, bool isCompute = false)
+    private void SetStage(bool isVertex = false, bool isFragment = false, bool isGeometry = false, bool isCompute = false)
     {
         _isVertex = isVertex;
         _isFragment = isFragment;
+        _isGeometry = isGeometry;
         _isCompute = isCompute;
     }
 
