@@ -1,5 +1,7 @@
 <Solution>
-  <Folder Name="/Test/" />
+  <Folder Name="/Test/">
+    <Project Path="Test/SpectraShade.Compiler.Tests/SpectraShade.Compiler.Tests.csproj" />
+  </Folder>
   <Folder Name="/SpectraShade/">
     <Project Path="SpectraShade.Compiler/SpectraShade.Compiler.csproj" />
     <Project Path="SpectraShade.Compiler.CLI/SpectraShade.Compiler.CLI.csproj" />

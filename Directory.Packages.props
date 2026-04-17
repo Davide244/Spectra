@@ -19,6 +19,11 @@
     <!-- Language Server -->
     <PackageVersion Include="OmniSharp.Extensions.LanguageServer" Version="0.19.9" />
 
+    <!-- Testing (xunit v3 on Microsoft.Testing.Platform) -->
+    <PackageVersion Include="xunit.v3.mtp-v2" Version="3.2.2" />
+    <PackageVersion Include="Verify.XunitV3" Version="31.16.1" />
+    <PackageVersion Include="Shouldly" Version="4.3.0" />
+
     <!-- VSIX (net472) -->
     <PackageVersion Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" />
     <PackageVersion Include="Microsoft.VisualStudio.LanguageServer.Client" Version="17.12.8" />

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SpectraShade.Compiler.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\SpectraShade.Compiler\SpectraShade.Compiler.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\**\*.spectrashade" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
