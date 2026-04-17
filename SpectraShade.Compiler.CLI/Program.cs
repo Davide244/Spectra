@@ -16,22 +16,28 @@ internal static class Program
     private const int ExitUsageError = 2;
     private const int ExitIoError = 3;
 
+    private static AnsiStyle _errStyle;
+    private static AnsiStyle _outStyle;
+
     private static int Main(string[] args)
     {
+        _errStyle = new AnsiStyle(ConsoleColor.ShouldUseForStderr());
+        _outStyle = new AnsiStyle(ConsoleColor.ShouldUseForStdout());
+
         try
         {
             var parse = CliOptions.Parse(args);
             switch (parse.Mode)
             {
                 case CliMode.Help:
-                    CliOptions.PrintUsage(Console.Out);
+                    CliOptions.PrintUsage(Console.Out, _outStyle.Enabled);
                     return ExitSuccess;
                 case CliMode.Version:
-                    Console.Out.WriteLine($"ssc {EngineInfo.VersionString} (shader format v{EngineInfo.ShaderFormatVersion})");
+                    Console.Out.WriteLine($"{_outStyle.Title}ssc{_outStyle.Reset} {_outStyle.Value}{EngineInfo.VersionString}{_outStyle.Reset} {_outStyle.Dim}(shader format v{EngineInfo.ShaderFormatVersion}){_outStyle.Reset}");
                     return ExitSuccess;
                 case CliMode.UsageError:
-                    Console.Error.WriteLine($"error: {parse.Error}");
-                    Console.Error.WriteLine("Run 'ssc --help' for usage.");
+                    WriteErr($"{_errStyle.Error}error{_errStyle.Reset}: {parse.Error}");
+                    WriteErr($"Run '{_errStyle.Command}ssc --help{_errStyle.Reset}' for usage.");
                     return ExitUsageError;
             }
 
@@ -39,16 +45,18 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"fatal: {ex.Message}");
+            WriteErr($"{_errStyle.Error}fatal{_errStyle.Reset}: {ex.Message}");
             return ExitIoError;
         }
     }
+
+    private static void WriteErr(string line) => Console.Error.WriteLine(line);
 
     private static int Run(CliOptions opts)
     {
         if (!File.Exists(opts.Input))
         {
-            Console.Error.WriteLine($"error: input file not found: {opts.Input}");
+            WriteErr($"{_errStyle.Error}error{_errStyle.Reset}: input file not found: {_errStyle.Path}{opts.Input}{_errStyle.Reset}");
             return ExitIoError;
         }
 
@@ -59,7 +67,7 @@ internal static class Program
         }
         catch (IOException ex)
         {
-            Console.Error.WriteLine($"error: failed to read '{opts.Input}': {ex.Message}");
+            WriteErr($"{_errStyle.Error}error{_errStyle.Reset}: failed to read '{_errStyle.Path}{opts.Input}{_errStyle.Reset}': {ex.Message}");
             return ExitIoError;
         }
 
@@ -90,7 +98,7 @@ internal static class Program
         {
             if (!generators.TryGetValue(target, out var gen))
             {
-                Console.Error.WriteLine($"error: no code generator available for backend '{target}'");
+                WriteErr($"{_errStyle.Error}error{_errStyle.Reset}: no code generator available for backend '{_errStyle.Value}{target}{_errStyle.Reset}'");
                 return ExitCompileError;
             }
 
@@ -101,7 +109,7 @@ internal static class Program
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"{opts.Input}: error: codegen failed for {target}: {ex.Message}");
+                WriteErr($"{_errStyle.Path}{opts.Input}{_errStyle.Reset}: {_errStyle.Error}error{_errStyle.Reset}: codegen failed for {_errStyle.Value}{target}{_errStyle.Reset}: {ex.Message}");
                 return ExitCompileError;
             }
 
@@ -131,14 +139,14 @@ internal static class Program
         }
         catch (IOException ex)
         {
-            Console.Error.WriteLine($"error: failed to write '{outputPath}': {ex.Message}");
+            WriteErr($"{_errStyle.Error}error{_errStyle.Reset}: failed to write '{_errStyle.Path}{outputPath}{_errStyle.Reset}': {ex.Message}");
             return ExitIoError;
         }
 
         if (!opts.Quiet)
         {
             var stageList = string.Join(", ", pipelines.Select(p => $"{p.Backend}:{p.Stages}"));
-            Console.Out.WriteLine($"ssc: wrote {outputPath} ({pipelines.Count} pipeline(s): {stageList})");
+            Console.Out.WriteLine($"{_outStyle.Success}ssc{_outStyle.Reset}: wrote {_outStyle.Path}{outputPath}{_outStyle.Reset} {_outStyle.Dim}({pipelines.Count} pipeline(s): {stageList}){_outStyle.Reset}");
         }
 
         return ExitSuccess;

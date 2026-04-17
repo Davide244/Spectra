@@ -10,6 +10,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <PublishAot>True</PublishAot>
     <SignAssembly>False</SignAssembly>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

@@ -157,37 +157,57 @@ internal sealed class CliOptions
             list.Add(item);
     }
 
-    private static bool ShouldUseColor()
+    private static bool ShouldUseColor() => ConsoleColor.ShouldUseForStderr();
+
+    public static void PrintUsage(TextWriter w, bool color)
     {
-        if (Console.IsErrorRedirected) return false;
-        var noColorEnv = Environment.GetEnvironmentVariable("NO_COLOR");
-        return string.IsNullOrEmpty(noColorEnv);
+        var s = new AnsiStyle(color);
+
+        w.WriteLine($"{s.Title}SpectraShade compiler{s.Reset} {s.Dim}(ssc){s.Reset}");
+        w.WriteLine();
+        w.WriteLine($"{s.Header}Usage:{s.Reset}");
+        w.WriteLine($"  {s.Command}ssc{s.Reset} {s.Dim}[options]{s.Reset} {s.Placeholder}<input.spectrashade>{s.Reset}");
+        w.WriteLine();
+        w.WriteLine($"{s.Header}Options:{s.Reset}");
+        WriteOption(w, s, "-o, --output", "<path>",
+            "Output .specshadecomp file",
+            $"(default: {s.Placeholder}<input>{s.Reset}.specshadecomp)");
+        WriteOption(w, s, "-t, --target", "<backend>",
+            "Target backend(s). Repeatable or comma-separated.",
+            $"Values: {s.Value}opengl, vulkan, d3d11, d3d12, all{s.Reset}",
+            $"Default: {s.Value}all{s.Reset}");
+        WriteOption(w, s, "    --emit-source", "<dir>",
+            "Also emit generated source text per backend",
+            "into <dir> (for debugging codegen).");
+        WriteOption(w, s, "-q, --quiet", null,
+            "Suppress non-error output.");
+        WriteOption(w, s, "    --no-color", null,
+            "Disable ANSI color output.");
+        WriteOption(w, s, "-h, --help", null,
+            "Show this help and exit.");
+        WriteOption(w, s, "    --version", null,
+            "Print version and exit.");
+        w.WriteLine();
+        w.WriteLine($"{s.Header}Diagnostics{s.Reset} are printed on stderr in IDE-parseable form:");
+        w.WriteLine($"  {s.Placeholder}<file>{s.Reset}({s.Placeholder}<line>{s.Reset},{s.Placeholder}<col>{s.Reset}): {s.Error}error{s.Reset}|{s.Warning}warning{s.Reset}|{s.Info}info{s.Reset}: {s.Placeholder}<message>{s.Reset}");
+        w.WriteLine();
+        w.WriteLine($"{s.Header}Exit codes:{s.Reset} " +
+            $"{s.Value}0{s.Reset}=success, " +
+            $"{s.Value}1{s.Reset}=compile error, " +
+            $"{s.Value}2{s.Reset}=usage error, " +
+            $"{s.Value}3{s.Reset}=I/O error");
     }
 
-    public static void PrintUsage(TextWriter w)
+    private static void WriteOption(TextWriter w, AnsiStyle s, string flags, string? arg, params string[] description)
     {
-        w.WriteLine("SpectraShade compiler (ssc)");
-        w.WriteLine();
-        w.WriteLine("Usage:");
-        w.WriteLine("  ssc [options] <input.spectrashade>");
-        w.WriteLine();
-        w.WriteLine("Options:");
-        w.WriteLine("  -o, --output <path>        Output .specshadecomp file");
-        w.WriteLine("                             (default: <input>.specshadecomp)");
-        w.WriteLine("  -t, --target <backend>     Target backend(s). Repeatable or comma-separated.");
-        w.WriteLine("                             Values: opengl, vulkan, d3d11, d3d12, all");
-        w.WriteLine("                             Default: all");
-        w.WriteLine("      --emit-source <dir>    Also emit generated source text per backend");
-        w.WriteLine("                             into <dir> (for debugging codegen).");
-        w.WriteLine("  -q, --quiet                Suppress non-error output.");
-        w.WriteLine("      --no-color             Disable ANSI color output.");
-        w.WriteLine("  -h, --help                 Show this help and exit.");
-        w.WriteLine("      --version              Print version and exit.");
-        w.WriteLine();
-        w.WriteLine("Diagnostics are printed on stderr in IDE-parseable form:");
-        w.WriteLine("  <file>(<line>,<col>): error|warning|info: <message>");
-        w.WriteLine();
-        w.WriteLine("Exit codes: 0=success, 1=compile error, 2=usage error, 3=I/O error");
+        const int descCol = 27;
+        var argText = arg is null ? string.Empty : $" {s.Placeholder}{arg}{s.Reset}";
+        var preLen = 2 + flags.Length + (arg is null ? 0 : 1 + arg.Length);
+        var pad = preLen < descCol ? new string(' ', descCol - preLen) : "  ";
+        w.WriteLine($"  {s.Flag}{flags}{s.Reset}{argText}{pad}{description[0]}");
+        var contIndent = new string(' ', descCol);
+        for (int i = 1; i < description.Length; i++)
+            w.WriteLine($"{contIndent}{description[i]}");
     }
 }
 

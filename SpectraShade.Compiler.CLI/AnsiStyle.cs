@@ -1,0 +1,49 @@
+namespace SpectraShade.Compiler.CLI;
+
+internal readonly struct AnsiStyle
+{
+    private readonly bool _on;
+    public AnsiStyle(bool on) { _on = on; }
+
+    public bool Enabled => _on;
+    private string Code(string seq) => _on ? $"\u001b[{seq}m" : string.Empty;
+
+    public string Reset       => Code("0");
+    public string Title       => Code("1;36");
+    public string Header      => Code("1;33");
+    public string Command     => Code("1;32");
+    public string Flag        => Code("32");
+    public string Placeholder => Code("36");
+    public string Value       => Code("35");
+    public string Dim         => Code("2");
+    public string Error       => Code("31;1");
+    public string Warning     => Code("33;1");
+    public string Info        => Code("36;1");
+    public string Success     => Code("32;1");
+    public string Path        => Code("36");
+}
+
+internal static class ConsoleColor
+{
+    public static bool ShouldUseForStderr()
+    {
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR")))
+            return false;
+        var force = Environment.GetEnvironmentVariable("FORCE_COLOR");
+        bool forced = !string.IsNullOrEmpty(force) && force != "0";
+        if (!forced && Console.IsErrorRedirected) return false;
+        bool vtReady = ConsoleVT.TryEnableForStderr();
+        return vtReady || forced;
+    }
+
+    public static bool ShouldUseForStdout()
+    {
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR")))
+            return false;
+        var force = Environment.GetEnvironmentVariable("FORCE_COLOR");
+        bool forced = !string.IsNullOrEmpty(force) && force != "0";
+        if (!forced && Console.IsOutputRedirected) return false;
+        bool vtReady = ConsoleVT.TryEnableForStdout();
+        return vtReady || forced;
+    }
+}
