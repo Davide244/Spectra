@@ -2,6 +2,7 @@
   <Folder Name="/Test/" />
   <Folder Name="/SpectraShade/">
     <Project Path="SpectraShade.Compiler/SpectraShade.Compiler.csproj" />
+    <Project Path="SpectraShade.Compiler.CLI/SpectraShade.Compiler.CLI.csproj" />
     <Project Path="SpectraShade.LSP/SpectraShade.LSP.csproj" />
     <Project Path="SpectraShade.VSIX/SpectraShade.VSIX.csproj" Id="8d6f2e4b-1c3a-4f7d-9b2e-5a1c6e4d8f90" />
   </Folder>
