@@ -8,6 +8,8 @@
     <RootNamespace>SpectraShade.Compiler.CLI</RootNamespace>
     <AssemblyName>ssc</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishAot>True</PublishAot>
+    <SignAssembly>False</SignAssembly>
   </PropertyGroup>
 
   <ItemGroup>
