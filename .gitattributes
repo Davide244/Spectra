@@ -3,6 +3,13 @@
 ###############################################################################
 * text=auto
 
+# Verify snapshot files are byte-exact golden outputs — pin them to LF so
+# CRLF normalization on Windows doesn't cause phantom diffs.
+*.verified.* text eol=lf
+*.verified.png binary
+*.verified.jpg binary
+*.verified.bin binary
+
 ###############################################################################
 # Set default behavior for command prompt diff.
 #

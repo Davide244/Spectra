@@ -48,6 +48,11 @@ Generated\ Files/
 # NUnit
 *.VisualState.xml
 TestResult.xml
+
+# Verify snapshot testing — received files are the "actual" output awaiting
+# acceptance; only the .verified.* counterparts are committed.
+*.received.*
+*.received/
 nunit-*.xml
 
 # Build Results of an ATL Project
