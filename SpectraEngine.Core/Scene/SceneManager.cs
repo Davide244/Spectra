@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
+using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
 using System;
+using System.Collections.Generic;
 using System.Numerics;
 
 namespace SpectraEngine.Core.Scene;
@@ -63,8 +65,46 @@ public sealed class SceneManager
             cubeMesh,
             new Material(shader) { BaseColor = new Vector3(0.3f, 0.6f, 1f) });
 
+        BuildStaticWorld(scene, renderer, shader, layout);
+
         ActiveScene = scene;
         _logger.LogInformation("Demo scene '{Name}' loaded", scene.Name);
+    }
+
+    // Builds the static, brush-based half of the demo: a floor slab and two
+    // pillars, partitioned into a BSP tree and meshed for rendering.
+    private void BuildStaticWorld(Scene scene, Renderer renderer, ShaderProgram shader, ReadOnlySpan<VertexAttribute> layout)
+    {
+        // The pillars sit flush on the floor's top (y = -1.0); CSG resolves the
+        // coincident faces at the interface.
+        var brushes = new List<Brush>
+        {
+            Brush.CreateBox(new Vector3(-3f, -1.2f, -3f), new Vector3(3f, -1.0f, 3f)),
+            Brush.CreateBox(new Vector3(-2.2f, -1.0f, -2.2f), new Vector3(-1.8f, 1.2f, -1.8f)),
+            Brush.CreateBox(new Vector3(1.8f, -1.0f, 1.8f), new Vector3(2.2f, 1.2f, 2.2f)),
+        };
+
+        var world = CsgWorld.Build(brushes);
+        scene.StaticGeometry = world.Bsp;
+
+        var (vertices, indices) = world.BuildMesh();
+        var worldMesh = renderer.CreateMesh(vertices, indices, layout);
+        var worldNode = scene.Root.CreateChild("StaticWorld");
+        worldNode.MeshRenderer = new MeshRenderer(
+            worldMesh,
+            new Material(shader) { BaseColor = new Vector3(0.55f, 0.55f, 0.6f) });
+
+        // Sanity-check CSG and the BSP queries against the geometry we built.
+        bool floorSolid = world.Bsp.ContainsPoint(new Vector3(0f, -1.1f, 0f));
+        bool pillarSolid = world.Bsp.ContainsPoint(new Vector3(-2f, 0f, -2f));
+        bool airEmpty = !world.Bsp.ContainsPoint(new Vector3(0f, 3f, 0f));
+        bool rayHitsFloor = world.Bsp.Raycast(
+            new Vector3(0f, 3f, 0f), -Vector3.UnitY, 10f, out var hit);
+
+        _logger.LogInformation(
+            "Static world: {Brushes} brushes -> {Surfaces} carved surfaces; " +
+            "floor-solid={Floor}, pillar-solid={Pillar}, air-empty={Air}, ray-hit={Hit} at y={Y:0.000}",
+            brushes.Count, world.Surfaces.Count, floorSolid, pillarSolid, airEmpty, rayHitsFloor, hit.Point.Y);
     }
 
     public void Update(double deltaTime)
