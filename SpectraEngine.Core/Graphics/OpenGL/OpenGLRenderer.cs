@@ -75,10 +75,6 @@ public class OpenGLRenderer : Renderer
         _gl.CullFace(TriangleFace.Back);
         _gl.FrontFace(FrontFaceDirection.Ccw);
 
-        var size = window.FramebufferSize;
-        _gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
-        window.FramebufferResize += OnFramebufferResize;
-
         DefaultShader = CreateShader(DefaultVertexShader, DefaultFragmentShader);
 
         _logger.LogInformation("Renderer initialized (OpenGL)");
@@ -86,14 +82,19 @@ public class OpenGLRenderer : Renderer
 
     public override void Render(Scene.Scene? scene, double deltaTime)
     {
-        _gl!.ClearColor(Color.CornflowerBlue);
+        // The framebuffer size is applied here every frame rather than from a
+        // resize event: this runs on the render thread where the GL context is
+        // current, while resize events arrive on the OS-event thread.
+        var size = _window!.FramebufferSize;
+        _gl!.Viewport(0, 0, (uint)size.X, (uint)size.Y);
+
+        _gl.ClearColor(Color.CornflowerBlue);
         _gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
 
         if (scene is null)
             return;
 
         var camera = scene.Camera;
-        var size = _window!.FramebufferSize;
         if (size.Y > 0)
             camera.AspectRatio = size.X / (float)size.Y;
 
@@ -122,16 +123,8 @@ public class OpenGLRenderer : Renderer
             DrawNode(children[i], camera);
     }
 
-    private void OnFramebufferResize(Vector2D<int> size)
-    {
-        _gl!.Viewport(0, 0, (uint)size.X, (uint)size.Y);
-    }
-
     public override void Shutdown()
     {
-        if (_window is not null)
-            _window.FramebufferResize -= OnFramebufferResize;
-
         foreach (var mesh in _meshes)
             mesh.Dispose();
         _meshes.Clear();
