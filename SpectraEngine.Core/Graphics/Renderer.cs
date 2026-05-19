@@ -11,6 +11,12 @@ public abstract class Renderer
 
     public abstract GraphicsBackend Backend { get; }
 
+    /// <summary>
+    /// A backend-provided shader suitable for general lit geometry. Available
+    /// after <see cref="Initialize"/> has run.
+    /// </summary>
+    public ShaderProgram? DefaultShader { get; protected set; }
+
     protected Renderer(ILogger<Renderer> logger)
     {
         _logger = logger;
@@ -21,7 +27,7 @@ public abstract class Renderer
         _logger.LogInformation("Renderer initialized");
     }
 
-    public virtual void Render(double deltaTime)
+    public virtual void Render(Scene.Scene? scene, double deltaTime)
     {
     }
 

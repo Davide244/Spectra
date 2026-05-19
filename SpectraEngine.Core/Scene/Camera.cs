@@ -1,8 +1,12 @@
 using System;
 using System.Numerics;
 
-namespace SpectraEngine.Core.Graphics;
+namespace SpectraEngine.Core.Scene;
 
+/// <summary>
+/// A free-standing view/projection source for a <see cref="Scene"/>.
+/// Maintains an orthonormal basis from yaw/pitch angles.
+/// </summary>
 public sealed class Camera
 {
     public Vector3 Position { get; set; } = new(0f, 0f, 3f);

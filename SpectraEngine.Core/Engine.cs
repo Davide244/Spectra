@@ -66,6 +66,8 @@ public sealed class Engine
         _renderer.Initialize(_window!);
         _inputManager.Initialize(_window!.CreateInput());
 
+        _sceneManager.LoadDemoScene(_renderer);
+
         _logger.LogInformation("All subsystems initialized");
     }
 
@@ -77,7 +79,7 @@ public sealed class Engine
 
     private void OnRender(double deltaTime)
     {
-        _renderer.Render(deltaTime);
+        _renderer.Render(_sceneManager.ActiveScene, deltaTime);
     }
 
     private void OnClosing()
