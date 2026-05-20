@@ -12,10 +12,12 @@ namespace SpectraEngine.Core.Bsp;
 /// surface set a BSP needs to build a correct partition.
 /// </summary>
 /// <remarks>
-/// The carve is parallelised across brushes and uses a broadphase so each brush
-/// only tests its true overlap neighbours. The per-fragment plane clipping is
-/// scalar (brush faces split into small polygons); the SIMD path lives in
-/// <see cref="SimdPlane"/> and is exercised by larger, many-sided faces.
+/// Each brush's faces are carved in <em>its own local frame</em>: the carver's
+/// planes and bounds are transformed into the carved brush's space before
+/// clipping. Vertex magnitudes during splits are bounded by the brush's extent,
+/// so a brush 10 km from the world origin has the same numerical accuracy as
+/// one at the origin. Local fragments are pushed to world coordinates only at
+/// the very end, in one matrix multiply per vertex.
 /// </remarks>
 public static class Csg
 {
@@ -24,7 +26,7 @@ public static class Csg
 
     /// <summary>
     /// Carves a set of brushes, returning the visible surface polygons of their
-    /// union.
+    /// union in world space.
     /// </summary>
     public static Polygon[] Carve(IReadOnlyList<Brush> brushes)
     {
@@ -32,41 +34,54 @@ public static class Csg
         if (n == 0)
             return [];
 
-        var bounds = new Aabb[n];
+        // Broadphase works in world space so it remains scale-independent.
+        var worldBounds = new Aabb[n];
         for (int i = 0; i < n; i++)
-            bounds[i] = brushes[i].Bounds;
+            worldBounds[i] = brushes[i].WorldBounds;
 
-        int[][] neighbors = BrushBroadphase.FindOverlaps(bounds);
+        int[][] neighbors = BrushBroadphase.FindOverlaps(worldBounds);
         var perBrush = new List<Polygon>[n];
 
         Parallel.For(0, n, b =>
         {
-            var surfaces = new List<Polygon>();
+            Brush brush = brushes[b];
+            var localSurfaces = new List<Polygon>();
             var current = new List<Polygon>();
             var next = new List<Polygon>();
 
-            foreach (Polygon face in brushes[b].Faces)
+            // Pre-transform each neighbour into this brush's local frame once.
+            var carvers = new CarverInFrame[neighbors[b].Length];
+            for (int k = 0; k < neighbors[b].Length; k++)
+            {
+                int o = neighbors[b][k];
+                carvers[k] = CarverInFrame.Build(brushes[o], brush, carverWins: o < b);
+            }
+
+            foreach (Polygon face in brush.LocalFaces)
             {
                 current.Clear();
                 current.Add(face);
 
-                foreach (int o in neighbors[b])
+                foreach (CarverInFrame carver in carvers)
                 {
-                    // Lower-index brushes own surfaces they share same-facing with.
-                    bool carverWins = o < b;
                     next.Clear();
                     foreach (Polygon fragment in current)
-                        CarveFragment(fragment, brushes[o], carverWins, next);
+                        CarveFragment(fragment, carver, next);
 
                     (current, next) = (next, current);
                     if (current.Count == 0)
                         break;
                 }
 
-                surfaces.AddRange(current);
+                localSurfaces.AddRange(current);
             }
 
-            perBrush[b] = surfaces;
+            // Push this brush's local fragments out to world coordinates.
+            var worldSurfaces = new List<Polygon>(localSurfaces.Count);
+            foreach (Polygon local in localSurfaces)
+                worldSurfaces.Add(local.Transformed(brush.Transform));
+
+            perBrush[b] = worldSurfaces;
         });
 
         var all = new List<Polygon>();
@@ -75,8 +90,8 @@ public static class Csg
         return all.ToArray();
     }
 
-    // Appends to `output` the parts of `fragment` that lie OUTSIDE brush `carver`.
-    private static void CarveFragment(Polygon fragment, Brush carver, bool carverWins, List<Polygon> output)
+    // Appends to `output` the parts of `fragment` that lie OUTSIDE the carver.
+    private static void CarveFragment(Polygon fragment, CarverInFrame carver, List<Polygon> output)
     {
         // Whole fragment clear of the carver: nothing to remove.
         if (!fragment.Bounds.Intersects(carver.Bounds))
@@ -97,7 +112,7 @@ public static class Csg
                 // Opposite-facing coincidence is an interior interface — drop the
                 // shared footprint from both brushes. Same-facing coincidence is
                 // a duplicate surface — resolved by brush precedence.
-                bool removeFootprint = orientation < 0 || carverWins;
+                bool removeFootprint = orientation < 0 || carver.Wins;
                 if (!removeFootprint)
                 {
                     output.Add(remaining);
@@ -128,5 +143,37 @@ public static class Csg
         if (dot < -1f + NormalEpsilon)
             return MathF.Abs(a.D + b.D) < OffsetEpsilon ? -1 : 0;
         return 0;
+    }
+
+    // A carver brush re-expressed in another brush's local frame so the inner
+    // loop never has to think about world coordinates or two transforms at once.
+    private readonly struct CarverInFrame
+    {
+        public Plane[] Planes { get; }
+        public Aabb Bounds { get; }
+        public bool Wins { get; }
+
+        private CarverInFrame(Plane[] planes, Aabb bounds, bool wins)
+        {
+            Planes = planes;
+            Bounds = bounds;
+            Wins = wins;
+        }
+
+        public static CarverInFrame Build(Brush carver, Brush carved, bool carverWins)
+        {
+            // Going from carver-local → world → carved-local:
+            //   v_carved = v_carver * carver.Transform * Invert(carved.Transform)
+            if (!Matrix4x4.Invert(carved.Transform, out Matrix4x4 carvedInverse))
+                carvedInverse = Matrix4x4.Identity;
+            Matrix4x4 combined = carver.Transform * carvedInverse;
+
+            var planes = new Plane[carver.LocalPlanes.Count];
+            for (int i = 0; i < planes.Length; i++)
+                planes[i] = Plane.Transform(carver.LocalPlanes[i], combined);
+
+            Aabb bounds = Brush.TransformAabb(carver.LocalBounds, combined);
+            return new CarverInFrame(planes, bounds, carverWins);
+        }
     }
 }

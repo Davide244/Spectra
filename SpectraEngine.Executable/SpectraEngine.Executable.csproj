@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
+    <ProjectReference Include="..\SpectraShade.Compiler\SpectraShade.Compiler.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -114,4 +114,17 @@ public sealed class Polygon
         for (int i = 1; i + 1 < _vertices.Length; i++)
             yield return (_vertices[0], _vertices[i], _vertices[i + 1]);
     }
+
+    /// <summary>
+    /// Returns a new polygon with every vertex and the surface plane transformed
+    /// by <paramref name="transform"/>. Used to push a brush's local-space
+    /// fragments out into world coordinates.
+    /// </summary>
+    public Polygon Transformed(Matrix4x4 transform)
+    {
+        var verts = new Vector3[_vertices.Length];
+        for (int i = 0; i < _vertices.Length; i++)
+            verts[i] = Vector3.Transform(_vertices[i], transform);
+        return new Polygon(verts, Plane.Transform(Surface, transform));
+    }
 }

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SpectraEngine.Graphics.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
+    <ProjectReference Include="..\..\SpectraShade.Compiler\SpectraShade.Compiler.csproj" />
+  </ItemGroup>
+
+</Project>

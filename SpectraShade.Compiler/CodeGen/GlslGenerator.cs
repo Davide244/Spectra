@@ -155,17 +155,30 @@ public sealed class GlslGenerator : ICodeGenerator
         sb.AppendLine("#version 330 core");
         sb.AppendLine();
 
-        // Vertex inputs from function parameters → layout(location=N) in
-        foreach (var param in func.Parameters)
+        EmitStructs(sb, structs);
+
+        // Vertex inputs: the input struct's fields become attribute declarations.
+        StructDeclaration? inputStruct = null;
+        string inputParamName = "input";
+        if (func.Parameters.Count > 0)
         {
-            var locAttr = param.Attributes.FirstOrDefault(a =>
-                string.Equals(a.Name, "Location", StringComparison.OrdinalIgnoreCase));
-            string layout = locAttr is not null
-                ? $"layout(location = {EmitExpression(locAttr.Arguments[0])}) "
-                : "";
-            sb.AppendLine($"{layout}in {GlslType(param.Type.Name)} {param.Name};");
+            inputStruct = FindStruct(func.Parameters[0].Type.Name, structs);
+            inputParamName = func.Parameters[0].Name;
         }
-        sb.AppendLine();
+
+        if (inputStruct is not null)
+        {
+            foreach (var field in inputStruct.Fields)
+            {
+                var locAttr = field.Attributes.FirstOrDefault(a =>
+                    string.Equals(a.Name, "Location", StringComparison.OrdinalIgnoreCase));
+                string layout = locAttr is not null
+                    ? $"layout(location = {EmitExpression(locAttr.Arguments[0])}) "
+                    : "";
+                sb.AppendLine($"{layout}in {GlslType(field.Type.Name)} a_{field.Name};");
+            }
+            sb.AppendLine();
+        }
 
         // Vertex outputs from return struct fields → out declarations
         var returnStruct = FindStruct(func.ReturnType.Name, structs);
@@ -191,7 +204,7 @@ public sealed class GlslGenerator : ICodeGenerator
         // Main function
         sb.AppendLine("void main()");
         sb.AppendLine("{");
-        EmitVertexBody(sb, func, returnStruct, 1);
+        EmitVertexBody(sb, func, returnStruct, inputStruct, inputParamName, 1);
         sb.AppendLine("}");
 
         return sb.ToString();
@@ -208,6 +221,8 @@ public sealed class GlslGenerator : ICodeGenerator
         var sb = new StringBuilder();
         sb.AppendLine("#version 330 core");
         sb.AppendLine();
+
+        EmitStructs(sb, structs);
 
         // Fragment inputs: matching vertex outputs
         StructDeclaration? inputStruct = null;
@@ -448,10 +463,11 @@ public sealed class GlslGenerator : ICodeGenerator
         return sb.ToString();
     }
 
-    private void EmitVertexBody(StringBuilder sb, FunctionDeclaration func, StructDeclaration? returnStruct, int indent)
+    private void EmitVertexBody(StringBuilder sb, FunctionDeclaration func, StructDeclaration? returnStruct,
+        StructDeclaration? inputStruct, string inputParam, int indent)
     {
         string pad = new(' ', indent * 4);
-        SetStageContext(isVertex: true);
+        SetStageContext(isVertex: true, inputStruct: inputStruct, inputParam: inputParam);
 
         foreach (var stmt in func.Body.Statements)
         {
@@ -535,6 +551,21 @@ public sealed class GlslGenerator : ICodeGenerator
 
     // ─── Shared emit ─────────────────────────────────────────
 
+    // Emits GLSL struct declarations so locals such as the vertex-output
+    // struct (and any user structs) resolve in the generated source.
+    private void EmitStructs(StringBuilder sb, List<StructDeclaration> structs)
+    {
+        foreach (var s in structs)
+        {
+            sb.AppendLine($"struct {s.Name}");
+            sb.AppendLine("{");
+            foreach (var field in s.Fields)
+                sb.AppendLine($"    {GlslType(field.Type.Name)} {field.Name}{EmitArraySuffix(field.Type)};");
+            sb.AppendLine("};");
+            sb.AppendLine();
+        }
+    }
+
     private void EmitUniforms(StringBuilder sb, List<CBufferDeclaration> cbuffers)
     {
         foreach (var cbuffer in cbuffers)
@@ -580,13 +611,19 @@ public sealed class GlslGenerator : ICodeGenerator
         {
             case VariableDeclaration v:
                 string varType = v.Type.Name == "var" ? "auto" : GlslType(v.Type.Name);
-                // For GLSL 330, we need explicit types — resolve var to the initializer type if possible
-                // For now, use the type as-is (analyzer would resolve var)
                 if (v.Type.Name == "var" && v.Initializer is ConstructorExpression ctor)
                     varType = GlslType(ctor.Type.Name);
                 else if (v.Type.Name == "var" && v.Initializer is NewExpression newExpr)
-                    varType = v.Initializer is NewExpression ne ? ne.Type.Name : "auto";
-                string init = v.Initializer is not null ? $" = {EmitExpression(v.Initializer)}" : "";
+                    varType = newExpr.Type.Name;
+
+                // GLSL has no zero-argument struct constructor — `new T()` lowers
+                // to a default-initialized declaration with no initializer.
+                string init;
+                if (v.Initializer is NewExpression ne && ne.Arguments.Count == 0)
+                    init = "";
+                else
+                    init = v.Initializer is not null ? $" = {EmitExpression(v.Initializer)}" : "";
+
                 sb.AppendLine($"{pad}{varType} {v.Name}{init};");
                 break;
 
@@ -768,13 +805,14 @@ public sealed class GlslGenerator : ICodeGenerator
 
     private string EmitMemberAccess(MemberAccessExpression ma)
     {
-        // Fragment: input.field → v_field (reading vertex/geometry outputs)
+        // input.field → a_field in the vertex stage (vertex attributes) and
+        // v_field in the fragment stage (varyings from the vertex shader).
         if (!_isGeometry && _inputStruct is not null && _inputParam is not null
             && ma.Object is IdentifierExpression id && id.Name == _inputParam)
         {
             var field = _inputStruct.Fields.FirstOrDefault(f => f.Name == ma.Member);
             if (field is not null && !HasAttribute(field.Attributes, "Position"))
-                return $"v_{ma.Member}";
+                return _isVertex ? $"a_{ma.Member}" : $"v_{ma.Member}";
         }
 
         // Geometry: vertices[i].field → gs_in[i].field or gl_in[i].gl_Position

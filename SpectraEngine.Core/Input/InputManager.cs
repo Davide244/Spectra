@@ -1,17 +1,34 @@
+using System.Collections.Generic;
+using System.Numerics;
 using Microsoft.Extensions.Logging;
 using Silk.NET.Input;
 
 namespace SpectraEngine.Core.Input;
 
+/// <summary>
+/// Tracks keyboard and mouse state from Silk.NET input events and exposes a
+/// pollable query surface. Events fire on the OS-event thread; queries are
+/// expected from the render thread, so all shared state is mutated under a
+/// single lock.
+/// </summary>
 public sealed class InputManager
 {
     private readonly ILogger<InputManager> _logger;
+    private readonly object _stateLock = new();
+    private readonly HashSet<Key> _keysDown = [];
+    private readonly HashSet<MouseButton> _mouseButtonsDown = [];
+
     private IInputContext? _inputContext;
+    private Vector2 _accumulatedMouseDelta;
+    private Vector2? _lastMousePosition;
 
     public InputManager(ILogger<InputManager> logger)
     {
         _logger = logger;
     }
+
+    /// <summary>The mouse movement accumulated during the last <see cref="Update"/> interval.</summary>
+    public Vector2 MouseDelta { get; private set; }
 
     public void Initialize(IInputContext inputContext)
     {
@@ -22,7 +39,6 @@ public sealed class InputManager
             var keyboard = _inputContext.Keyboards[i];
             keyboard.KeyDown += OnKeyDown;
             keyboard.KeyUp += OnKeyUp;
-            keyboard.KeyChar += OnKeyChar;
         }
 
         for (int i = 0; i < _inputContext.Mice.Count; i++)
@@ -31,15 +47,32 @@ public sealed class InputManager
             mouse.MouseDown += OnMouseDown;
             mouse.MouseUp += OnMouseUp;
             mouse.MouseMove += OnMouseMove;
-            mouse.Scroll += OnScroll;
         }
 
         _logger.LogInformation("Input manager initialized ({KeyboardCount} keyboards, {MouseCount} mice)",
             _inputContext.Keyboards.Count, _inputContext.Mice.Count);
     }
 
+    /// <summary>Latches per-frame deltas; call once per game tick before querying.</summary>
     public void Update(double deltaTime)
     {
+        lock (_stateLock)
+        {
+            MouseDelta = _accumulatedMouseDelta;
+            _accumulatedMouseDelta = Vector2.Zero;
+        }
+    }
+
+    public bool IsKeyDown(Key key)
+    {
+        lock (_stateLock)
+            return _keysDown.Contains(key);
+    }
+
+    public bool IsMouseButtonDown(MouseButton button)
+    {
+        lock (_stateLock)
+            return _mouseButtonsDown.Contains(button);
     }
 
     public void Shutdown()
@@ -47,40 +80,39 @@ public sealed class InputManager
         _logger.LogInformation("Input manager shut down");
     }
 
-    // Keyboard
+    // ─── Event handlers (OS-event thread) ────────────────────
+
     private void OnKeyDown(IKeyboard keyboard, Key key, int keyCode)
     {
-        //_logger.LogDebug("Key down: {Key} (scancode {KeyCode})", key, keyCode);
+        lock (_stateLock)
+            _keysDown.Add(key);
     }
 
     private void OnKeyUp(IKeyboard keyboard, Key key, int keyCode)
     {
-        //_logger.LogDebug("Key up: {Key} (scancode {KeyCode})", key, keyCode);
+        lock (_stateLock)
+            _keysDown.Remove(key);
     }
 
-    private void OnKeyChar(IKeyboard keyboard, char character)
-    {
-        //_logger.LogDebug("Key char: {Character}", character);
-    }
-
-    // Mouse
     private void OnMouseDown(IMouse mouse, MouseButton button)
     {
-        //_logger.LogDebug("Mouse down: {Button}", button);
+        lock (_stateLock)
+            _mouseButtonsDown.Add(button);
     }
 
     private void OnMouseUp(IMouse mouse, MouseButton button)
     {
-        //_logger.LogDebug("Mouse up: {Button}", button);
+        lock (_stateLock)
+            _mouseButtonsDown.Remove(button);
     }
 
-    private void OnMouseMove(IMouse mouse, System.Numerics.Vector2 position)
+    private void OnMouseMove(IMouse mouse, Vector2 position)
     {
-        //_logger.LogTrace("Mouse move: {Position}", position);
-    }
-
-    private void OnScroll(IMouse mouse, ScrollWheel scroll)
-    {
-        //_logger.LogDebug("Scroll: X={X} Y={Y}", scroll.X, scroll.Y);
+        lock (_stateLock)
+        {
+            if (_lastMousePosition.HasValue)
+                _accumulatedMouseDelta += position - _lastMousePosition.Value;
+            _lastMousePosition = position;
+        }
     }
 }

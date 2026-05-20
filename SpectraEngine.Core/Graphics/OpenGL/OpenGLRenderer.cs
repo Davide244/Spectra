@@ -22,45 +22,8 @@ public class OpenGLRenderer : Renderer
 
     public override GraphicsBackend Backend => GraphicsBackend.OpenGL;
 
-    private const string DefaultVertexShader = """
-        #version 330 core
-
-        layout (location = 0) in vec3 aPosition;
-        layout (location = 1) in vec3 aNormal;
-
-        uniform mat4 uModel;
-        uniform mat4 uView;
-        uniform mat4 uProjection;
-
-        out vec3 vNormal;
-
-        void main()
-        {
-            vNormal = mat3(uModel) * aNormal;
-            gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
-        }
-        """;
-
-    private const string DefaultFragmentShader = """
-        #version 330 core
-
-        in vec3 vNormal;
-        out vec4 out_color;
-
-        uniform vec3 uLightDir;
-        uniform vec3 uBaseColor;
-
-        void main()
-        {
-            vec3 n = normalize(vNormal);
-            float ndotl = max(dot(n, normalize(-uLightDir)), 0.0);
-            vec3 ambient = uBaseColor * 0.2;
-            vec3 diffuse = uBaseColor * ndotl;
-            out_color = vec4(ambient + diffuse, 1.0);
-        }
-        """;
-
-    public OpenGLRenderer(ILogger<Renderer> logger) : base(logger)
+    public OpenGLRenderer(ILogger<Renderer> logger, IShaderCompiler shaderCompiler)
+        : base(logger, shaderCompiler)
     {
     }
 
@@ -75,7 +38,7 @@ public class OpenGLRenderer : Renderer
         _gl.CullFace(TriangleFace.Back);
         _gl.FrontFace(FrontFaceDirection.Ccw);
 
-        DefaultShader = CreateShader(DefaultVertexShader, DefaultFragmentShader);
+        DefaultShader = CreateShaderFromSource(BaseShaders.Lit);
 
         _logger.LogInformation("Renderer initialized (OpenGL)");
     }

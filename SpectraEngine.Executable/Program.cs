@@ -7,6 +7,7 @@ using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.OpenGL;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
+using SpectraShade.Compiler;
 
 // Configure Serilog
 Log.Logger = new LoggerConfiguration()
@@ -22,7 +23,8 @@ using var loggerFactory = LoggerFactory.Create(builder =>
 });
 
 // Create subsystems
-var renderer = new OpenGLRenderer(loggerFactory.CreateLogger<OpenGLRenderer>());
+var shaderCompiler = new SpectraShadeCompiler();
+var renderer = new OpenGLRenderer(loggerFactory.CreateLogger<OpenGLRenderer>(), shaderCompiler);
 var sceneManager = new SceneManager(loggerFactory.CreateLogger<SceneManager>());
 var assetManager = new AssetManager(loggerFactory.CreateLogger<AssetManager>());
 var audioManager = new AudioManager(loggerFactory.CreateLogger<AudioManager>());

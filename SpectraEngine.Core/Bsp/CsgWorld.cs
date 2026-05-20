@@ -26,6 +26,10 @@ public sealed class CsgWorld
     public static CsgWorld Build(IReadOnlyList<Brush> brushes)
     {
         Polygon[] surfaces = Csg.Carve(brushes);
+        // Snap before welding so T-vertices land on the same grid as the edges
+        // they're inserted into — keeps every shared vertex bit-identical.
+        surfaces = VertexSnapper.Snap(surfaces);
+        surfaces = TJunctionWelder.Weld(surfaces);
         BspTree bsp = BspTree.BuildFromSurfaces(surfaces);
         return new CsgWorld(surfaces, bsp);
     }

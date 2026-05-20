@@ -8,6 +8,7 @@ namespace SpectraEngine.Core.Graphics;
 public abstract class Renderer
 {
     internal readonly ILogger<Renderer> _logger;
+    private readonly IShaderCompiler _shaderCompiler;
 
     public abstract GraphicsBackend Backend { get; }
 
@@ -17,9 +18,24 @@ public abstract class Renderer
     /// </summary>
     public ShaderProgram? DefaultShader { get; protected set; }
 
-    protected Renderer(ILogger<Renderer> logger)
+    protected Renderer(ILogger<Renderer> logger, IShaderCompiler shaderCompiler)
     {
         _logger = logger;
+        _shaderCompiler = shaderCompiler;
+    }
+
+    /// <summary>
+    /// Compiles SpectraShade source for this renderer's backend and creates a
+    /// shader program from the result.
+    /// </summary>
+    public ShaderProgram CreateShaderFromSource(string spectraShadeSource)
+    {
+        ReadOnlySpan<GraphicsBackend> targets = [Backend];
+        CompiledShaderFile compiled = _shaderCompiler.Compile(spectraShadeSource, targets);
+        PipelineBlob blob = compiled.GetPipeline(Backend)
+            ?? throw new InvalidOperationException(
+                $"SpectraShade compilation produced no pipeline for {Backend}.");
+        return CreateShader(blob);
     }
 
     public virtual void Initialize(IWindow window)

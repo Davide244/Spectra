@@ -25,6 +25,7 @@ public sealed class Engine
     private readonly InputManager _inputManager;
 
     private IWindow? _window;
+    private FlyCameraController? _cameraController;
 
     // The render thread publishes its latest title here; the OS-event thread
     // applies it, because GLFW window calls must run on the main thread.
@@ -119,6 +120,10 @@ public sealed class Engine
 
         _renderer.Initialize(window);
         _sceneManager.LoadDemoScene(_renderer);
+
+        if (_sceneManager.ActiveScene is { } activeScene)
+            _cameraController = new FlyCameraController(activeScene.Camera, _inputManager);
+
         _logger.LogInformation("All subsystems initialized");
 
         var clock = Stopwatch.StartNew();
@@ -131,6 +136,7 @@ public sealed class Engine
             previous = now;
 
             _inputManager.Update(deltaTime);
+            _cameraController?.Update(deltaTime);
             _sceneManager.Update(deltaTime);
             _renderer.Render(_sceneManager.ActiveScene, deltaTime);
 
