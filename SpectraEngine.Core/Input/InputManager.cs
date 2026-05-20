@@ -16,6 +16,8 @@ public sealed class InputManager
     private readonly ILogger<InputManager> _logger;
     private readonly object _stateLock = new();
     private readonly HashSet<Key> _keysDown = [];
+    private readonly HashSet<Key> _pendingPressed = [];
+    private readonly HashSet<Key> _pressedThisFrame = [];
     private readonly HashSet<MouseButton> _mouseButtonsDown = [];
 
     private IInputContext? _inputContext;
@@ -60,6 +62,11 @@ public sealed class InputManager
         {
             MouseDelta = _accumulatedMouseDelta;
             _accumulatedMouseDelta = Vector2.Zero;
+
+            _pressedThisFrame.Clear();
+            foreach (Key k in _pendingPressed)
+                _pressedThisFrame.Add(k);
+            _pendingPressed.Clear();
         }
     }
 
@@ -67,6 +74,13 @@ public sealed class InputManager
     {
         lock (_stateLock)
             return _keysDown.Contains(key);
+    }
+
+    /// <summary>True for the single tick on which <paramref name="key"/> went from up to down.</summary>
+    public bool WasKeyPressed(Key key)
+    {
+        lock (_stateLock)
+            return _pressedThisFrame.Contains(key);
     }
 
     public bool IsMouseButtonDown(MouseButton button)
@@ -85,7 +99,11 @@ public sealed class InputManager
     private void OnKeyDown(IKeyboard keyboard, Key key, int keyCode)
     {
         lock (_stateLock)
-            _keysDown.Add(key);
+        {
+            // HashSet.Add returns false on auto-repeat — only true presses count.
+            if (_keysDown.Add(key))
+                _pendingPressed.Add(key);
+        }
     }
 
     private void OnKeyUp(IKeyboard keyboard, Key key, int keyCode)

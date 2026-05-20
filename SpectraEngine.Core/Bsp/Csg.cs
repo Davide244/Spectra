@@ -172,7 +172,7 @@ public static class Csg
             for (int i = 0; i < planes.Length; i++)
                 planes[i] = Plane.Transform(carver.LocalPlanes[i], combined);
 
-            Aabb bounds = Brush.TransformAabb(carver.LocalBounds, combined);
+            Aabb bounds = carver.LocalBounds.Transform(combined);
             return new CarverInFrame(planes, bounds, carverWins);
         }
     }

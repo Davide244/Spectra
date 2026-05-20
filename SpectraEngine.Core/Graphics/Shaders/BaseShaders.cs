@@ -13,6 +13,9 @@ public static class BaseShaders
     /// <summary>The built-in lit shader — diffuse + ambient from one directional light.</summary>
     public static string Lit => ReadEmbedded("Lit.spectrashade");
 
+    /// <summary>The unlit per-vertex-coloured shader used by the debug-draw renderer.</summary>
+    public static string DebugLine => ReadEmbedded("DebugLine.spectrashade");
+
     private static string ReadEmbedded(string fileName)
     {
         var assembly = typeof(BaseShaders).Assembly;

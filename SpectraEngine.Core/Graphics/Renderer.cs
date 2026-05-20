@@ -18,6 +18,13 @@ public abstract class Renderer
     /// </summary>
     public ShaderProgram? DefaultShader { get; protected set; }
 
+    /// <summary>
+    /// Per-frame primitive accumulator for debug visualisations. Callers push
+    /// lines/boxes/arrows before <see cref="Render"/>; the renderer uploads and
+    /// draws them after the main scene pass. The engine clears it each frame.
+    /// </summary>
+    public DebugDraw DebugDraw { get; } = new();
+
     protected Renderer(ILogger<Renderer> logger, IShaderCompiler shaderCompiler)
     {
         _logger = logger;

@@ -58,7 +58,7 @@ public sealed class Brush
     public Aabb LocalBounds { get; }
 
     /// <summary>Axis-aligned bounding box in world space, derived from <see cref="LocalBounds"/> and <see cref="Transform"/>.</summary>
-    public Aabb WorldBounds => TransformAabb(LocalBounds, Transform);
+    public Aabb WorldBounds => LocalBounds.Transform(Transform);
 
     /// <summary>
     /// Builds an axis-aligned box brush spanning <paramref name="min"/>..<paramref name="max"/>
@@ -153,30 +153,4 @@ public sealed class Brush
         return new Aabb(min, max);
     }
 
-    // Transforms the 8 corners of an AABB and takes the bounding box of the
-    // result — exact for axis-aligned translations, tight for rotations.
-    internal static Aabb TransformAabb(Aabb local, Matrix4x4 transform)
-    {
-        Span<Vector3> corners =
-        [
-            new(local.Min.X, local.Min.Y, local.Min.Z),
-            new(local.Max.X, local.Min.Y, local.Min.Z),
-            new(local.Min.X, local.Max.Y, local.Min.Z),
-            new(local.Max.X, local.Max.Y, local.Min.Z),
-            new(local.Min.X, local.Min.Y, local.Max.Z),
-            new(local.Max.X, local.Min.Y, local.Max.Z),
-            new(local.Min.X, local.Max.Y, local.Max.Z),
-            new(local.Max.X, local.Max.Y, local.Max.Z),
-        ];
-
-        var min = new Vector3(float.MaxValue);
-        var max = new Vector3(float.MinValue);
-        for (int i = 0; i < corners.Length; i++)
-        {
-            Vector3 w = Vector3.Transform(corners[i], transform);
-            min = Vector3.Min(min, w);
-            max = Vector3.Max(max, w);
-        }
-        return new Aabb(min, max);
-    }
 }

@@ -24,11 +24,11 @@ public sealed class Scene
     public Camera Camera { get; } = new();
 
     /// <summary>
-    /// The static, query-oriented half of the scene: a BSP tree built from
-    /// world brushes, used for spatial queries (containment, raycasts, and
-    /// later visibility/culling). Null until world geometry is loaded.
+    /// The static, query-oriented half of the scene: the compiled world from a
+    /// set of brushes (carved surfaces + BSP). Null until world geometry is
+    /// loaded.
     /// </summary>
-    public BspTree? StaticGeometry { get; set; }
+    public CsgWorld? StaticWorld { get; set; }
 
     /// <summary>Enumerates every node in the scene, depth-first from the root.</summary>
     public IEnumerable<SceneNode> Nodes => Root.Traverse();

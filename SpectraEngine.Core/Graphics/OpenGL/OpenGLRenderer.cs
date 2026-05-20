@@ -17,6 +17,8 @@ public class OpenGLRenderer : Renderer
     private IWindow? _window;
     private readonly List<Mesh> _meshes = [];
     private readonly List<ShaderProgram> _shaders = [];
+    private OpenGLLineBatch? _lineBatch;
+    private ShaderProgram? _debugShader;
 
     private Vector3 _lightDirection = Vector3.Normalize(new Vector3(-0.4f, -1f, -0.6f));
 
@@ -39,6 +41,8 @@ public class OpenGLRenderer : Renderer
         _gl.FrontFace(FrontFaceDirection.Ccw);
 
         DefaultShader = CreateShaderFromSource(BaseShaders.Lit);
+        _debugShader = CreateShaderFromSource(BaseShaders.DebugLine);
+        _lineBatch = new OpenGLLineBatch(_gl);
 
         _logger.LogInformation("Renderer initialized (OpenGL)");
     }
@@ -62,6 +66,25 @@ public class OpenGLRenderer : Renderer
             camera.AspectRatio = size.X / (float)size.Y;
 
         DrawNode(scene.Root, camera);
+
+        FlushDebugDraw(camera);
+    }
+
+    private void FlushDebugDraw(Camera camera)
+    {
+        if (DebugDraw.VertexCount == 0 || _debugShader is null || _lineBatch is null)
+            return;
+
+        // Always-on-top: depth test off so debug lines don't fight the geometry
+        // they describe. Restored afterwards so the next frame's main pass is depth-correct.
+        _gl!.Disable(EnableCap.DepthTest);
+
+        _debugShader.Use();
+        _debugShader.SetUniform("uView", camera.View);
+        _debugShader.SetUniform("uProjection", camera.Projection);
+        _lineBatch.Draw(DebugDraw.Vertices, (uint)DebugDraw.VertexCount);
+
+        _gl.Enable(EnableCap.DepthTest);
     }
 
     private void DrawNode(SceneNode node, Camera camera)
@@ -88,6 +111,10 @@ public class OpenGLRenderer : Renderer
 
     public override void Shutdown()
     {
+        _lineBatch?.Dispose();
+        _lineBatch = null;
+        _debugShader = null;
+
         foreach (var mesh in _meshes)
             mesh.Dispose();
         _meshes.Clear();

@@ -10,13 +10,17 @@ namespace SpectraEngine.Core.Bsp;
 /// </summary>
 public sealed class CsgWorld
 {
-    private CsgWorld(IReadOnlyList<Polygon> surfaces, BspTree bsp)
+    private CsgWorld(IReadOnlyList<Brush> brushes, IReadOnlyList<Polygon> surfaces, BspTree bsp)
     {
+        Brushes = brushes;
         Surfaces = surfaces;
         Bsp = bsp;
     }
 
-    /// <summary>The visible exterior surfaces of the brush union.</summary>
+    /// <summary>The source brushes the world was built from.</summary>
+    public IReadOnlyList<Brush> Brushes { get; }
+
+    /// <summary>The visible exterior surfaces of the brush union, in world space.</summary>
     public IReadOnlyList<Polygon> Surfaces { get; }
 
     /// <summary>A solid-leaf BSP tree over the carved geometry.</summary>
@@ -31,7 +35,7 @@ public sealed class CsgWorld
         surfaces = VertexSnapper.Snap(surfaces);
         surfaces = TJunctionWelder.Weld(surfaces);
         BspTree bsp = BspTree.BuildFromSurfaces(surfaces);
-        return new CsgWorld(surfaces, bsp);
+        return new CsgWorld(brushes, surfaces, bsp);
     }
 
     /// <summary>

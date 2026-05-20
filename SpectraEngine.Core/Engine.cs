@@ -26,6 +26,7 @@ public sealed class Engine
 
     private IWindow? _window;
     private FlyCameraController? _cameraController;
+    private DebugVisualization _debugFlags = DebugVisualization.None;
 
     // The render thread publishes its latest title here; the OS-event thread
     // applies it, because GLFW window calls must run on the main thread.
@@ -138,6 +139,18 @@ public sealed class Engine
             _inputManager.Update(deltaTime);
             _cameraController?.Update(deltaTime);
             _sceneManager.Update(deltaTime);
+
+            // F1–F4 toggle debug visualisations on/off.
+            if (_inputManager.WasKeyPressed(Key.F1)) _debugFlags ^= DebugVisualization.Wireframe;
+            if (_inputManager.WasKeyPressed(Key.F2)) _debugFlags ^= DebugVisualization.Vertices;
+            if (_inputManager.WasKeyPressed(Key.F3)) _debugFlags ^= DebugVisualization.Aabbs;
+            if (_inputManager.WasKeyPressed(Key.F4)) _debugFlags ^= DebugVisualization.Normals;
+            if (_inputManager.WasKeyPressed(Key.F5)) _debugFlags ^= DebugVisualization.SceneGraph;
+
+            _renderer.DebugDraw.Clear();
+            if (_sceneManager.ActiveScene is { } scene && _debugFlags != DebugVisualization.None)
+                DebugVisualizations.Draw(_renderer.DebugDraw, scene, _debugFlags);
+
             _renderer.Render(_sceneManager.ActiveScene, deltaTime);
 
             if (_fpsCounter.Tick(deltaTime))

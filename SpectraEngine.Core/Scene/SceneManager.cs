@@ -85,7 +85,7 @@ public sealed class SceneManager
         };
 
         var world = CsgWorld.Build(brushes);
-        scene.StaticGeometry = world.Bsp;
+        scene.StaticWorld = world;
 
         var (vertices, indices) = world.BuildMesh();
         var worldMesh = renderer.CreateMesh(vertices, indices, layout);
