@@ -36,6 +36,23 @@ public sealed class GlslGenerator : ICodeGenerator
     private string? _inputParam;
     private StructDeclaration? _geometryOutputStruct;
 
+    // GLSL reserved words (used or reserved-for-future-use) that must not appear
+    // as user identifiers. Names matching this set are prefixed with `_ss_` at every
+    // emission site. Source: GLSL 4.6 spec §3.6.
+    private static readonly HashSet<string> GlslReservedWords = new(StringComparer.Ordinal)
+    {
+        "input", "output", "common", "partition", "active", "asm", "class", "union",
+        "enum", "typedef", "template", "this", "resource", "goto", "inline", "noinline",
+        "public", "static", "extern", "external", "interface", "long", "short", "half",
+        "fixed", "unsigned", "superp", "hvec2", "hvec3", "hvec4", "fvec2", "fvec3", "fvec4",
+        "filter", "sizeof", "cast", "namespace", "using", "sampler3DRect",
+        "attribute", "varying", "subroutine", "patch", "sample", "coherent", "volatile",
+        "restrict", "readonly", "writeonly", "noperspective", "centroid", "precise",
+    };
+
+    private static string EscapeId(string name)
+        => GlslReservedWords.Contains(name) ? "_ss_" + name : name;
+
     // Built-in Math.X → GLSL function name mapping
     private static readonly Dictionary<string, string> MathBuiltins = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -281,7 +298,7 @@ public sealed class GlslGenerator : ICodeGenerator
                 string layout = targetAttr is not null
                     ? $"layout(location = {EmitExpression(targetAttr.Arguments[0])}) "
                     : "";
-                sb.AppendLine($"{layout}out {GlslType(field.Type.Name)} {field.Name};");
+                sb.AppendLine($"{layout}out {GlslType(field.Type.Name)} {EscapeId(field.Name)};");
             }
         }
         else
@@ -380,7 +397,7 @@ public sealed class GlslGenerator : ICodeGenerator
             {
                 if (HasAttribute(field.Attributes, "Position"))
                     continue;
-                sb.AppendLine($"    {GlslType(field.Type.Name)} {field.Name};");
+                sb.AppendLine($"    {GlslType(field.Type.Name)} {EscapeId(field.Name)};");
             }
             sb.AppendLine($"}} gs_in[];");
             sb.AppendLine();
@@ -478,9 +495,9 @@ public sealed class GlslGenerator : ICodeGenerator
                 foreach (var field in returnStruct.Fields)
                 {
                     if (HasAttribute(field.Attributes, "Position"))
-                        sb.AppendLine($"{pad}gl_Position = {resultName}.{field.Name};");
+                        sb.AppendLine($"{pad}gl_Position = {resultName}.{EscapeId(field.Name)};");
                     else
-                        sb.AppendLine($"{pad}v_{field.Name} = {resultName}.{field.Name};");
+                        sb.AppendLine($"{pad}v_{field.Name} = {resultName}.{EscapeId(field.Name)};");
                 }
             }
             else
@@ -505,7 +522,7 @@ public sealed class GlslGenerator : ICodeGenerator
                 {
                     string resultName = GetReturnVarName(ret.Value);
                     foreach (var field in returnStruct.Fields)
-                        sb.AppendLine($"{pad}{field.Name} = {resultName}.{field.Name};");
+                        sb.AppendLine($"{pad}{EscapeId(field.Name)} = {resultName}.{EscapeId(field.Name)};");
                 }
                 else
                 {
@@ -560,7 +577,7 @@ public sealed class GlslGenerator : ICodeGenerator
             sb.AppendLine($"struct {s.Name}");
             sb.AppendLine("{");
             foreach (var field in s.Fields)
-                sb.AppendLine($"    {GlslType(field.Type.Name)} {field.Name}{EmitArraySuffix(field.Type)};");
+                sb.AppendLine($"    {GlslType(field.Type.Name)} {EscapeId(field.Name)}{EmitArraySuffix(field.Type)};");
             sb.AppendLine("};");
             sb.AppendLine();
         }
@@ -572,7 +589,7 @@ public sealed class GlslGenerator : ICodeGenerator
         {
             sb.AppendLine($"// cbuffer {cbuffer.Name}");
             foreach (var field in cbuffer.Fields)
-                sb.AppendLine($"uniform {GlslType(field.Type.Name)} {field.Name}{EmitArraySuffix(field.Type)};");
+                sb.AppendLine($"uniform {GlslType(field.Type.Name)} {EscapeId(field.Name)}{EmitArraySuffix(field.Type)};");
             sb.AppendLine();
         }
     }
@@ -580,7 +597,7 @@ public sealed class GlslGenerator : ICodeGenerator
     private void EmitSamplerUniforms(StringBuilder sb, List<SamplerDeclaration> samplers)
     {
         foreach (var sampler in samplers)
-            sb.AppendLine($"uniform {GlslType(sampler.Type.Name)} {sampler.Name}{EmitArraySuffix(sampler.Type)};");
+            sb.AppendLine($"uniform {GlslType(sampler.Type.Name)} {EscapeId(sampler.Name)}{EmitArraySuffix(sampler.Type)};");
         if (samplers.Count > 0)
             sb.AppendLine();
     }
@@ -588,7 +605,7 @@ public sealed class GlslGenerator : ICodeGenerator
     private void EmitFunction(StringBuilder sb, FunctionDeclaration func)
     {
         string ret = GlslType(func.ReturnType.Name);
-        string parms = string.Join(", ", func.Parameters.Select(p => $"{GlslType(p.Type.Name)} {p.Name}"));
+        string parms = string.Join(", ", func.Parameters.Select(p => $"{GlslType(p.Type.Name)} {EscapeId(p.Name)}"));
         sb.AppendLine($"{ret} {func.Name}({parms})");
         EmitBlock(sb, func.Body, 0);
         sb.AppendLine();
@@ -624,7 +641,7 @@ public sealed class GlslGenerator : ICodeGenerator
                 else
                     init = v.Initializer is not null ? $" = {EmitExpression(v.Initializer)}" : "";
 
-                sb.AppendLine($"{pad}{varType} {v.Name}{init};");
+                sb.AppendLine($"{pad}{varType} {EscapeId(v.Name)}{init};");
                 break;
 
             case ReturnStatement r:
@@ -652,7 +669,7 @@ public sealed class GlslGenerator : ICodeGenerator
                 {
                     string fType = fv.Type.Name == "var" ? "float" : GlslType(fv.Type.Name);
                     string fInit = fv.Initializer is not null ? $" = {EmitExpression(fv.Initializer)}" : "";
-                    sb.Append($"{fType} {fv.Name}{fInit}");
+                    sb.Append($"{fType} {EscapeId(fv.Name)}{fInit}");
                 }
                 sb.Append("; ");
                 if (f.Condition is not null)
@@ -731,7 +748,7 @@ public sealed class GlslGenerator : ICodeGenerator
                 // Geometry built-in: PrimitiveID → gl_PrimitiveIDIn
                 if (_isGeometry && id.Name == "PrimitiveID")
                     return "gl_PrimitiveIDIn";
-                return id.Name;
+                return EscapeId(id.Name);
 
             case BinaryExpression bin:
                 return $"({EmitExpression(bin.Left)} {MapOperator(bin.Operator)} {EmitExpression(bin.Right)})";
@@ -827,8 +844,10 @@ public sealed class GlslGenerator : ICodeGenerator
             return $"gs_in[{index}].{ma.Member}";
         }
 
-        // Swizzle or regular member access
-        return $"{EmitExpression(ma.Object)}.{ma.Member}";
+        // Swizzle or regular member access. Member is escaped to match struct-field
+        // declarations (a struct field named `output` is declared as `_ss_output`).
+        // Swizzle component names (xyzw/rgba/stpq) are never reserved, so this is safe.
+        return $"{EmitExpression(ma.Object)}.{EscapeId(ma.Member)}";
     }
 
     private string EmitIndexExpression(IndexExpression idx)
@@ -841,7 +860,7 @@ public sealed class GlslGenerator : ICodeGenerator
     private static string GetReturnVarName(Expression expr)
     {
         if (expr is IdentifierExpression id)
-            return id.Name;
+            return EscapeId(id.Name);
         return "/* complex return */";
     }
 
