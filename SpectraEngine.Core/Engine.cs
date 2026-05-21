@@ -59,6 +59,7 @@ public sealed class Engine
             VSync = false,
             FramesPerSecond = 0,
             UpdatesPerSecond = 0,
+            API = _renderer.WindowApi,
         };
 
         _window = Window.Create(options);
@@ -70,8 +71,9 @@ public sealed class Engine
         _audioManager.Initialize();
         _inputManager.Initialize(_window.CreateInput());
 
-        // Release the GL context here so the render thread can take ownership.
-        _window.GLContext?.Clear();
+        // Release any thread-affine context (OpenGL) here so the render thread
+        // can take ownership. Backends without one (D3D, Vulkan) no-op.
+        _renderer.ReleaseContext(_window);
 
         var renderThread = new Thread(RenderLoop)
         {
@@ -116,7 +118,7 @@ public sealed class Engine
     private void RenderLoop()
     {
         var window = _window!;
-        window.GLContext?.MakeCurrent();
+        _renderer.AcquireContext(window);
         window.VSync = false;
 
         _renderer.Initialize(window);
@@ -163,10 +165,10 @@ public sealed class Engine
                     $"{WindowTitle}  —  {_fpsCounter.Fps:0} FPS  ({_fpsCounter.FrameTimeMs:0.00} ms)  —  {_renderer.CurrentPipelineName}";
             }
 
-            window.GLContext?.SwapBuffers();
+            _renderer.Present(window);
         }
 
         _renderer.Shutdown();
-        window.GLContext?.Clear();
+        _renderer.ReleaseContext(window);
     }
 }

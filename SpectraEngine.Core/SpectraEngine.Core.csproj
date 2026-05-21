@@ -15,6 +15,8 @@
     <PackageReference Include="Silk.NET.Assimp" />
     <PackageReference Include="Silk.NET.Direct3D11" />
     <PackageReference Include="Silk.NET.Direct3D12" />
+    <PackageReference Include="Silk.NET.Direct3D.Compilers" />
+    <PackageReference Include="Silk.NET.DXGI" />
     <PackageReference Include="Silk.NET.GLFW" />
     <PackageReference Include="Silk.NET.Input" />
     <PackageReference Include="Silk.NET.Maths" />

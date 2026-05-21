@@ -574,6 +574,15 @@ public sealed class HlslGenerator : ICodeGenerator
 
             case ConstructorExpression ctor:
             {
+                // matN(singleMatrix) → (floatNxN)matrix. HLSL has no single-matrix
+                // constructor; the GLSL idiom mat3(uModel) for upper-left
+                // extraction has to lower to an explicit truncating cast.
+                if (IsMatrixType(ctor.Type.Name) && ctor.Arguments.Count == 1
+                    && IsMatrixType(InferType(ctor.Arguments[0])))
+                {
+                    return $"(({HlslType(ctor.Type.Name)}){EmitExpression(ctor.Arguments[0])})";
+                }
+
                 string args = string.Join(", ", ctor.Arguments.Select(a => EmitExpression(a)));
                 return $"{HlslType(ctor.Type.Name)}({args})";
             }

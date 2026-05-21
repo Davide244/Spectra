@@ -14,6 +14,33 @@ public abstract class Renderer
     public abstract GraphicsBackend Backend { get; }
 
     /// <summary>
+    /// The graphics API the host window should be created with. OpenGL needs
+    /// <see cref="GraphicsAPI.Default"/> (a real GL context); D3D and Vulkan
+    /// backends want <see cref="GraphicsAPI.None"/> and create their own
+    /// device against the native window handle.
+    /// </summary>
+    public virtual GraphicsAPI WindowApi => GraphicsAPI.Default;
+
+    /// <summary>
+    /// Makes any thread-affine context (e.g. an OpenGL context) current on the
+    /// calling thread. Called once at the start of the render loop. Backends
+    /// without thread-current state (D3D, Vulkan) leave this empty.
+    /// </summary>
+    public virtual void AcquireContext(IWindow window) => window.GLContext?.MakeCurrent();
+
+    /// <summary>
+    /// Releases the context from the calling thread; mirror of
+    /// <see cref="AcquireContext"/>. Called at render-loop shutdown.
+    /// </summary>
+    public virtual void ReleaseContext(IWindow window) => window.GLContext?.Clear();
+
+    /// <summary>
+    /// Presents the most recently rendered frame to the window. OpenGL swaps
+    /// buffers via the GL context; D3D11/12 call IDXGISwapChain::Present.
+    /// </summary>
+    public virtual void Present(IWindow window) => window.GLContext?.SwapBuffers();
+
+    /// <summary>
     /// A backend-provided shader suitable for general lit geometry. Available
     /// after <see cref="Initialize"/> has run.
     /// </summary>
