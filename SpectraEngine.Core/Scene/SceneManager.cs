@@ -43,15 +43,24 @@ public sealed class SceneManager
         [
             new(location: 0, componentCount: 3),
             new(location: 1, componentCount: 3),
+            new(location: 2, componentCount: 2),
         ];
         var cubeMesh = renderer.CreateMesh(vertices, indices, layout);
         var shader = renderer.DefaultShader
             ?? throw new InvalidOperationException("Renderer has no default shader; initialize it first.");
 
+        // A procedural checker as the diffuse texture. Linear mipmap minifies
+        // cleanly when seen at distance; repeat lets world-scale UVs tile.
+        byte[] checker = Primitives.CheckerboardRgb8();
+        var checkerTexture = renderer.CreateTexture(
+            checker, 16, 16, TextureFormat.Rgb8,
+            TextureFilter.LinearMipmap, TextureWrap.Repeat);
+
         var center = scene.Root.CreateChild("SpinningCube");
-        center.MeshRenderer = new MeshRenderer(
-            cubeMesh,
-            new Material(shader) { BaseColor = new Vector3(1f, 0.55f, 0.2f) });
+        center.MeshRenderer = new MeshRenderer(cubeMesh,
+            new Material(shader)
+                .SetVector3("uBaseColor", new Vector3(1f, 0.55f, 0.2f))
+                .SetTexture("uDiffuse", 0, checkerTexture));
         _spinner = center;
 
         var orbiter = center.CreateChild("Orbiter");
@@ -61,11 +70,12 @@ public sealed class SceneManager
             Rotation = Quaternion.Identity,
             Scale = new Vector3(0.4f, 0.4f, 0.4f),
         };
-        orbiter.MeshRenderer = new MeshRenderer(
-            cubeMesh,
-            new Material(shader) { BaseColor = new Vector3(0.3f, 0.6f, 1f) });
+        orbiter.MeshRenderer = new MeshRenderer(cubeMesh,
+            new Material(shader)
+                .SetVector3("uBaseColor", new Vector3(0.3f, 0.6f, 1f))
+                .SetTexture("uDiffuse", 0, checkerTexture));
 
-        BuildStaticWorld(scene, renderer, shader, layout);
+        BuildStaticWorld(scene, renderer, shader, layout, checkerTexture);
 
         ActiveScene = scene;
         _logger.LogInformation("Demo scene '{Name}' loaded", scene.Name);
@@ -73,7 +83,7 @@ public sealed class SceneManager
 
     // Builds the static, brush-based half of the demo: a floor slab and two
     // pillars, partitioned into a BSP tree and meshed for rendering.
-    private void BuildStaticWorld(Scene scene, Renderer renderer, ShaderProgram shader, ReadOnlySpan<VertexAttribute> layout)
+    private void BuildStaticWorld(Scene scene, Renderer renderer, ShaderProgram shader, ReadOnlySpan<VertexAttribute> layout, Texture diffuse)
     {
         // The pillars sit flush on the floor's top (y = -1.0); CSG resolves the
         // coincident faces at the interface.
@@ -90,9 +100,10 @@ public sealed class SceneManager
         var (vertices, indices) = world.BuildMesh();
         var worldMesh = renderer.CreateMesh(vertices, indices, layout);
         var worldNode = scene.Root.CreateChild("StaticWorld");
-        worldNode.MeshRenderer = new MeshRenderer(
-            worldMesh,
-            new Material(shader) { BaseColor = new Vector3(0.55f, 0.55f, 0.6f) });
+        worldNode.MeshRenderer = new MeshRenderer(worldMesh,
+            new Material(shader)
+                .SetVector3("uBaseColor", new Vector3(0.55f, 0.55f, 0.6f))
+                .SetTexture("uDiffuse", 0, diffuse));
 
         // Sanity-check CSG and the BSP queries against the geometry we built.
         bool floorSolid = world.Bsp.ContainsPoint(new Vector3(0f, -1.1f, 0f));

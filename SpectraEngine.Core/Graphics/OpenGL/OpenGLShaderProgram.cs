@@ -1,14 +1,17 @@
 using Silk.NET.OpenGL;
+using SpectraEngine.Core.Graphics.Shaders;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
+using System.Text;
 
 namespace SpectraEngine.Core.Graphics.OpenGL;
 
 internal sealed class OpenGLShaderProgram : ShaderProgram
 {
     private readonly GL _gl;
-    private readonly uint _handle;
+    private uint _handle;
     private readonly Dictionary<string, int> _uniformCache = new();
     private bool _disposed;
 
@@ -18,7 +21,51 @@ internal sealed class OpenGLShaderProgram : ShaderProgram
         _handle = handle;
     }
 
+    public override bool TryReload(PipelineBlob blob, [NotNullWhen(false)] out string? error)
+    {
+        if (blob.Backend != GraphicsBackend.OpenGL)
+        {
+            error = $"Expected OpenGL blob, got {blob.Backend}";
+            return false;
+        }
+        if (blob.Format != ShaderDataFormat.SourceText)
+        {
+            error = $"OpenGL requires SourceText format, got {blob.Format}";
+            return false;
+        }
+
+        string vertexSource = Encoding.UTF8.GetString(blob.VertexData
+            ?? throw new InvalidOperationException("Compiled shader has no vertex stage"));
+        string fragmentSource = Encoding.UTF8.GetString(blob.FragmentData
+            ?? throw new InvalidOperationException("Compiled shader has no fragment stage"));
+
+        uint newHandle;
+        try
+        {
+            newHandle = LinkProgram(_gl, vertexSource, fragmentSource);
+        }
+        catch (InvalidOperationException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+
+        uint old = _handle;
+        _handle = newHandle;
+        _uniformCache.Clear();
+        if (old != 0)
+            _gl.DeleteProgram(old);
+        error = null;
+        return true;
+    }
+
     internal static OpenGLShaderProgram Create(GL gl, string vertexSource, string fragmentSource)
+    {
+        uint program = LinkProgram(gl, vertexSource, fragmentSource);
+        return new OpenGLShaderProgram(gl, program);
+    }
+
+    private static uint LinkProgram(GL gl, string vertexSource, string fragmentSource)
     {
         uint vertexShader = CompileShader(gl, ShaderType.VertexShader, vertexSource);
         uint fragmentShader = CompileShader(gl, ShaderType.FragmentShader, fragmentSource);
@@ -43,7 +90,7 @@ internal sealed class OpenGLShaderProgram : ShaderProgram
         gl.DeleteShader(vertexShader);
         gl.DeleteShader(fragmentShader);
 
-        return new OpenGLShaderProgram(gl, program);
+        return program;
     }
 
     public override void Use()
@@ -91,6 +138,18 @@ internal sealed class OpenGLShaderProgram : ShaderProgram
         int location = GetLocation(name);
         if (location < 0) return;
         _gl.Uniform1(location, value);
+    }
+
+    public override void SetTexture(string name, int unit, Texture texture)
+    {
+        if (texture is not OpenGLTexture gl)
+            throw new ArgumentException($"Texture must be OpenGLTexture, got {texture.GetType().Name}", nameof(texture));
+
+        int location = GetLocation(name);
+        if (location < 0) return;
+
+        gl.Bind(unit);
+        _gl.Uniform1(location, unit);
     }
 
     private int GetLocation(string name)

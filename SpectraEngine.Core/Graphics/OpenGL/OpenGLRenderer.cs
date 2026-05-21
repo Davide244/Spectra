@@ -1,12 +1,9 @@
 using Microsoft.Extensions.Logging;
-using Silk.NET.Maths;
 using Silk.NET.OpenGL;
 using Silk.NET.Windowing;
 using SpectraEngine.Core.Graphics.Shaders;
-using SpectraEngine.Core.Scene;
 using System;
-using System.Drawing;
-using System.Numerics;
+using System.Collections.Generic;
 using System.Text;
 
 namespace SpectraEngine.Core.Graphics.OpenGL;
@@ -17,12 +14,16 @@ public class OpenGLRenderer : Renderer
     private IWindow? _window;
     private readonly List<Mesh> _meshes = [];
     private readonly List<ShaderProgram> _shaders = [];
+    private readonly List<Texture> _textures = [];
+    private readonly List<IOpenGLRenderPipeline> _pipelines = [];
+    private int _pipelineIndex;
     private OpenGLLineBatch? _lineBatch;
     private ShaderProgram? _debugShader;
 
-    private Vector3 _lightDirection = Vector3.Normalize(new Vector3(-0.4f, -1f, -0.6f));
-
     public override GraphicsBackend Backend => GraphicsBackend.OpenGL;
+
+    public override string CurrentPipelineName =>
+        _pipelines.Count == 0 ? "None" : _pipelines[_pipelineIndex].Name;
 
     public OpenGLRenderer(ILogger<Renderer> logger, IShaderCompiler shaderCompiler)
         : base(logger, shaderCompiler)
@@ -40,44 +41,71 @@ public class OpenGLRenderer : Renderer
         _gl.CullFace(TriangleFace.Back);
         _gl.FrontFace(FrontFaceDirection.Ccw);
 
-        DefaultShader = CreateShaderFromSource(BaseShaders.Lit);
-        _debugShader = CreateShaderFromSource(BaseShaders.DebugLine);
+        // Prefer source-on-disk so the dev build hot-reloads on save.
+        // Deployed builds (where the source tree isn't present) silently fall
+        // back to the embedded resource and keep the shader frozen.
+        DefaultShader = BaseShaders.LitPath is { } litPath
+            ? CreateShaderFromFile(litPath)
+            : CreateShaderFromSource(BaseShaders.Lit);
+        _debugShader = BaseShaders.DebugLinePath is { } debugPath
+            ? CreateShaderFromFile(debugPath)
+            : CreateShaderFromSource(BaseShaders.DebugLine);
         _lineBatch = new OpenGLLineBatch(_gl);
 
-        _logger.LogInformation("Renderer initialized (OpenGL)");
+        RegisterPipeline(new ForwardPipeline());
+        RegisterPipeline(new WireframePipeline());
+
+        _logger.LogInformation("Renderer initialized (OpenGL, pipeline={Pipeline})", CurrentPipelineName);
+    }
+
+    /// <summary>Adds <paramref name="pipeline"/> to the rotation; the first registered pipeline is the default.</summary>
+    public void RegisterPipeline(IOpenGLRenderPipeline pipeline)
+    {
+        pipeline.Initialize(this);
+        _pipelines.Add(pipeline);
+    }
+
+    public override string NextPipeline()
+    {
+        if (_pipelines.Count == 0)
+            return "None";
+        _pipelineIndex = (_pipelineIndex + 1) % _pipelines.Count;
+        _logger.LogInformation("Pipeline switched to {Pipeline}", CurrentPipelineName);
+        return CurrentPipelineName;
     }
 
     public override void Render(Scene.Scene? scene, double deltaTime)
     {
-        // The framebuffer size is applied here every frame rather than from a
-        // resize event: this runs on the render thread where the GL context is
-        // current, while resize events arrive on the OS-event thread.
-        var size = _window!.FramebufferSize;
-        _gl!.Viewport(0, 0, (uint)size.X, (uint)size.Y);
+        // Apply any shader source-file changes that came in since the last
+        // frame. We're on the render thread here, so GL calls are safe.
+        HotReloader.PumpPendingReloads();
 
-        _gl.ClearColor(Color.CornflowerBlue);
-        _gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
-
-        if (scene is null)
+        if (_pipelines.Count == 0 || _gl is null || _window is null)
             return;
 
-        var camera = scene.Camera;
-        if (size.Y > 0)
-            camera.AspectRatio = size.X / (float)size.Y;
-
-        DrawNode(scene.Root, camera);
-
-        FlushDebugDraw(camera);
+        var context = new OpenGLRenderContext
+        {
+            Renderer = this,
+            Gl = _gl,
+            Window = _window,
+            Scene = scene,
+            DeltaTime = deltaTime,
+        };
+        _pipelines[_pipelineIndex].Execute(context);
     }
 
-    private void FlushDebugDraw(Camera camera)
+    /// <summary>
+    /// Uploads and draws the accumulated <see cref="Renderer.DebugDraw"/> lines
+    /// with depth-test off. Called by pipelines after their main scene pass.
+    /// </summary>
+    internal void FlushDebugDraw(Scene.Camera camera)
     {
-        if (DebugDraw.VertexCount == 0 || _debugShader is null || _lineBatch is null)
+        if (DebugDraw.VertexCount == 0 || _debugShader is null || _lineBatch is null || _gl is null)
             return;
 
         // Always-on-top: depth test off so debug lines don't fight the geometry
         // they describe. Restored afterwards so the next frame's main pass is depth-correct.
-        _gl!.Disable(EnableCap.DepthTest);
+        _gl.Disable(EnableCap.DepthTest);
 
         _debugShader.Use();
         _debugShader.SetUniform("uView", camera.View);
@@ -87,30 +115,12 @@ public class OpenGLRenderer : Renderer
         _gl.Enable(EnableCap.DepthTest);
     }
 
-    private void DrawNode(SceneNode node, Camera camera)
-    {
-        if (node.MeshRenderer is { } meshRenderer)
-        {
-            var material = meshRenderer.Material;
-            var shader = material.Shader;
-
-            shader.Use();
-            shader.SetUniform("uModel", node.WorldMatrix);
-            shader.SetUniform("uView", camera.View);
-            shader.SetUniform("uProjection", camera.Projection);
-            shader.SetUniform("uLightDir", _lightDirection);
-            material.Apply();
-
-            meshRenderer.Mesh.Draw();
-        }
-
-        var children = node.Children;
-        for (int i = 0; i < children.Count; i++)
-            DrawNode(children[i], camera);
-    }
-
     public override void Shutdown()
     {
+        foreach (var pipeline in _pipelines)
+            pipeline.Dispose();
+        _pipelines.Clear();
+
         _lineBatch?.Dispose();
         _lineBatch = null;
         _debugShader = null;
@@ -118,6 +128,10 @@ public class OpenGLRenderer : Renderer
         foreach (var mesh in _meshes)
             mesh.Dispose();
         _meshes.Clear();
+
+        foreach (var texture in _textures)
+            texture.Dispose();
+        _textures.Clear();
 
         foreach (var shader in _shaders)
             shader.Dispose();
@@ -127,6 +141,7 @@ public class OpenGLRenderer : Renderer
         _gl?.Dispose();
         _gl = null;
 
+        base.Shutdown();
         _logger.LogInformation("Renderer shut down (OpenGL)");
     }
 
@@ -135,6 +150,15 @@ public class OpenGLRenderer : Renderer
         var mesh = OpenGLMesh.Create(_gl!, vertices, indices, attributes);
         _meshes.Add(mesh);
         return mesh;
+    }
+
+    public override Texture CreateTexture(
+        ReadOnlySpan<byte> pixels, int width, int height,
+        TextureFormat format, TextureFilter filter, TextureWrap wrap)
+    {
+        var texture = OpenGLTexture.Create(_gl!, pixels, width, height, format, filter, wrap);
+        _textures.Add(texture);
+        return texture;
     }
 
     public override ShaderProgram CreateShader(string vertexSource, string fragmentSource)

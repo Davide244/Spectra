@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Silk.NET.Windowing;
 using SpectraEngine.Core.Graphics.Shaders;
 using System;
+using System.IO;
 
 namespace SpectraEngine.Core.Graphics;
 
@@ -25,10 +26,18 @@ public abstract class Renderer
     /// </summary>
     public DebugDraw DebugDraw { get; } = new();
 
+    /// <summary>
+    /// Hot-reloads shaders created via <see cref="CreateShaderFromFile"/> when
+    /// the source file changes on disk. The render loop must call
+    /// <see cref="ShaderHotReloader.PumpPendingReloads"/> once per frame.
+    /// </summary>
+    public ShaderHotReloader HotReloader { get; }
+
     protected Renderer(ILogger<Renderer> logger, IShaderCompiler shaderCompiler)
     {
         _logger = logger;
         _shaderCompiler = shaderCompiler;
+        HotReloader = new ShaderHotReloader(logger, shaderCompiler, Backend);
     }
 
     /// <summary>
@@ -45,6 +54,19 @@ public abstract class Renderer
         return CreateShader(blob);
     }
 
+    /// <summary>
+    /// Compiles a SpectraShade source file and registers the resulting program
+    /// for hot-reload — saving the file recompiles and swaps it in without
+    /// invalidating materials that reference it.
+    /// </summary>
+    public ShaderProgram CreateShaderFromFile(string absolutePath)
+    {
+        string source = File.ReadAllText(absolutePath);
+        ShaderProgram program = CreateShaderFromSource(source);
+        HotReloader.Register(absolutePath, program);
+        return program;
+    }
+
     public virtual void Initialize(IWindow window)
     {
         _logger.LogInformation("Renderer initialized");
@@ -56,10 +78,30 @@ public abstract class Renderer
 
     public virtual void Shutdown()
     {
+        HotReloader.Dispose();
         _logger.LogInformation("Renderer shut down");
     }
 
+    /// <summary>Name of the rendering pipeline currently in use (e.g. "Forward", "Wireframe").</summary>
+    public abstract string CurrentPipelineName { get; }
+
+    /// <summary>Cycles to the next registered rendering pipeline. Returns the new pipeline's name.</summary>
+    public abstract string NextPipeline();
+
     public abstract Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes);
+
+    /// <summary>
+    /// Uploads <paramref name="pixels"/> as a 2D texture in the given format and
+    /// returns a renderer-owned handle. Pixel data is expected as tightly packed
+    /// rows from bottom-left to top-right (OpenGL convention).
+    /// </summary>
+    public abstract Texture CreateTexture(
+        ReadOnlySpan<byte> pixels,
+        int width,
+        int height,
+        TextureFormat format,
+        TextureFilter filter = TextureFilter.Linear,
+        TextureWrap wrap = TextureWrap.Repeat);
 
     public abstract ShaderProgram CreateShader(string vertexSource, string fragmentSource);
 

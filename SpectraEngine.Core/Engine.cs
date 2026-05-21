@@ -140,12 +140,16 @@ public sealed class Engine
             _cameraController?.Update(deltaTime);
             _sceneManager.Update(deltaTime);
 
-            // F1–F4 toggle debug visualisations on/off.
+            // F1–F5 toggle debug visualisations on/off.
             if (_inputManager.WasKeyPressed(Key.F1)) _debugFlags ^= DebugVisualization.Wireframe;
             if (_inputManager.WasKeyPressed(Key.F2)) _debugFlags ^= DebugVisualization.Vertices;
             if (_inputManager.WasKeyPressed(Key.F3)) _debugFlags ^= DebugVisualization.Aabbs;
             if (_inputManager.WasKeyPressed(Key.F4)) _debugFlags ^= DebugVisualization.Normals;
             if (_inputManager.WasKeyPressed(Key.F5)) _debugFlags ^= DebugVisualization.SceneGraph;
+
+            // F6 cycles render pipelines (Forward, Wireframe, ...).
+            if (_inputManager.WasKeyPressed(Key.F6))
+                _renderer.NextPipeline();
 
             _renderer.DebugDraw.Clear();
             if (_sceneManager.ActiveScene is { } scene && _debugFlags != DebugVisualization.None)
@@ -156,7 +160,7 @@ public sealed class Engine
             if (_fpsCounter.Tick(deltaTime))
             {
                 _pendingTitle =
-                    $"{WindowTitle}  —  {_fpsCounter.Fps:0} FPS  ({_fpsCounter.FrameTimeMs:0.00} ms)";
+                    $"{WindowTitle}  —  {_fpsCounter.Fps:0} FPS  ({_fpsCounter.FrameTimeMs:0.00} ms)  —  {_renderer.CurrentPipelineName}";
             }
 
             window.GLContext?.SwapBuffers();
