@@ -20,6 +20,8 @@ dotnet run --project Test/SpectraEngine.Graphics.Tests   # GL smoke tests (real 
 dotnet run --project SpectraShade.Compiler.CLI -- <file> # ssc shader compiler
 dotnet run -c Release --project Benchmarks/CsgBench      # CSG/BSP benchmark (optional filters: grid | floorplan | tower | query | incremental | openworld)
 dotnet publish SpectraEngine.Executable -c Release -r win-x64 -p:PublishAot=true   # NativeAOT demo build
+git submodule update --init --recursive              # fetch the pinned Box3D source
+native/build-box3d.ps1                               # build box3d.dll (win-x64 Release; -Rid/-Config/-Clean)
 ```
 
 Test projects run via `dotnet run` (xUnit v3 on Microsoft.Testing.Platform), not `dotnet test`.
@@ -27,6 +29,8 @@ Test projects run via `dotnet run` (xUnit v3 on Microsoft.Testing.Platform), not
 `--fullscreen-cycle[=seconds]` is the second piece of gate instrumentation, and OFF by default for the same reason as the self-test: it starts a driver thread that hits the window-mode latch on a timer, so an unattended run performs the windowed ↔ borderless-fullscreen transition a human does with F11 while the render thread keeps presenting and resizing the swap chain. That is the crash this repo fixed — a run must log a `Window mode -> …` line per toggle, survive all of them, and keep the recompile counter and chunk-culling counts moving afterwards, with nothing at `ERR`. Nobody wants a window that reshapes itself every two seconds interactively, so it has to be asked for.
 
 A ~15-second demo run is a smoke gate in its own right — **run it with `--selftest`** (or `SPECTRA_SELFTEST=1`), which is off by default: it must then log `Editing self-test: PASS` about every five seconds (see the self-test bullet below) and nothing at `ERR`. Without the switch the demo is quiet and nothing synthetic touches the scene, which is what an interactive run must be.
+
+**Native code needs no Developer Command Prompt, and using one is not the fix for anything here.** Box3D is a git submodule at `external/box3d`, pinned to an exact commit, built by `native/build-box3d.ps1` — and CMake's Visual Studio generator locates MSVC through the registry and drives MSBuild itself, so `cl` on `PATH` is irrelevant to that build. Verified: CMake 4.2.3 → Visual Studio 18 2026 → MSVC 14.50.35717 from an ordinary shell. **The NativeAOT publish below is the genuinely different case** — it shells out to the ilcompiler's `findvcvarsall.bat`, which *does* care. Do not generalise one to the other. The build options are a contract and live in that one script (notably `BOX3D_DOUBLE_PRECISION=OFF`, which is ABI-affecting rather than a tuning knob); output lands in `native/runtimes/<rid>/native/` and is deliberately NOT committed, because the submodule SHA is what is under version control and a binary that can drift from it is worse than none. See `native/README.md`.
 
 The NativeAOT publish shells out to the MSVC linker through the ilcompiler's `findvcvarsall.bat`, and VS 2026's `vcvarsall.bat` calls `vswhere.exe` unqualified. If `C:\Program Files (x86)\Microsoft Visual Studio\Installer` is not on `PATH`, the batch file's error text is captured as the linker path and the publish dies with `MSB3073 ... exited with code 123` — nothing to do with the code. Publish from a Developer prompt, or prepend that directory to `PATH`.
 
