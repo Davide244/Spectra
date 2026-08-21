@@ -60,6 +60,19 @@ public interface ISceneEditor
     /// </summary>
     string GizmoModeName { get; }
 
+    /// <summary>
+    /// A stable, allocation-free label for the navigation model currently
+    /// driving the viewport camera ("freelook", "fly camera", …).
+    /// </summary>
+    /// <remarks>
+    /// It is in the periodic stats line for the same reason the gizmo mode is:
+    /// which camera is driving is invisible to a headless smoke run, and it is
+    /// the difference between "the editor navigation works" and "the editor
+    /// navigation was never switched on". Interned constants only — the stats
+    /// line is otherwise allocation-free.
+    /// </remarks>
+    string NavigationModeName { get; }
+
     /// <summary>How many edits can currently be undone.</summary>
     int UndoDepth { get; }
 

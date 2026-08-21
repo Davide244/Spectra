@@ -121,6 +121,14 @@ public sealed class Engine
         _renderer.SetFramebufferSize(_window.FramebufferSize);
         _window.FramebufferResize += _renderer.SetFramebufferSize;
 
+        // Focus changes fire during DoEvents, i.e. on this thread — which is
+        // the only thread allowed to touch the cursor. A focus loss has to
+        // release a freelook capture immediately (and drop the held keys whose
+        // key-up went to whoever stole the focus), so it is handled inside the
+        // input manager rather than latched for the render thread to notice a
+        // frame later.
+        _window.FocusChanged += _inputManager.OnWindowFocusChanged;
+
         // Release any thread-affine context (OpenGL) here so the render thread
         // can take ownership. Backends without one (D3D, Vulkan) no-op.
         _renderer.ReleaseContext(_window);
@@ -151,6 +159,13 @@ public sealed class Engine
                 _window.Title = pending;
                 appliedTitle = pending;
             }
+
+            // The third main-thread latch, applied in the same slot and for the
+            // same reason as the title above: the editor camera asks for a
+            // locked cursor from the render thread, and GLFW only accepts
+            // cursor calls here. A no-op on every frame but the two that begin
+            // and end a freelook.
+            _inputManager.ApplyPendingCursorMode();
 
             Thread.Sleep(1);
         }

@@ -51,10 +51,10 @@ public sealed class EngineEditorInputSource : IEditorInputSource
     /// Snapshots input with the whole framebuffer as the viewport — the
     /// full-window editor case.
     /// </summary>
-    public EditorInputFrame CaptureFrame(float deltaTime)
+    public EditorInputFrame CaptureFrame(float deltaTime, EditorNavigationInput navigation = default)
     {
         _renderer.GetFramebufferSize(out int width, out int height);
-        return CaptureFrame(deltaTime, Vector2.Zero, new Vector2(width, height));
+        return CaptureFrame(deltaTime, Vector2.Zero, new Vector2(width, height), navigation);
     }
 
     /// <summary>
@@ -65,7 +65,18 @@ public sealed class EngineEditorInputSource : IEditorInputSource
     /// <c>Camera.ScreenPointToRay</c> wants). The cursor may land outside the
     /// rect — see <see cref="EditorInputFrame.IsCursorInsideViewport"/>.
     /// </summary>
-    public EditorInputFrame CaptureFrame(float deltaTime, Vector2 viewportOrigin, Vector2 viewportSize) =>
+    /// <remarks>
+    /// <b>Both the absolute position and the relative motion are carried.</b>
+    /// While the cursor is locked for a freelook the position freezes at wherever
+    /// the lock was taken (see
+    /// <see cref="InputManager.MousePosition"/>) and only
+    /// <see cref="EditorInputFrame.CursorDelta"/> still means anything — so the
+    /// lock flag travels with the frame, and every consumer above the seam reads
+    /// <see cref="EditorInputFrame.IsPointerUsable"/> instead of assuming the
+    /// position is good.
+    /// </remarks>
+    public EditorInputFrame CaptureFrame(
+        float deltaTime, Vector2 viewportOrigin, Vector2 viewportSize, EditorNavigationInput navigation = default) =>
         new(
             _input.MousePosition - viewportOrigin,
             viewportSize,
@@ -74,5 +85,8 @@ public sealed class EngineEditorInputSource : IEditorInputSource
             _input.PointerButtonsReleased,
             _input.Modifiers,
             _input.ScrollDelta,
-            deltaTime);
+            deltaTime,
+            _input.MouseDelta,
+            navigation,
+            _input.IsCursorLocked);
 }

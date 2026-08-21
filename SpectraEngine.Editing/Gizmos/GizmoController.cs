@@ -157,8 +157,8 @@ public sealed class GizmoController
     }
 
     /// <summary>Advances the live tool by one frame. See <see cref="GizmoTool.Update"/>.</summary>
-    public GizmoUpdateResult Update(in EditorInputFrame frame, bool cancelRequested = false) =>
-        Active.Update(in frame, cancelRequested);
+    public GizmoUpdateResult Update(in EditorInputFrame frame, bool cancelRequested = false, bool pointerAvailable = true) =>
+        Active.Update(in frame, cancelRequested, pointerAvailable);
 
     /// <summary>Draws the live tool. See <see cref="GizmoTool.Draw"/>.</summary>
     public void Draw(DebugDraw output) => Active.Draw(output);

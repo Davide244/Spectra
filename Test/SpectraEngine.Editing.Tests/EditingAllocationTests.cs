@@ -279,21 +279,49 @@ public sealed class EditingAllocationTests
     // --- The viewport per-frame path -----------------------------------------
 
     [Fact]
-    public void Driving_the_orbit_camera_allocates_nothing_per_frame()
+    public void Driving_the_editor_camera_allocates_nothing_per_frame()
     {
+        // The whole navigation path in one loop: freelook (the unmodified
+        // right-drag), the fly axis, the speed trim, and the damping filter.
         var harness = new ViewportHarness();
         harness.Orbit(Vector3.Zero, 20f, 0.4f, -0.2f);
         harness.EditorCamera.SmoothingTimeConstant = 0.1f; // damping on: the real path
+        EditorNavigationInput fly = EditorNavigationInput.FromKeys(
+            forward: true, back: false, left: false, right: true, up: true, down: false, boost: true);
 
         // Warm up the whole filter, including the transcendentals.
         for (int i = 0; i < 200; i++)
             harness.EditorCamera.Update(harness.Frame(
-                new Vector2(400f + i % 5, 300f), down: PointerButtons.Right, scroll: new Vector2(0f, 1f)));
+                new Vector2(400f + i % 5, 300f), down: PointerButtons.Right,
+                scroll: new Vector2(0f, 1f), navigation: fly));
 
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 10_000; i++)
             harness.EditorCamera.Update(harness.Frame(
-                new Vector2(400f + i % 5, 300f), down: PointerButtons.Right, scroll: new Vector2(0f, i % 3 - 1)));
+                new Vector2(400f + i % 5, 300f), down: PointerButtons.Right,
+                scroll: new Vector2(0f, i % 3 - 1), navigation: fly));
+        long after = GC.GetAllocatedBytesForCurrentThread();
+
+        (after - before).ShouldBe(0);
+    }
+
+    [Fact]
+    public void A_locked_look_frame_allocates_nothing_per_frame()
+    {
+        var harness = new ViewportHarness();
+        harness.EditorCamera.SetPose(Vector3.Zero, 0.4f, -0.2f);
+        harness.EditorCamera.SmoothingTimeConstant = 0.1f;
+
+        for (int i = 0; i < 200; i++)
+            harness.EditorCamera.Update(harness.Frame(
+                harness.CenterPixel, down: PointerButtons.Right,
+                cursorDelta: new Vector2(i % 3 - 1, i % 5 - 2), locked: true));
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 10_000; i++)
+            harness.EditorCamera.Update(harness.Frame(
+                harness.CenterPixel, down: PointerButtons.Right,
+                cursorDelta: new Vector2(i % 3 - 1, i % 5 - 2), locked: true));
         long after = GC.GetAllocatedBytesForCurrentThread();
 
         (after - before).ShouldBe(0);
