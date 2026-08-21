@@ -129,6 +129,7 @@ public sealed class Scene
         // Index BEFORE the event so handlers (and anything they call) can
         // already resolve the arriving node through TryFindById.
         _nodesById[node.Id] = node;
+        UpdatePartBrushMembership(node);
         NodeAdded?.Invoke(node);
     }
 
@@ -142,6 +143,10 @@ public sealed class Scene
         // node that currently owns the key.
         if (_nodesById.TryGetValue(node.Id, out SceneNode? indexed) && ReferenceEquals(indexed, node))
             _nodesById.Remove(node.Id);
+        // Unconditionally, unlike the membership recheck elsewhere: the node is
+        // leaving whatever it carries, and its meshes are collected by the next
+        // pump's sweep.
+        _partBrushNodes.Remove(node);
         NodeRemoved?.Invoke(node);
     }
 
@@ -152,7 +157,26 @@ public sealed class Scene
     // node, and reparents WITHIN this scene (which move the subtree's world
     // matrices but deliberately raise no membership events — yet still change
     // traversal order, hence the structure bump).
-    internal void OnNodeSpatialComponentChanged(SceneNode node) => Bvh.OnSpatialComponentChanged(node);
+    internal void OnNodeSpatialComponentChanged(SceneNode node)
+    {
+        Bvh.OnSpatialComponentChanged(node);
+        // The Brush setter routes through here unconditionally (it is one of
+        // the two gate sites that must stay kind-blind), which makes it the
+        // natural place to keep the part set honest through attach, swap and
+        // detach alike.
+        UpdatePartBrushMembership(node);
+    }
+
+    // Adds or drops `node` from the part set to match what it currently
+    // carries. Idempotent and O(1), so every caller may just say "recheck this
+    // node" rather than reasoning about which transition happened.
+    internal void UpdatePartBrushMembership(SceneNode node)
+    {
+        if (node.Brush is not null && node.BrushKind == BrushKind.Part)
+            _partBrushNodes.Add(node);
+        else
+            _partBrushNodes.Remove(node);
+    }
 
     internal void OnNodeSubtreeMoved(SceneNode node)
     {
@@ -274,14 +298,36 @@ public sealed class Scene
         _renderViewScratch.Clear();
         Bvh.QueryFrustum(in frustum, _renderViewScratch);
 
-        // The query yields every visible spatial node, brush nodes included —
-        // only mesh-bearing nodes become draws (brush geometry renders through
-        // the compiled static world, never per-node).
+        // The query yields every visible spatial node, brush nodes included.
+        // Mesh-bearing nodes become draws, and so do PART brush nodes: world
+        // brush geometry renders through the compiled static world and never
+        // per-node, but a part is by definition not in that world, so its own
+        // mesh is drawn here under the node's world matrix. This is the one
+        // place the two kinds diverge in the render path.
+        // Counted apart from view.Items.Count, which now holds both
+        // populations: VisibleCount stays "mesh nodes that survived culling",
+        // so the two numbers keep meaning what their names say and neither can
+        // read as larger than its own total.
+        int meshItems = 0;
+        int partBrushes = 0;
         for (int i = 0; i < _renderViewScratch.Count; i++)
         {
             SceneNode node = _renderViewScratch[i];
             if (node.MeshRenderer is { } meshRenderer)
+            {
+                meshItems++;
                 view.Add(new RenderItem(meshRenderer.Mesh, meshRenderer.Material, node.WorldMatrix));
+            }
+
+            if (node.BrushKind == BrushKind.Part &&
+                node.Brush is { } partBrush &&
+                _partBrushMeshes.TryGet(partBrush, out BrushSubmesh[] submeshes))
+            {
+                partBrushes++;
+                Matrix4x4 world = node.WorldMatrix;
+                for (int s = 0; s < submeshes.Length; s++)
+                    view.Add(new RenderItem(submeshes[s].Mesh, submeshes[s].Material, world));
+            }
         }
 
         // The static world's chunks: cull against the RENDER bounds (owned
@@ -317,8 +363,10 @@ public sealed class Scene
             }
         }
 
-        view.VisibleCount = view.Items.Count;
+        view.VisibleCount = meshItems;
         view.TotalCount = Bvh.MeshLeafCount;
+        view.PartBrushesVisible = partBrushes;
+        view.PartBrushesTotal = _partBrushNodes.Count;
         view.WorldChunksVisible = visibleChunks;
         view.WorldChunksTotal = _staticWorldChunkList.Count;
         view.WorldMaterialBatchesVisible = view.WorldItems.Count;
@@ -342,6 +390,23 @@ public sealed class Scene
     // scene state; both containers always describe the same entries.
     private readonly Dictionary<ChunkCoord, StaticWorldChunkMesh> _staticWorldChunkMeshes = [];
     private readonly List<StaticWorldChunkMesh> _staticWorldChunkList = [];
+
+    // Every owned node carrying a BrushKind.Part brush, and the GPU meshes
+    // those brushes draw with.
+    //
+    // The set exists so the per-frame pump has an exact work list instead of a
+    // graph walk: parts are the population that moves every tick, so anything
+    // O(world) here would reintroduce exactly the cost the kind was invented to
+    // remove. It is plain membership — no ancestor walk, no subtree invariant —
+    // maintained from the same four places that already learn about a brush
+    // arriving, leaving or changing kind, and it is deliberately NOT a third
+    // counter (see SceneNode's two lanes for why that distinction matters).
+    private readonly HashSet<SceneNode> _partBrushNodes = [];
+    private readonly PartBrushMeshCache _partBrushMeshes = new();
+
+    // Cached so the per-brush upload path can hand the resolver down without
+    // allocating a delegate per call.
+    private Func<MaterialRef, Material?>? _resolveWorldMaterial;
 
     /// <summary>
     /// The static world's GPU meshes, one entry per chunk with render geometry
@@ -417,6 +482,55 @@ public sealed class Scene
     // geometry. The asset manager's own default material is the last resort for
     // a scene that set no fallback at all (it degrades, never throws, on a
     // missing file or an unknown id).
+    /// <summary>
+    /// Brings the part brushes' GPU meshes up to date: builds one for any part
+    /// brush that does not have one yet, and destroys the meshes of brushes
+    /// nothing references any more. Render thread only, once per frame, beside
+    /// <see cref="ProcessStaticWorldCompilation"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The work is proportional to the number of distinct part <em>brushes</em>
+    /// — not to the world, and not to how much anything moved. A part that only
+    /// moves is a pure cache hit: its mesh is brush-local, so movement is the
+    /// node's world matrix and nothing here is rebuilt. That is the entire
+    /// performance claim of <see cref="BrushKind.Part"/>, and it is why this
+    /// pump may run unconditionally every frame.
+    /// </para>
+    /// <para>
+    /// A part's mesh is built from its brush alone, with no carve against its
+    /// neighbours — which is the visible difference between the two kinds, not
+    /// an optimisation. Two overlapping world brushes merge into one skin; two
+    /// overlapping parts interpenetrate, and a part face left coplanar with a
+    /// world face z-fights. Both are correct, and both are why the editor must
+    /// make the kind visible.
+    /// </para>
+    /// </remarks>
+    public void ProcessPartBrushMeshes(Renderer renderer)
+    {
+        if (_partBrushNodes.Count == 0 && _partBrushMeshes.Count == 0)
+            return;
+
+        _resolveWorldMaterial ??= ResolveWorldMaterial;
+
+        _partBrushMeshes.BeginPump();
+        foreach (SceneNode node in _partBrushNodes)
+        {
+            if (node.Brush is { } brush)
+                _partBrushMeshes.Acquire(renderer, brush, _resolveWorldMaterial);
+        }
+        _partBrushMeshes.EndPump(renderer);
+    }
+
+    /// <summary>How many distinct part brushes currently hold GPU meshes.</summary>
+    public int PartBrushMeshCount => _partBrushMeshes.Count;
+
+    /// <summary>How many nodes in this scene carry a <see cref="BrushKind.Part"/> brush.</summary>
+    public int PartBrushNodeCount => _partBrushNodes.Count;
+
+    /// <summary>Destroys every GPU mesh the part-brush cache owns. Render thread, before renderer shutdown.</summary>
+    public void ReleasePartBrushMeshes(Renderer renderer) => _partBrushMeshes.ReleaseGraphicsResources(renderer);
+
     private Material? ResolveWorldMaterial(MaterialRef reference)
     {
         if (!reference.IsDefault && Assets is { } assets)
@@ -725,6 +839,29 @@ public sealed class Scene
     {
         _staticWorldVersion++;
         _snapshotForceFull = true;
+    }
+
+    // The set of brushes ADMITTED to the static world changed — a node's
+    // BrushKind flipped — without the graph's shape changing at all.
+    //
+    // This needs its own door because it breaks two separate assumptions at
+    // once, and MarkStaticWorldDirty only covers one of them. The placement
+    // COUNT changed, so every slot after the converted node shifted (that is
+    // the force-full half). But the snapshot's fast path also gates on the
+    // graph-structure version, whose documented meaning is "the brush
+    // snapshot's TRAVERSAL ORDER may have changed" — and a conversion changes
+    // exactly that while adding and removing no nodes, so no membership event
+    // fires and nothing would bump it. A stale structure version plus a
+    // shifted slot map is a trusted diff applied to the wrong placements: the
+    // corruption is silent, and it renders.
+    //
+    // Render thread only, like the two marks below it.
+    internal void MarkAdmissionChanged(SceneNode node)
+    {
+        _graphStructureVersion++;
+        _staticWorldVersion++;
+        _snapshotForceFull = true;
+        UpdatePartBrushMembership(node);
     }
 
     // Node-scoped dirtying for placement-preserving edits (transform changes,
@@ -1307,15 +1444,25 @@ public sealed class Scene
 
             foreach (SceneNode node in root.Traverse())
             {
-                if (node.Brush is not { } brush)
+                // Admitted brushes only. Testing IsStaticWorldBrush rather
+                // than `Brush is not null` is what keeps a part brush inside a
+                // dirty subtree from forcing the O(world) walk on every drag
+                // frame: an un-admitted node holds no slot, so it would fall
+                // into the "brush appeared since the snapshot" bail below.
+                if (!node.IsStaticWorldBrush)
                 {
-                    // A slot-holding node without a brush means a detach the
-                    // force-full signal did not cover: the placement count
-                    // changed, every later slot shifted — re-walk.
+                    // A slot-holding node that is no longer an admitted brush
+                    // means a detach — or a conversion — that the force-full
+                    // signal did not cover: the placement count changed, every
+                    // later slot shifted, so re-walk. (Both routes do signal
+                    // it: detach through MarkStaticWorldDirty, conversion
+                    // through MarkAdmissionChanged. This is the net.)
                     if (_snapshotSlots.ContainsKey(node))
                         return FastSnapshotResult.FullWalkRequired;
                     continue;
                 }
+
+                Bsp.Brush brush = node.Brush!;
 
                 if (!_snapshotSlots.TryGetValue(node, out int slot))
                     return FastSnapshotResult.FullWalkRequired; // brush appeared since the snapshot
@@ -1348,8 +1495,14 @@ public sealed class Scene
         var nodes = new List<SceneNode>();
         foreach (SceneNode node in Nodes)
         {
-            if (node.Brush is { } brush)
+            // Admitted brushes only: a part brush is not compiled, so it holds
+            // no slot and contributes no placement. Rigidity validation
+            // therefore stops seeing part brushes here — they stay rigid by the
+            // tool-level refusal instead, which reads the kind-BLIND
+            // SubtreeBrushCount precisely so that it still covers them.
+            if (node.IsStaticWorldBrush)
             {
+                Bsp.Brush brush = node.Brush!;
                 Matrix4x4 world = node.WorldMatrix;
                 string? defect = DescribeNonRigidDefect(world);
                 if (defect is not null)

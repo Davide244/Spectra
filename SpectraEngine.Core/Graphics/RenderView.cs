@@ -59,7 +59,13 @@ public sealed class RenderView
     /// </summary>
     public IReadOnlyList<RenderItem> WorldItems => _worldItems;
 
-    /// <summary>Mesh items emitted into <see cref="Items"/> this build (i.e. the survivors of culling).</summary>
+    /// <summary>
+    /// Mesh-renderer items emitted into <see cref="Items"/> this build (i.e.
+    /// the survivors of culling). NOT the length of <see cref="Items"/>, which
+    /// also carries part-brush draws — see <see cref="PartBrushesVisible"/>.
+    /// The two populations are counted apart so neither can read as larger
+    /// than its own total.
+    /// </summary>
     public int VisibleCount { get; internal set; }
 
     /// <summary>Total mesh-bearing spatial nodes registered in the scene, culled or not.</summary>
@@ -86,6 +92,17 @@ public sealed class RenderView
     /// <summary>Per-material world draws across every uploaded chunk, culled or not.</summary>
     public int WorldMaterialBatchesTotal { get; internal set; }
 
+    /// <summary>
+    /// Part brushes that survived culling and contributed draws this build.
+    /// Their draws land in <see cref="Items"/> alongside mesh renderers, not in
+    /// <see cref="WorldItems"/> — a part is drawn per node under its own world
+    /// matrix, which is precisely what makes it free to move.
+    /// </summary>
+    public int PartBrushesVisible { get; internal set; }
+
+    /// <summary>Total nodes carrying a part brush, culled or not.</summary>
+    public int PartBrushesTotal { get; internal set; }
+
     /// <summary>Appends one draw to the list (build-side use only).</summary>
     internal void Add(in RenderItem item) => _items.Add(item);
 
@@ -106,5 +123,7 @@ public sealed class RenderView
         WorldChunksTotal = 0;
         WorldMaterialBatchesVisible = 0;
         WorldMaterialBatchesTotal = 0;
+        PartBrushesVisible = 0;
+        PartBrushesTotal = 0;
     }
 }
