@@ -29,11 +29,22 @@ Spectra is a C#/.NET 10 game engine built on a scene graph, with Hammer-style CS
 | `Instance` | `SceneNode` | **exists** | One concrete class. No subclass hierarchy — `Brush` and `MeshRenderer` are optional payload fields on the node. |
 | `Instance` identity | `SceneNode.Id` (`Guid`) | **exists** | Assigned at construction, stable across rename and reparent. Better than Roblox, which has no instance identity at all. |
 | `DataModel` / `game` | `Scene` / `Scene.Root` | **exists** | `Scene` owns the root, camera, selection set, BVH, and the derived static world. |
-| `Workspace` | `Scene.Workspace` well-known node | **planned** | Today spatial content sits directly under `Scene.Root`. |
-| `Lighting` | `Scene.Lighting` node with attributes | **planned** | Needs no bespoke type — it is a node the forward pipeline reads. Nothing reads it today. |
-| `ReplicatedStorage` / `ServerStorage` | a single `Storage` node | **deliberate difference** | The two exist only to express a replication boundary. Spectra is single-process; one container is the honest answer. |
+| `Workspace` | `Scene.Root` itself; Luau `workspace` aliases it | **exists** (root) / **planned** (alias) | **There is no `Workspace` container.** Spatial content sits directly under `Scene.Root`, which is what `workspace.Wall` will resolve against, so that expression ports character-for-character. What decides whether a node is live world content is the `State` property below, not its ancestry. |
+| `Lighting` | **three things, three homes** — a typed `Scene.Environment` settings struct for global properties, asset references on it for sky/atmosphere, and a render-arc post-effect chain | **planned** | **Corrected.** An earlier version of this row said "a `Scene.Lighting` node with attributes". A node implies a transform, a parent, a realm and a subtree brush count, none of which mean anything for fog density. Lights themselves *are* spatial `SceneNode`s carrying a `Light` payload. Nothing reads any of it today. |
+| `ServerStorage`, `ServerScriptService` | `Realm = Server`, plus `State = Dormant` for the storage case | **planned** | **Corrected — this replaces a `Storage`-collapse row** that read "deliberate difference, Spectra is single-process". Multiplayer is designed (`docs/networking.md`), so that premise is dead. Note these two Roblox folders have *identical* audience and differ only in liveness — which is exactly what the two properties separate. Design: [`docs/realms.md`](realms.md). |
+| `ReplicatedStorage` | nothing — `Shared` is the default | **planned** | Shared content needs no marking at all, so the container has no replacement and needs none. Roblox's "client writes persist locally but never replicate back" survives as an **authority** rule (`networking.md` §4.4), which is stronger. |
+| `ReplicatedFirst` | `JoinPriority = First` on the node | **planned** | Sent ahead of the bulk world-sync channel. `game:IsLoaded()` → a `WorldReady` signal; `RemoveDefaultLoadingScreen()` → `DismissBootScreen()`. |
+| `StarterGui`, `StarterPack`, `StarterPlayerScripts`, `StarterCharacterScripts` | declarative **spawn rules** in `game.spectraproj`: `{ template, phase, destination }` | **planned** | `phase` is `OnJoin` or `OnCharacterSpawn` — the distinction Roblox leaves unwritten in the tree (`StarterPlayerScripts` copies once, `StarterCharacterScripts` copies every death) becomes a word on the rule. `ResetOnSpawn` disappears into `phase`. **`StarterPack`'s destination does not exist**: tools and inventory are an unbuilt subsystem, so that one rule ports with nothing to spawn into. |
+| `StarterPlayer` (the object) | split: 23 properties → a player-defaults settings block; its two script containers → spawn rules | **planned** | It was never a container; it was a property bag that also parented two containers. **There is no `StarterPlayer` node.** |
 | `RunService` (`Heartbeat`, `PreSimulation`, `PreRender`) | engine frame signals | **planned** | The render loop already has all the phase points; nothing is exposed. Roblox's current names plus the legacy aliases are the plan. |
-| `Players`, `Humanoid`, `Terrain`, `StarterPlayer` | — | **deliberate difference** | Not provided. A hollow `Humanoid` would be worse than none. |
+| `Players` | a **service and index**, not a tree container | **planned** | A player has no transform, no brush and no realm. Its *contents* stay real nodes: `player.Gui`, `player.Scripts`, `player.Character` live in a per-player subtree, replicated to that one client by a per-client interest filter. This is the split Roblox already makes (`Player` in `Players`, `Character` in `Workspace`), made explicit. |
+| `CollectionService` | per-node tags + a scene reverse index + `ObserveTag` | **planned** | See the Instance API table. The reverse index must take an audience mask, or it enumerates content the caller cannot see. |
+| `SoundService` | `Scene.Audio` settings + `Audio.Play2D(clip)`; spatial sounds are payloads on world nodes | **planned** | A sound is never parented to a service. Audio is a stub in the tree today. |
+| `Teams` | nothing in v1 — a string attribute or a `NodeRef` to a team entity | **deliberate difference** | `Teams` exists largely to drive `TeamColor` on the default leaderboard, which does not exist here, and `BrickColor` is already rejected. Cheap to add later; expensive to ship an empty one. |
+| `Humanoid`, `Terrain`, `Debris`, `CoreGui`, `Chat`, `TestService` | — | **deliberate difference** | Not provided. A hollow `Humanoid` would be worse than none; `Terrain` is a deliberate difference because brushes *are* the world; `Debris` is `task.delay` + `Destroy`; `CoreGui` has no analogue in an engine with no platform UI. |
+| `ReplicatedScriptService` | nothing | n/a | Removed from Roblox itself in 2022 (v0.526.0); never had members. Named only to close the question. |
+| — (no Roblox analogue) | `SceneNode.Realm` — `Inherit` / `Shared` / `Server` / `Client` | **planned** | The audience axis, lifted off tree location. Inherited down the subtree; `Shared` is the effective default everywhere. |
+| — (no Roblox analogue) | `SceneNode.State` — `Inherit` / `Active` / `Dormant` | **planned** | The liveness axis. `Dormant` means not carved, not drawn, not queried, not ticking — a parked template you can keep next to the thing that clones it. This is `ServerStorage`'s *other* job, and it needs its own property because there is no way to make a brush inert today. |
 
 ### Parts and geometry
 
@@ -71,7 +82,7 @@ Spectra is a C#/.NET 10 game engine built on a scene graph, with Hammer-style CS
 | `:GetChildren()` | `node.Children` | **exists** | Allocation-free `IReadOnlyList`, unlike Roblox's fresh table per call. |
 | `:GetDescendants()` | `node.Traverse()` | **exists** | Pre-order, explicit stack. Allocates one `Stack` per call — do not call it per frame. |
 | `:FindFirstChild(name)` | — | **planned** | |
-| `:WaitForChild(name)` | sync return if present, throw if absent; `WaitForChildAsync` for the real case | **deliberate difference** | Roblox's `WaitForChild` exists because of replication. There is no replication here, so the silent infinite yield would be imported for nothing. |
+| `:WaitForChild(name)` | sync return if present, throw if absent; `WaitForChildAsync` for the real case | **deliberate difference** | Roblox's `WaitForChild` exists because the whole DataModel streams in. **Corrected:** replication *is* designed (`docs/networking.md`), so "there is no replication here" is no longer the reason. The reason is narrower and survives it — an **authored** node is present on every client from map load, forever, and only its property updates are interest-filtered, so the silent infinite yield has nothing to wait for. It stays a real API for content spawned at runtime, which is what `WaitForChildAsync` is. Note this call is also subject to the audience gate: a node your realm does not hold reads as absent, exactly as it would on a remote client. |
 | `:IsA(className)` | string class table (`NodeClassRegistry`) | **planned** | Not C# subclassing and not reflection — AOT forbids the latter. |
 | `:Clone()` | `SceneNode.Clone()` | **planned** | Must deep-copy the `Brush` (a `Brush` instance must never be shared between nodes) while sharing the GPU mesh. |
 | `:Destroy()` | `Destroy()` with a `Destroying` signal and a destroyed lock | **planned** | Today: `node.Parent?.RemoveChild(node)`, which detaches, drops the BVH leaf, and auto-deselects — but has no lock and no event. |
@@ -86,8 +97,10 @@ Spectra is a C#/.NET 10 game engine built on a scene graph, with Hammer-style CS
 
 | Roblox concept | Spectra equivalent | Status | Note |
 | --- | --- | --- | --- |
-| `Script` / `ModuleScript` | a `Script` payload on a node, running Luau | **planned** | Nothing exists: no VM, no `Script` type, no scripting project in the solution. |
-| `LocalScript` | — | **deliberate difference (for now)** | No client/server split exists, so the distinction would be theatre. |
+| `Script` / `ModuleScript` | a `Script` payload on a node, with **one** axis: `bool IsModule` | **planned** | Nothing exists: no VM, no `Script` type, no scripting project in the solution. |
+| `LocalScript` | a script node declared `Realm = Client` | **planned** | **There is no second script type.** Where the script *runs* is the node's realm, and Roblox agrees this was the mistake — it shipped `Enum.RunContext` in 2022 to unwind exactly this, motivated by *"consolidating Script and LocalScript behavior"*. We have no content, so we do it once. |
+| `Script.RunContext` | `SceneNode.Realm` | **planned** | Roblox's partial fix decoupled run location and left audience coupled to the container, which is why a `RunContext = Client` script in `ServerScriptService` silently does not run. Here there is one axis and it is the node's. |
+| "where does this script run?" | **a script runs on the narrowest side its node exists on, and `Shared` means server** | **planned** | Stated precisely because the tempting slogan — *"where a script exists is where it runs"* — is **false**: a `Shared` node exists on both sides and its runnable script runs on one. `Server` → server. `Client` → every client, one private instance each. `Shared` → the **server**, once. A `Shared` *module* is requirable from both sides and yields **one instance per side**, which is what a `ModuleScript` in `ReplicatedStorage` already does. There is no value meaning "runs on both". |
 | C# gameplay code | compiled C# against `SpectraEngine.Core` | **exists** | This is the only way to write behaviour today: reference the engine and write C#. |
 | Explorer | editor tree panel | **planned** | |
 | Properties | editor property panel driven by descriptor tables (no reflection) | **planned** | |
@@ -125,6 +138,57 @@ The static world is *derived data*. You never author it; you author brush nodes,
 ### The scene graph is the single spine
 
 There is one node type. There is no ECS, no component registry, no entity table, and none is planned. Payloads — `Brush`, `MeshRenderer`, and later `Entity` and `Script` — are optional fields on the node. That is closer to Roblox's own model than it first looks: in Roblox, behaviour is an attached `Script` child, not a subclass. `Part : BasePart : Instance` is a class table for `IsA`, not a C# inheritance chain, and in Spectra it will literally be a string table for exactly that reason (reflection is banned by the AOT rule).
+
+### There are no service containers — audience and liveness are properties of the node
+
+**Status: planned. None of this exists in the tree.** The full design is [`docs/realms.md`](realms.md); this section is the part you need to read the mapping table above. Read it as a design decision you will meet later, not as something you can try today.
+
+Roblox encodes **four independent questions** in **one dimension — where in the tree the object sits**:
+
+| the question | how Roblox asks it |
+| --- | --- |
+| who holds this data at all | `ServerStorage`/`ServerScriptService` vs `ReplicatedStorage` vs `Workspace` |
+| when does it arrive on a client | `ReplicatedFirst` vs everything else |
+| is this live world content, or a parked template | `Workspace` vs any storage container |
+| is it copied per player, and when | the four `Starter*` containers |
+
+One dimension cannot carry four values, and the costs are mechanical rather than stylistic. The axes cannot be combined — "shared, but parked" is not expressible at all, and `ServerStorage` and `ServerScriptService` have *identical* audience and differ only in liveness, which is why there are two folders with one word between them and no documentation that says so plainly. The rules are tribal knowledge, because a folder name cannot carry a rule. And the one that costs you every day: **you cannot put a server-only spawner next to the enemies it spawns.** The spawner must live in `ServerScriptService`, the enemies in `Workspace`, the templates in `ServerStorage`. Three folders, one feature, and the tree is organised for the replication system instead of for your game.
+
+Spectra splits it into **two inherited properties you declare on the node where the exception actually is**:
+
+- **`Realm`** — `Inherit` (the default) / `Shared` / `Server` / `Client`. Who holds it. `Shared` is what the root resolves to, so the overwhelming majority of content declares nothing.
+- **`State`** — `Inherit` (the default) / `Active` / `Dormant`. Whether it is live: carved into the world, in the spatial index, drawn, queried, ticking. `Dormant` is a parked template.
+
+Both inherit down the subtree and both resolve by **narrowing**: a child can be as narrow as its parent or narrower, never wider. A `Server` subtree cannot contain a `Shared` child, because a client that does not hold the parent has no way to compute the child's world transform — its transform is parent-relative, so the only options would be silently reparenting it (server and client then disagree about where a replicated object *is*) or shipping the hidden ancestors' names and transforms (leaking exactly what the declaration existed to hide). Both are refused.
+
+Drag a `Client` subtree under a `Server` parent and it does **not** become server content. `Server ∩ Client` is empty, and the result has a name — **`Inert`** — meaning the subtree exists nowhere as live content, its scripts run nowhere, and the editor badges every affected node. Your *declarations* are untouched, so dragging it back restores it exactly. The alternative — clamping to the ancestor — would turn client code that ran with no authority into server code that runs *with* authority, from a mouse gesture, which is a worse version of the problem this design exists to delete.
+
+Three consequences that will bite if you do not know them up front:
+
+1. **A brush node is always `Shared`.** Marking a brush-bearing subtree `Server` or `Client` is refused at the setter, not excluded with a warning. Brushes carve into the one static world that every peer renders *and collides against*, so a server-only brush would publish its exact shape as the hole it leaves, and the server's collision world would disagree with every client's — you would rubber-band into a wall you cannot see. If you want a region parked, that is `State = Dormant`. If you want something drawn but never carved, that is a `MeshRenderer` node, which lives outside CSG.
+2. **Server content is not secret on disk in v1.** The tree stops your own client code from reading it; it does not stop someone unpacking the game. Server node records — names, transforms, attributes, and server script source — ship in the client's pack. Do not put a secret in a server script. (There is a route to on-disk secrecy — a cook-target strip — and it is designed, not built.)
+3. **What you get is orthogonality, not fewer rules.** Honestly counted, the new model is about ten rules and three of them are exceptions. Roblox's containers are eight folders you can *see*, one rule each, learned on demand, in a project that ships them non-empty. The defensible claim is not "smaller" — it is that **you can finally put the spawner next to the enemies it spawns.**
+
+#### Porting `game.ServerStorage.Enemy:Clone()`
+
+Be ready for a rewrite, not a shim. **There is deliberately no compatibility layer**, and the reason is not cost: the moment `game.ServerStorage` resolves to a real node, the container model is back *without its rules* — nothing would then stop a brush under it from carving — and you would be running both models at once, which is worse than either. Every future Spectra tutorial would have two right answers. There is also no codemod, because it cannot be made sound for Luau: `game[name]`, `FindFirstChild("ServerStorage")`, string-built paths and `require` chains defeat a regex and a real parser alike, and a codemod that fixes 80% and silently misses 20% fails in production instead of at your keyboard.
+
+What you get instead is the codemod's *value* as diagnostics: `game.ServerStorage`, `game.ReplicatedStorage`, `game.StarterGui` and friends are declared as **deprecated symbols in the generated `spectra.d.luau`**, whose type-level message names the replacement — so under `--!strict` the 20% fails at the type checker. And `game:GetService(name)` **throws**, naming the replacement, rather than returning `nil`: the universal idiom binds the service on one line and indexes it ten lines later, so a `nil` would report the wrong line while the helpful message scrolled past.
+
+```lua
+-- Roblox
+local enemy = game.ServerStorage.Enemy:Clone()
+enemy.Parent = workspace
+
+-- Spectra as designed: a Dormant template, sitting next to the spawner that uses it
+local enemy = script.Parent.Templates.Enemy:Clone()   -- Templates.State == "Dormant"
+enemy.State  = "Active"
+enemy.Parent = workspace.Arena
+```
+
+**And the honest ergonomic gap:** a `Dormant` subtree is not a prefab. You clone and re-parent it by hand, it has no override mechanism, and its contents are written into the map rather than expanded from a shared definition. Prefabs are on the roadmap, explicitly *off* the critical path, so `Dormant` is the answer for the next several milestones rather than a stopgap that lands next month.
+
+**Finally, the container mapping is the easy third of a port.** The hard two thirds are that your gameplay code references physics, `Humanoid`, `TweenService`, `DataStoreService` and per-part colour — none of which exist here. A migration guide that leads with a slick container table and buries that would be dishonest, so it is stated here instead.
 
 ### Two languages: Luau for gameplay, C# for the engine
 
@@ -282,6 +346,7 @@ if (node.TryGetAttribute("Speed", out var v))
 - **Custom shaders in a real shader language.** SpectraShade source files compile per backend at runtime and hot-reload on save while the program's identity stays stable, so every material picks up the change. **Exists.**
 - **Three render backends.** OpenGL, D3D11, D3D12, each with forward and wireframe pipelines over one shared draw list. OpenGL is the Linux path. **Exists.**
 - **Native AOT-published games.** `PublishAot` is already set on the executable and on the shader compiler CLI, so the AOT analyzers run on every build of those projects. Caveat, and it is a real one: an end-to-end AOT publish has not been proven, and Silk.NET 2.23 needs explicit `GlfwWindowing.RegisterPlatform()` / `GlfwInput.RegisterPlatform()` calls under NativeAOT that are absent from the tree — expect the first publish to build and then die at window creation.
+- **A tree organised for your game instead of for the replication system.** Audience and liveness are declared on the node where the exception is, so the server-only spawner, the enemies it spawns and the templates it clones can be siblings — which four Roblox containers make impossible. **Planned, not built**, and the honest framing is orthogonality rather than simplicity: it is about ten rules, three of them exceptions, against Roblox's eight visible folders.
 - **Per-face materials with Hammer-style texture alignment.** The differentiator Studio has no answer for — Roblox gives you six-axis decals on box faces and no alignment tooling. **Planned, not built**, and it is the highest-fanout unbuilt item in the engine.
 
 ---
@@ -297,7 +362,7 @@ Ordered by how much it will matter to you, not by engineering size.
 5. **No Instance API surface.** No settable `Parent`, `FindFirstChild`, `WaitForChild`, `IsA`, `Clone`, `Destroy`, attributes, tags, or per-node signals.
 6. **No `CFrame` or `Color3` value types.** Transform code is `System.Numerics` matrices and quaternions.
 7. **No save or load.** There is no scene serializer anywhere in the tree — no place file, no prefabs, no asset round-trip. An engine without save/load is a demo, and this is the gap the Play/Stop and undo designs both have to route around.
-8. **No networking.** No client/server split, no `RemoteEvent`, no replication, no `Players`. Half of Roblox architecture knowledge is inapplicable, and this is unanswered rather than answered "no".
+8. **No networking, and no realms.** No client/server split, no `RemoteEvent`, no replication, no `Players` — and no `Realm`/`State` properties on `SceneNode`, so today there is no audience concept anywhere in the tree and nothing is hidden from anything. Half of Roblox architecture knowledge is inapplicable. Unlike the other entries on this list, this one is now **answered on paper**: [`docs/networking.md`](networking.md) designs the multiplayer arc and [`docs/realms.md`](realms.md) designs the replacement for the service containers. Both are design documents in the sense this page's status vocabulary means by **planned** — decided, written down in detail, and not written in code. Treat them as vapour until they land.
 9. **No model import.** `Silk.NET.Assimp` is referenced; no importer code exists. Meshes come from `Primitives`.
 10. **Thin rendering feature set.** Forward and wireframe only: no shadows, no post-processing, no transparency pass, no offscreen render targets, no PBR, no instancing.
 11. **Sharp edges worth knowing.** `AddChild` has no cycle guard (a parent loop recurses to stack exhaustion). A non-rigid write on a brush node is accepted at the setter and rejected three stages later, freezing the static world at its last good compile with only a log line. `Scene.Raycast` reports no hit for a ray that starts inside a solid, so a camera inside a wall cannot click-select it.
