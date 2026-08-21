@@ -84,6 +84,11 @@ public sealed class Engine
     {
         _logger.LogInformation("Spectra Engine {Version} starting", EngineInfo.VersionString);
 
+        // Must precede Window.Create and CreateInput below. Silk.NET otherwise
+        // discovers its GLFW backends by reflection, which a NativeAOT publish
+        // trims away — see SilkPlatform for the full story.
+        SilkPlatform.EnsureRegistered();
+
         var options = WindowOptions.Default with
         {
             Title = WindowTitle,
@@ -209,11 +214,21 @@ public sealed class Engine
                 double deltaTime = Math.Min(rawDelta, MaxDeltaTime);
 
                 _inputManager.Update(deltaTime);
-                _cameraController?.Update(deltaTime);
-                // The demo update also handles mouse picking and the periodic
-                // smoke self-test, so it gets the input manager and last
-                // frame's render view (for its culling stats) alongside time.
-                _sceneManager.Update(deltaTime, _inputManager, _renderView);
+
+                // The editor, when the host installed one, gets the frame
+                // first: it owns selection, manipulation and — on the frames it
+                // says so — navigation. It runs before the scene update so the
+                // camera and any gizmo edit are final by the time the draw list
+                // is built from them. A host without an editor (a shipped game)
+                // simply keeps the fly camera.
+                ISceneEditor? editor = _sceneManager.Editor;
+                bool editorNavigated = editor is not null && editor.Update(deltaTime);
+                if (!editorNavigated)
+                    _cameraController?.Update(deltaTime);
+
+                // The demo update animates and logs; it gets last frame's
+                // render view for its culling stats alongside time.
+                _sceneManager.Update(deltaTime, _renderView);
 
                 // Drive the async static-world pipeline: harvest a finished
                 // background compile (the swap and GPU mesh creation happen
@@ -244,6 +259,14 @@ public sealed class Engine
                     // visualisation — it draws whenever something is selected,
                     // with no F-key opt-in (and costs nothing when nothing is).
                     DebugVisualizations.DrawSelectionHighlight(_renderer.DebugDraw, scene);
+
+                    // The manipulator and the marquee ride the same depth-off
+                    // line path as the highlight, which is what makes a gizmo
+                    // grabbable on a handle buried inside the brush it moves:
+                    // the handles are drawn on top of everything, so what you
+                    // can see is exactly what you can pick.
+                    editor?.Draw(_renderer.DebugDraw);
+
                     if (_debugFlags != DebugVisualization.None)
                         DebugVisualizations.Draw(_renderer.DebugDraw, scene, _debugFlags);
                 }

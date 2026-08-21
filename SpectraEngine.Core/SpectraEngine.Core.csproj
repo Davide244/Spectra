@@ -2,6 +2,14 @@
 
   <PropertyGroup>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!--
+      The engine ships NativeAOT (see SpectraEngine.Executable). Without this,
+      the trim/AOT/single-file analysers only run when an executable publishes,
+      so a library-side violation is found minutes later at ILC time and
+      attributed to the exe. IsAotCompatible turns them on for this project's
+      ordinary build, which is where the offending line actually lives.
+    -->
+    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
   <ItemGroup>
@@ -47,6 +55,7 @@
     <PackageReference Include="Silk.NET.DXGI" />
     <PackageReference Include="Silk.NET.GLFW" />
     <PackageReference Include="Silk.NET.Input" />
+    <PackageReference Include="Silk.NET.Input.Glfw" />
     <PackageReference Include="Silk.NET.Maths" />
     <PackageReference Include="Silk.NET.OpenAL" />
     <PackageReference Include="Silk.NET.OpenCL" />
@@ -54,6 +63,7 @@
     <PackageReference Include="Silk.NET.Vulkan" />
     <PackageReference Include="Silk.NET.Windowing" />
     <PackageReference Include="Silk.NET.Windowing.Common" />
+    <PackageReference Include="Silk.NET.Windowing.Glfw" />
     <PackageReference Include="Silk.NET.XInput" />
   </ItemGroup>
 
