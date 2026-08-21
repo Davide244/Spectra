@@ -10,6 +10,7 @@ using SpectraEngine.Core.Graphics.OpenGL;
 using SpectraEngine.Core.Graphics.Shaders;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
+using SpectraEngine.Executable;
 using SpectraEngine.Executable.Editing;
 using SpectraShade.Compiler;
 
@@ -31,17 +32,37 @@ using var loggerFactory = LoggerFactory.Create(builder =>
 // log file instead of an unhandled exception with a raw stack trace.
 try
 {
-    // CLI: first positional arg picks the graphics backend (default OpenGL).
-    // Accepted aliases mirror the SpectraShade compiler CLI for consistency.
-    GraphicsBackend backend = ParseBackend(args);
+    // CLI: a positional arg picks the graphics backend (default OpenGL), and
+    // --selftest opts into the synthetic editing run (default OFF). See
+    // DemoStartupOptions for both, and for why the default is what it is.
+    DemoStartupOptions options = DemoStartupOptions.Parse(
+        args, Environment.GetEnvironmentVariable(DemoStartupOptions.SelfTestEnvironmentVariable));
+
+    // Said once, loudly, before anything moves: with the self-test on, a brush
+    // node in the demo scene really does jump a unit every few seconds with no
+    // human touching it. A gate run should document itself; an interactive run
+    // should never leave anyone wondering why the scene twitches.
+    if (options.SelfTestEnabled)
+    {
+        Log.Information(
+            "Editing self-test ENABLED (from {Source}): every {Interval:0.#} s the demo drives a synthetic " +
+            "pick/grab/drag/commit/undo/redo on the self-test brush node and logs one 'Editing self-test: PASS' " +
+            "line. That node visibly moves ~1 unit for a handful of frames per run while the static world " +
+            "recompiles — that motion IS the test. Drop --selftest (and {EnvVar}) for a scene nothing synthetic touches.",
+            options.SelfTestSource == SelfTestSource.Environment
+                ? DemoStartupOptions.SelfTestEnvironmentVariable
+                : "--selftest",
+            EditingSelfTest.IntervalSeconds,
+            DemoStartupOptions.SelfTestEnvironmentVariable);
+    }
 
     var shaderCompiler = new SpectraShadeCompiler();
-    Renderer renderer = backend switch
+    Renderer renderer = options.Backend switch
     {
         GraphicsBackend.D3D11 => new D3D11Renderer(loggerFactory.CreateLogger<D3D11Renderer>(), shaderCompiler),
         GraphicsBackend.D3D12 => new D3D12Renderer(loggerFactory.CreateLogger<D3D12Renderer>(), shaderCompiler),
         GraphicsBackend.OpenGL => new OpenGLRenderer(loggerFactory.CreateLogger<OpenGLRenderer>(), shaderCompiler),
-        _ => throw new NotSupportedException($"Backend {backend} is not yet implemented; pick opengl, d3d11, or d3d12."),
+        _ => throw new NotSupportedException($"Backend {options.Backend} is not yet implemented; pick opengl, d3d11, or d3d12."),
     };
 
     var sceneManager = new SceneManager(loggerFactory.CreateLogger<SceneManager>());
@@ -57,8 +78,13 @@ try
     // A factory rather than an instance because the scene does not exist until
     // the render thread has built it; SceneManager invokes this once, on that
     // thread, with the finished scene.
+    //
+    // The self-test node is handed over only when the switch asked for it: the
+    // host skips the whole synthetic run on a null subject, so opting out here
+    // is the entire gate.
     sceneManager.EditorFactory = scene => new DemoEditorHost(
-        loggerFactory, scene, renderer, inputManager, sceneManager.SelfTestNode);
+        loggerFactory, scene, renderer, inputManager,
+        options.SelfTestEnabled ? sceneManager.SelfTestNode : null);
 
     var engine = new Engine(
         loggerFactory.CreateLogger<Engine>(),
@@ -77,8 +103,8 @@ try
 }
 catch (ArgumentException ex)
 {
-    // Usage error (unknown backend string from ParseBackend) — the message is
-    // self-explanatory, so log without a stack trace.
+    // Usage error (an unknown backend or switch from DemoStartupOptions.Parse)
+    // — the message is self-explanatory, so log without a stack trace.
     Log.Fatal("{Message}", ex.Message);
     Environment.ExitCode = 2;
 }
@@ -96,21 +122,4 @@ catch (Exception ex)
 finally
 {
     Log.CloseAndFlush();
-}
-
-static GraphicsBackend ParseBackend(string[] args)
-{
-    if (args.Length == 0) return GraphicsBackend.OpenGL;
-    string raw = args[0].Trim().TrimStart('-', '/').ToLowerInvariant();
-    if (raw.StartsWith("backend="))
-        raw = raw["backend=".Length..];
-    return raw switch
-    {
-        "opengl" or "gl" => GraphicsBackend.OpenGL,
-        "d3d11" or "dx11" or "directx11" or "hlsl11" => GraphicsBackend.D3D11,
-        "d3d12" or "dx12" or "directx12" or "hlsl12" => GraphicsBackend.D3D12,
-        "vulkan" or "vk" => GraphicsBackend.Vulkan,
-        _ => throw new ArgumentException(
-            $"Unknown backend '{args[0]}'. Try: opengl, d3d11, d3d12."),
-    };
 }
