@@ -2,9 +2,9 @@
 
 > **Status.** Design, not implementation. Nothing in this document exists in the tree today. Every claim about the current codebase carries a `file:line` and was read on 2026-08-21; every claim about Roblox behaviour was verified against `create.roblox.com/docs` rather than recalled.
 >
-> **Naming is not locked.** This document says *realm*. `docs/networking.md` already uses *scope* for interest management, and the value goes into every `.smap` and every `.scmap` payload-flag bit, so it cannot be renamed after content exists. See §9, Q8 — this one needs a sign-off, not another opinion.
+> **Naming is LOCKED: the axis is `Realm`.** Chosen by the user on 2026-08-21, over *scope*. Three reasons, on record: *realm* is Garry's Mod / Source Lua vocabulary for exactly this axis (`sv_`/`cl_`/`sh_`), so it arrives already meaning the right thing to the Source-lineage developer it is aimed at; `docs/networking.md` already uses *scope* for interest management, and shipping both words would collide in the two documents that have to be read together; and the value is written into every `.smap` node record, every `.scmap` `NODE` payload-flag bit and every `.sentdef` `Flags` bit pair, so it cannot change once content exists. **This closes §9 Q8 and `networking.md` §9 item 12.** Standing consequence: nothing in these documents may use *scope* to mean node audience, and nothing may use *realm* to mean interest management.
 >
-> **This supersedes `docs/networking.md` §4.1's container paragraph** (lines 412–414, "Replication scope is defined by WHERE a node lives, not by a flag… There is deliberately no setter") and **`docs/roblox-to-spectra.md` lines 33–34**. All three must be corrected in the same change that lands the realm byte. Leaving either asserting the container model is worse than either model alone. Everything else in §4.1 — the four leak channels, the accessor gate, the scope-aware resolver, the CSG/BVH admission conditions, `net_strictlocalclient` — survives unchanged; only the *source* of the byte changes, from "nearest well-known ancestor" to "nearest explicit declaration".
+> **This supersedes `docs/networking.md` §4.1's container paragraph** (lines 412–414, "Replication scope is defined by WHERE a node lives, not by a flag… There is deliberately no setter") and **`docs/roblox-to-spectra.md` lines 33–34**. All three must be corrected in the same change that lands the realm byte. Leaving either asserting the container model is worse than either model alone. Everything else in §4.1 — the four leak channels, the accessor gate, the realm-aware resolver, the CSG/BVH admission conditions, `net_strictlocalclient` — survives unchanged; only the *source* of the byte changes, from "nearest well-known ancestor" to "nearest explicit declaration".
 
 ---
 
@@ -16,7 +16,8 @@ The same game, both ways:
 
 ```
 ROBLOX                              SPECTRA
-Workspace                           World
+Workspace                           Scene.Root   (no Workspace container,
+                                                 and no World folder either)
   └ Enemy                             └ Enemy           (Shared — inherited; you set nothing)
 ServerStorage                         └ EnemyTemplate   (Server + Dormant)
   └ EnemyTemplate                     └ EnemySpawner    (Server)
@@ -31,7 +32,7 @@ Note what moved: **the spawner now sits next to the enemies it spawns.** In Robl
 | Roblox container | Spectra |
 | --- | --- |
 | `Workspace` | nothing to set — `Shared` + `Active` are the defaults |
-| `ServerStorage` | `Realm = Server`, `State = Dormant` |
+| `ServerStorage` | `Realm = Server`, `State = Dormant` — or just `State = Dormant` for a template holding brushes, which R15 keeps `Shared` |
 | `ServerScriptService` | `Realm = Server` on a script node |
 | `ReplicatedStorage` | `Realm = Shared`, `State = Dormant` |
 | `StarterGui` / `StarterPack` | `Realm = Client` |
@@ -40,7 +41,125 @@ Note what moved: **the spawner now sits next to the enemies it spawns.** In Robl
 
 Eight containers with unwritten rules become two dropdowns. Inheritance behaves exactly as a folder did — mark one node `Server` and its whole subtree is server-only — except the mark goes on *any* node, so the tree stays organised around the game rather than around the replication system.
 
-The rest of this document is the precise version of that idea: the lattice, the resolution rule, the enforcement seam, and the one hard refusal on the static world.
+The next section answers the obvious objection to all of it — that a property nobody has been told about organises nothing, so a fresh project would be a bare root with everything piled under it. The rest of the document is the precise version of the idea above: the lattice, the resolution rule, the enforcement seam, and the one hard refusal on the static world.
+
+---
+
+## The bare-root objection, and what a new project actually ships
+
+> *"One thing thats genuenly good about the roblox structure, is that it enforces some sort of organization for free, though. This system right now will result in everything being under the World node."* — the user, 2026-08-21
+
+**The objection is correct, and it is the strongest one raised against this model.** Everything above argues that Roblox's containers are a bad *replication mechanism*. None of it disputes that they are a genuinely good **starter kit**, and that is a separate virtue with three parts: an empty project already has a place for everything; the names teach that the concepts exist, before you have any reason to look them up; and every project looks broadly alike, so you can open someone else's and navigate it. Realms alone delete all three and hand the user a bare root. A property nobody has been told about cannot organise anything.
+
+### The answer: folders come back as content, never as engine concepts
+
+A payload-free `SceneNode` already *is* a folder — `SceneNode.CreateChild` (`SceneNode.cs:287`) needs nothing else — so the recovery costs no new type and no new concept. **A new project ships a template tree whose folders already carry declared realms.** Dragging a node into `ServerLogic` then works exactly as dragging it into `ServerScriptService` did, by R1, with no property ever opened; a beginner can ship a game without learning that realms exist. And because they are ordinary nodes, they stay renameable, deletable, nestable and ignorable — which is the escape hatch that motivated the entire redesign. The spawner still goes next to the enemies it spawns; the template just means you have somewhere obvious to put it if you have no opinion yet.
+
+> ### The hard rule
+>
+> **No engine code may EVER check for a folder by name.** Not `Scene`, not `SceneNode`, not the CSG or BVH admission predicates, not the loader, not the cooker, not the Luau bindings, not the editor's own systems. There is no well-known-name lookup, no `Scene.ServerLogic` accessor, no `GetService("ServerLogic")`, no default that keys on a string, and no configurable list of names either — "configurable" is how name checks get in.
+>
+> The moment one name is special-cased, the container zoo is rebuilt with extra steps and a worse story: the folder would once again *mean* something the property does not, the two would drift, and every rule in §3 would acquire a silent exception nobody can see in the tree. **The template is content — a file the editor copies — and the engine must be unable to tell that it ever existed.** Pinned by test pin 12 in §10, which is deliberately the same reflection-based boundary assertion R10's counting-oracle pin uses.
+
+### The tree a new project gets
+
+Everything below is an ordinary `SceneNode`. Nothing here is a type, a service, or a name the engine knows.
+
+```
+Untitled Place                     root · Shared · Active (permanent, R4)
+│   The scene name (.smap `scene.name`). The root IS the world — Luau `workspace`
+│   aliases it (§7.1), so `workspace.Baseplate` ports character-for-character.
+│   `scene.spawn` is set above the baseplate as a VALUE in the map
+│   (`formats-and-pipeline.md:224`), deliberately NOT a SpawnPoint node.
+│
+├── Baseplate                      no declaration · brush
+│      A real brush, not a folder. Teaches by existing that the default case
+│      needs no marking: its dimmed inherited badge sits beside five solid ones.
+│
+├── ServerLogic                    Realm = Server
+│      The game's authority: round rules, scoring, spawners, saves.
+│      Replaces ServerScriptService.
+│
+├── ClientLogic                    Realm = Client
+│      Per-player scripts: camera, input, local effects. One private copy each.
+│      Replaces StarterPlayerScripts and LocalScript-by-location.
+│
+├── Interface                      Realm = Client
+│      HUD and menus; the source the `playerSpawnRules` of §7.2 point at.
+│      Replaces StarterGui. Deliberately a SECOND Client folder — two folders,
+│      one realm, is the lesson: folders are organisation, realm is data.
+│
+├── Templates                      State = Dormant  (Realm inherited = Shared)
+│      Parked content you clone: not carved, not drawn, not queried, not
+│      ticking. Replaces ServerStorage's second job. MUST be Shared, never
+│      Server — R15 refuses a brush subtree under a non-Shared node, so a
+│      ServerStorage-shaped folder would reject the commonest template there is.
+│
+└── Modules                        no declaration (Inherit → Shared · Active)
+       Shared Luau modules, required from both sides, one instance per side
+       (§6.1). A second dimmed row, reinforcing that shared needs no marking.
+```
+
+**An `Empty` template — root, `scene.spawn`, nothing else — ships beside it, one click away in the same dialog.** That is not a footnote: this design's thesis is that the tree belongs to the user, and shipping only an opinionated tree would contradict it in the first dialog a new user ever sees.
+
+**New Map inside an existing project offers `Empty` and `Level` (root + spawn + baseplate) only** — never the logic folders. A project's logic folders already exist in its startup map, and duplicating them across five maps is how *"which `ServerLogic` is the real one"* starts.
+
+### Four naming and shape decisions, with their reasons
+
+1. **There is no `World` folder — world content sits directly under the root.** `Scene.Root` is already the `Workspace` equivalent by explicit decision here (§7.1) and in `roblox-to-spectra.md`, which promises that `workspace.Wall` ports character-for-character. A `World` child makes it `workspace.World.Wall` in every template-created project, breaking that promise on first use. It is also the one folder whose declaration is a **no-op**: `Shared`/`Active` under a `Shared`/`Active` root is either a redundant key or, per §2.5's omit-iff-`Inherit` rule, nothing at all. A folder carrying no declaration teaches nothing about the model while costing a path segment on the project's hottest content — and worse, a folder named `World` invites the belief that the *folder* is what makes content live, when liveness is `IsLive`. **The discoverability `World` was meant to buy is bought better by shipping a `Baseplate`**: an empty folder teaches by name, a baseplate teaches by existence, and it demonstrates the model's most important fact — the default case needs no marking — in one glance.
+2. **The realm word appears as an adjective, never as the bare value: `ServerLogic`, never `Server`.** A folder literally named `Server` collapses two operations into one sentence — "move it to Server" and "set its realm to Server" — when separating location from data is the entire point. And the moment the expert declares `Realm = Server` on a node outside it (the spawner beside its enemies, the motivating case), the name reads as an invariant that is false. A compound name states the job, hints the realm, cannot be confused with the value token, and can be renamed by the user without it feeling like renaming a system concept. Dropping the realm word entirely (`Gameplay`/`Library`) was rejected for the opposite reason: the template's job is to teach that the axis exists, and a name that never says "server" cannot.
+3. **`Templates`, not `Prefabs`.** §7.4 states plainly that a parked template is a `Dormant` subtree and **not** a prefab until `P10`, which `ROADMAP.md:92` puts off the critical path. A folder named `Prefabs` promises an unbuilt feature and teaches a word with a specific meaning to people who cannot use it. `Templates` is what this document's own worked example already calls it (`script.Templates`, `templates.Grunt:Clone()`), describes exactly what is inside, and absorbs real prefabs later with no rename.
+4. **`Interface`, not `UI`** — every other name in a six-row teaching tree is a full word, and a lone initialism reads as inconsistency in the one artifact whose job is to be read. This is the weakest of the four calls and `UI` is defensible; what is *not* defensible is two different starter names across two documents, so §7.2's example paths are corrected in the same change.
+
+### R7 amendment: the dormant `AddChild` refusal is deleted
+
+The `Templates` folder is unusable on day one without this, and the contradiction it removes is already in the document. R15's own refusal message tells the user that **`State = Dormant` is how you park a brush subtree** — while R7 as first written threw `BrushSubtreeUnderDormantParent` when that same subtree was *dragged into* an already-dormant folder. Setting `Dormant` on the subtree was blessed; dropping the subtree into `Dormant` threw. The beginner's first non-trivial gesture — drag the house you just built into `Templates` so the spawner can clone it — hit an exception dialog.
+
+It also closes nothing. `State` is a mutable admission filter whether it is declared on the node or inherited from an ancestor, which is precisely why R17 requires `Scene.MarkAdmissionChanged()` on **every** `State` transition over a brush-bearing subtree — the guarantee comes from that bump, not from the refusal. **R7's realm half stays**, because it has an independent correctness argument (the imprint channel, R15/R16) that dormancy does not share.
+
+### How a template ships, and why the engine never learns one existed
+
+- **A template is a directory that is already a valid project** — `game.spectraproj`, `Maps/Startup.smap`, `Assets/` — plus exactly one file the instantiated project never receives: a small `template.json` manifest (display name, one-line description, sort order, icon). Deliberately not in the `s*` family (it is editor tooling metadata: never content, never cooked, never mounted) and deliberately not a block inside `game.spectraproj`, where unknown keys warn and are *preserved* (`formats-and-pipeline.md:473`) and a template field would therefore survive into every shipped project meaning nothing.
+- **Resolution is an ordered search path** — built-in (`<editor>/Templates/`) → per-user → studio/shared, later entries winning by directory name. Identical in shape to `game.spectraproj`'s `packs` array, which is already *"an ORDERED array; later entries win — that is the mod and patch story, free"*. A studio ships house structure by dropping its own `Game` template on a later path entry: content, versioned in their repo, requiring nothing from the engine.
+- **The shareable form is a ZIP of that directory.** Not a new decision — `formats-and-pipeline.md:40` already reserves ZIP for *"authored-source interchange bundles — a prefab or asset drop a user emails, a template project"*.
+- **Instantiation, in full:** copy the directory verbatim → drop `template.json` → set `name` and a fresh `id` Guid in `game.spectraproj` → **re-GUID every node in every `.smap`** → rewrite through the canonical writer. Copying node GUIDs verbatim would give every project ever made from the template identical node ids and collide two maps from one template inside one project — and Guid identity is load-bearing for `IEditorCommand` addressing, collaborative editing (`networking.md` §3.3) and NetId assignment.
+- **No provenance is recorded anywhere.** No template id, no inheritance link, no "update from template". A live dependency on a template would make the folder names semantically load-bearing again, which is the failure this section exists to prevent. A template is a starting position, not a parent. Pinned by test pin 13.
+- **"Save Project As Template…"** writes the current project into the user templates directory minus `logs/` and every cooked artifact, generates a `template.json`, and **shows the exclusion list before writing** — a template is the one artifact designed to be handed to strangers.
+
+### Enforcement is advisory, and that is not a compromise
+
+Roblox's organisation is enforced by **breakage**: a `LocalScript` in `ServerStorage` does not run, so the folder is a *claim about* the node that can be wrong. Here the folder **is the mechanism that makes the claim true** — a node dragged into `ServerLogic` resolves to `Server` by R1, full stop. The Roblox failure mode (node in the wrong folder misbehaves) is not merely discouraged; it is **unreachable**.
+
+So the obvious lint cannot fire. *"Warn when a node's realm disagrees with its folder's"* has no satisfiable condition: by R1 the effective value always **is** the folder's, narrowed. The only way a declaration can differ from its parent's is a narrowing — and narrowing beside the thing it is about is the feature this whole redesign exists to permit. That warning would fire on the expert path and on nothing else. **Reject it, and reject a project-conventions file for the same reason**, plus a second: it would have to key on names.
+
+The lattice already carries every legitimate tooth, and each one is name-blind:
+
+- **R4** refuses an explicit widening or a disjoint write at the setter.
+- **R3's `Inert`** is the one genuine mistake state the model has, already required to be badged unmistakably (§7.5 item 2) — and it now also becomes a **cook diagnostic: warning by default, error under `--strict`**, matching the asymmetry `formats-and-pipeline.md:516` already pins for unresolved connections and unknown keys. Content that runs nowhere, draws nowhere and replicates nowhere is always either a mistake or unfinished, and the cook is where "unfinished" stops being acceptable. It keys on the resolved `RealmSet`, never on a name.
+- **R8's** non-suppressible notice when a gesture changes where a script runs.
+- **R15's** three refusals on brush subtrees.
+
+**The escape valve that preserves the hard rule:** a studio that genuinely wants *"all server scripts must live under `ServerLogic`"* writes it as a **Luau editor plugin** — `formats-and-pipeline.md:490` already settles that editor plugins are Luau running against the edit-mode VM's node and selection surface. That is their policy, in their tool, on their projects, and the engine still contains zero folder names.
+
+### The payoff the folder model structurally cannot match
+
+Because realm is **data rather than location**, the editor can organise by it **on demand**: filter the Explorer to everything `Server`, colour by realm, or switch to a group-by-realm view — while the tree itself stays organised for the game. **Roblox gets exactly one view of a project, forever, because there location *is* the grouping.**
+
+One implementation note decides whether this is the headline payoff or a useless feature: **group by DECLARATION and list the subtree roots, not by effective value listing every node.** Grouping by effective value puts the entire project under `Shared` and is worthless at any real size. Grouping by declaration answers the question people actually have — *"where are the exceptions in this project"* — in a list whose length is the number of decisions someone made, not the number of nodes they have.
+
+The editor obligations this creates are acceptance criteria, not polish, and they live with the rest of them in **§7.5** — the Realm column (item 1), the badge vocabulary (item 2), the `View as` lens (item 4), one-gesture setting from the tree (item 6), `IEditorCommand` coverage (item 8), and the filter-and-group-by-declaration views (item 13) — rather than being restated here. Two more are specific to dragging into a template folder and are added there: **the drag preview must show the resulting badge before the drop** (item 10), and **reparent-by-drag must preserve the world transform** (item 11), because `AddChild` preserves the *local* transform and `WorldMatrix` is `local * Parent.WorldMatrix` (`SceneNode.cs:225–237`), so without compensation dragging a part into any folder with a non-identity transform teleports it — and "dragging into a folder just works exactly as in Roblox" would be false.
+
+### Two narratives, and the one wall each hits
+
+**The beginner, who never learns realms exists.** New Project → Game. She sees a place name, a baseplate and five folders. She drags parts into the viewport; they land under the root, she touches no property, they carve the world and every player sees them. She builds a HUD inside `Interface` and it appears on each player's screen. She adds a round timer to `ServerLogic`; its badge reads `runs: Server · inherited` (§6.5) and it runs once, authoritatively. She builds an enemy, drags it into `Templates`, watches it ghost out of the world, and her spawner clones it and sets `State = "Active"`. Five folders, zero properties, no dropdown ever opened. **She hits exactly one wall, and it is unavoidable:** dragging a *brush* model into `Interface` is refused by R15, because brushes are permanently `Shared`. The obligation that creates is that the refusal arrives as a forbidden-drop cursor carrying R15's message **before the mouse is released**, never as an exception dialog after it (§7.5 item 10).
+
+**The expert, who puts the spawner next to its enemies.** He has an `Arena` folder he named himself, holding grunts, cover and a spawn logic node. He selects `Arena/Spawner`, right-click → Realm → Server: one gesture from the tree, the badge goes solid, and the node stays next to the thing it is about — which is the sentence this whole design was built to make true. The brush templates it clones sit beside it as `Shared` + `Dormant`, because R15 will not let them be otherwise, and he can see that in the badges without reading a doc. He deletes `ClientLogic` and `Interface` because his game has no UI, and nothing breaks. Then he filters the Explorer to `Server` and sees **every server declaration in the project in one list, wherever it lives.** He never once moved a node to change what it means.
+
+### The three risks this section owns
+
+1. **`playerSpawnRules` reference template nodes by PATH** (§7.2). That is the single place where a folder name becomes load-bearing *data*, and it breaks silently the moment a user exercises the promised freedom to rename or delete the folder. It needs rename-repair in the editor (§7.5 item 12) and a loud unresolved-spawn-rule diagnostic at cook. It is not a violation of the hard rule — the name lives in the user's own project file, not in engine code — but it is the closest thing to one, and it should be the last such reference ever added.
+2. **The naming cost is the same shape as the realm/scope decision itself.** These five names go into every tutorial, every forum answer and every third-party template. Renaming `Interface` to `UI` after content exists is cheap in the engine and expensive in the ecosystem. Decided here, once.
+3. **A ZIP-imported third-party template is arbitrary content the editor opens with full trust** — it can carry scripts under `ServerLogic` that run on the first Play. Template import needs the same posture as opening any untrusted project, and the import dialog must list the scripts a template contains before it lands on disk.
 
 ---
 
@@ -301,9 +420,10 @@ public SceneNode AddChild(SceneNode child)
     // BEFORE ANY MUTATION. A half-applied reparent is worse than a refusal, and
     // the detach block below is already destructive by its second statement.
     if (child._subtreeBrushCount > 0 && _effectiveRealm != RealmSet.Shared)
-        throw new InvalidOperationException(RealmMessages.BrushSubtreeUnderScopedParent(this, child));
-    if (child._subtreeBrushCount > 0 && !_effectiveLive)
-        throw new InvalidOperationException(RealmMessages.BrushSubtreeUnderDormantParent(this, child));
+        throw new InvalidOperationException(RealmMessages.BrushSubtreeUnderNonSharedParent(this, child));
+    // There is deliberately NO dormant refusal here. See the R7 amendment below:
+    // dropping a brush subtree into a Dormant folder is the supported gesture, and
+    // the guarantee comes from MarkAdmissionChanged() further down, not from a throw.
 
     Scene? previousOwner = child.Owner;
 
@@ -335,6 +455,8 @@ public SceneNode AddChild(SceneNode child)
 ```
 
 `RemoveChild` mirrors it: after `SetOwner(null)`, re-propagate the detached root against `RealmSet.Shared` / live, so a detached subtree resolves its own declarations and is never left holding a stale ancestor's answer.
+
+**Amendment, 2026-08-21 — the dormant refusal is deleted, and must not be reinstated.** An earlier draft of R7 also threw `BrushSubtreeUnderDormantParent` when a brush-bearing subtree was added under a non-live parent. It contradicted R15's own refusal message, which tells the user in as many words that **`State = Dormant` is how you park a brush subtree**: setting `Dormant` *on* the subtree was blessed while dragging the same subtree *into* a `Dormant` folder threw. It also made the shipped project template's `Templates` folder unable to receive the commonest template there is, which is the beginner's first non-trivial gesture. And it closed nothing — `State` is a mutable admission filter whether it is declared on the node or inherited from an ancestor, which is exactly why R17 requires `Scene.MarkAdmissionChanged()` on **every** `State` transition over a brush-bearing subtree. The guarantee lives in that bump, which the method above already performs. **R7's realm refusal stays**, because it rests on an independent correctness argument — the imprint channel of R15/R16 — that dormancy does not share.
 
 ### R8 — A realm change on a node carrying a runnable script is a distinct, non-suppressible editor event
 
@@ -382,7 +504,7 @@ Three surfaces, not one. The third is the one every version of this design misse
 
 ### R11 — A denial looks like ABSENCE, routed into the surface's existing absent path
 
-Never a new error kind. A bespoke `ScopeViolationException` is an existence oracle under `pcall` — the caller learns the node exists by the *shape* of the failure — and it makes hosting behave differently from joining, which is the "works solo, breaks in multiplayer" trap wearing the costume of its own fix.
+Never a new error kind. A bespoke `RealmViolationException` is an existence oracle under `pcall` — the caller learns the node exists by the *shape* of the failure — and it makes hosting behave differently from joining, which is the "works solo, breaks in multiplayer" trap wearing the costume of its own fix.
 
 | Surface | Denial |
 | --- | --- |
@@ -517,7 +639,7 @@ Enforcement of per-property realm is **not** at the C# property. C# is trusted e
 
 ### R14 — Do not optimise the gate
 
-A proposed `Scene.ScopedNodeCount == 0` short-circuit — skip the check when the project has no realm-marked content — should be **deleted from the design**. `(effective & mask) != 0` is one load, one AND, one compare, against an `__index` metamethod plus an interned-name lookup plus a generated switch: it is unmeasurable. The short-circuit costs a field load through a `Scene` reference, and it makes a security check depend on a separately-maintained counter whose drift is a **total silent bypass**. Keep such a counter as a diagnostic and as a fast path for whole-subtree *enumeration* if it earns it; never guard an individual visibility test with it.
+A proposed `Scene.RealmDeclaredNodeCount == 0` short-circuit — skip the check when the project has no realm-marked content — should be **deleted from the design**. `(effective & mask) != 0` is one load, one AND, one compare, against an `__index` metamethod plus an interned-name lookup plus a generated switch: it is unmeasurable. The short-circuit costs a field load through a `Scene` reference, and it makes a security check depend on a separately-maintained counter whose drift is a **total silent bypass**. Keep such a counter as a diagnostic and as a fast path for whole-subtree *enumeration* if it earns it; never guard an individual visibility test with it.
 
 ---
 
@@ -628,7 +750,7 @@ public sealed class Script
 
 Roblox shipped `Enum.RunContext { Legacy, Server, Client, Plugin }` in 2022 for exactly this reason, with the stated motivation *"consolidating Script and LocalScript behavior to simplify future script type development."* **Roblox agrees the two-script-types design is a mistake** and is trying to unwind it against fifteen years of content. We have no content, so we do it once, and we do all the axes at the same time instead of one — which is precisely where their attempt failed (§1).
 
-**Scope the parity claim honestly, or the first migrating developer reports it as a bug.** `Shared`-resolves-to-server matches `RunContext.Legacy` *under `Workspace`*, not `Legacy` generally: Roblox's docs say Legacy *"a) is a server-side script and b) only runs if it is in a server container, such as Workspace or ServerScriptService."* A `Legacy` script under `ReplicatedStorage` does not run **at all**, whereas a `Shared` node in Spectra runs it on the server. The parity claim is worth making — a `Script` under `Workspace` behaves identically — but it must be stated with that qualifier.
+**Qualify the parity claim honestly, or the first migrating developer reports it as a bug.** `Shared`-resolves-to-server matches `RunContext.Legacy` *under `Workspace`*, not `Legacy` generally: Roblox's docs say Legacy *"a) is a server-side script and b) only runs if it is in a server container, such as Workspace or ServerScriptService."* A `Legacy` script under `ReplicatedStorage` does not run **at all**, whereas a `Shared` node in Spectra runs it on the server. The parity claim is worth making — a `Script` under `Workspace` behaves identically — but it must be stated with that qualifier.
 
 ### 6.4 A realm change on a running script, at runtime
 
@@ -655,7 +777,7 @@ Status is honest about the Spectra side. **planned** means designed and unbuilt.
 | Roblox | Verified semantics | Spectra | Status |
 | --- | --- | --- | --- |
 | `Workspace` | *"contains all objects that make up a place's 3D world"*; clients render only this container; holds `Terrain` and `Camera` | **Deleted as a container.** `Scene.Root` *is* the world; Luau `workspace` aliases it so `workspace.Wall` ports character-for-character. **Rendering and carving are decided by `IsLive`, not by ancestry.** | root **exists**; alias planned (`O5`) |
-| `ServerStorage` | *"objects only meant for server use"*; never replicated; **scripts do not run there**; cloned into `Workspace` at runtime | `Realm = Server` **+** `State = Dormant`. Note this was *two* properties fused into one folder — which is why Roblox's docs must state the script rule separately: the folder cannot express it | **planned** |
+| `ServerStorage` | *"objects only meant for server use"*; never replicated; **scripts do not run there**; cloned into `Workspace` at runtime | `Realm = Server` **+** `State = Dormant`. Note this was *two* properties fused into one folder — which is why Roblox's docs must state the script rule separately: the folder cannot express it. **One caveat R15 makes unavoidable:** a template containing *brushes* cannot be `Server` at all — it is `Shared` + `Dormant`, which is exactly what the shipped project template's `Templates` folder is. `Server` + `Dormant` is for parked data and non-brush content | **planned** |
 | `ServerScriptService` | *"Scripts…only meant for server use"*; never replicated | `Realm = Server` **+** `State = Active`. Identical audience to `ServerStorage`, different liveness — exactly the distinction the two folder names encode and never explain | **planned** |
 | `ReplicatedStorage` | *"available to both server and connected clients"*; client changes persist locally but do not replicate back | **Deleted.** `Shared` is the root default, so shared content needs no marking at all. The client-writes-stay-local rule survives as an **authority** rule (`networking.md` ruling 5), which is stronger than Roblox's "persists locally then gets overwritten" | **planned** |
 | `ReplicatedFirst` | *"replicate to a client when it joins…only once"*; `RemoveDefaultLoadingScreen()` | `JoinPriority = First` on the node (usually with `Realm = Client`), sent ahead of the `Bulk` world-sync channel `networking.md` §3.2 already defines. `game:IsLoaded()` → a `WorldReady` signal; `RemoveDefaultLoadingScreen()` → `DismissBootScreen()` | **planned** |
@@ -677,12 +799,14 @@ Verified: *"the server copies the objects from the client containers in the edit
 ```jsonc
 // game.spectraproj — the four Starter* containers, as data.
 "playerSpawnRules": [
-  { "template": "UI/Hud",          "phase": "OnJoin",           "destination": "PlayerGui" },
-  { "template": "UI/RespawnPanel", "phase": "OnCharacterSpawn", "destination": "PlayerGui" },
-  { "template": "Scripts/Client",  "phase": "OnJoin",           "destination": "PlayerScripts" },
-  { "template": "Character/Anim",  "phase": "OnCharacterSpawn", "destination": "Character" }
+  { "template": "Interface/Hud",              "phase": "OnJoin",           "destination": "PlayerGui" },
+  { "template": "Interface/RespawnPanel",     "phase": "OnCharacterSpawn", "destination": "PlayerGui" },
+  { "template": "ClientLogic/Boot",           "phase": "OnJoin",           "destination": "PlayerScripts" },
+  { "template": "Templates/CharacterScripts", "phase": "OnCharacterSpawn", "destination": "Character" }
 ]
 ```
+
+Those paths name folders from the shipped project template ("The bare-root objection", above). **They are the one place in the whole design where a folder name becomes load-bearing data** — in the user's own project file, never in engine code, so the hard rule is intact — and they are therefore the one place a rename or a delete can break something silently. The editor owes rename-repair (§7.5 item 12) and the cook owes a loud unresolved-spawn-rule diagnostic. Do not add a second reference of this shape.
 
 **The `OnJoin` vs `OnCharacterSpawn` distinction is the single most valuable thing this replacement buys.** In Roblox it is unwritten in the tree: you must simply know that `StarterPlayerScripts` copies once and `StarterCharacterScripts` copies every death. Here it is a word on the rule.
 
@@ -732,14 +856,18 @@ local enemy = Assets.Prefab("Enemies/Grunt"):Instantiate(workspace.Arena)
 Roblox's containers have three virtues a flag does not: they are **discoverable** (you open Explorer and learn the model by reading folder names), **zero-configuration** (dragging *is* the config), and **glanceable** (audience is visible in the tree without clicking anything). **An invisible flag is worse in practice than a visible folder.** If the first editor build ships without these, this design is worse than Roblox's regardless of being better in theory.
 
 1. **A Realm column in the Explorer, always visible.** Effective value on every row; inherited values dimmed, explicit declarations solid. This recovers glanceability *and* shows something Roblox's tree cannot — **where the exception was declared**.
-2. **A per-row gutter badge: glyph AND colour, never colour alone.** `Shared` neutral, `Server` one hue, `Client` another, `Dormant` hatched/desaturated, **`Inert` unmistakable** (it is always an accident or a work-in-progress).
+2. **A per-row gutter badge: glyph AND colour, never colour alone.** The glyphs are `sh` / `sv` / `cl` — deliberately the Garry's Mod / Source prefixes the naming decision was made on (§9 Q8), so the badge teaches the same vocabulary as the console and these documents, and it survives colourblindness and a greyscale screenshot. `Shared` neutral, `Server` one hue, `Client` another; **`Dormant` is encoded by FILL, not by hue** — badge outlined instead of filled, row text desaturated — so one glyph carries both axes without a second column; and **`Inert` is unmistakable** (error-coloured badge plus a struck-through row, and a persistent inspector banner naming the conflicting ancestor with a click-through that selects it), because it is always an accident or a work-in-progress and the recovery must be one click rather than a doc lookup.
 3. **`Dormant` subtrees render ghosted in the viewport.** A dormant brush that is not carving is otherwise indistinguishable from a CSG bug — and this repo has already shipped one symptom mistaken for a brush bug (the self-test jitter, commit `d4701d6`). Non-negotiable.
 4. **A `View as: Editor | Server | Client` lens** that feeds the **same** `RealmSet` mask to `BuildRenderView`, `Scene.Raycast` and the box-select query that the runtime uses — so it **cannot drift from what the runtime does**. This is strictly better than Roblox, which offers no such view, and it is nearly free because the byte is already cached.
 5. **Picking follows render visibility, always.** In any view context, a node that is not drawn is not pickable and not box-selectable, and switching to a narrower view **deselects** what the new view hides — the same auto-deselect `RemoveChild` already performs. Without this a gizmo can drag something the user cannot see, which is worse than having no lens.
 6. **Settable in one gesture from the tree** — right-click → Realm → …, with **illegal options disabled and the refusal text as the tooltip** (a brush subtree shows "Server" disabled carrying R15's message). Disabled-with-a-reason beats an exception dialog. If it needs a Properties-panel round trip, people stop marking things and the model rots.
-7. **New-node templates declare explicitly.** New Script → `Server`. New UI root → `Client`. New folder → `Inherit`. This is how the zero-configuration property is recovered.
+7. **New-node defaults declare explicitly** ("template" is reserved here for the project template above). New Script → `Server`. New UI root → `Client`. New folder → `Inherit`. This is how the zero-configuration property is recovered.
 8. **Realm and state edits are `IEditorCommand`s.** `SetRealmCommand` is addressed by `SceneNode.Id`, records the absolute **before** and **after declared** value of every node it changed (never effective values — those are derived), and coalesces into one transaction per gesture, exactly like every other editor command.
-9. **The new-project template ships a pre-declared tree, and this is an acceptance criterion.** This is the discoverability property nobody else named: **Roblox's containers are discoverable because they exist in an empty project** — the model teaches itself on first open. A fresh Spectra project is a bare root that teaches nothing, and no badge on a node nobody created can fix that. Ship `World` (Shared), `ServerLogic` (Server), `ClientLogic` (Client) with the realms already declared and the badges already visible — which recovers zero-configuration and self-teaching, and demonstrates in the same gesture that **the names are yours to change**.
+9. **The new-project template ships a pre-declared tree, and this is an acceptance criterion.** This is the discoverability property nobody else named, and the answer to the strongest objection this design has faced: **Roblox's containers are discoverable because they exist in an empty project** — the model teaches itself on first open, while a fresh Spectra project would be a bare root that teaches nothing, and no badge on a node nobody created can fix that. The full design, the tree, the ship mechanism and the reasoning are in **"The bare-root objection, and what a new project actually ships"** near the top of this document; the acceptance criterion here is that the tree ships with the first editor build — `Baseplate` (no declaration), `ServerLogic` (Server), `ClientLogic` (Client), `Interface` (Client), `Templates` (Dormant), `Modules` (no declaration) — with the realms already declared and the badges already visible, an `Empty` template beside it in the same dialog, and **no engine code anywhere that knows any of those names**.
+10. **A drag shows its consequence BEFORE the drop, and an illegal drop is refused before the mouse is released.** While hovering a target whose effective realm or state differs from the dragged selection's, the drag ghost carries the resulting badge (`Shared → Server`), and an empty intersection reads `INERT` in the error colour; a mixed multi-selection shows per-source counts rather than one badge. An R15-illegal drop (a brush subtree onto a non-`Shared` target) shows a forbidden-drop cursor with R15's refusal text in the drag tooltip — **never an exception dialog after the fact**. Without this, drag-into-folder is precisely the silent semantic change this design exists to eliminate. On drop: affected rows flash their new badge, a one-line status summary states what changed ("6 nodes narrowed to Server; 2 became Inert"), R8's script notice fires separately, and the undo entry is labelled with the semantics rather than the mechanics.
+11. **Reparent-by-drag preserves the world transform**, by recomputing the local transform against the new parent. This is not polish: `AddChild` does no transform compensation and `WorldMatrix` is `local * Parent.WorldMatrix` (`SceneNode.cs:225–237`), so dragging a part into any folder with a non-identity transform teleports it. Roblox never does this because its `CFrame` is world-space, so a migrating developer has no defence against it. Template folders are authored at identity **and** the editor compensates; without both, "dragging into a folder just works exactly as in Roblox" is false in the general case.
+12. **Renaming or deleting a node that a `playerSpawnRules` entry names by path surfaces the affected rules in the same confirmation**, offering to update or drop them (§7.2). That is the only data anywhere that references a template folder by name, and it is in the user's project file rather than in engine code.
+13. **Filter and group by realm — the view Roblox structurally cannot offer.** Explorer filter chips (`Shared` / `Server` / `Client` / `Dormant` / `Inert`) that filter the tree while keeping ancestor rows as dimmed context, and an alternate group-by-realm view. **Group by DECLARATION, listing the subtree roots where each declaration was made** — never by effective value listing every node, which puts the whole project under `Shared` and is worthless at any real size. Grouping by declaration answers the question people actually have: *where are the exceptions in this project*. Drag is disabled inside the grouped view and group headers are not drop targets, because a drop into a virtual group has no defined parent and inventing one would be a silent reparent.
 
 ### 7.6 The honest onboarding claim
 
@@ -771,7 +899,7 @@ A client self-reporting its strip mask (`sv_require_stripped_client`) is hygiene
 
 ## 9. Open questions
 
-Eight edges the adversarial pass could not close from source. A position is taken where one is defensible; where it is not, the question and the tradeoff are stated rather than dropped.
+Eight edges the adversarial pass could not close from source. A position is taken where one is defensible; where it is not, the question and the tradeoff are stated rather than dropped. **Q8 is now closed by the user (2026-08-21) and Q1 by argument; both are kept in place, numbered, so cross-references keep resolving.**
 
 **Q1 — What does a `Shared` runnable script do? → CLOSED. It runs on the server, once.** See §6.2 for the full argument. The alternative ("runs in every context") is unsafe without R9 and merely surprising with it, and the useful case it was reaching for is better served by a `Shared` **module**. This had to be answered before `O8` ships the `Script` payload, because it decides whether `ScriptKind` has two members or three. It has two.
 
@@ -787,7 +915,9 @@ Eight edges the adversarial pass could not close from source. A position is take
 
 **Q7 — Per-property realm versus the signal surface. → POSITION: follows from R11 mechanically.** A server-only property is **absent from the client's binding table**, so in client context `GetPropertyChangedSignal("LootTable")` takes the same path as a misspelled name — the generated switch's existing `default`, *"LootTable is not a valid member of Chest"* — and the `Changed` signal **does not fire for it in that context at all**. Firing `Changed` with a name the client cannot resolve is an existence oracle; firing it with nothing is a silent hole in a documented API; **not firing it is neither**, because in a client context that property genuinely does not exist. `O3` ships both signals, so this must be settled in the same change.
 
-**Q8 — The naming lock. → NOT DECIDED HERE. This needs the user, not another agent.** `networking.md` already uses *scope* for interest management and *replication scope* in adjacent paragraphs; the original ask said "scope"; this document says **realm**, on Garry's Mod precedent (`sv_`/`cl_`/`sh_`), because it survives all four consumers (data existence, script run location, property replication, per-player filtering) and because *scope* is overloaded three ways already — interest management, milestone scope, and lexical scope in a document about scripting. The counter-argument is real: `realm` is a new word to learn, and `scope` is what was asked for. **It goes into every `.smap`, every `.scmap` payload-flag bit and every `.sentdef` record, so it cannot be changed after content exists.** Decide before the first map is saved.
+**Q8 — The naming lock. → CLOSED by the user on 2026-08-21. The axis is `Realm`.** The choice was between *realm* and *scope*, and the user took *realm* for three stated reasons. (1) **Precedent:** *realm* is Garry's Mod / Source Lua vocabulary for exactly this axis — the `sv_`/`cl_`/`sh_` split — so it arrives already meaning the right thing to the Source-lineage developer, and the editor badge vocabulary (§7.5 item 2) can teach the same three letters the console and these documents use. (2) **The collision:** `networking.md` already uses *scope* for interest management and "replication scope" in adjacent paragraphs, so shipping both would put two meanings of one word in the two documents that must be read together — and *scope* was already overloaded three ways (interest management, milestone scope, lexical scope in a document about scripting). (3) **Irreversibility:** the word goes into every `.smap` node record, every `.scmap` `NODE` payload-flag bit and every `.sentdef` `Flags` bit pair, so it could not be changed after the first map was saved; it was decided before that happened. The counter-argument — *realm* is a new word to learn, and *scope* was what the original ask said — was heard and overruled.
+
+**Binding consequences of the lock**, so it does not have to be re-argued: the property is `SceneNode.Realm`, the enum is `NodeRealm`, the resolved set is `RealmSet`, the serialized key is `"realm"`, the Luau property is `.Realm`/`.EffectiveRealm`, and the diagnostic vocabulary is `Shared`/`Server`/`Client`/`Inert`. **No engine identifier, message, key or document may use *scope* for node audience** (this document's own `BrushSubtreeUnderScopedParent`, `ScopeViolationException` and `Scene.ScopedNodeCount` were renamed in the same change), **and none may use *realm* for interest management** — `networking.md` §4.3 keeps *scope* and *relevancy* for that, permanently.
 
 ### Also carried forward, from the migration pass
 
@@ -795,7 +925,7 @@ Smaller, but not dropped:
 
 - **Can a server-context script create a `Client` node at runtime**, meaning "create this on every client"? A coherent primitive with no Roblox analogue (Roblox forces a `RemoteEvent`), and also a way to accidentally spawn N copies. The v1 rule refuses it — a node's realm is fixed at creation and may only be created in a context that would hold it — but the generalisation needs a decision before the replication vocabulary is frozen.
 - **What is the relationship between `State = Dormant` and `P7`'s dynamic-part split?** Both express "this exists but is not world geometry". If a `Dormant` brush subtree goes `Active` during Play, does it join the carve (a structural edit, full recompile) or become a dynamic `MeshRenderer`? A spawner activating templates every few seconds would full-recompile the world on each one. This is the same hazard `P7` already names and must be answered together with it.
-- **Where do shared Luau modules live by convention** now that `ReplicatedStorage` is gone? The mechanism is answered (`Shared` is the default; `require` is by node id); the convention is not, and a missing convention is how every project invents a different one. The new-project template (§7.5 item 9) is the place to fix it.
+- **Where do shared Luau modules live by convention** now that `ReplicatedStorage` is gone? **ANSWERED: the `Modules` row of the shipped project template** — `Shared` by inheritance, declaring nothing (see "The bare-root objection" above, and §7.5 item 9). The mechanism was never in doubt (`Shared` is the default; `require` is by node id); what was missing was a convention, and a convention is a template row rather than an engine feature. **One edge of it is genuinely still open: is a `Dormant` module requirable?** §6.4 and Q2 rule that a dormant script is torn down rather than suspended, while §6.1's module table is indexed by realm and says nothing about state. If dormant modules are *not* requirable, a `Templates` subtree cannot carry the module its own scripts require, and the template's documentation must say "reach out to `Modules`" instead.
 - **Do `StarterPlayer`'s 23 character properties become a settings struct or entity keyvalues on the character prefab?** Keyvalues are consistent with the entity arc and give the property panel for free; a settings struct is simpler and replicates through the built-in table. Small, but it blocks the character work.
 - **Does per-property realm need a `Client` value at all**, or only `Shared`/`Server`? A client-only keyvalue on a replicated entity is arguably a local cache wearing the realm word. Dropping it would free a bit and remove a combination nobody has asked for.
 
@@ -818,3 +948,6 @@ None of this is real until these exist.
 | 9 | `scook verify --target client` asserts every `STRT` entry is referenced by a surviving record. |
 | 10 | A reflection-based public-surface test (the `EditingAssemblyBoundaryTests` precedent) asserting every public API returning or counting `SceneNode`s is either mask-taking or on an explicit allow-list — and that the generated Luau bindings never name a blind form. |
 | 11 | **The master pin:** `N14`'s three-context loopback rig asserts the **local** client's observation of a mixed tree is identical, member for member, to the **remote** client's. Everything else on this list is a shortcut to this one. |
+| 12 | **The hard rule's pin.** A reflection/source scan over the engine assemblies (`SpectraEngine.Core`, `SpectraEngine.Editing`, and the cooking library when it exists) asserts that **no template folder name appears as a string literal anywhere** — `ServerLogic`, `ClientLogic`, `Interface`, `Templates`, `Modules`, `Baseplate` — and that no public member resolves a node by a well-known name. Same precedent and same assembly as pin 10 (`EditingAssemblyBoundaryTests`). The rule is only as real as the thing that catches its first violation, and the container zoo was documented too. |
+| 13 | **The template is a starting position, not a parent.** Instantiating the `Game` template and hand-authoring the same project produce **byte-identical** files modulo the freshly generated node Guids and the project name and id — which simultaneously pins that instantiation re-GUIDs every node, that `template.json` does not survive, and that no provenance field is written anywhere. Byte identity is already this repo's preferred oracle (`P2`'s save→load→save pin). |
+| 14 | **The R7 amendment.** `AddChild` of a brush-bearing subtree into a `Dormant` parent **succeeds**, the subtree contributes zero placements and zero BVH leaves (pin 7's oracle), and `_graphStructureVersion` was bumped by `MarkAdmissionChanged()` — asserted in the **Release** configuration, for pin 5's reason. |
