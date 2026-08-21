@@ -2,7 +2,7 @@
 
 SpectraShade is the shader language consumed by `SpectraShade.Compiler`. Source files use the
 `.spectrashade` extension. A file produces a single shader program that the compiler lowers to
-one or more backends (GLSL today; HLSL and SPIR-V planned) and packages into a multi-pipeline
+one or more backends (GLSL and HLSL today; SPIR-V planned) and packages into a multi-pipeline
 `.specshadecomp` artifact.
 
 The surface syntax blends GLSL's type vocabulary with C#-style attributes and `new` expressions.
@@ -240,8 +240,9 @@ Texture sampling is method-style on sampler values (`tex.Sample(uv)`), not a fre
 
 ## Worked Example
 
-See `samples/BasicLit.spectrashade` for a full PBR-ish forward shader that exercises
-`cbuffer`, samplers, varying structs, `Position`, `new`, `var`, swizzles, and `Math.*`.
+See `SpectraEngine.Core/Graphics/BaseShaders/Lit.spectrashade` for the engine's forward
+lit shader, which exercises `cbuffer`, samplers, varying structs, `Position`, `new`,
+`var`, swizzles, and `Math.*`.
 
 ---
 
@@ -252,8 +253,8 @@ for each enabled backend. Current backend status:
 
 | Backend | Status |
 |---|---|
-| GLSL | Implemented |
-| HLSL | Planned |
-| SPIR-V | Planned |
+| GLSL (OpenGL) | Implemented |
+| HLSL SM5 (D3D11/D3D12) | Implemented |
+| SPIR-V (Vulkan) | Planned |
 
 See FEATURES.md for the up-to-date roadmap.

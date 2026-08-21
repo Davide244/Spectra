@@ -36,7 +36,7 @@
 - [ ] Precision qualifiers ([HighP], [MediumP], [LowP] for mobile)
 - [ ] Push constants (Vulkan fast uniform path)
 - [ ] Specialization constants (compile-time variants)
-- [ ] HLSL code generation
+- [x] HLSL code generation (SM5, D3D11/D3D12 — vertex, fragment, geometry, compute)
 - [ ] SPIR-V code generation
 
 ## Lower Priority — Advanced Features
@@ -50,8 +50,8 @@
 - [ ] Dual-source blending ([Target(0, Index(1))])
 
 ## Tooling
-- [ ] LSP server (diagnostics, completions)
-- [ ] TextMate grammar (syntax highlighting)
+- [x] LSP server (diagnostics, completions — hover/definition/rename still open)
+- [x] TextMate grammar (syntax highlighting)
 - [ ] VS Code extension
-- [ ] Visual Studio VSIX extension
-- [ ] CLI compiler tool (spectrashade compile input.spectrashade -o output.specshadecomp)
+- [x] Visual Studio VSIX extension (highlighting, item templates, bundled LSP)
+- [x] CLI compiler tool (`ssc input.spectrashade -o output.specshadecomp`)

@@ -365,6 +365,39 @@ public sealed class Parser
         return new VariableDeclaration(type, name, init, Span(start));
     }
 
+    // Brace-less if/for/while bodies parse through ParseStatement, which can
+    // legitimately produce a VariableDeclaration — a SyntaxNode that is NOT a
+    // Statement. A blind cast turned typeable input like
+    // `if (flag) float y = 1.0;` into an unhandled InvalidCastException — a
+    // compiler crash escaping the diagnostics contract (reachable from the
+    // engine's shader hot-reload mid-edit). Such a declaration is also
+    // meaningless (its scope ends immediately), so report an error and wrap
+    // it in a synthesized block to keep parsing.
+    private Statement ParseEmbeddedStatement()
+    {
+        var start = Current.Span;
+        var stmt = ParseStatement();
+        switch (stmt)
+        {
+            case Statement statement:
+                return statement;
+
+            case VariableDeclaration declaration:
+                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                    "A declaration cannot be the sole body of a brace-less 'if'/'for'/'while' — wrap it in braces",
+                    declaration.Span));
+                return new BlockStatement([declaration], declaration.Span);
+
+            default:
+                // ParseStatement yields no other node kinds (nor null) today;
+                // recover with an empty block rather than crash if that changes.
+                var statements = new List<SyntaxNode>();
+                if (stmt is not null)
+                    statements.Add(stmt);
+                return new BlockStatement(statements, Span(start));
+        }
+    }
+
     private IfStatement ParseIfStatement()
     {
         var start = Current.Span;
@@ -372,10 +405,10 @@ public sealed class Parser
         Expect(TokenKind.LeftParen, "Expected '('");
         var condition = ParseExpression();
         Expect(TokenKind.RightParen, "Expected ')'");
-        var thenBranch = (Statement)(ParseStatement() ?? new BlockStatement([], Span(start)));
+        var thenBranch = ParseEmbeddedStatement();
         Statement? elseBranch = null;
         if (Match(TokenKind.Else))
-            elseBranch = (Statement)(ParseStatement() ?? new BlockStatement([], Span(start)));
+            elseBranch = ParseEmbeddedStatement();
         return new IfStatement(condition, thenBranch, elseBranch, Span(start));
     }
 
@@ -388,9 +421,21 @@ public sealed class Parser
         SyntaxNode? init = null;
         if (!Check(TokenKind.Semicolon))
         {
+            // Declaration initializers lead with a type keyword (`int i = 0`)
+            // or a custom struct type, which is only recognizable as two
+            // adjacent identifiers (`MyType x = ...`). A lone leading
+            // identifier is the canonical assignment to a pre-declared
+            // counter (`i = 0`) — IsTypeToken alone would consume `i` as a
+            // type name — so one token of lookahead routes an identifier
+            // followed by anything but another identifier (`=`, `.`, `[`,
+            // any operator) to the expression branch.
+            bool isStructTypeDecl = Check(TokenKind.Identifier)
+                && _pos + 1 < _tokens.Count
+                && _tokens[_pos + 1].Kind == TokenKind.Identifier;
+
             if (Check(TokenKind.Var))
                 init = ParseVarDeclaration();
-            else if (IsTypeToken(Current.Kind))
+            else if ((IsTypeToken(Current.Kind) && !Check(TokenKind.Identifier)) || isStructTypeDecl)
             {
                 var type = ParseType();
                 string name = Expect(TokenKind.Identifier, "Expected name").Text;
@@ -421,7 +466,7 @@ public sealed class Parser
             increment = ParseExpression();
         Expect(TokenKind.RightParen, "Expected ')'");
 
-        var body = (Statement)(ParseStatement() ?? new BlockStatement([], Span(start)));
+        var body = ParseEmbeddedStatement();
         return new ForStatement(init, condition, increment, body, Span(start));
     }
 
@@ -432,7 +477,7 @@ public sealed class Parser
         Expect(TokenKind.LeftParen, "Expected '('");
         var condition = ParseExpression();
         Expect(TokenKind.RightParen, "Expected ')'");
-        var body = (Statement)(ParseStatement() ?? new BlockStatement([], Span(start)));
+        var body = ParseEmbeddedStatement();
         return new WhileStatement(condition, body, Span(start));
     }
 
@@ -702,7 +747,7 @@ public sealed class Parser
     private SourceSpan Span(SourceSpan start) => new(start.Start, Current.Span.End);
 
     private static bool IsAssignmentOp(TokenKind kind) =>
-        kind is TokenKind.Assign or TokenKind.PlusAssign or TokenKind.MinusAssign or TokenKind.StarAssign or TokenKind.SlashAssign;
+        kind is TokenKind.Assign or TokenKind.PlusAssign or TokenKind.MinusAssign or TokenKind.StarAssign or TokenKind.SlashAssign or TokenKind.PercentAssign;
 
     private static bool IsSamplerType(TokenKind kind) =>
         kind is TokenKind.Sampler2D or TokenKind.Sampler2DArray or TokenKind.Sampler3D or TokenKind.SamplerCube;
