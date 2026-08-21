@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!--
+      Full-opts JIT from the first call. With tiering enabled, dynamic-PGO
+      re-instrumentation lands mid-run and skews individual phase medians by
+      up to 10x (observed on the Parallel.For bodies in Carve/Weld); a
+      regression benchmark needs run-to-run stability more than peak-PGO
+      steady state.
+    -->
+    <TieredCompilation>false</TieredCompilation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
+  </ItemGroup>
+
+</Project>

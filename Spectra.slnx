@@ -1,9 +1,13 @@
 <Solution>
   <Folder Name="/Test/">
+    <Project Path="Test/SpectraEngine.Bsp.Tests/SpectraEngine.Bsp.Tests.csproj" />
     <Project Path="Test/SpectraEngine.Graphics.Tests/SpectraEngine.Graphics.Tests.csproj">
       <Build Solution="Debug|*" Project="false" />
     </Project>
     <Project Path="Test/SpectraShade.Compiler.Tests/SpectraShade.Compiler.Tests.csproj" />
+  </Folder>
+  <Folder Name="/Benchmarks/">
+    <Project Path="Benchmarks/CsgBench/CsgBench.csproj" />
   </Folder>
   <Folder Name="/SpectraShade/">
     <Project Path="SpectraShade.Compiler/SpectraShade.Compiler.csproj" />
