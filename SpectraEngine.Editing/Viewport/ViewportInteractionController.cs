@@ -41,6 +41,46 @@ namespace SpectraEngine.Editing.Viewport;
 /// scene — it mutates nothing — so the rule can be tested directly rather than
 /// inferred from what the viewport did afterwards.
 /// <para>
+/// <b>Three rules sit above that list, and they are what keep the camera and the
+/// tools out of each other's way now that right-drag is a freelook rather than
+/// an orbit:</b>
+/// <list type="number">
+///   <item><description>
+///     <b>A gesture that owns the pointer keeps it — and the rule runs both
+///     ways.</b> While <see cref="DragMode"/> is anything but
+///     <see cref="ViewportDragMode.None"/> the camera does not run at all, so a
+///     gizmo drag can never be stolen mid-manipulation — not by a right press,
+///     not by anything. Symmetrically, while
+///     <see cref="EditorCameraController.OwnsPointer"/> says a navigation
+///     gesture is still being held, the <em>camera</em> owns the pointer and
+///     this class starts nothing — so a stray left click during a middle-drag
+///     pan or a right-drag freelook cannot select an object, open an undo
+///     transaction and kill the navigation gesture underneath it.
+///   </description></item>
+///   <item><description>
+///     <b>A press the camera claims is never re-interpreted.</b>
+///     <see cref="EditorCameraController.ClaimsPress"/> names the button and
+///     modifier combinations that belong to navigation; on such a frame this
+///     class starts no gesture, <see cref="ClassifyPress"/> answers
+///     <see cref="ViewportDragMode.None"/>, and the manipulator is run with its
+///     grab disabled so a handle under the cursor cannot swallow the press
+///     either. That is what makes right-drag reach the camera <em>wherever the
+///     cursor happens to be</em>, and it is also what stops Alt+left-drag —
+///     the orbit modifier — from being read as a box select. <b>Claiming is a
+///     press-edge test and therefore only ever describes <em>this</em> frame</b>,
+///     which is exactly why rule 1 has to carry the frames after it.
+///   </description></item>
+///   <item><description>
+///     <b>A locked cursor makes every absolute-position path inert.</b> During a
+///     freelook the OS reports no meaningful cursor position, so picking,
+///     hit-testing and the marquee all test
+///     <see cref="EditorInputFrame.IsPointerUsable"/> rather than merely
+///     "inside the viewport". Nothing can begin a pointer gesture while the
+///     pointer does not exist.
+///   </description></item>
+/// </list>
+/// </para>
+/// <para>
 /// <b>Clicking an already-selected node does not collapse a multi-selection on
 /// the press.</b> If it did, grabbing one of five selected crates to drag all
 /// five would drop four of them at the instant of the grab. The collapse is
@@ -50,8 +90,8 @@ namespace SpectraEngine.Editing.Viewport;
 /// </para>
 /// <para>
 /// <b>Camera navigation only runs when nothing has claimed the pointer.</b>
-/// Right-drag orbits, but right-click during a manipulation cancels it; the
-/// two cannot both be live, and the mode is what separates them. Every frame
+/// Right-drag looks around, but right-click during a manipulation cancels it;
+/// the two cannot both be live, and the mode is what separates them. Every frame
 /// the camera is withheld it is told so
 /// (<see cref="EditorCameraController.SuspendNavigation"/>), because a
 /// controller that measures its drag against the last cursor it saw would
@@ -138,7 +178,14 @@ public sealed class ViewportInteractionController
     /// </summary>
     public ViewportDragMode ClassifyPress(in EditorInputFrame frame)
     {
-        if (!frame.IsCursorInsideViewport)
+        // Rule 3: no usable pointer — outside the viewport, or locked for a
+        // freelook — means the press belongs to nobody here.
+        if (!frame.IsPointerUsable)
+            return ViewportDragMode.None;
+
+        // Rules 1 and 2: navigation asked for this press, or is already in the
+        // middle of a gesture the press would otherwise cut short.
+        if (CameraOwnsPointer(in frame))
             return ViewportDragMode.None;
 
         if (Gizmos.Active.PickAt(in frame).IsHit)
@@ -167,9 +214,15 @@ public sealed class ViewportInteractionController
             return WithheldFromCamera();
         }
 
+        // Rules 1 and 2, evaluated once for the whole frame: a press that
+        // belongs to navigation — because the combination is the camera's, or
+        // because the camera is already mid-gesture — is invisible to every tool
+        // below, starting with the manipulator's grab.
+        bool cameraOwnsPointer = CameraOwnsPointer(in frame);
+
         // Everything else routes through the manipulator, which owns the
         // handle hover even on frames where no gesture is in progress.
-        GizmoUpdateResult gizmoResult = Gizmos.Update(in frame, cancelRequested);
+        GizmoUpdateResult gizmoResult = Gizmos.Update(in frame, cancelRequested, !cameraOwnsPointer);
 
         if (DragMode != ViewportDragMode.None)
         {
@@ -185,7 +238,7 @@ public sealed class ViewportInteractionController
             return WithheldFromCamera();
         }
 
-        if (frame.WasPressed(DragButton) && frame.IsCursorInsideViewport)
+        if (frame.WasPressed(DragButton) && frame.IsPointerUsable && !cameraOwnsPointer)
         {
             BeginGesture(in frame);
             return WithheldFromCamera();
@@ -237,6 +290,23 @@ public sealed class ViewportInteractionController
         CameraController?.SuspendNavigation();
         return DragMode;
     }
+
+    // Rules 1 and 2 together: does navigation have this frame's pointer?
+    //
+    // Asking ClaimsPress alone is not enough, and the gap is a definition rather
+    // than a race: claiming is a pure function of THIS frame's press edges, so a
+    // camera gesture that began on an earlier frame is invisible to it. A left
+    // click landing while the middle button is already panning — or while the
+    // right button is already looking, before the cursor-lock latch has landed —
+    // would answer "not claimed", start a gizmo drag, open an undo transaction,
+    // and take the pointer away from a gesture that was already using it, with
+    // SuspendNavigation quietly killing the pan or the look mid-stroke.
+    // EditorCameraController.OwnsPointer answers both halves.
+    //
+    // Null-safe so a host running without a camera controller behaves exactly as
+    // it did before navigation existed.
+    private bool CameraOwnsPointer(in EditorInputFrame frame) =>
+        CameraController is { } camera && camera.OwnsPointer(in frame);
 
     // --- Gesture start -------------------------------------------------------
 
@@ -309,7 +379,13 @@ public sealed class ViewportInteractionController
 
     private void UpdateBoxSelect(in EditorInputFrame frame, bool cancelRequested)
     {
-        BoxSelectResult result = BoxSelect.Update(in frame, cancelRequested);
+        // A marquee tracks the cursor by its absolute position, so a cursor that
+        // became locked underneath it has nothing left to track: abandon the
+        // rectangle rather than committing whatever frozen corner it last saw.
+        // Unreachable while the arbitration holds — a marquee owns the pointer,
+        // so the camera never sees the press that would lock it — which is
+        // exactly why it is worth stating here rather than assuming.
+        BoxSelectResult result = BoxSelect.Update(in frame, cancelRequested || frame.IsCursorLocked);
         if (result == BoxSelectResult.Dragging)
             return;
 

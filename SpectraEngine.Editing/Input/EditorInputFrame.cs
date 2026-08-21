@@ -5,9 +5,11 @@ namespace SpectraEngine.Editing.Input;
 
 /// <summary>
 /// An immutable snapshot of everything the editing layer is allowed to know
-/// about input for one frame: where the cursor is, how big the viewport is,
-/// which mouse buttons are held and which changed this frame, which modifiers
-/// are down, how far the wheel turned, and how long the frame was.
+/// about input for one frame: where the cursor is and how far it moved, how big
+/// the viewport is, which mouse buttons are held and which changed this frame,
+/// which modifiers are down, how far the wheel turned, whether the cursor is
+/// captured for freelook, which way the host's movement keys are pointing, and
+/// how long the frame was.
 /// </summary>
 /// <remarks>
 /// <b>This type is the seam.</b> Editor tools — gizmos, selection, drag
@@ -42,6 +44,13 @@ public readonly struct EditorInputFrame
     /// <param name="modifiers">Modifier keys held at snapshot time.</param>
     /// <param name="scrollDelta">Wheel movement over this frame, in notches (y = vertical).</param>
     /// <param name="deltaTime">Frame duration in seconds.</param>
+    /// <param name="cursorDelta">Relative cursor motion over this frame, in pixels.</param>
+    /// <param name="navigation">This frame's resolved fly-camera axis, if the host binds one.</param>
+    /// <param name="isCursorLocked">
+    /// True while the cursor is captured for freelook, which makes
+    /// <paramref name="cursorPosition"/> meaningless — see
+    /// <see cref="IsCursorLocked"/>.
+    /// </param>
     public EditorInputFrame(
         Vector2 cursorPosition,
         Vector2 viewportSize,
@@ -50,7 +59,10 @@ public readonly struct EditorInputFrame
         PointerButtons buttonsReleased,
         KeyModifiers modifiers,
         Vector2 scrollDelta,
-        float deltaTime)
+        float deltaTime,
+        Vector2 cursorDelta = default,
+        EditorNavigationInput navigation = default,
+        bool isCursorLocked = false)
     {
         CursorPosition = cursorPosition;
         ViewportSize = viewportSize;
@@ -60,6 +72,9 @@ public readonly struct EditorInputFrame
         Modifiers = modifiers;
         ScrollDelta = scrollDelta;
         DeltaTime = deltaTime;
+        CursorDelta = cursorDelta;
+        Navigation = navigation;
+        IsCursorLocked = isCursorLocked;
     }
 
     /// <summary>
@@ -110,13 +125,58 @@ public readonly struct EditorInputFrame
     public float DeltaTime { get; }
 
     /// <summary>
+    /// How far the cursor moved over this frame, in pixels — the <em>relative</em>
+    /// signal, valid whether or not the cursor is locked.
+    /// </summary>
+    /// <remarks>
+    /// While <see cref="IsCursorLocked"/> is true this is the only motion signal
+    /// there is: a captured cursor has no absolute position, so a look gesture
+    /// that differenced <see cref="CursorPosition"/> between frames would read
+    /// zero forever. Hosts that do not track relative motion may leave it at
+    /// zero; consumers must then be driven unlocked, where differencing the
+    /// absolute position still works.
+    /// </remarks>
+    public Vector2 CursorDelta { get; }
+
+    /// <summary>
+    /// This frame's fly-camera axis, resolved by the host from its own keymap.
+    /// Default (idle) for a host that binds no movement keys.
+    /// </summary>
+    public EditorNavigationInput Navigation { get; }
+
+    /// <summary>
+    /// True while the cursor is captured for freelook: hidden, unable to leave
+    /// the window, and <b>without a meaningful <see cref="CursorPosition"/></b>.
+    /// </summary>
+    /// <remarks>
+    /// Everything that turns a cursor position into a world query — picking,
+    /// gizmo hit-testing, the marquee, zoom-toward-cursor — must stand down
+    /// while this is set, and it is <see cref="IsPointerUsable"/> rather than
+    /// this flag that those sites test, so the rule is one predicate instead of
+    /// a condition each of them has to remember.
+    /// </remarks>
+    public bool IsCursorLocked { get; }
+
+    /// <summary>
     /// True when <see cref="CursorPosition"/> lies inside the viewport rect
     /// (left/top inclusive, right/bottom exclusive). False for a zero-sized
     /// viewport, so a not-yet-sized panel never claims a hover.
     /// </summary>
+    /// <remarks>
+    /// Purely geometric: it says where the reported position is, not whether
+    /// that position means anything. <see cref="IsPointerUsable"/> is the one
+    /// that answers the second question.
+    /// </remarks>
     public bool IsCursorInsideViewport =>
         CursorPosition.X >= 0f && CursorPosition.X < ViewportSize.X &&
         CursorPosition.Y >= 0f && CursorPosition.Y < ViewportSize.Y;
+
+    /// <summary>
+    /// True when <see cref="CursorPosition"/> may be used as a viewport
+    /// coordinate: it is inside the viewport <em>and</em> the cursor is not
+    /// locked. The single predicate every absolute-position consumer tests.
+    /// </summary>
+    public bool IsPointerUsable => !IsCursorLocked && IsCursorInsideViewport;
 
     /// <summary>
     /// True when <em>every</em> button in <paramref name="buttons"/> is held.

@@ -44,9 +44,21 @@ internal sealed class ViewportHarness
         Scene.Camera.AspectRatio = ViewportSize.X / ViewportSize.Y;
         Undo = new UndoStack(Scene);
         Gizmos = new GizmoController(Scene, Undo);
-        EditorCamera = new EditorCameraController(Scene) { SmoothingTimeConstant = 0f };
+        CursorLock = new FakeCursorLock();
+        EditorCamera = new EditorCameraController(Scene)
+        {
+            SmoothingTimeConstant = 0f,
+            CursorLock = CursorLock,
+        };
         Viewport = new ViewportInteractionController(Scene, Gizmos) { CameraController = EditorCamera };
     }
+
+    /// <summary>
+    /// The cursor-lock double the camera requests through. It records requests
+    /// and only "applies" them when <see cref="FakeCursorLock.Pump"/> is called,
+    /// mirroring the real latch's main-thread round trip.
+    /// </summary>
+    public FakeCursorLock CursorLock { get; }
 
     public Scene Scene { get; }
 
@@ -100,6 +112,13 @@ internal sealed class ViewportHarness
     }
 
     /// <summary>Builds one input frame at an explicit pixel.</summary>
+    /// <remarks>
+    /// <paramref name="cursorDelta"/> and <paramref name="locked"/> are the
+    /// freelook pair: while the cursor is locked the absolute position is
+    /// meaningless and the camera consumes the delta instead, so a locked frame
+    /// normally repeats the same <paramref name="cursor"/> and varies only the
+    /// delta — exactly as the real input source does once the position freezes.
+    /// </remarks>
     public EditorInputFrame Frame(
         Vector2 cursor,
         PointerButtons down = PointerButtons.None,
@@ -107,8 +126,12 @@ internal sealed class ViewportHarness
         PointerButtons released = PointerButtons.None,
         KeyModifiers modifiers = KeyModifiers.None,
         Vector2 scroll = default,
-        float deltaTime = 1f / 60f) =>
-        new(cursor, ViewportSize, down, pressed, released, modifiers, scroll, deltaTime);
+        float deltaTime = 1f / 60f,
+        Vector2 cursorDelta = default,
+        EditorNavigationInput navigation = default,
+        bool locked = false) =>
+        new(cursor, ViewportSize, down, pressed, released, modifiers, scroll, deltaTime,
+            cursorDelta, navigation, locked);
 
     /// <summary>Builds one input frame aimed at a world point.</summary>
     public EditorInputFrame FrameAt(

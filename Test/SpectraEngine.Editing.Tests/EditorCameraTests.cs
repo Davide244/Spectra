@@ -163,29 +163,53 @@ public sealed class EditorCameraTests
         // Cursor jumps a long way and the button goes down on the same frame:
         // that jump is where the user moved the mouse BEFORE deciding to orbit.
         harness.EditorCamera.Update(harness.Frame(new Vector2(20f, 20f)));
-        harness.EditorCamera.Update(
-            harness.Frame(new Vector2(700f, 500f), down: PointerButtons.Right, pressed: PointerButtons.Right));
+        harness.EditorCamera.Update(harness.Frame(
+            new Vector2(700f, 500f),
+            down: PointerButtons.Right,
+            pressed: PointerButtons.Right,
+            modifiers: KeyModifiers.Alt));
 
         harness.EditorCamera.Yaw.ShouldBe(0.3f);
         harness.EditorCamera.Pitch.ShouldBe(-0.2f);
     }
 
     [Fact]
-    public void Alt_and_the_left_button_orbit_as_well_as_the_right_button()
+    public void Alt_with_the_left_button_orbits_exactly_as_alt_with_the_right_one()
     {
-        var alt = new ViewportHarness();
-        alt.Orbit(Vector3.Zero, 15f, 0.3f, -0.2f);
-        alt.EditorCamera.Update(alt.Frame(new Vector2(400f, 300f),
+        var left = new ViewportHarness();
+        left.Orbit(Vector3.Zero, 15f, 0.3f, -0.2f);
+        left.EditorCamera.Update(left.Frame(new Vector2(400f, 300f),
             down: PointerButtons.Left, modifiers: KeyModifiers.Alt));
-        alt.EditorCamera.Update(alt.Frame(new Vector2(460f, 340f),
+        left.EditorCamera.Update(left.Frame(new Vector2(460f, 340f),
             down: PointerButtons.Left, modifiers: KeyModifiers.Alt));
 
         var right = new ViewportHarness();
         right.Orbit(Vector3.Zero, 15f, 0.3f, -0.2f);
-        OrbitDrag(right, new Vector2(400f, 300f), new Vector2(460f, 340f));
+        OrbitStep(right, new Vector2(400f, 300f), new Vector2(460f, 340f));
 
-        alt.EditorCamera.Yaw.ShouldBe(right.EditorCamera.Yaw);
-        alt.EditorCamera.Pitch.ShouldBe(right.EditorCamera.Pitch);
+        left.EditorCamera.Yaw.ShouldBe(right.EditorCamera.Yaw);
+        left.EditorCamera.Pitch.ShouldBe(right.EditorCamera.Pitch);
+    }
+
+    [Fact]
+    public void Alt_is_what_turns_a_right_drag_from_a_look_into_an_orbit()
+    {
+        // The whole semantic change in one assertion: the same drag, the same
+        // button, and the modifier decides whether the camera turns in place or
+        // swings around the focus.
+        var look = new ViewportHarness();
+        look.Orbit(new Vector3(3f, 1f, -2f), 15f, 0.3f, -0.2f);
+        Vector3 lookStart = look.Scene.Camera.Position;
+        look.EditorCamera.Update(look.Frame(new Vector2(400f, 300f), down: PointerButtons.Right));
+        look.EditorCamera.Update(look.Frame(new Vector2(460f, 340f), down: PointerButtons.Right));
+
+        var orbit = new ViewportHarness();
+        orbit.Orbit(new Vector3(3f, 1f, -2f), 15f, 0.3f, -0.2f);
+        Vector3 orbitStart = orbit.Scene.Camera.Position;
+        OrbitStep(orbit, new Vector2(400f, 300f), new Vector2(460f, 340f));
+
+        look.Scene.Camera.Position.ShouldBe(lookStart);
+        (orbit.Scene.Camera.Position - orbitStart).Length().ShouldBeGreaterThan(0.1f);
     }
 
     [Fact]
@@ -517,56 +541,73 @@ public sealed class EditorCameraTests
         return ray.PointAt(travel);
     }
 
+    // Orbit is the MODIFIER gesture now that plain right-drag is a freelook, so
+    // every orbit here holds Alt. See EditorFreelookTests for the unmodified
+    // gesture.
     private static void OrbitDrag(ViewportHarness harness, Vector2 from, Vector2 to)
     {
+        harness.EditorCamera.Update(harness.Frame(
+            from, down: PointerButtons.Right, pressed: PointerButtons.Right, modifiers: KeyModifiers.Alt));
         harness.EditorCamera.Update(
-            harness.Frame(from, down: PointerButtons.Right, pressed: PointerButtons.Right));
-        harness.EditorCamera.Update(harness.Frame(to, down: PointerButtons.Right));
+            harness.Frame(to, down: PointerButtons.Right, modifiers: KeyModifiers.Alt));
     }
 
     // One held-button step: the press edge is already behind us, so both frames
     // carry the delta.
     private static void OrbitStep(ViewportHarness harness, Vector2 from, Vector2 to)
     {
-        harness.EditorCamera.Update(harness.Frame(from, down: PointerButtons.Right));
-        harness.EditorCamera.Update(harness.Frame(to, down: PointerButtons.Right));
+        harness.EditorCamera.Update(
+            harness.Frame(from, down: PointerButtons.Right, modifiers: KeyModifiers.Alt));
+        harness.EditorCamera.Update(
+            harness.Frame(to, down: PointerButtons.Right, modifiers: KeyModifiers.Alt));
     }
 
     // --- Frames the arbiter withheld -----------------------------------------
 
     [Fact]
-    public void Cursor_travel_withheld_by_a_marquee_never_arrives_as_one_orbit_step()
+    public void Cursor_travel_withheld_by_a_marquee_never_arrives_as_one_look_step()
     {
         // The controller measures its drag against the cursor position it last
         // SAW, and it only sees the frames it is given. A marquee owns the
         // pointer for its whole duration, so without being told it was skipped
-        // the controller applies every withheld pixel at once on the first idle
-        // frame afterwards — a frame on which the cursor did not move at all.
+        // the controller applies every withheld pixel at once on the first frame
+        // it runs again — a frame on which the cursor did not move at all.
         var harness = new ViewportHarness();
         harness.Orbit(Vector3.Zero, 20f, 0f, 0f);
 
+        // A real look first, so the anchor the camera would snap from is a
+        // position it genuinely saw rather than a default.
         harness.Viewport.Update(harness.Frame(
             new Vector2(400f, 300f), down: PointerButtons.Right, pressed: PointerButtons.Right));
         harness.Viewport.Update(harness.Frame(new Vector2(410f, 300f), down: PointerButtons.Right));
 
         float yaw = harness.EditorCamera.Yaw;
         float pitch = harness.EditorCamera.Pitch;
-        yaw.ShouldBe(10f * harness.EditorCamera.OrbitSensitivity, 1e-5f); // it really was orbiting
+        yaw.ShouldBe(10f * harness.EditorCamera.LookSensitivity, 1e-5f); // it really was looking
 
-        // Left press on empty space with the orbit button still down: the
-        // marquee claims the pointer and the camera sits out every frame.
+        harness.Viewport.Update(harness.Frame(new Vector2(410f, 300f), released: PointerButtons.Right));
+        harness.EditorCamera.IsNavigating.ShouldBeFalse();
+
+        // Now a marquee across most of the viewport. The camera sits out every
+        // frame of it — and the right button arriving mid-marquee does not take
+        // the pointer back, so it sits out those frames too.
         harness.Viewport.Update(harness.Frame(
             new Vector2(410f, 300f),
-            down: PointerButtons.Right | PointerButtons.Left,
+            down: PointerButtons.Left,
             pressed: PointerButtons.Left)).ShouldBe(ViewportDragMode.BoxSelect);
+        harness.Viewport.Update(harness.Frame(
+            new Vector2(600f, 400f),
+            down: PointerButtons.Left | PointerButtons.Right,
+            pressed: PointerButtons.Right)).ShouldBe(ViewportDragMode.BoxSelect);
         harness.Viewport.Update(harness.Frame(
             new Vector2(700f, 500f), down: PointerButtons.Right | PointerButtons.Left));
         harness.Viewport.Update(harness.Frame(
             new Vector2(700f, 500f), down: PointerButtons.Right, released: PointerButtons.Left))
             .ShouldBe(ViewportDragMode.None);
 
-        // The first idle frame. The cursor has not moved since the release, so
-        // the camera must not move either.
+        // The first frame the camera runs again. The cursor has not moved since
+        // the release, so the camera must not move either — 290 px of withheld
+        // travel is sitting in the stale anchor.
         harness.Viewport.Update(harness.Frame(new Vector2(700f, 500f), down: PointerButtons.Right));
         harness.EditorCamera.Yaw.ShouldBe(yaw);
         harness.EditorCamera.Pitch.ShouldBe(pitch);
@@ -574,11 +615,11 @@ public sealed class EditorCameraTests
         // And navigation resumes from where the cursor now is, not from where
         // it was before the marquee.
         harness.Viewport.Update(harness.Frame(new Vector2(710f, 500f), down: PointerButtons.Right));
-        harness.EditorCamera.Yaw.ShouldBe(yaw + 10f * harness.EditorCamera.OrbitSensitivity, 1e-5f);
+        harness.EditorCamera.Yaw.ShouldBe(yaw + 10f * harness.EditorCamera.LookSensitivity, 1e-5f);
     }
 
     [Fact]
-    public void Cursor_travel_withheld_by_a_gizmo_drag_never_arrives_as_one_orbit_step()
+    public void Cursor_travel_withheld_by_a_gizmo_drag_never_arrives_as_one_look_step()
     {
         var harness = new ViewportHarness();
         harness.Orbit(Vector3.Zero, 20f, 0f, 0f);
@@ -590,22 +631,26 @@ public sealed class EditorCameraTests
         float yaw = harness.EditorCamera.Yaw;
         float pitch = harness.EditorCamera.Pitch;
 
-        // Grab the x arrow while the orbit button is still held. Right is down
-        // but not pressed, so it is not the gizmo's cancel edge.
+        harness.Viewport.Update(harness.Frame(new Vector2(410f, 300f), released: PointerButtons.Right));
+
         float axisLength = GizmoGeometry.Build(
             harness.Scene.Camera, Vector3.Zero, Quaternion.Identity,
             harness.ViewportSize, harness.Gizmos.Active.HandlePixelSize).AxisLength;
         Vector2 handlePixel = harness.WorldToScreen(Vector3.UnitX * (axisLength * 0.8f));
 
+        // Grab the x arrow, then bring the look button down mid-drag. Right is
+        // pressed while the manipulator owns the pointer, so it reaches the
+        // gizmo's cancel binding and not the camera; either way the camera is
+        // skipped for the whole gesture.
         harness.Viewport.Update(harness.Frame(
-            handlePixel,
+            handlePixel, down: PointerButtons.Left, pressed: PointerButtons.Left))
+            .ShouldBe(ViewportDragMode.Manipulate);
+        harness.Viewport.Update(harness.Frame(
+            handlePixel + new Vector2(300f, 0f), down: PointerButtons.Left));
+        harness.Viewport.Update(harness.Frame(
+            handlePixel + new Vector2(300f, 0f),
             down: PointerButtons.Right | PointerButtons.Left,
-            pressed: PointerButtons.Left)).ShouldBe(ViewportDragMode.Manipulate);
-        harness.Viewport.Update(harness.Frame(
-            handlePixel + new Vector2(300f, 0f), down: PointerButtons.Right | PointerButtons.Left));
-        harness.Viewport.Update(harness.Frame(
-            handlePixel + new Vector2(300f, 0f), down: PointerButtons.Right, released: PointerButtons.Left))
-            .ShouldBe(ViewportDragMode.None);
+            pressed: PointerButtons.Right)).ShouldBe(ViewportDragMode.None);
 
         harness.Viewport.Update(harness.Frame(
             handlePixel + new Vector2(300f, 0f), down: PointerButtons.Right));
@@ -617,7 +662,7 @@ public sealed class EditorCameraTests
     public void Resetting_the_viewport_also_re_anchors_the_camera()
     {
         // Same hazard through a different door: a host that resets while the
-        // orbit button is down (a minimized window, an undo mid-gesture) skips
+        // look button is down (a minimized window, an undo mid-gesture) skips
         // the camera for as long as it takes to come back.
         var harness = new ViewportHarness();
         harness.Orbit(Vector3.Zero, 20f, 0f, 0f);
@@ -626,10 +671,10 @@ public sealed class EditorCameraTests
             new Vector2(400f, 300f), down: PointerButtons.Right, pressed: PointerButtons.Right));
         harness.Viewport.Update(harness.Frame(new Vector2(410f, 300f), down: PointerButtons.Right));
         float yaw = harness.EditorCamera.Yaw;
-        harness.EditorCamera.IsOrbiting.ShouldBeTrue();
+        harness.EditorCamera.IsFreeLooking.ShouldBeTrue();
 
         harness.Viewport.Reset();
-        harness.EditorCamera.IsOrbiting.ShouldBeFalse();
+        harness.EditorCamera.IsFreeLooking.ShouldBeFalse();
 
         harness.Viewport.Update(harness.Frame(new Vector2(700f, 500f), down: PointerButtons.Right));
         harness.EditorCamera.Yaw.ShouldBe(yaw);

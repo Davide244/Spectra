@@ -206,13 +206,20 @@ public abstract class GizmoTool
     /// vocabulary: the host owns the keymap and passes the verdict down, which
     /// keeps the backend-neutral input seam intact.
     /// </param>
+    /// <param name="pointerAvailable">
+    /// False when something else has already claimed this frame's press — the
+    /// viewport camera's own navigation buttons, in practice. The hover still
+    /// updates; only the grab is refused, because a press that belongs to
+    /// navigation must not also start a manipulation. A drag already in progress
+    /// is unaffected: it owns the pointer and nothing may take it away.
+    /// </param>
     /// <returns>What this call did.</returns>
-    public GizmoUpdateResult Update(in EditorInputFrame frame, bool cancelRequested = false)
+    public GizmoUpdateResult Update(in EditorInputFrame frame, bool cancelRequested = false, bool pointerAvailable = true)
     {
         if (_state == GizmoInteractionState.Dragging)
             return UpdateDrag(in frame, cancelRequested);
 
-        return UpdateHover(in frame);
+        return UpdateHover(in frame, pointerAvailable);
     }
 
     /// <summary>
@@ -232,7 +239,7 @@ public abstract class GizmoTool
     {
         if (Scene.Selection.Count == 0 ||
             frame.ViewportSize.X <= 0f || frame.ViewportSize.Y <= 0f ||
-            !frame.IsCursorInsideViewport)
+            !frame.IsPointerUsable)
         {
             return GizmoPick.Miss;
         }
@@ -426,7 +433,7 @@ public abstract class GizmoTool
 
     // --- Hover ---------------------------------------------------------------
 
-    private GizmoUpdateResult UpdateHover(in EditorInputFrame frame)
+    private GizmoUpdateResult UpdateHover(in EditorInputFrame frame, bool pointerAvailable)
     {
         _hovered = GizmoHandle.None;
         _active = GizmoHandle.None;
@@ -438,14 +445,16 @@ public abstract class GizmoTool
         }
 
         // A cursor outside the viewport belongs to whatever panel it is over,
-        // not to this gizmo.
-        if (frame.IsCursorInsideViewport)
+        // not to this gizmo — and a LOCKED cursor has no position at all, so
+        // hit-testing through it would highlight a handle under a pointer the
+        // user cannot see or aim.
+        if (frame.IsPointerUsable)
         {
             Ray3 ray = Scene.Camera.ScreenPointToRay(frame.CursorPosition, frame.ViewportSize);
             _hovered = HitTest(in _geometry, in ray, PickTolerancePixels).Handle;
         }
 
-        if (_hovered != GizmoHandle.None && frame.WasPressed(DragButton))
+        if (pointerAvailable && _hovered != GizmoHandle.None && frame.WasPressed(DragButton))
             return BeginDrag(in frame);
 
         _state = _hovered != GizmoHandle.None ? GizmoInteractionState.Hovering : GizmoInteractionState.Idle;

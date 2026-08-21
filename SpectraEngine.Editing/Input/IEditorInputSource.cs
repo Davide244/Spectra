@@ -18,5 +18,13 @@ public interface IEditorInputSource
     /// Snapshots the current input state for a frame of
     /// <paramref name="deltaTime"/> seconds.
     /// </summary>
-    EditorInputFrame CaptureFrame(float deltaTime);
+    /// <param name="deltaTime">The frame's duration in seconds.</param>
+    /// <param name="navigation">
+    /// The fly-camera axis the host resolved from its own keymap this frame.
+    /// It arrives as a parameter rather than being read here because the
+    /// <em>keyboard</em> is the host's business — the same reason
+    /// <c>GizmoTool.Update</c> takes its cancel flag as a parameter. A host with
+    /// no movement bindings omits it.
+    /// </param>
+    EditorInputFrame CaptureFrame(float deltaTime, EditorNavigationInput navigation = default);
 }

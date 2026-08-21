@@ -6,6 +6,16 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\SpectraEngine.Editing\SpectraEngine.Editing.csproj" />
+    <!--
+      The demo host is referenced for one pure type: DemoStartupOptions, the
+      parser that decides whether the synthetic editing self-test runs. That
+      switch is an editing concern (it drives the gizmo chain) and its default
+      is load-bearing — a self-test left on moves brushes in front of whoever is
+      using the editor — so it is pinned here rather than left to a comment.
+      Nothing else in the executable is touched, and the dependency runs the
+      same direction the solution already does (host -> editing).
+    -->
+    <ProjectReference Include="..\..\SpectraEngine.Executable\SpectraEngine.Executable.csproj" />
   </ItemGroup>
 
 </Project>
