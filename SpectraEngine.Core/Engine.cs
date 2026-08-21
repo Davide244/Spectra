@@ -5,6 +5,7 @@ using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Audio;
 using SpectraEngine.Core.Diagnostics;
 using SpectraEngine.Core.Graphics;
+using SpectraEngine.Core.Physics;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Core.Windowing;
@@ -40,6 +41,12 @@ public sealed class Engine
     // renderer, so backend pipelines iterate a flat, frustum-culled item list
     // instead of each walking the scene graph themselves.
     private readonly RenderView _renderView = new();
+
+    // Turns the variable frame delta into whole fixed physics ticks plus the
+    // leftover fraction render interpolation blends with. Engine-owned rather
+    // than backend-owned, so that "one tick is one tick" is true across a
+    // backend swap and remains true for the null backend.
+    private readonly FixedTickAccumulator _physicsTicks = new();
 
     // The render thread publishes its latest title here; the OS-event thread
     // applies it, because GLFW window calls must run on the main thread.
@@ -293,7 +300,44 @@ public sealed class Engine
                 // background compile (the swap and GPU mesh creation happen
                 // here, on the render thread) and launch the next compile when
                 // brush nodes have changed since the last one.
+                // ─── FIXED TICK LOOP ───────────────────────────────────
+                // Physics advances in whole fixed steps, never in frame
+                // deltas: a step that varies with frame time makes the
+                // simulation a function of how fast the machine is, which is
+                // what determinism, replay and any future server
+                // reconciliation all rest on NOT being true.
+                //
+                // Targets are pushed before the step (a door decides where it
+                // is this tick before the tick resolves against it), and events
+                // are drained INSIDE the loop, immediately after the step that
+                // produced them — a backend's event buffers are overwritten by
+                // the next step, so draining outside would silently discard
+                // every tick's events but the last on a catch-up frame.
+                //
+                // Entity logic, scripts and the touch diff take their slots in
+                // this loop when they exist; the ordering above is already the
+                // one they need.
+                IScenePhysics physics = _sceneManager.Physics;
+                int ticks = _physicsTicks.Advance(deltaTime);
+                for (int tick = 0; tick < ticks; tick++)
+                {
+                    physics.PushKinematicTargets(_physicsTicks.FixedDeltaTime);
+                    physics.Step(_physicsTicks.FixedDeltaTime);
+                    physics.DrainEvents();
+                }
+                // ─── end tick loop ─────────────────────────────────────
+
                 _sceneManager.ActiveScene?.ProcessStaticWorldCompilation(_renderer, _logger);
+
+                // Static collision follows the compiled world in the SAME slot
+                // the render meshes swap in, deliberately: geometry that is
+                // visible and geometry that is solid must change in the same
+                // instant, or a player walks into an invisible wall for a
+                // frame. It stays out of the tick loop because running it up to
+                // MaxTicksPerFrame times a frame would be that many shape-churn
+                // batches of which at most one can do work.
+                if (_sceneManager.ActiveScene is { } physicsScene)
+                    physics.SyncStaticWorld(physicsScene);
 
                 // The other half of the same story: part brushes are NOT in
                 // that compile, so their meshes are built and collected here
@@ -305,6 +349,11 @@ public sealed class Engine
                 // buffers over here and the GPU textures are created on this
                 // thread. Costs nothing on a frame with nothing pending.
                 _assetManager.PumpPendingUploads();
+
+                // Render poses last, once per frame: the blend between the two
+                // most recent ticks. A render-only overlay — it must never
+                // write back through a node's transform setters.
+                physics.PublishRenderPoses(_physicsTicks.Alpha);
 
                 // F1–F5 toggle debug visualisations on/off.
                 if (_inputManager.WasKeyPressed(Key.F1)) _debugFlags ^= DebugVisualization.Wireframe;
