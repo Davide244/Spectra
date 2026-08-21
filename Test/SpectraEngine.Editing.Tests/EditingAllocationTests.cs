@@ -231,8 +231,10 @@ public sealed class EditingAllocationTests
         // immutable, so a new size is a new instance — and ScaleGizmo documents
         // that as the one gesture in the editing layer that cannot be free.
         var harness = GizmoHarness.ThreeQuarterView();
-        harness.AddSelectedNode(new Vector3(-1f, 0f, 0f), "A");
-        harness.AddSelectedNode(new Vector3(1f, 0f, 0f), "B");
+        // Real meshes, so this measures the ordinary measured-size path rather
+        // than the proportional fallback a bare node would take.
+        harness.AddSelectedMeshNode(new Vector3(-1f, 0f, 0f), 0.5f, "A");
+        harness.AddSelectedMeshNode(new Vector3(1f, 0f, 0f), 0.5f, "B");
         ScaleGizmo scale = (ScaleGizmo)harness.Use(GizmoMode.Scale);
         scale.Snap.Enabled = false;
 

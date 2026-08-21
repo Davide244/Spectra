@@ -10,14 +10,20 @@ namespace SpectraEngine.Editing.Gizmos;
 /// key that inverts the setting for the duration of a gesture.
 /// </summary>
 /// <remarks>
-/// <b>The quantity differs per tool, the policy does not.</b> A move snaps world
-/// units, a rotate snaps degrees, a resize snaps a factor — but "hold Alt to
-/// invert", "the ladder clamps at both ends", "an increment typed into a panel
-/// enters the ladder at its nearest rung" and "exact halves round away from
-/// zero" are one behaviour that users learn once. Subclasses supply the default
-/// and the ladder and add whatever unit-specific helper they need
-/// (<see cref="GridSnapSettings.SnapMasked"/>,
+/// <b>The quantity differs per tool, the policy does not.</b> A move snaps a
+/// world-unit position, a rotate snaps degrees, a resize snaps a world-unit size
+/// change — but "hold Alt to invert", "the ladder clamps at both ends", "an
+/// increment typed into a panel enters the ladder at its nearest rung" and
+/// "exact halves round away from zero" are one behaviour that users learn once.
+/// Subclasses supply the default and the ladder and add whatever unit-specific
+/// helper they need (<see cref="GridSnapSettings.SnapMasked"/>,
 /// <see cref="AngleSnapSettings.SnapRadians"/>); nothing else is duplicated.
+/// <para>
+/// All three units are absolute quantities of the thing being edited, never a
+/// multiplier: an increment a UI puts in a box has to mean the same thing at
+/// every object size, which is precisely what <see cref="ResizeSnapSettings"/>
+/// stopped doing when it quantised a scale factor.
+/// </para>
 /// <para>
 /// <b>Threading:</b> render thread only, like the tools that read it.
 /// </para>
