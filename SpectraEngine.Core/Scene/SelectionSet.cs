@@ -28,6 +28,18 @@ public sealed class SelectionSet
     private readonly List<SceneNode> _items = [];
     private readonly HashSet<SceneNode> _membership = [];
 
+    // Scratch for the batched operations: the candidate result is built here,
+    // compared against the live selection, and only copied over when it
+    // actually differs — so a box drag that keeps sweeping the same nodes
+    // raises nothing. Reused across calls (capacity is retained), which is safe
+    // because the re-entrancy rule below forbids mutating the selection from
+    // inside SelectionChanged. `_seen` collapses duplicates in the caller's
+    // list, which matters for Toggle, where a node listed twice would
+    // otherwise flip twice and land back where it started.
+    private readonly List<SceneNode> _scratchItems = [];
+    private readonly HashSet<SceneNode> _scratchMembership = [];
+    private readonly HashSet<SceneNode> _seen = [];
+
     internal SelectionSet(Scene scene)
     {
         _scene = scene;
@@ -128,6 +140,113 @@ public sealed class SelectionSet
 
         _items.Remove(node);
         SelectionChanged?.Invoke();
+    }
+
+    // --- Batched operations --------------------------------------------------
+
+    /// <summary>
+    /// Replaces the whole selection with <paramref name="nodes"/>, raising
+    /// <see cref="SelectionChanged"/> <b>exactly once</b> — or not at all when
+    /// the result is the selection that was already there.
+    /// </summary>
+    /// <remarks>
+    /// This is what a box select calls. Selecting five hundred nodes one
+    /// <see cref="Add"/> at a time would raise five hundred events and thrash
+    /// every UI binding subscribed to the selection; one sweep of a marquee is
+    /// one selection change, and the event should say so.
+    /// </remarks>
+    public void SetRange(IReadOnlyList<SceneNode> nodes) => Apply(nodes, SelectionUpdate.Replace);
+
+    /// <summary>
+    /// Adds every node in <paramref name="nodes"/> that is not already
+    /// selected, appending in list order, and raises
+    /// <see cref="SelectionChanged"/> at most once. The additive (Shift) half
+    /// of a box select.
+    /// </summary>
+    public void AddRange(IReadOnlyList<SceneNode> nodes) => Apply(nodes, SelectionUpdate.Add);
+
+    /// <summary>
+    /// Flips membership for every distinct node in <paramref name="nodes"/> and
+    /// raises <see cref="SelectionChanged"/> at most once. The toggle (Ctrl)
+    /// half of a box select. A node listed more than once is considered once.
+    /// </summary>
+    public void ToggleRange(IReadOnlyList<SceneNode> nodes) => Apply(nodes, SelectionUpdate.Toggle);
+
+    /// <summary>
+    /// The batched operations behind one entry point, for a caller that carries
+    /// the mode as data — an editor resolving Shift/Ctrl into
+    /// <see cref="SelectionUpdate"/> and applying whatever it got. Raises
+    /// <see cref="SelectionChanged"/> at most once, and never when the
+    /// resulting selection (membership <em>and</em> order) is unchanged.
+    /// Throws <see cref="ArgumentException"/> when any node does not belong to
+    /// this scene, and validates the whole list before mutating anything, so a
+    /// rejected batch leaves the selection exactly as it was.
+    /// </summary>
+    public void Apply(IReadOnlyList<SceneNode> nodes, SelectionUpdate mode)
+    {
+        ArgumentNullException.ThrowIfNull(nodes);
+
+        // Validate first, mutate second: a foreign node halfway down the list
+        // must not leave a half-applied selection behind.
+        for (int i = 0; i < nodes.Count; i++)
+            RequireOwnNode(nodes[i]);
+
+        _scratchItems.Clear();
+        _scratchMembership.Clear();
+        _seen.Clear();
+
+        // Replace starts from nothing; Add and Toggle start from what is there.
+        if (mode != SelectionUpdate.Replace)
+        {
+            for (int i = 0; i < _items.Count; i++)
+            {
+                _scratchItems.Add(_items[i]);
+                _scratchMembership.Add(_items[i]);
+            }
+        }
+
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            SceneNode node = nodes[i];
+            if (!_seen.Add(node))
+                continue;
+
+            if (mode == SelectionUpdate.Toggle && _scratchMembership.Remove(node))
+            {
+                _scratchItems.Remove(node);
+                continue;
+            }
+
+            if (_scratchMembership.Add(node))
+                _scratchItems.Add(node);
+        }
+
+        if (MatchesCurrentSelection())
+            return;
+
+        _items.Clear();
+        _membership.Clear();
+        for (int i = 0; i < _scratchItems.Count; i++)
+        {
+            _items.Add(_scratchItems[i]);
+            _membership.Add(_scratchItems[i]);
+        }
+        SelectionChanged?.Invoke();
+    }
+
+    // Order-sensitive, because Items promises a stable order that editor UI
+    // renders directly: a batch that reshuffles the same nodes IS a change.
+    private bool MatchesCurrentSelection()
+    {
+        if (_scratchItems.Count != _items.Count)
+            return false;
+
+        for (int i = 0; i < _items.Count; i++)
+        {
+            if (!ReferenceEquals(_items[i], _scratchItems[i]))
+                return false;
+        }
+        return true;
     }
 
     /// <summary>Empties the selection; a no-op when already empty.</summary>

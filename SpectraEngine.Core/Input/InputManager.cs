@@ -21,11 +21,15 @@ public sealed class InputManager
     private readonly HashSet<MouseButton> _mouseButtonsDown = [];
     private readonly HashSet<MouseButton> _pendingMousePressed = [];
     private readonly HashSet<MouseButton> _mousePressedThisFrame = [];
+    private readonly HashSet<MouseButton> _pendingMouseReleased = [];
+    private readonly HashSet<MouseButton> _mouseReleasedThisFrame = [];
 
     private IInputContext? _inputContext;
     private Vector2 _accumulatedMouseDelta;
     private Vector2 _mouseDelta;
     private Vector2? _lastMousePosition;
+    private Vector2 _accumulatedScrollDelta;
+    private Vector2 _scrollDelta;
 
     public InputManager(ILogger<InputManager> logger)
     {
@@ -53,6 +57,89 @@ public sealed class InputManager
         get { lock (_stateLock) return _lastMousePosition ?? Vector2.Zero; }
     }
 
+    /// <summary>
+    /// Wheel movement accumulated during the last <see cref="Update"/> interval,
+    /// in notches: <c>Y</c> is the vertical wheel (positive = away from the
+    /// user), <c>X</c> the horizontal one. Latched per frame like
+    /// <see cref="MouseDelta"/>, because scroll is a delta, not a state.
+    /// </summary>
+    public Vector2 ScrollDelta
+    {
+        get { lock (_stateLock) return _scrollDelta; }
+    }
+
+    // ─── Backend-neutral view ────────────────────────────────
+    // The properties below report the same state as the Silk.NET-typed queries
+    // above, but in the engine's own PointerButtons/KeyModifiers vocabulary.
+    // That is what lets SpectraEngine.Editing consume live input without
+    // referencing Silk.NET at all (see EditorInputFrame): the whole windowing
+    // backend stays behind this seam.
+
+    /// <summary>
+    /// The mouse buttons currently held, as a backend-neutral flag set.
+    /// </summary>
+    public PointerButtons PointerButtonsDown
+    {
+        get { lock (_stateLock) return ToPointerButtons(_mouseButtonsDown); }
+    }
+
+    /// <summary>
+    /// The mouse buttons that went from up to down on this tick, as a
+    /// backend-neutral flag set. Latched by <see cref="Update"/>.
+    /// </summary>
+    public PointerButtons PointerButtonsPressed
+    {
+        get { lock (_stateLock) return ToPointerButtons(_mousePressedThisFrame); }
+    }
+
+    /// <summary>
+    /// The mouse buttons that went from down to up on this tick, as a
+    /// backend-neutral flag set. Latched by <see cref="Update"/>. A button
+    /// pressed and released inside a single tick reports on both edge sets.
+    /// </summary>
+    public PointerButtons PointerButtonsReleased
+    {
+        get { lock (_stateLock) return ToPointerButtons(_mouseReleasedThisFrame); }
+    }
+
+    /// <summary>
+    /// The modifier keys currently held, as a backend-neutral flag set. Left
+    /// and right physical keys collapse into one flag each.
+    /// </summary>
+    public KeyModifiers Modifiers
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                KeyModifiers modifiers = KeyModifiers.None;
+                if (_keysDown.Contains(Key.ShiftLeft) || _keysDown.Contains(Key.ShiftRight))
+                    modifiers |= KeyModifiers.Shift;
+                if (_keysDown.Contains(Key.ControlLeft) || _keysDown.Contains(Key.ControlRight))
+                    modifiers |= KeyModifiers.Control;
+                if (_keysDown.Contains(Key.AltLeft) || _keysDown.Contains(Key.AltRight))
+                    modifiers |= KeyModifiers.Alt;
+                if (_keysDown.Contains(Key.SuperLeft) || _keysDown.Contains(Key.SuperRight))
+                    modifiers |= KeyModifiers.Super;
+                return modifiers;
+            }
+        }
+    }
+
+    // Caller must hold _stateLock. Three membership probes, no enumeration and
+    // no allocation — this runs once per editor frame per edge set.
+    private static PointerButtons ToPointerButtons(HashSet<MouseButton> buttons)
+    {
+        PointerButtons result = PointerButtons.None;
+        if (buttons.Contains(MouseButton.Left))
+            result |= PointerButtons.Left;
+        if (buttons.Contains(MouseButton.Right))
+            result |= PointerButtons.Right;
+        if (buttons.Contains(MouseButton.Middle))
+            result |= PointerButtons.Middle;
+        return result;
+    }
+
     public void Initialize(IInputContext inputContext)
     {
         _inputContext = inputContext;
@@ -70,6 +157,7 @@ public sealed class InputManager
             mouse.MouseDown += OnMouseDown;
             mouse.MouseUp += OnMouseUp;
             mouse.MouseMove += OnMouseMove;
+            mouse.Scroll += OnScroll;
         }
 
         // Seed the pollable cursor position from the first mouse so a click
@@ -95,6 +183,9 @@ public sealed class InputManager
             _mouseDelta = _accumulatedMouseDelta;
             _accumulatedMouseDelta = Vector2.Zero;
 
+            _scrollDelta = _accumulatedScrollDelta;
+            _accumulatedScrollDelta = Vector2.Zero;
+
             _pressedThisFrame.Clear();
             foreach (Key k in _pendingPressed)
                 _pressedThisFrame.Add(k);
@@ -104,6 +195,11 @@ public sealed class InputManager
             foreach (MouseButton b in _pendingMousePressed)
                 _mousePressedThisFrame.Add(b);
             _pendingMousePressed.Clear();
+
+            _mouseReleasedThisFrame.Clear();
+            foreach (MouseButton b in _pendingMouseReleased)
+                _mouseReleasedThisFrame.Add(b);
+            _pendingMouseReleased.Clear();
         }
     }
 
@@ -133,6 +229,18 @@ public sealed class InputManager
             return _mousePressedThisFrame.Contains(button);
     }
 
+    /// <summary>
+    /// True for the single tick on which <paramref name="button"/> went from
+    /// down to up. The release edge is what ends a gizmo drag, so it is latched
+    /// exactly like the press edge rather than inferred from a state change the
+    /// caller might miss between ticks.
+    /// </summary>
+    public bool WasMouseButtonReleased(MouseButton button)
+    {
+        lock (_stateLock)
+            return _mouseReleasedThisFrame.Contains(button);
+    }
+
     public void Shutdown()
     {
         if (_inputContext is not null)
@@ -152,6 +260,7 @@ public sealed class InputManager
                 mouse.MouseDown -= OnMouseDown;
                 mouse.MouseUp -= OnMouseUp;
                 mouse.MouseMove -= OnMouseMove;
+                mouse.Scroll -= OnScroll;
             }
 
             _inputContext.Dispose();
@@ -162,8 +271,13 @@ public sealed class InputManager
     }
 
     // ─── Event handlers (OS-event thread) ────────────────────
+    //
+    // Internal rather than private so the headless suites can drive the state
+    // machine — edges, latching, the neutral flag mapping — without a real
+    // input device. The device parameter is part of Silk.NET's event signature
+    // and is unused, so a test may pass null for it.
 
-    private void OnKeyDown(IKeyboard keyboard, Key key, int keyCode)
+    internal void OnKeyDown(IKeyboard keyboard, Key key, int keyCode)
     {
         lock (_stateLock)
         {
@@ -173,13 +287,13 @@ public sealed class InputManager
         }
     }
 
-    private void OnKeyUp(IKeyboard keyboard, Key key, int keyCode)
+    internal void OnKeyUp(IKeyboard keyboard, Key key, int keyCode)
     {
         lock (_stateLock)
             _keysDown.Remove(key);
     }
 
-    private void OnMouseDown(IMouse mouse, MouseButton button)
+    internal void OnMouseDown(IMouse mouse, MouseButton button)
     {
         lock (_stateLock)
         {
@@ -190,13 +304,24 @@ public sealed class InputManager
         }
     }
 
-    private void OnMouseUp(IMouse mouse, MouseButton button)
+    internal void OnMouseUp(IMouse mouse, MouseButton button)
     {
         lock (_stateLock)
-            _mouseButtonsDown.Remove(button);
+        {
+            // Only a real down→up transition arms the release edge, so a stray
+            // MouseUp for a button we never saw go down reports nothing.
+            if (_mouseButtonsDown.Remove(button))
+                _pendingMouseReleased.Add(button);
+        }
     }
 
-    private void OnMouseMove(IMouse mouse, Vector2 position)
+    internal void OnScroll(IMouse mouse, ScrollWheel wheel)
+    {
+        lock (_stateLock)
+            _accumulatedScrollDelta += new Vector2(wheel.X, wheel.Y);
+    }
+
+    internal void OnMouseMove(IMouse mouse, Vector2 position)
     {
         lock (_stateLock)
         {

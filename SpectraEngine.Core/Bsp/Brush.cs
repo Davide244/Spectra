@@ -254,6 +254,99 @@ public sealed class Brush
         return new Brush(_localPlanes, Transform, faces);
     }
 
+    /// <summary>
+    /// Returns a copy of this brush whose local extents are scaled by
+    /// <paramref name="scale"/> about the brush's local origin — the supported
+    /// way to <em>resize</em> a brush, since brush node transforms must stay
+    /// rigid and a brush is immutable after construction.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is the exact image of the solid under the diagonal map
+    /// <c>p → S·p</c>, not an approximation for boxes.</b> A half-space
+    /// <c>{p : n·p + d ≤ 0}</c> maps to <c>{q : (S⁻¹n)·q + d ≤ 0}</c>, so the new
+    /// bounding plane is <c>n' = normalize(S⁻¹n)</c> with
+    /// <c>d' = d / ‖S⁻¹n‖</c>. Every convex shape the brush pipeline accepts —
+    /// wedges, cut corners, arbitrary plane sets — comes through correctly, and
+    /// for the axis-aligned box case it reduces to the obvious
+    /// "multiply the half-extents": a +X plane <c>(1,0,0), d = −hx</c> becomes
+    /// <c>(1,0,0), d = −hx·sx</c>.
+    /// <para>
+    /// <b>Why this and not node scale.</b> The whole CSG epsilon scheme assumes
+    /// unit-length plane normals and rigid placements; a scale in the node
+    /// transform makes <c>Plane.Transform</c> produce non-normalized planes and
+    /// silently changes the meaning of every distance tolerance downstream
+    /// (<c>Scene</c>'s snapshot rejects it outright). Size therefore lives in the
+    /// plane offsets, which is exactly what this method edits.
+    /// </para>
+    /// <para>
+    /// <b>The result is a new instance</b>, which is what makes the resize
+    /// visible to the compile pipeline — <see cref="Brush"/> reference identity
+    /// is the carve cache's validity key. Face payloads ride along unchanged, so
+    /// a face with explicit texture axes keeps its projection and the texture
+    /// does not stretch with the resize (Hammer's behaviour); world-aligned faces
+    /// re-derive theirs as always.
+    /// </para>
+    /// <para>
+    /// Rebuilding a brush re-runs the full plane validation and face clipping, so
+    /// this is <em>not</em> a per-frame-free operation — a resize gizmo should
+    /// only call it when the resulting extents actually changed.
+    /// </para>
+    /// </remarks>
+    /// <param name="scale">
+    /// Per-axis factors about the brush's local origin. Every component must be
+    /// finite and strictly positive: zero collapses the solid to a plane and a
+    /// negative factor mirrors it, inverting every outward normal into an
+    /// inward one and turning the brush inside out.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// A component of <paramref name="scale"/> is not finite or not positive.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// The scaled planes no longer bound a volume — reported by the ordinary
+    /// construction-time validation.
+    /// </exception>
+    public Brush WithScaledExtents(Vector3 scale)
+    {
+        ThrowIfUnusableScale(scale.X, nameof(scale));
+        ThrowIfUnusableScale(scale.Y, nameof(scale));
+        ThrowIfUnusableScale(scale.Z, nameof(scale));
+
+        // Identity is common (a resize drag that has not left its starting
+        // factor yet) and rebuilding would cost a full re-clip for nothing.
+        // Reference-equal is also the right answer for the carve cache: nothing
+        // about the geometry changed, so the cached carve stays valid.
+        if (scale == Vector3.One)
+            return this;
+
+        var planes = new Plane[_localPlanes.Length];
+        for (int i = 0; i < planes.Length; i++)
+        {
+            Plane plane = _localPlanes[i];
+            var mapped = new Vector3(
+                plane.Normal.X / scale.X,
+                plane.Normal.Y / scale.Y,
+                plane.Normal.Z / scale.Z);
+
+            // Non-zero for any positive finite scale, because the source normal
+            // is unit length and therefore has a non-zero component somewhere.
+            float length = mapped.Length();
+            planes[i] = new Plane(mapped / length, plane.D / length);
+        }
+
+        return new Brush(planes, Transform, _faceSurfaces);
+    }
+
+    private static void ThrowIfUnusableScale(float component, string paramName)
+    {
+        if (!float.IsFinite(component) || component <= 0f)
+        {
+            throw new ArgumentOutOfRangeException(
+                paramName, component,
+                "Brush extent scale factors must be finite and strictly positive; " +
+                "zero collapses the solid and a negative factor turns it inside out.");
+        }
+    }
+
     // Two same-facing near-coincident planes make Polygon.Split's
     // coplanar-front rule silently drop BOTH faces during BuildFaces (each
     // face classifies as coplanar against the other's plane and the kept

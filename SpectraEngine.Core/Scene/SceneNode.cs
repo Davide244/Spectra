@@ -30,16 +30,34 @@ public class SceneNode
     public SceneNode(string name = "Node")
     {
         Name = name;
+        Id = Guid.NewGuid();
+    }
+
+    /// <summary>
+    /// Creates a node that re-uses an existing identity instead of minting a
+    /// fresh one. This is how undo resurrects a deleted node: edit history is
+    /// addressed by <see cref="Id"/>, so a node recreated by an undo must come
+    /// back under the id the recorded commands still name, or every command
+    /// behind the delete would target a node that no longer exists.
+    /// Deserialization will use the same door.
+    /// </summary>
+    public SceneNode(string name, Guid id)
+    {
+        Name = name;
+        Id = id;
     }
 
     /// <summary>
     /// The node's identity, assigned at construction and stable for the node's
     /// entire lifetime — reparenting, renaming, and moving between scenes never
-    /// change it. This is the reference that future serialization and undo/redo
-    /// will use to name nodes across saves and edit history. (A setter for
-    /// deserialization is deliberately deferred to the serialization arc.)
+    /// change it. This is the reference that serialization and undo/redo use to
+    /// name nodes across saves and edit history: editor commands store this id
+    /// rather than an object reference, because undoing a delete produces a new
+    /// instance with the same id (see <see cref="SceneNode(string, Guid)"/>),
+    /// and <see cref="Scene.TryFindById"/> resolves it back to the live node.
+    /// The id is immutable after construction.
     /// </summary>
-    public Guid Id { get; } = Guid.NewGuid();
+    public Guid Id { get; }
 
     public string Name { get; set; }
 
@@ -185,6 +203,23 @@ public class SceneNode
             OnLocalTransformChanged();
         }
     }
+
+    /// <summary>
+    /// How many brushes are attached in this node's subtree, this node's own
+    /// <see cref="Brush"/> included. Maintained incrementally by the brush
+    /// setter and by reparenting, so reading it is O(1).
+    /// </summary>
+    /// <remarks>
+    /// <b>Rigidity is a subtree property, not a node property.</b> A brush's
+    /// placement is the world matrix of the node it hangs under, so a scale
+    /// written <em>anywhere</em> above a brush makes that brush's placement
+    /// non-rigid and the static-world compile rejects the whole snapshot — not
+    /// just that brush. Any tool that is about to write
+    /// <see cref="LocalScale"/> must therefore ask this, not
+    /// <c>node.Brush is not null</c>: a group node carrying no brush of its own
+    /// can still be the root of a subtree full of them.
+    /// </remarks>
+    public int SubtreeBrushCount => _subtreeBrushCount;
 
     /// <summary>The node's accumulated world matrix (local composed with all ancestors).</summary>
     public Matrix4x4 WorldMatrix

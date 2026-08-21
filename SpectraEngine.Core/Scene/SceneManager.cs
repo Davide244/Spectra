@@ -1,10 +1,8 @@
 using Microsoft.Extensions.Logging;
-using Silk.NET.Input;
 using Silk.NET.Maths;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
-using SpectraEngine.Core.Input;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -26,9 +24,9 @@ public sealed class SceneManager
     // smoke run proves live recompiles happen, rare enough not to spam.
     private const double CompileLogIntervalSeconds = 5.0;
 
-    // Cadence for the smoke self-test's center-screen ray. Same reasoning as
+    // Cadence for the smoke probe's center-screen ray. Same reasoning as
     // the compile log: a 15-second smoke run yields two or three lines.
-    private const double SelfTestIntervalSeconds = 5.0;
+    private const double ScreenProbeIntervalSeconds = 5.0;
 
     // Scattered "parts": deterministic boxes over a PartAreaSize^2 area around
     // the hand-authored structures, placed like Roblox parts (open-world
@@ -103,7 +101,7 @@ public sealed class SceneManager
     private int _modelsPlaced;
 
     // Waits one full interval, for the reason documented on _nextCompileLogTime.
-    private double _nextSelfTestTime = SelfTestIntervalSeconds;
+    private double _nextScreenProbeTime = ScreenProbeIntervalSeconds;
 
     // The renderer whose framebuffer latch supplies the picking viewport;
     // captured at demo load (the renderer is thread-safe to read from here —
@@ -117,6 +115,44 @@ public sealed class SceneManager
 
     /// <summary>The scene currently being simulated and rendered, if one is loaded.</summary>
     public Scene? ActiveScene { get; private set; }
+
+    /// <summary>
+    /// Builds the editing layer for a freshly loaded scene, or null to run
+    /// without one. The host sets this before <see cref="Engine.Run"/>;
+    /// <see cref="LoadDemoScene"/> invokes it once, on the render thread, after
+    /// the scene is complete.
+    /// </summary>
+    /// <remarks>
+    /// A factory rather than a plain setter because the scene does not exist
+    /// until the render thread has built it, and the editor is meaningless
+    /// without one — so there is no window in which <see cref="Editor"/> could
+    /// hold a tool bound to a scene that has gone away. Core cannot name the
+    /// editing assembly at all (see <see cref="ISceneEditor"/>), which is why
+    /// the host supplies the construction.
+    /// </remarks>
+    public Func<Scene, ISceneEditor>? EditorFactory { get; set; }
+
+    /// <summary>
+    /// The editing layer this run installed, or null when the host supplied no
+    /// <see cref="EditorFactory"/> — a shipped game, or a headless run. The
+    /// engine loop drives it; the periodic stats line reports its counters.
+    /// </summary>
+    public ISceneEditor? Editor { get; private set; }
+
+    /// <summary>
+    /// The brush node a host-side editing self-test is expected to manipulate,
+    /// or null before the demo scene is loaded.
+    /// </summary>
+    /// <remarks>
+    /// <b>It is a specific node for a specific reason.</b> A self-test that
+    /// drags a node and then asserts the static world recompiled needs the
+    /// dirty-cell evidence to be attributable: the demo's only other moving
+    /// brush is the bobbing pillar, which dirties its own chunk cells every
+    /// single frame. This node is deliberately one whose cells the bobbing
+    /// pillar never touches, so "the compile launched after the drag covers
+    /// this node's cell" is a statement about the drag and nothing else.
+    /// </remarks>
+    public SceneNode? SelfTestNode { get; private set; }
 
     public void Initialize()
     {
@@ -227,6 +263,12 @@ public sealed class SceneManager
         double worldMs = BuildStaticWorld(scene, renderer, worldMaterial);
 
         ActiveScene = scene;
+
+        // Last, and only once the scene is complete: the editing layer adopts
+        // the camera and reads the selection the moment it is built, so it must
+        // not see a half-authored world.
+        Editor = EditorFactory?.Invoke(scene);
+
         loadClock.Stop();
 
         _logger.LogInformation(
@@ -326,11 +368,18 @@ public sealed class SceneManager
         // be resolved per submesh at upload. A regression renders as a
         // uniformly orange pillar, which is exactly the kind of thing a
         // headless smoke run cannot see and a human can.
+        //
+        // It doubles as the host editing self-test's subject (see
+        // SelfTestNode): it is a brush node, it never moves on its own, and at
+        // +x/+z it sits in chunk cells the bobbing pillar at -x/-z never
+        // touches — so a dirty-cell set that covers it after a simulated drag
+        // can only have come from that drag.
         var pillarB = scene.Root.CreateChild("PillarB");
         pillarB.LocalPosition = new Vector3(2f, 0.1f, 2f);
         pillarB.Brush = Brush
             .CreateBox(-PillarHalfExtent, PillarHalfExtent, pillarMaterial)
             .WithFaceMaterial(BoxFacePlusZ, accentMaterial);
+        SelfTestNode = pillarB;
 
         int partCount = AddScatteredParts(scene);
 
@@ -454,13 +503,20 @@ public sealed class SceneManager
     }
 
     /// <summary>
-    /// Per-frame demo update: animation, mouse picking, and the periodic smoke
-    /// self-test. Render thread only. <paramref name="renderView"/> is the
-    /// engine's draw list as built LAST frame (this runs before this frame's
-    /// build) — one frame stale, which the self-test's multi-second cadence
-    /// doesn't care about.
+    /// Per-frame demo update: animation, the async prop hand-off, and the two
+    /// periodic smoke lines. Render thread only. <paramref name="renderView"/>
+    /// is the engine's draw list as built LAST frame (this runs before this
+    /// frame's build) — one frame stale, which a multi-second cadence doesn't
+    /// care about.
     /// </summary>
-    public void Update(double deltaTime, InputManager input, RenderView renderView)
+    /// <remarks>
+    /// Selection and manipulation are NOT handled here: they belong to the
+    /// editing layer the host installs through <see cref="EditorFactory"/>,
+    /// which the engine drives through <see cref="ISceneEditor"/> before this
+    /// runs. A host with no editor gets a demo that animates and renders but
+    /// does not select — which is exactly what a shipped game wants.
+    /// </remarks>
+    public void Update(double deltaTime, RenderView renderView)
     {
         _elapsed += deltaTime;
 
@@ -486,7 +542,6 @@ public sealed class SceneManager
         if (ActiveScene is { } scene)
         {
             ProcessPendingProp(scene);
-            HandlePicking(scene, input);
 
             // Bounded-spam smoke evidence for the whole frame pipeline, in one
             // line a headless run can grep:
@@ -501,7 +556,13 @@ public sealed class SceneManager
             //    batches > chunks is only possible if some chunk carries more
             //    than one face material;
             //  * the dirty-cell count of the latest compile must stay small
-            //    while only the pillar bobs, however many chunks the world has.
+            //    while only the pillar bobs, however many chunks the world has;
+            //  * the editing state — how much is selected, which manipulator is
+            //    live, how deep the history is — is the one part of the frame a
+            //    headless run cannot see at all, and it is also the cheapest
+            //    check that the host actually wired an editor in: a run whose
+            //    editing fields read "none" has an unwired viewport, however
+            //    healthy everything else looks.
             //
             // Fixed arity, no collections formatted — the line's length cannot
             // grow with the size of the world.
@@ -509,25 +570,29 @@ public sealed class SceneManager
             {
                 _nextCompileLogTime = _elapsed + CompileLogIntervalSeconds;
                 AssetManager? assets = _assets;
+                ISceneEditor? editor = Editor;
                 _logger.LogInformation(
                     "Assets: {Textures} texture(s), {Materials} material(s), " +
                     "{Models} model(s) requested / {Placed} placed; " +
                     "world: {ChunksVisible} of {ChunksTotal} chunks visible, " +
                     "{BatchesVisible} of {BatchesTotal} material batches; " +
                     "scene: {NodesVisible} of {NodesTotal} mesh nodes; " +
-                    "recompiled {Count} times, last touched {DirtyCells} dirty cell(s)",
+                    "recompiled {Count} times, last touched {DirtyCells} dirty cell(s); " +
+                    "editing: {Selected} selected, {GizmoMode} gizmo, undo {UndoDepth} / redo {RedoDepth}",
                     assets?.TextureCount ?? 0, assets?.MaterialCount ?? 0,
                     _modelsRequested, _modelsPlaced,
                     renderView.WorldChunksVisible, renderView.WorldChunksTotal,
                     renderView.WorldMaterialBatchesVisible, renderView.WorldMaterialBatchesTotal,
                     renderView.VisibleCount, renderView.TotalCount,
-                    scene.StaticWorldCompileCount, scene.LastCompileDirtyCells.Count);
+                    scene.StaticWorldCompileCount, scene.LastCompileDirtyCells.Count,
+                    editor?.SelectionCount ?? 0, editor?.GizmoModeName ?? "none",
+                    editor?.UndoDepth ?? 0, editor?.RedoDepth ?? 0);
             }
 
-            if (_elapsed >= _nextSelfTestTime)
+            if (_elapsed >= _nextScreenProbeTime)
             {
-                _nextSelfTestTime = _elapsed + SelfTestIntervalSeconds;
-                RunSelfTest(scene, renderView);
+                _nextScreenProbeTime = _elapsed + ScreenProbeIntervalSeconds;
+                RunScreenProbe(scene, renderView);
             }
         }
     }
@@ -568,39 +633,18 @@ public sealed class SceneManager
         }
     }
 
-    // Editor-style pick: a left-press selects whatever the cursor is over —
-    // but not while the right button engages the fly-camera look, where a
-    // click mid-drag must not silently change the selection.
-    private void HandlePicking(Scene scene, InputManager input)
-    {
-        if (!input.WasMouseButtonPressed(MouseButton.Left) || input.IsMouseButtonDown(MouseButton.Right))
-            return;
-
-        if (!TryGetViewportSize(out Vector2 viewport))
-            return;
-
-        Ray3 ray = scene.Camera.ScreenPointToRay(input.MousePosition, viewport);
-        if (scene.Raycast(in ray, out SceneRaycastHit hit))
-        {
-            scene.Selection.Select(hit.Node);
-            _logger.LogInformation(
-                "Picked '{Node}' at {Distance:0.00} m, point ({X:0.00}, {Y:0.00}, {Z:0.00})",
-                hit.Node.Name, hit.Distance, hit.Point.X, hit.Point.Y, hit.Point.Z);
-        }
-        else
-        {
-            scene.Selection.Clear();
-            _logger.LogDebug("Pick ray hit nothing; selection cleared");
-        }
-    }
-
-    // Smoke self-test: cast a ray through the viewport centre and report what
-    // it struck, plus the render view's culling stats. With the demo camera
-    // aimed at the scene the centre ray is expected to hit world geometry or a
-    // mesh node — the Information line is a live end-to-end check that camera
+    // Smoke probe: cast a ray through the viewport centre and report what it
+    // struck, plus the render view's culling stats. With the demo camera aimed
+    // at the scene the centre ray is expected to hit world geometry or a mesh
+    // node — the Information line is a live end-to-end check that camera
     // unprojection, the BVH raycast, and the culling stats all agree with what
     // is on screen.
-    private void RunSelfTest(Scene scene, RenderView renderView)
+    //
+    // Deliberately named "Scene probe" and not "self-test": the host's editing
+    // self-test logs its own PASS/FAIL line, and two different checks answering
+    // to the same grep in a smoke log is how a green run gets mistaken for a
+    // proof it never made.
+    private void RunScreenProbe(Scene scene, RenderView renderView)
     {
         if (!TryGetViewportSize(out Vector2 viewport))
             return;
@@ -609,7 +653,7 @@ public sealed class SceneManager
         if (scene.Raycast(in ray, out SceneRaycastHit hit))
         {
             _logger.LogInformation(
-                "Self-test: center ray hit '{Node}' at {Distance:0.00} m; " +
+                "Scene probe: center ray hit '{Node}' at {Distance:0.00} m; " +
                 "{Visible} of {Total} mesh nodes, {ChunksVisible} of {ChunksTotal} world chunks visible",
                 hit.Node.Name, hit.Distance, renderView.VisibleCount, renderView.TotalCount,
                 renderView.WorldChunksVisible, renderView.WorldChunksTotal);
@@ -617,7 +661,7 @@ public sealed class SceneManager
         else
         {
             _logger.LogInformation(
-                "Self-test: center ray hit nothing; " +
+                "Scene probe: center ray hit nothing; " +
                 "{Visible} of {Total} mesh nodes, {ChunksVisible} of {ChunksTotal} world chunks visible",
                 renderView.VisibleCount, renderView.TotalCount,
                 renderView.WorldChunksVisible, renderView.WorldChunksTotal);
@@ -644,6 +688,8 @@ public sealed class SceneManager
     public void Shutdown()
     {
         ActiveScene = null;
+        Editor = null;
+        SelfTestNode = null;
         _spinner = null;
         _bobbingPillar = null;
         _renderer = null;

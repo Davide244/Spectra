@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/Test/">
     <Project Path="Test/SpectraEngine.Bsp.Tests/SpectraEngine.Bsp.Tests.csproj" />
+    <Project Path="Test/SpectraEngine.Editing.Tests/SpectraEngine.Editing.Tests.csproj" />
     <Project Path="Test/SpectraEngine.Graphics.Tests/SpectraEngine.Graphics.Tests.csproj">
       <Build Solution="Debug|*" Project="false" />
     </Project>
@@ -16,5 +17,6 @@
     <Project Path="SpectraShade.VSIX/SpectraShade.VSIX.csproj" Id="8d6f2e4b-1c3a-4f7d-9b2e-5a1c6e4d8f90" />
   </Folder>
   <Project Path="SpectraEngine.Core/SpectraEngine.Core.csproj" Id="03c564bb-5c77-4da7-93f2-b02c6fe6c2dc" />
+  <Project Path="SpectraEngine.Editing/SpectraEngine.Editing.csproj" />
   <Project Path="SpectraEngine.Executable/SpectraEngine.Executable.csproj" Id="78f3c10f-f49b-4abe-809d-bec4cfd19994" />
 </Solution>
