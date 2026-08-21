@@ -4,7 +4,9 @@
 >
 > **Naming is LOCKED: the axis is `Realm`.** Chosen by the user on 2026-08-21, over *scope*. Three reasons, on record: *realm* is Garry's Mod / Source Lua vocabulary for exactly this axis (`sv_`/`cl_`/`sh_`), so it arrives already meaning the right thing to the Source-lineage developer it is aimed at; `docs/networking.md` already uses *scope* for interest management, and shipping both words would collide in the two documents that have to be read together; and the value is written into every `.smap` node record, every `.scmap` `NODE` payload-flag bit and every `.sentdef` `Flags` bit pair, so it cannot change once content exists. **This closes §9 Q8 and `networking.md` §9 item 12.** Standing consequence: nothing in these documents may use *scope* to mean node audience, and nothing may use *realm* to mean interest management.
 >
-> **This supersedes `docs/networking.md` §4.1's container paragraph** (lines 412–414, "Replication scope is defined by WHERE a node lives, not by a flag… There is deliberately no setter") and **`docs/roblox-to-spectra.md` lines 33–34**. All three must be corrected in the same change that lands the realm byte. Leaving either asserting the container model is worse than either model alone. Everything else in §4.1 — the four leak channels, the accessor gate, the realm-aware resolver, the CSG/BVH admission conditions, `net_strictlocalclient` — survives unchanged; only the *source* of the byte changes, from "nearest well-known ancestor" to "nearest explicit declaration".
+> **The supersession of the container model is COMPLETE — do not reinstate it.** This document replaced `docs/networking.md` §4.1's container paragraph ("Replication scope is defined by WHERE a node lives, not by a flag… There is deliberately no setter") and the container rows of `docs/roblox-to-spectra.md`. **Both corrections have landed**: `networking.md` carries the amendment at the top of the document and states the realm model directly in §4.1, and `roblox-to-spectra.md`'s tree-and-services rows are rewritten and marked **Corrected**. No document in this set still asserts the container model, and nothing may re-derive audience from tree location again. Everything else in `networking.md` §4.1 — the four leak channels, the accessor gate, the realm-aware resolver, the CSG/BVH admission conditions, `net_strictlocalclient` — survived that change unchanged; only the *source* of the byte moved, from "nearest well-known ancestor" to "nearest explicit declaration". (Cross-references between these documents name sections and rule ids, never line numbers, because line numbers go stale the first time either file is edited.)
+>
+> **Reading the `R*` ids in this document.** `R1`–`R17` below are **rules of this design**, not `ROADMAP.md`'s rendering-arc milestones (`R1`, `R9`, `R10`, …) and not its cross-arc rulings (written `R‑1`, `R‑3`, … with a dash). Other documents therefore cite these as `realms.md R9`, qualified by the document name; do the same when citing them.
 
 ---
 
@@ -19,13 +21,15 @@ ROBLOX                              SPECTRA
 Workspace                           Scene.Root   (no Workspace container,
                                                  and no World folder either)
   └ Enemy                             └ Enemy           (Shared — inherited; you set nothing)
-ServerStorage                         └ EnemyTemplate   (Server + Dormant)
-  └ EnemyTemplate                     └ EnemySpawner    (Server)
-ServerScriptService                   └ HealthBar       (Client)
-  └ EnemySpawner
+ServerStorage                         └ EnemyTemplate   (Dormant — and Shared, because
+  └ EnemyTemplate                     │                  it is built from brushes: R15)
+ServerScriptService                   └ EnemySpawner    (Server)
+  └ EnemySpawner                      └ HealthBar       (Client)
 StarterGui
   └ HealthBar
 ```
+
+Note the one place the translation is not a straight swap: **a template made of brushes stays `Shared`.** R15 refuses a brush subtree under a non-`Shared` node — a brush *is* the compiled static world every client renders and collides against — so the audience half of `ServerStorage` is unavailable for exactly the commonest template there is, and `Dormant` alone is what parks it. `Server` + `Dormant` is for parked data and non-brush content. §5 has the full argument.
 
 Note what moved: **the spawner now sits next to the enemies it spawns.** In Roblox it cannot — it has to live in `ServerScriptService`, structurally separated from the thing it is about, because that folder *is* how you said "server only".
 
@@ -70,7 +74,7 @@ Untitled Place                     root · Shared · Active (permanent, R4)
 │   The scene name (.smap `scene.name`). The root IS the world — Luau `workspace`
 │   aliases it (§7.1), so `workspace.Baseplate` ports character-for-character.
 │   `scene.spawn` is set above the baseplate as a VALUE in the map
-│   (`formats-and-pipeline.md:224`), deliberately NOT a SpawnPoint node.
+│   (`formats-and-pipeline.md` §2.6's `scene.spawn`), deliberately NOT a SpawnPoint node.
 │
 ├── Baseplate                      no declaration · brush
 │      A real brush, not a folder. Teaches by existing that the default case
@@ -108,7 +112,7 @@ Untitled Place                     root · Shared · Active (permanent, R4)
 
 1. **There is no `World` folder — world content sits directly under the root.** `Scene.Root` is already the `Workspace` equivalent by explicit decision here (§7.1) and in `roblox-to-spectra.md`, which promises that `workspace.Wall` ports character-for-character. A `World` child makes it `workspace.World.Wall` in every template-created project, breaking that promise on first use. It is also the one folder whose declaration is a **no-op**: `Shared`/`Active` under a `Shared`/`Active` root is either a redundant key or, per §2.5's omit-iff-`Inherit` rule, nothing at all. A folder carrying no declaration teaches nothing about the model while costing a path segment on the project's hottest content — and worse, a folder named `World` invites the belief that the *folder* is what makes content live, when liveness is `IsLive`. **The discoverability `World` was meant to buy is bought better by shipping a `Baseplate`**: an empty folder teaches by name, a baseplate teaches by existence, and it demonstrates the model's most important fact — the default case needs no marking — in one glance.
 2. **The realm word appears as an adjective, never as the bare value: `ServerLogic`, never `Server`.** A folder literally named `Server` collapses two operations into one sentence — "move it to Server" and "set its realm to Server" — when separating location from data is the entire point. And the moment the expert declares `Realm = Server` on a node outside it (the spawner beside its enemies, the motivating case), the name reads as an invariant that is false. A compound name states the job, hints the realm, cannot be confused with the value token, and can be renamed by the user without it feeling like renaming a system concept. Dropping the realm word entirely (`Gameplay`/`Library`) was rejected for the opposite reason: the template's job is to teach that the axis exists, and a name that never says "server" cannot.
-3. **`Templates`, not `Prefabs`.** §7.4 states plainly that a parked template is a `Dormant` subtree and **not** a prefab until `P10`, which `ROADMAP.md:92` puts off the critical path. A folder named `Prefabs` promises an unbuilt feature and teaches a word with a specific meaning to people who cannot use it. `Templates` is what this document's own worked example already calls it (`script.Templates`, `templates.Grunt:Clone()`), describes exactly what is inside, and absorbs real prefabs later with no rename.
+3. **`Templates`, not `Prefabs`.** §7.4 states plainly that a parked template is a `Dormant` subtree and **not** a prefab until `P10`, which `ROADMAP.md` `P10` puts off the critical path. A folder named `Prefabs` promises an unbuilt feature and teaches a word with a specific meaning to people who cannot use it. `Templates` is what this document's own worked example already calls it (`script.Templates`, `templates.Grunt:Clone()`), describes exactly what is inside, and absorbs real prefabs later with no rename.
 4. **`Interface`, not `UI`** — every other name in a six-row teaching tree is a full word, and a lone initialism reads as inconsistency in the one artifact whose job is to be read. This is the weakest of the four calls and `UI` is defensible; what is *not* defensible is two different starter names across two documents, so §7.2's example paths are corrected in the same change.
 
 ### R7 amendment: the dormant `AddChild` refusal is deleted
@@ -119,9 +123,9 @@ It also closes nothing. `State` is a mutable admission filter whether it is decl
 
 ### How a template ships, and why the engine never learns one existed
 
-- **A template is a directory that is already a valid project** — `game.spectraproj`, `Maps/Startup.smap`, `Assets/` — plus exactly one file the instantiated project never receives: a small `template.json` manifest (display name, one-line description, sort order, icon). Deliberately not in the `s*` family (it is editor tooling metadata: never content, never cooked, never mounted) and deliberately not a block inside `game.spectraproj`, where unknown keys warn and are *preserved* (`formats-and-pipeline.md:473`) and a template field would therefore survive into every shipped project meaning nothing.
+- **A template is a directory that is already a valid project** — `game.spectraproj`, `Maps/Startup.smap`, `Assets/` — plus exactly one file the instantiated project never receives: a small `template.json` manifest (display name, one-line description, sort order, icon). Deliberately not in the `s*` family (it is editor tooling metadata: never content, never cooked, never mounted) and deliberately not a block inside `game.spectraproj`, where unknown keys warn and are *preserved* (`formats-and-pipeline.md` §3.3) and a template field would therefore survive into every shipped project meaning nothing.
 - **Resolution is an ordered search path** — built-in (`<editor>/Templates/`) → per-user → studio/shared, later entries winning by directory name. Identical in shape to `game.spectraproj`'s `packs` array, which is already *"an ORDERED array; later entries win — that is the mod and patch story, free"*. A studio ships house structure by dropping its own `Game` template on a later path entry: content, versioned in their repo, requiring nothing from the engine.
-- **The shareable form is a ZIP of that directory.** Not a new decision — `formats-and-pipeline.md:40` already reserves ZIP for *"authored-source interchange bundles — a prefab or asset drop a user emails, a template project"*.
+- **The shareable form is a ZIP of that directory.** Not a new decision — `formats-and-pipeline.md` §2.1 already reserves ZIP for *"authored-source interchange bundles — a prefab or asset drop a user emails, a template project"*.
 - **Instantiation, in full:** copy the directory verbatim → drop `template.json` → set `name` and a fresh `id` Guid in `game.spectraproj` → **re-GUID every node in every `.smap`** → rewrite through the canonical writer. Copying node GUIDs verbatim would give every project ever made from the template identical node ids and collide two maps from one template inside one project — and Guid identity is load-bearing for `IEditorCommand` addressing, collaborative editing (`networking.md` §3.3) and NetId assignment.
 - **No provenance is recorded anywhere.** No template id, no inheritance link, no "update from template". A live dependency on a template would make the folder names semantically load-bearing again, which is the failure this section exists to prevent. A template is a starting position, not a parent. Pinned by test pin 13.
 - **"Save Project As Template…"** writes the current project into the user templates directory minus `logs/` and every cooked artifact, generates a `template.json`, and **shows the exclusion list before writing** — a template is the one artifact designed to be handed to strangers.
@@ -135,11 +139,11 @@ So the obvious lint cannot fire. *"Warn when a node's realm disagrees with its f
 The lattice already carries every legitimate tooth, and each one is name-blind:
 
 - **R4** refuses an explicit widening or a disjoint write at the setter.
-- **R3's `Inert`** is the one genuine mistake state the model has, already required to be badged unmistakably (§7.5 item 2) — and it now also becomes a **cook diagnostic: warning by default, error under `--strict`**, matching the asymmetry `formats-and-pipeline.md:516` already pins for unresolved connections and unknown keys. Content that runs nowhere, draws nowhere and replicates nowhere is always either a mistake or unfinished, and the cook is where "unfinished" stops being acceptable. It keys on the resolved `RealmSet`, never on a name.
+- **R3's `Inert`** is the one genuine mistake state the model has, already required to be badged unmistakably (§7.5 item 2) — and it now also becomes a **cook diagnostic: warning by default, error under `--strict`**, matching the asymmetry `formats-and-pipeline.md` §4.2 already pins for unresolved connections and unknown keys. Content that runs nowhere, draws nowhere and replicates nowhere is always either a mistake or unfinished, and the cook is where "unfinished" stops being acceptable. It keys on the resolved `RealmSet`, never on a name.
 - **R8's** non-suppressible notice when a gesture changes where a script runs.
 - **R15's** three refusals on brush subtrees.
 
-**The escape valve that preserves the hard rule:** a studio that genuinely wants *"all server scripts must live under `ServerLogic`"* writes it as a **Luau editor plugin** — `formats-and-pipeline.md:490` already settles that editor plugins are Luau running against the edit-mode VM's node and selection surface. That is their policy, in their tool, on their projects, and the engine still contains zero folder names.
+**The escape valve that preserves the hard rule:** a studio that genuinely wants *"all server scripts must live under `ServerLogic`"* writes it as a **Luau editor plugin** — `formats-and-pipeline.md` §3.5 already settles that editor plugins are Luau running against the edit-mode VM's node and selection surface. That is their policy, in their tool, on their projects, and the engine still contains zero folder names.
 
 ### The payoff the folder model structurally cannot match
 
@@ -277,9 +281,11 @@ effectiveRealm = ToSet(declaredRealm) & inheritedRealm;
 effectiveLive  = (declaredState != NodeState.Dormant) & inheritedLive;
 ```
 
-`Inherit` and `Shared` map to the same set on purpose. They differ in exactly two places: whether an explicit write is legality-checked (R4), and whether the value is written to disk (R18). That is the whole difference, and stating it plainly heads off the first question every implementer will ask.
+`Inherit` and `Shared` map to the same set on purpose. They differ in exactly two places: whether an explicit write is legality-checked (R4), and whether the value is written to disk (§2.5 — omitted iff `Inherit`). That is the whole difference, and stating it plainly heads off the first question every implementer will ask.
 
 ### 2.4 Fields, defaults, and packing
+
+**`partial` is a change this design requires, not the state of the tree.** `SceneNode` is declared `public class SceneNode` (`SceneNode.cs:14`) and is not `partial` anywhere in the solution today, so the `partial` keyword below is part of the work: either add it to the existing declaration (which `networking.md` §4.4 also assumes for `SetNetworkOwner`, so the two arcs want the same one-word edit) or drop it and add these members to the single existing file. The keyword is used here only to show the addition in isolation — nothing in the design depends on the members living in a second file.
 
 ```csharp
 public partial class SceneNode
@@ -310,11 +316,15 @@ Defaults are chosen so that the 99% of nodes that never think about either axis 
 
 | Carrier | Encoding | Rule |
 | --- | --- | --- |
-| `.smap` node record | `"realm"`, `"state"` — lowercase strings from a closed vocabulary (`shared \| server \| client`, `active \| dormant`) | **Omitted iff the declared value is `Inherit`.** Written after `"name"`, before `"transform"`. Never a numeric enum, never the *effective* value (that is derived data, and `P2` forbids storing derived data). |
-| `.scmap` `NODE` record | **declared** realm + state in reserved `PayloadFlags` bits | Effective is derived in the pre-order forward pass that already rebuilds the tree (records are ordered `ParentIndex < SelfIndex`, so it is free). **Storing effective only is wrong** — a runtime reparent could not recompute. |
-| `.sentdef` keyvalue record | per-property realm in `Flags` **bits 6–7**, as a 2-bit value | Bits 0–2 are `readOnly`/`hideInEditor`/`requiresRestart` (`formats-and-pipeline.md:460`); bits 3–5 are `replicated`/`unreliable`/`clientWritable` (`networking.md:329`). **Do not touch 3–5 and do not grow the fixed 32-byte record.** `D15`'s C#↔Luau byte-identity parity pin extends to the new bits in the same change. |
+**This document is normative for what the values MEAN; `formats-and-pipeline.md` is normative for how they are ENCODED.** The bit numbers and member order below are quoted from it, not decided here, and the two must be changed together.
 
-`"realm"` and `"state"` join `"editor"` on the **reserved-key list** and are never captured by `formats-and-pipeline.md` §2.6's unknown-member preservation. A misspelled realm silently falling through to `Shared` is a data leak on load.
+| Carrier | Encoding | Rule |
+| --- | --- | --- |
+| `.smap` node record | `"realm"`, `"state"` — lowercase strings from a closed vocabulary (`shared \| server \| client`, `active \| dormant`) | **Omitted iff the declared value is `Inherit`.** Written after `"name"`, before `"transform"`. Never a numeric enum, never the *effective* value (that is derived data, and `P2` forbids storing derived data). Spelled out in `formats-and-pipeline.md` §2.6. |
+| `.scmap` `NODE` record | **declared** realm + state in `PayloadFlags` **bits 3–4** (realm) and **bits 5–6** (state), each a 2-bit value | Allocation owned by `formats-and-pipeline.md` §2.7, which also holds bits 0–2 (`HasSource`/`IsEntityOwned`/`CanReCarve`). Effective is derived in the pre-order forward pass that already rebuilds the tree (records are ordered `ParentIndex < SelfIndex`, so it is free). **Storing effective only is wrong** — a runtime reparent could not recompute. |
+| `.sentdef` keyvalue record | per-property realm in `Flags` **bits 6–7**, as a 2-bit value | A **different record from the one above, with a different allocation** — do not carry `.scmap`'s bit numbers across. Bits 0–2 are `readOnly`/`hideInEditor`/`requiresRestart` (`formats-and-pipeline.md` §3.2); bits 3–5 are `replicated`/`unreliable`/`clientWritable` (`networking.md` §3.4, whose table is the single allocation of this u32). **Do not touch 3–5 and do not grow the fixed 32-byte record.** `D15`'s C#↔Luau byte-identity parity pin extends to the new bits in the same change. |
+
+**`"realm"` and `"state"` are reserved keys**, never captured by `formats-and-pipeline.md` §2.6's unknown-member preservation — the reserved-key list itself lives in that section and is not restated here. The reason is this document's: a misspelled realm surviving as a preserved unknown member means the node declares nothing and falls through to `Shared`, which is a data leak on load rather than a lost setting.
 
 ---
 
@@ -744,7 +754,7 @@ public sealed class Script
 }
 ```
 
-**`roblox-onboarding.md` `O8`'s "reserve `ScriptKind.Client`" is spent, not honoured, and must be corrected in the same change.**
+**`roblox-onboarding.md` `O8`'s "reserve `ScriptKind.Client`" is spent, not honoured — and that correction has LANDED.** `O8` now specifies the single `bool IsModule` axis and records the supersession in place, `roblox-to-spectra.md` and `data-model.md` agree, and `formats-and-pipeline.md` §2.6 no longer writes a `"kind"` string into `.smap`. No document in this set still specifies a three-member `ScriptKind`.
 
 ### 6.3 Roblox already collapsed `Script`/`LocalScript` — corroboration, not coincidence
 
@@ -814,7 +824,7 @@ Those paths name folders from the shipped project template ("The bare-root objec
 
 | Roblox | Verified semantics | Spectra | Status |
 | --- | --- | --- | --- |
-| `Lighting` | global lighting properties **and** a container for `Sky`/`Atmosphere`/post-effects | **Three things, three homes.** Global properties → a typed `Scene.Environment` settings struct; sky/atmosphere → asset references on it; post-effects → an ordered chain owned by the render arc. **Lights are spatial `SceneNode`s with a `Light` payload.** This **overturns `roblox-to-spectra.md:33`** ("a `Scene.Lighting` node with attributes") — a node implies a transform, a parent, a realm and a subtree brush count, none of which mean anything for fog density | **planned; row needs correcting** |
+| `Lighting` | global lighting properties **and** a container for `Sky`/`Atmosphere`/post-effects | **Three things, three homes.** Global properties → a typed `Scene.Environment` settings struct; sky/atmosphere → asset references on it; post-effects → an ordered chain owned by the render arc. **Lights are spatial `SceneNode`s with a `Light` payload.** This overturned an earlier `roblox-to-spectra.md` row ("a `Scene.Lighting` node with attributes") — a node implies a transform, a parent, a realm and a subtree brush count, none of which mean anything for fog density. **That correction has landed**; the row there is marked *Corrected* and agrees with this one | **planned** |
 | `SoundService` | global audio properties **and** a container where a parented `Sound` plays non-spatially | Properties → `Scene.Audio` settings; `Audio.Play2D(clip)` for non-spatial; spatial sounds are `Sound` payloads on world nodes. A sound is never parented to a service | **planned** (audio is a stub today) |
 | `Players` | creates a `Player` per client; parents `PlayerGui`/`Backpack`/`PlayerScripts`/`Character` | A **service and index**, not a tree container — a player has no transform, no brush and no realm of its own. Its *contents* stay nodes: `player.Gui`, `player.Scripts`, `player.Character` are real `SceneNode`s in a per-player subtree, `Realm = Client` plus a per-client replication filter. This is the same split Roblox already makes (`Player` in `Players`, `Character` in `Workspace`), made explicit | **planned** |
 | `CollectionService` | tags | `O3`'s per-node tags + scene reverse index + `ObserveTag` — **with R10's mask parameter, non-negotiably** | **planned** |

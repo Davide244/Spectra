@@ -4,7 +4,20 @@
 > Sizes are relative (**S / M / L**), not calendar estimates. Every milestone is independently shippable and independently verifiable.
 > Read `CLAUDE.md` first — it holds the architecture decisions and the pillars this roadmap must never break.
 >
-> **Companion documents:** [`docs/roblox-onboarding.md`](docs/roblox-onboarding.md) holds the scripting decision (Luau) and the onboarding milestones `O0`–`O9`, which interleave with the arcs below; [`docs/roblox-to-spectra.md`](docs/roblox-to-spectra.md) is the concept mapping written for a Roblox developer.
+> **Companion documents — eight, and this is the whole set.** Five own an arc of milestone ids that interleaves with the arcs below and is referenced here by id rather than restated; the other three are a survey, a mapping and a rule set, and own no milestones. **Start with the first one.**
+>
+> | Document | What it owns | Arc |
+> | --- | --- | --- |
+> | [`docs/data-model.md`](docs/data-model.md) | **The orientation page — read it first.** What `SceneNode`, `Scene` and the payloads actually are today, with a `file:line` on every row, and one table separating what exists from what is only designed. It is the counting authority for the payload set. | — (survey) |
+> | [`docs/roblox-onboarding.md`](docs/roblox-onboarding.md) | The scripting decision (Luau), the script payload, attributes, tags, signals, Play/Stop. | `O0`–`O9` |
+> | [`docs/roblox-to-spectra.md`](docs/roblox-to-spectra.md) | The concept mapping written for a Roblox developer, marked row by row with what exists. | — (mapping) |
+> | [`docs/formats-and-pipeline.md`](docs/formats-and-pipeline.md) | Every file format and the cook: `.spack`, `.smap`/`.scmap`, `.smodel`, `.simage`, `.saudio`, `.sentdef`, `game.spectraproj`, and the `scook` rules. | `D0`–`D22` |
+> | [`docs/console.md`](docs/console.md) | The console as the engine's control surface: typed cvars, commands, binds, cfg files. | `C*` |
+> | [`docs/networking.md`](docs/networking.md) | Server-authoritative replication, the fixed tick, interest management, prediction — plus collaborative editing. | `N*`, `T*` |
+> | [`docs/realms.md`](docs/realms.md) | Audience and liveness as node properties (`Realm`/`State`), replacing Roblox's container folders. Rules `R1`–`R17` — **its own rules, not the `R*` rendering arc below**. | — (rules `R1`–`R17`) |
+> | [`docs/physics.md`](docs/physics.md) | The physics engine choice (Box3D), hulls from brushes, the character mover, networked bodies. | `Y0`–`Y16` |
+>
+> Milestone-id prefixes are a shared namespace: `F`/`E`/`P`/`S`/`R`/`H` are this document's arcs, and `O`, `D`, `C`, `N`/`T` and `Y` belong to the companions above. **`R` is the one overloaded letter** — here it is the rendering arc (`R1`, `R9`, `R10`, …), this document's cross-arc rulings are written with a dash (`R‑1`, `R‑3`, …), and `realms.md`'s rules are always cited document-qualified (`realms.md R15`).
 
 ---
 
@@ -28,11 +41,11 @@ The plan was drafted assuming a large asset arc — asset manager, texture loadi
 | --- | --- |
 | Asset manager, texture loading | ✅ landed (`Assets/AssetManager.cs`, `ContentRoot.cs`, `ImageDecoder.cs`, `TextureAsset.cs`) |
 | `.spectramat` material assets | ✅ landed (`Assets/MaterialDefinition.cs`, `MaterialParser.cs`, `Assets/Materials/*.spectramat`, never-null default material) |
-| Per-face brush materials + texture axes | ⏳ in progress — `Bsp/Brush.cs` still carries no per-face material data or u/v axes |
-| Per-material chunk submeshes | ⏳ pending — `Scene.StaticWorldMaterial` is still one material for the entire world |
-| Model import | ⏳ pending — `Silk.NET.Assimp` is referenced; no importer code exists |
+| Per-face brush materials + texture axes | ✅ landed (`Bsp/FaceSurface.cs`; `Brush.FaceSurfaces` at `Brush.cs:148`, `WithFaceMaterial`/`WithFaceSurface`) |
+| Per-material chunk submeshes | ✅ landed (`ChunkSubmesh` at `Bsp/ChunkMesh.cs:39`, `ChunkMesh.Submeshes` at `:95`; `Scene.StaticWorldMaterial` demoted to the fallback for faces naming none) |
+| Model import | ✅ landed (`Assets/ModelImporter.cs` over `Silk.NET.Assimp`, `ModelData`, `AssetManager.Models.cs`, `Scene/ModelInstantiator.cs`) |
 
-Consequences, which the ordering below reflects: **F1 (materials) is real, unlanded, and the highest-fanout item in the entire roadmap.** Texturing in the editor, the shader parameter manifest binding, exact tangents for PBR, transparent-face submesh splitting, and the map format's face records all wait on it. Do not let any of those arcs guess its schema.
+**Updated 2026-08-21: this table is no longer a list of gaps — every row above has landed**, re-verified against the working tree at the files cited. `docs/formats-and-pipeline.md` §1 flagged the staleness first and its consequence stands: **`F1` (materials) was the highest-fanout item in the roadmap, and it is now real**, so texturing in the editor, the shader parameter manifest binding, exact tangents for PBR, transparent-face submesh splitting and the map format's `faces` records all bind to a schema that exists rather than one they have to guess. Any milestone below that still reads as though `F1` were pending is describing the past; check the tree, not the prose.
 
 *(The mangled comment markers previously seen in `Engine.cs` were a transient mid-edit artifact and are gone — the tree reads clean.)*
 
@@ -270,9 +283,10 @@ Two-phase load: construct all entities and parse keyvalues, *then* resolve conne
 - **Risk** — **MEDIUM–HIGH.** GUID derivation must use a fixed hash (FNV/xxHash into a v8-shaped Guid), never `string.GetHashCode`, which is process-randomised and would break every stored reference on the next launch. **Prefab-internal targetname scoping is a sign-off decision (§9.8)** — it bakes into every saved map and cannot be changed later without a migration.
 - **Size** — **L.**
 
-### P11b — `.spectramapb` shipping format
-Binary container mirroring `CompiledShaderFile`'s existing idiom (magic + `ushort` version + sections), produced from text by a CLI, preferred by the loader when present and newer. Pinned test: binary-load → text-save → byte-identical to the original text map, so divergence cannot ship silently.
-- **Depends on** — `P9`. **Size** — **M.** **Risk** — LOW. Purely optional; skip until load time is measured as a problem.
+### P11b — `.spectramapb` shipping format — **SUPERSEDED, do not build**
+**Replaced by `.scmap` in [`docs/formats-and-pipeline.md`](docs/formats-and-pipeline.md) §2.7 (`D*` arc).** The id is kept so existing cross-references still resolve, and the entry is kept so nobody re-derives it from scratch.
+
+Two things were wrong with it, and the second is the reason it cannot simply be renamed. It specified a binary *mirror* of the text map containing zero derived data — but the artifact actually wanted is the **baked** one: per-cell welded meshes, per-cell BSP trees and per-cell material runs, so a shipped game runs zero CSG at load. And its pinned test — *binary-load → text-save → byte-identical to the original text map* — **is unsatisfiable for that artifact**: welding, T-junction repair and per-cell carving are not invertible, so `.scmap → .smap` is not a valid operation and must not be attempted. The replacement guard is a **bake oracle**: cook → load → assert the loaded per-cell arrays are element-identical to a fresh `CsgWorld.Build(placements)` of the same source. **`.smap` is the only editable artifact; a lost `.smap` is a lost map.**
 
 ---
 
@@ -416,7 +430,7 @@ Both D3D backends switch from `CreateSwapChainForHwnd` to `CreateSwapChainForCom
 ## 11. Decisions that need sign-off before anything is built on them
 
 1. **Does the Uno editor host the engine in-process, or run as a separate process reading `.spectramap`?** In-process gives a live graph, instant undo and no schema export; separate-process is more robust but forces a document model, a JSON entity-schema export, and no shared GPU resources — and it changes `H1`, `P5` and undo simultaneously. *(This is the highest-leverage unanswered question in the whole plan.)*
-2. **Does the editing layer live in a new `SpectraEngine.Editing` assembly, or in Core?** A separate assembly keeps gizmo/undo/PIE code out of every shipped AOT game binary; Core is one fewer project and one fewer set of public API additions.
+2. **SETTLED AND BUILT — the editing layer is its own assembly.** *(Was: a new `SpectraEngine.Editing` assembly, or in Core?)* `SpectraEngine.Editing` exists in the tree, references Core and nothing else, and a test asserts the boundary (no Silk.NET type, no `IWindow`); the executable is the only project that references it, which is what keeps gizmo/undo/tool code out of a shipped AOT game binary. `CLAUDE.md` carries the rule. Nothing may re-open this by adding editor code to Core.
 3. **Is D3D-only embedding on Windows acceptable (no embedded OpenGL viewport)?** Accepting it makes `H2` a contained change; rejecting it means `WGL_NV_DX_interop` or a per-frame copy for a configuration D3D already covers.
 4. **Is CPU readback an acceptable *shipping* path for the Linux viewport until GL sharing is proven?** Accepting unblocks Linux immediately at ~8 MB and a pipeline stall per 1080p frame; rejecting makes `H3` a research task that could stall indefinitely.
 5. **Play-in-editor: diff-restore a snapshot onto the live graph, or spawn a fresh scene from the document and discard it?** Diff-restore preserves the incremental-compile pillar and is cheap now; fresh-scene means simulation state never needs rollback (a permanent tax saved once entities exist) but costs a full world recompile and doubles GPU residency on every Play.
@@ -426,7 +440,7 @@ Both D3D backends switch from `CreateSwapChainForHwnd` to `CreateSwapChainForCom
 9. **Does the wireframe pipeline survive as a peer of forward, or become a shaded+wireframe *overlay* mode?** Overlay is what a Roblox-style editor actually wants and would delete two of the six pipeline classes; keeping it as a peer means it inherits shadows, post and blending it does not want.
 10. **Accept that `R2` (sRGB) makes everything look different — brighter midtones, softer falloff — and budget a retune of the ambient and base colours?** Accepting fixes shading that is currently wrong in two places; deferring keeps the current look and blocks PBR, HDR and tone mapping.
 11. **Is Vulkan still a real goal?** If yes, `R3`'s pass abstraction should stay genuinely pass-shaped (costs nothing now, a great deal later) and `S5`/`S9` gain priority; if no, `S9` is deleted and the "vulkan opt-in" carve-out becomes permanent.
-12. **Is C#-plus-rebuild acceptable for gameplay logic, or is a scripting VM eventually needed?** Mandatory AOT means an entity change is a rebuild-and-restart, which is the sharpest tension with Roblox's edit-and-see-it-instantly appeal; the no-code logic entities (`P6`) cover most gameplay without a rebuild, but a VM would change the entity base class's shape and must be decided before `P4` hardens.
+12. **ANSWERED by [`docs/roblox-onboarding.md`](docs/roblox-onboarding.md) §2 — a scripting VM is needed, and it is Luau** (hybrid, Luau-first for gameplay with compiled C# staying the engine-facing language; `O0`–`O9`, with `O8` owning the `Script` payload). Binding consequence that milestone `P4` must respect: the `Entity` base class has to be designed knowing a VM is coming. The original tension is preserved below because it is why the answer went that way. *(Was:)* **Is C#-plus-rebuild acceptable for gameplay logic, or is a scripting VM eventually needed?** Mandatory AOT means an entity change is a rebuild-and-restart, which is the sharpest tension with Roblox's edit-and-see-it-instantly appeal; the no-code logic entities (`P6`) cover most gameplay without a rebuild, but a VM would change the entity base class's shape and must be decided before `P4` hardens.
 13. **What is the default editing grid?** `VertexSnapper.GridSize` is 1e-4 (a welding concern, not a user grid) and `ChunkCoord.CellSize` is 32; a Roblox-like default of 1 world unit with 0.25/0.5/2/4 presets is proposed but the demo's part sizes suggest a different working scale.
 14. **Multi-viewport (Hammer four-pane) — wanted at all, given the Roblox-first pillar?** Nearly free after `R3`, but it changes how the Uno shell is laid out, so answer before designing the shell.
 
@@ -452,7 +466,7 @@ These are genuinely unresolved and are called out rather than guessed:
 - **What OpenGL version does the engine actually get from Silk.NET, and what is the intended floor?** This gates `glProgramUniform` (4.1 — would erase the `Use()`/`SetUniform` seam entirely), texture arrays for cascades (3.0), and immutable textures (4.2).
 - **How many shadow-casting lights should the design eventually target?** `R6`/`R7` shadow only the directional light. Point-light shadows need cube maps, and `Renderer.CreateTexture` has **no cubemap path at all** today. If "many shadowed dynamic lights" is real, the shadow atlas should be designed for it in `R6` rather than retrofitted.
 - **Is there a target frame budget or hardware floor?** HDR format choice, cascade count, PCF taps and whether D3D12's current single-frame-in-flight full-fence sync becomes the bottleneck all turn on it — and every rendering milestone adds at least one pass, which with a full fence serialises against the GPU with no overlap.
-- **Does `.spectramat` key parameter values by authored name or manifest index?** Names survive reordering (assumed); indices are smaller but break on any cbuffer edit.
+- **ANSWERED by [`docs/formats-and-pipeline.md`](docs/formats-and-pipeline.md) §2.5, by splitting the question: the TEXT form keys by authored name** (survives reordering, is what a human edits and merges) **and the cooked `.smaterial` keys by offset**, resolved at cook time when the manifest is in hand. Both answers are right for their format. The durable risk it names: a `.smaterial` cooked against one shader version and loaded against another misaligns cbuffer offsets silently, which is why its `SHDR` section carries the shader hash and the loader refuses a mismatch loudly.
 - **Do per-face materials support per-face *parameter overrides*, or only a whole-material reference?** Overrides mean the manifest must mark which parameters are per-face-instanceable and the submesh batching must account for them.
 - **Are shader features per-material or per-render-pass?** Per-material (assumed) lets a user ship an unlit variant of their own shader; per-pass is simpler but cannot.
 - **Should the engine shader stdlib (`engine/Lighting.spectrashade`) be user-overridable?** The reserved `engine/` prefix says no; if users must replace the lighting model, that is a shading-model plugin point and belongs in `S8`'s variant system, not in import shadowing.

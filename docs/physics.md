@@ -127,7 +127,7 @@ Hulls are cached per `Brush` **reference identity** — the key `CsgCompileCache
 The three obvious fixes each fail for a different reason, and the reasons are worth recording:
 
 1. **A nodraw material does not work.** The carve is union-skin extraction, so a clip brush poking out of a wall contributes its own exterior faces to the union skin; making those faces invisible punches a see-through hole into the solid interior.
-2. **A per-node "do not carve" flag is refused by [`docs/realms.md`](realms.md).** `realms.md:667` states it directly — *"Do not add a third subtree invariant"* — because admission would stop being a subtree property and become a per-node walk on the CSG snapshot hot path, which `O7` already names as how silent corruption happens.
+2. **A per-node "do not carve" flag is refused by [`docs/realms.md`](realms.md).** `realms.md` R15 states it directly — *"Do not add a third subtree invariant"* — because admission would stop being a subtree property and become a per-node walk on the CSG snapshot hot path, which `O7` already names as how silent corruption happens.
 3. **Removing the brush from the placement list removes it from physics**, because physics consumes that exact list by design.
 
 **The fix uses a mechanism that already exists: a collision-only volume is a `P7` entity-owned brush** with a `func_clip`-shaped classname. `P7` brushes already leave the carve, already compile to entity-local `BrushModel`s, and under this design already become static or kinematic bodies carrying their own hulls. Zero new invariants, zero new geometry code, and the level designer draws it exactly like any other brush.
@@ -150,11 +150,11 @@ After this lands there are **four** spatial structures, not two: `BrushBroadphas
 
 - **`SceneBvh` is never redundant.** It indexes *nodes* — including nodes with no collision at all — and serves frustum culling and editor picking, neither of which physics can answer. It does, however, need new work regardless of backend: today it exposes only `Raycast` (`SceneBvh.cs:496`) and `QueryFrustum` (`:585`). There is **no box or sphere overlap query**, so `GetPartBoundsInBox`/`InRadius` is new work.
 - **`CsgWorld.Raycast`/`ContainsPoint` are demoted.** Once physics holds the static world, the two answer the same question about the same solid through different code at different tolerances. **Ruling: physics is the sole authority for every query whose answer feeds simulation or gameplay.** `CsgWorld`'s queries are demoted *in their own XML docs* to "the compiled authored static world only — no dynamic bodies, no model colliders, no character", and kept for the editor, for cook-time verification, and as the reference side of an oracle. The demotion argument does not depend on Box3D: the moment one dynamic body exists, a gameplay ray that consults only the static world is already wrong.
-- **Pin it with a divergence oracle, and run it in Release.** N seeded rays over a fixture map; `CsgWorld.Raycast` and `b3World_CastRayClosest` under a static-only filter must agree on hit/miss and on distance within a stated tolerance. **Release, not Debug** — `CsgIncrementalCompiler.VerifyTrustedDiff` is already `[Conditional("DEBUG")]` by design, and `realms.md:535` names the consequence of repeating that pattern: *a dev build throws and a shipping build silently compiles corrupt geometry*.
+- **Pin it with a divergence oracle, and run it in Release.** N seeded rays over a fixture map; `CsgWorld.Raycast` and `b3World_CastRayClosest` under a static-only filter must agree on hit/miss and on distance within a stated tolerance. **Release, not Debug** — `CsgIncrementalCompiler.VerifyTrustedDiff` is already `[Conditional("DEBUG")]` by design, and `realms.md` R17 names the consequence of repeating that pattern: *a dev build throws and a shipping build silently compiles corrupt geometry*.
 
 ### 2.6 Dynamic bodies on the scene graph
 
-**No fifth `SceneNode` payload.** `O8` already wrote down that the payload count "is now a real cost on the hottest type in the engine and should be a conscious acceptance, not a drift", and adding a reference field for something 99% of nodes never carry is that drift. Instead:
+**No physics-body `SceneNode` payload — this arc adds a bit, not a reference field.** The exact count, since documents have miscounted it before: `SceneNode` carries **two** payloads today, `Brush` and `MeshRenderer` (`data-model.md` §3, the counting authority), and four more are designed and unbuilt — `Entity` (`P4`–`P9`), `Script` (`O8`), `PrefabInstance` (`P10`) and `Light`. `O8` already wrote down that the payload count "is a real cost on the hottest type in the engine and should be a conscious acceptance, not a drift", and adding a reference field for something 99% of nodes never carry is that drift whatever ordinal it would land on. Instead:
 
 - A packed **`PhysicsFlags` byte** on `SceneNode` (`CanCollide`, `CanQuery`, `CanTouch`, `Anchored`, `Massless`, `HasBody`), fitting existing padding, read as a bit test in the hot path.
 - A **side table** in the physics world keyed by `SceneNode.Id` holding the body handle, collision group and material, probed only when `HasBody` is set.
@@ -321,9 +321,11 @@ The multiplier is the point: **replay cost = (predicted things) × (latency dept
 
 The permanent brush refusal [`docs/networking.md`](networking.md) §4.4 already ships survives untouched and gains a second reason: a brush is a static hull, and a static hull has no owner because it does not simulate.
 
-### 3.6 Two corrections owed to `networking.md`, both cheap now
+### 3.6 Two corrections owed to `networking.md` — **both now applied there**
 
-1. **The purity contract is unsatisfiable as literally written.** §4.4 says `ApplyInput` *"MUST be a pure function of (captured state, cmd, dt)"*, and any mover that queries geometry violates that — and it must query geometry. Amend to **"pure with respect to a pinned world revision"**: `ApplyInput` may issue read-only queries, and the design guarantees the queried world is identical between the original prediction and the replay, which is what the static-world generation counter and the platform pose ring exist for. Do this **before `N16` hardens**, or the first implementation either quietly breaks the stated contract or the double-replay test is written so as to hide it.
+Both landed in `networking.md` §4.4 on 2026-08-21; they are kept here with their arguments because the arguments are this document's.
+
+1. **The purity contract was unsatisfiable as literally written.** §4.4 says `ApplyInput` *"MUST be a pure function of (captured state, cmd, dt)"*, and any mover that queries geometry violates that — and it must query geometry. Amend to **"pure with respect to a pinned world revision"**: `ApplyInput` may issue read-only queries, and the design guarantees the queried world is identical between the original prediction and the replay, which is what the static-world generation counter and the platform pose ring exist for. Do this **before `N16` hardens**, or the first implementation either quietly breaks the stated contract or the double-replay test is written so as to hide it.
 2. **Drop `NetInputCommand.DeltaTime`.** Under `N2`'s fixed tick it is redundant, and a client-supplied `dt` on a client-authored input packet is free speed for anyone who edits it.
 
 ---
@@ -400,7 +402,7 @@ A gizmo drag on a live physics body during Play is an ordinary `IEditorCommand` 
 
 Collision hulls for the selected node, **trigger volumes always**, the character capsule and its ground normal during Play — all through the existing depth-off `DebugDraw` line pass that already works identically on OpenGL, D3D11 and D3D12 and already draws gizmos, the marquee and the selection highlight. Do **not** use Box3D's own debug-draw callback: the engine already holds every hull's source geometry (it built them), so nothing is gained by asking native code to hand geometry back through a reverse P/Invoke with a debug-shape lifetime protocol.
 
-Trigger volumes are drawn *always*, not on selection, for the reason `realms.md:700` already establishes for ghosted dormant subtrees: an invisible gameplay volume is indistinguishable from a bug, and this repo has already had exactly that mistake reported as a brush bug (commit `d4701d6`).
+Trigger volumes are drawn *always*, not on selection, for the reason `realms.md` §7.5 item 3 already establishes for ghosted dormant subtrees: an invisible gameplay volume is indistinguishable from a bug, and this repo has already had exactly that mistake reported as a brush bug (commit `d4701d6`).
 
 ### 5.3 Physics never runs in a Team Edit session
 
