@@ -74,7 +74,7 @@ Spectra is a C#/.NET 10 game engine built on a scene graph, with Hammer-style CS
 | `Color3` | `Color3` readonly struct | **planned** | Blocked behind per-part appearance. |
 | `Orientation` (YXZ degrees) | `CFrame.Angles(rx, ry, rz)` in radians | **deliberate difference** | Degrees in a radians codebase is a footgun. The editor's Properties panel is planned to show degrees anyway. |
 | `BrickColor` | — | **deliberate difference** | Legacy inside Roblox itself. Not coming. |
-| 1 stud | 1 world unit | **planned/undecided** | Nothing in the engine forces a scale. The chunk cell is pinned at 32 units, so 1 unit = 1 stud makes a chunk 32 studs, which is the leading proposal. |
+| 1 stud | 1 **spectraunit** (`sunit`) = **1 metre** | **decided 2026-08-21** | One sunit is one metre, so a 32-unit chunk is 32 m and gravity is `9.81 sunit/s²` — the solver runs at exactly the scale it was tuned for. **A ported place must scale, and would have had to under any answer:** Roblox is internally inconsistent about its own stud, documenting 0.28 m/stud while its default gravity implies 0.05 m/stud — a factor of 5.6 between two official numbers — so no choice here could have made porting mechanical. Multiply by **0.28** to follow Roblox's documented figure, or by **0.05** to reproduce its gravity behaviour; pick per project and stay consistent. See [`docs/physics.md`](physics.md) §7 item 1. |
 
 ### Instance API
 
