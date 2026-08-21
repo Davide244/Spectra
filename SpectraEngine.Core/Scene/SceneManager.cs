@@ -79,8 +79,7 @@ public sealed class SceneManager
     private static readonly Vector3 PillarHalfExtent = new(0.2f, 1.1f, 0.2f);
 
     private SceneNode? _spinner;
-    private SceneNode? _bobbingPillar;
-    private Vector3 _bobbingPillarRest;
+    private DemoBobAnimation? _pillarBob;
     private double _elapsed;
 
     // Both periodic lines wait one full interval, for the same reason: they
@@ -356,10 +355,12 @@ public sealed class SceneManager
 
         // The bobbing pillar re-compiles continuously, so its cells prove the
         // per-material split survives every incremental recompile — not just
-        // the initial build.
-        _bobbingPillar = AddBrushNode(
+        // the initial build. It stays editable while it does: the animation
+        // adopts whatever the editor last left on the node instead of
+        // overwriting it (see DemoBobAnimation).
+        SceneNode bobbingPillar = AddBrushNode(
             scene, "PillarA", new Vector3(-2f, 0.1f, -2f), PillarHalfExtent, pillarMaterial);
-        _bobbingPillarRest = _bobbingPillar.LocalPosition;
+        _pillarBob = new DemoBobAnimation(bobbingPillar, PillarBobAmplitude, PillarBobPeriodSeconds);
 
         // THE PER-FACE PROOF. PillarB is the bobbing pillar's twin except for
         // the single face turned towards the demo camera, which wears the gray
@@ -528,16 +529,11 @@ public sealed class SceneManager
                 0f);
         }
 
-        if (_bobbingPillar is not null)
-        {
-            // Rigid translation only — scale or shear would be rejected by the
-            // snapshot's rigidity validation. Writing LocalPosition on a brush
-            // node auto-dirties the static world, so this line alone keeps the
-            // async recompile pipeline continuously exercised.
-            float bob = PillarBobAmplitude *
-                MathF.Sin((float)(_elapsed * (2.0 * Math.PI / PillarBobPeriodSeconds)));
-            _bobbingPillar.LocalPosition = _bobbingPillarRest + new Vector3(0f, bob, 0f);
-        }
+        // Runs AFTER the editor has had the frame (see Engine.Run), so it must
+        // never be the writer that wins an argument with a gizmo: the animation
+        // re-centres on any edit made since the last frame rather than
+        // overwriting it. See DemoBobAnimation for why that is not optional.
+        _pillarBob?.Advance(_elapsed);
 
         if (ActiveScene is { } scene)
         {
@@ -558,11 +554,14 @@ public sealed class SceneManager
             //  * the dirty-cell count of the latest compile must stay small
             //    while only the pillar bobs, however many chunks the world has;
             //  * the editing state — how much is selected, which manipulator is
-            //    live, how deep the history is — is the one part of the frame a
-            //    headless run cannot see at all, and it is also the cheapest
-            //    check that the host actually wired an editor in: a run whose
-            //    editing fields read "none" has an unwired viewport, however
-            //    healthy everything else looks.
+            //    live, WHICH NAVIGATION MODEL is driving the camera, how deep
+            //    the history is — is the one part of the frame a headless run
+            //    cannot see at all, and it is also the cheapest check that the
+            //    host actually wired an editor in: a run whose editing fields
+            //    read "none" has an unwired viewport, however healthy everything
+            //    else looks. The navigation label in particular is the only way
+            //    a smoke log distinguishes "the editor camera is driving" from
+            //    "the engine fell back to its own fly camera".
             //
             // Fixed arity, no collections formatted — the line's length cannot
             // grow with the size of the world.
@@ -578,7 +577,8 @@ public sealed class SceneManager
                     "{BatchesVisible} of {BatchesTotal} material batches; " +
                     "scene: {NodesVisible} of {NodesTotal} mesh nodes; " +
                     "recompiled {Count} times, last touched {DirtyCells} dirty cell(s); " +
-                    "editing: {Selected} selected, {GizmoMode} gizmo, undo {UndoDepth} / redo {RedoDepth}",
+                    "editing: {Selected} selected, {GizmoMode} gizmo, {Navigation} navigation, " +
+                    "undo {UndoDepth} / redo {RedoDepth}",
                     assets?.TextureCount ?? 0, assets?.MaterialCount ?? 0,
                     _modelsRequested, _modelsPlaced,
                     renderView.WorldChunksVisible, renderView.WorldChunksTotal,
@@ -586,6 +586,7 @@ public sealed class SceneManager
                     renderView.VisibleCount, renderView.TotalCount,
                     scene.StaticWorldCompileCount, scene.LastCompileDirtyCells.Count,
                     editor?.SelectionCount ?? 0, editor?.GizmoModeName ?? "none",
+                    editor?.NavigationModeName ?? "none",
                     editor?.UndoDepth ?? 0, editor?.RedoDepth ?? 0);
             }
 
@@ -691,7 +692,7 @@ public sealed class SceneManager
         Editor = null;
         SelfTestNode = null;
         _spinner = null;
-        _bobbingPillar = null;
+        _pillarBob = null;
         _renderer = null;
         // Dropped, not unloaded: the asset manager owns every model and texture
         // the demo asked for and releases them itself (ReleaseGraphicsResources

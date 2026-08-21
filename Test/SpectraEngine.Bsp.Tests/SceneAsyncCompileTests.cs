@@ -248,6 +248,80 @@ public sealed class SceneAsyncCompileTests
         second.WeldStats.ShouldBe(new CsgWeldStats(Reused: 1, Welded: 1));
     }
 
+    [Fact]
+    public void A_continuously_dragged_brush_never_renders_an_older_placement_than_one_already_shown()
+    {
+        // THE JITTER PIN. A brush's compiled geometry is allowed to trail its
+        // node — the compile is asynchronous, so one frame of lag is inherent —
+        // but it must never go BACKWARDS. A swap that published a snapshot
+        // older than one already on screen would show up to a user as exactly
+        // what was reported once: a brush that pops out, back, out and back
+        // again over a handful of frames while nothing else in the scene does.
+        // Mesh nodes cannot have this failure mode (they render straight from
+        // the node transform), which is what would make it brush-only.
+        //
+        // Randomised interleaving on a fixed seed, because the failure this
+        // guards against is a race between "when the edit happens" and "when
+        // the pump runs", and a fixed 1:1 rhythm would only ever probe one
+        // phase of it.
+        var (scene, node, renderer, logger) = CreateSceneWithBrushNode();
+        var random = new Random(20260821);
+
+        const float Step = 0.05f;   // a plausible per-frame drag distance
+        const int Frames = 400;
+        float authored = 0f;
+        float lastRendered = float.NegativeInfinity;
+        int backwards = 0;
+        int swaps = 0;
+
+        for (int frame = 0; frame < Frames; frame++)
+        {
+            // Zero, one or several edits per frame: a drag that dirties the
+            // world faster than compiles can land is the interesting case, and
+            // is also what "pump starvation" would look like if it existed.
+            int edits = random.Next(0, 3);
+            for (int i = 0; i < edits; i++)
+            {
+                authored += Step;
+                node.LocalPosition = new Vector3(authored, 0f, 0f);
+            }
+
+            scene.ProcessStaticWorldCompilation(renderer, logger);
+
+            // Occasionally let the pool actually finish, so the run covers both
+            // "compile still in flight" and "result waiting to be harvested".
+            if (random.Next(0, 5) == 0)
+                Thread.Sleep(1);
+
+            if (scene.StaticWorld is not { } world)
+                continue;
+
+            float rendered = world.Placements[0].Transform.Translation.X;
+            if (rendered != lastRendered)
+                swaps++;
+            if (rendered < lastRendered)
+                backwards++;
+            lastRendered = rendered;
+
+            // The compiled world may trail the node, but it may never lead it:
+            // a published placement always comes from a snapshot of a state the
+            // scene really was in.
+            rendered.ShouldBeLessThanOrEqualTo(authored);
+        }
+
+        backwards.ShouldBe(0, $"a swap published an older placement than one already rendered ({swaps} swaps seen)");
+        swaps.ShouldBeGreaterThan(1,
+            $"the drag never actually recompiled ({scene.StaticWorldCompileCount} compiles landed), " +
+            $"so nothing was proved. Captured log:{Environment.NewLine}{logger.Describe()}");
+
+        // And the trailing is a lag, not a loss: once the edits stop, the
+        // rendered world catches up to the authored pose without further edits.
+        PumpUntil(scene, renderer, logger,
+            () => scene.StaticWorld is { } settled &&
+                  settled.Placements[0].Transform.Translation.X == authored,
+            "the compiled world to catch up with the final drag position");
+    }
+
     // Ceiling for a background compile of a handful of boxes; normally met
     // within a few pump iterations. Only a hung or lost compile ever runs the
     // clock out, so the size of this value never slows a passing run.

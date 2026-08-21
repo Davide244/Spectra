@@ -31,6 +31,17 @@ namespace SpectraEngine.Executable.Editing;
 /// This runs that chain headlessly, on a cadence, and says PASS or FAIL in a
 /// smoke log.
 /// <para>
+/// <b>It is opt-in, and off by default.</b> It is gate instrumentation, not
+/// demo behaviour: the drag is a real one-world-unit move of a real brush node
+/// that stays displaced for the frames the async recompile needs, so with it
+/// running the scene pops every few seconds with nobody touching the mouse —
+/// indistinguishable, to someone using the editor, from a jitter bug. The host
+/// therefore constructs this only when <c>--selftest</c> (or
+/// <c>SPECTRA_SELFTEST</c>) asked for it; see <see cref="DemoStartupOptions"/>,
+/// and note that <see cref="DemoEditorHost"/> skips the whole test on a null
+/// subject node.
+/// </para>
+/// <para>
 /// <b>Determinism, and the three things it borrows.</b> Real mouse input is
 /// never consulted: every frame the drag sees is a synthesized
 /// <see cref="EditorInputFrame"/> whose cursor is a world point projected
@@ -75,8 +86,12 @@ namespace SpectraEngine.Executable.Editing;
 /// </remarks>
 internal sealed class EditingSelfTest
 {
-    /// <summary>Seconds between runs, measured from the end of the previous one.</summary>
-    private const double IntervalSeconds = 5.0;
+    /// <summary>
+    /// Seconds between runs, measured from the end of the previous one.
+    /// Internal so the startup banner can quote the real cadence rather than a
+    /// number that drifts out of date beside it.
+    /// </summary>
+    internal const double IntervalSeconds = 5.0;
 
     // The frame duration handed to every synthesized input frame. Nothing in a
     // translate drag integrates time, so the value only has to be positive and
