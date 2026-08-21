@@ -600,6 +600,23 @@ public sealed class CsgWorld
     /// correctly for every point inside the cell (see
     /// <see cref="ChunkBspBuilder"/> for the closure argument).
     /// </summary>
+    /// <remarks>
+    /// <b>SCOPE: the compiled authored static world, and nothing else.</b> Not
+    /// part brushes (a <c>BrushKind.Part</c> brush is not in the placement list,
+    /// so this structure cannot see one at all), not dynamic bodies, not model
+    /// colliders, not the character. It is the right answer for the editor, for
+    /// cook-time verification, and as the reference side of a determinism
+    /// oracle — and it is the wrong answer for gameplay, which needs everything
+    /// this list excludes.
+    /// <para>
+    /// It also disagrees with <see cref="Scene.Scene.Raycast"/> by design and
+    /// in both directions: that one tests <em>authored</em> brush planes, so it
+    /// reports solid inside a doorway this one correctly reports as empty; this
+    /// one sees only admitted world brushes, so it reports empty where a part
+    /// brush stands. Neither is a bug; picking one per call site is the
+    /// contract until the two unify behind physics.
+    /// </para>
+    /// </remarks>
     public bool ContainsPoint(Vector3 point) =>
         Chunks.TryGet(ChunkCoord.FromPosition(point), out WorldChunk chunk) && chunk.Bsp.ContainsPoint(point);
 
@@ -614,6 +631,12 @@ public sealed class CsgWorld
     /// and is found there, in order). The first accepted hit is therefore the
     /// global nearest.
     /// </summary>
+    /// <remarks>
+    /// <b>SCOPE: the compiled authored static world, and nothing else</b> — see
+    /// <see cref="ContainsPoint"/> for the full statement of what that excludes
+    /// and why this disagrees with <see cref="Scene.Scene.Raycast"/> in both
+    /// directions.
+    /// </remarks>
     public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, out BspRaycastHit hit)
     {
         hit = default;

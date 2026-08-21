@@ -275,6 +275,20 @@ public sealed class Scene
     /// query you called, not a refusal on the setter.
     /// </para>
     /// <para>
+    /// <b>WHAT THIS ANSWERS ABOUT, which is narrower than it looks.</b> A brush
+    /// node is tested against its <em>authored</em> planes, not against the
+    /// compiled solid — so this reports a hit inside a doorway that a
+    /// subtractive brush removed, and inside the overlap of two brushes that
+    /// merged. Subtractive brushes themselves are skipped (a hole is not a
+    /// solid), but that only removes the most absurd case, not the divergence:
+    /// <b>this is authored-geometry authority, and it is right for picking,
+    /// selection and editor tooling — it is not a gameplay query.</b>
+    /// <see cref="Bsp.CsgWorld.Raycast"/> answers about the compiled solid and
+    /// disagrees with this one by design; the two unify behind physics later.
+    /// Nothing enforces the distinction yet, so it is written here where the
+    /// caller is.
+    /// </para>
+    /// <para>
     /// Refusing the flag on world brushes would also have created an ordering
     /// trap with no good exit: clear <c>CanQuery</c> on a part brush, convert it
     /// to world geometry, and the refusal has to either reject the conversion —
@@ -285,8 +299,29 @@ public sealed class Scene
     /// </remarks>
     public bool Raycast(
         in Ray3 ray, out SceneRaycastHit hit, in SceneQueryFilter filter,
-        float maxDistance = float.PositiveInfinity) =>
-        Bvh.Raycast(in ray, out hit, in filter, maxDistance);
+        float maxDistance = float.PositiveInfinity)
+    {
+        ValidateQueryGroup(in filter);
+        return Bvh.Raycast(in ray, out hit, in filter, maxDistance);
+    }
+
+    // The CALLER's group is validated here, once, before any traversal — the
+    // opposite discipline to the node's group, which the filter answers
+    // leniently (see CollisionGroups.Interacts). The asymmetry is the point: a
+    // caller naming a group it never registered is a mistake at this call site
+    // and should be reported here, deterministically. Diagnosing it inside the
+    // walk instead would make the exception depend on whether some box happened
+    // to overlap, and would leave the caller's results list half-filled.
+    private static void ValidateQueryGroup(in SceneQueryFilter filter)
+    {
+        if (filter.Groups is { } groups && (uint)filter.CollisionGroup >= (uint)groups.Count)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(filter), filter.CollisionGroup,
+                $"SceneQueryFilter.CollisionGroup must name a registered group " +
+                $"(0..{groups.Count - 1}).");
+        }
+    }
 
     /// <summary>
     /// The scene's collision-group registry: up to 64 named groups and the
@@ -316,8 +351,11 @@ public sealed class Scene
     /// As <see cref="GetPartBoundsInBox(in Aabb, List{SceneNode})"/>, reporting
     /// only nodes <paramref name="filter"/> accepts.
     /// </summary>
-    public void GetPartBoundsInBox(in Aabb box, List<SceneNode> results, in SceneQueryFilter filter) =>
+    public void GetPartBoundsInBox(in Aabb box, List<SceneNode> results, in SceneQueryFilter filter)
+    {
+        ValidateQueryGroup(in filter);
         Bvh.QueryBox(in box, results, in filter);
+    }
 
     /// <summary>
     /// Appends every spatial node whose world AABB overlaps the sphere to
@@ -332,8 +370,11 @@ public sealed class Scene
     /// reporting only nodes <paramref name="filter"/> accepts.
     /// </summary>
     public void GetPartBoundsInRadius(
-        Vector3 center, float radius, List<SceneNode> results, in SceneQueryFilter filter) =>
+        Vector3 center, float radius, List<SceneNode> results, in SceneQueryFilter filter)
+    {
+        ValidateQueryGroup(in filter);
         Bvh.QuerySphere(center, radius, results, in filter);
+    }
 
     /// <summary>
     /// Appends every spatial node whose world AABB intersects
@@ -343,6 +384,14 @@ public sealed class Scene
     /// false positives are possible, false negatives are not. Render thread
     /// only, allocation-free in steady state once the list has grown.
     /// </summary>
+    /// <remarks>
+    /// <b>Deliberately flag-blind, unlike every other query here.</b> This is a
+    /// visibility question, not a gameplay one: <see cref="SceneNode.CanQuery"/>
+    /// governs what a raycast or an overlap can find, and applying it to
+    /// culling would make clearing the flag turn geometry invisible — a
+    /// rendering bug wearing a physics property's clothes. It takes no filter
+    /// for the same reason.
+    /// </remarks>
     public void QueryFrustum(in Frustum frustum, List<SceneNode> results) =>
         Bvh.QueryFrustum(in frustum, results);
 
