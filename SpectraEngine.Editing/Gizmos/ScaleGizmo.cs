@@ -1,5 +1,7 @@
+using Microsoft.Extensions.Logging;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
+using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Editing.Commands;
 using SpectraEngine.Editing.Input;
@@ -12,10 +14,34 @@ namespace SpectraEngine.Editing.Gizmos;
 
 /// <summary>
 /// The resize tool: three cube-capped axis handles and a uniform centre cube,
-/// turning a drag into a per-axis scale factor — applied to a mesh node's
-/// transform scale, and to a brush node's <em>local plane extents</em>.
+/// turning a drag into a <b>world-unit change of the object's size</b> — applied
+/// to a mesh node's transform scale, and to a brush node's <em>local plane
+/// extents</em>.
 /// </summary>
 /// <remarks>
+/// <b>The drag quantity is a size in world units, not a multiplier, and that is
+/// the difference the whole tool is built around.</b> A factor drag makes the
+/// world-space change per snap notch proportional to whatever the object already
+/// measures — at a 0.25 factor step a 10-unit brush jumps 2.5 units per notch
+/// and a 0.4-unit brush jumps 0.1 — so the increment a user sets means a
+/// different thing for every object they click. Here the cursor's travel along
+/// the constraint IS the size change (1:1 in world units), the snap increment is
+/// world units (<see cref="ResizeSnapSettings"/>), and the per-node scale factor
+/// is <em>derived</em> from each node's own measured size
+/// (<see cref="ResizeMath.FactorForSizeChange"/>). One notch is one increment on
+/// every object in the selection, at any size.
+/// <para>
+/// <b>Resizes are face-anchored by default</b>, like Roblox Studio's: growing
+/// along +x moves the +x face out by exactly the increment and leaves the −x
+/// face planted, which means the node's position shifts by half the increment.
+/// (Every handle stands on the positive side of its axis, so the anchored face
+/// is always the negative one.) Holding <see cref="SymmetricModifier"/> resizes
+/// about the node origin instead: both faces move, the node stays put, and the
+/// snapped increment is still the total size change. The uniform centre cube is
+/// always symmetric — it drags no single face — and grows the object's largest
+/// dimension by the increment, scaling the other two in proportion.
+/// </para>
+/// <para>
 /// <b>Brush nodes never receive node scale, and that is the load-bearing rule of
 /// this whole tool.</b> The CSG epsilon scheme assumes rigid brush placements and
 /// unit-length plane normals; a scale in a brush node's transform makes
@@ -27,14 +53,16 @@ namespace SpectraEngine.Editing.Gizmos;
 ///   <item><description>
 ///     A node with a <see cref="Brush"/> is resized by rebuilding the brush with
 ///     scaled plane offsets (<see cref="Brush.WithScaledExtents"/>) and swapping
-///     the successor onto the node through <see cref="SetBrushCommand"/>. The
-///     node's transform is not touched at all.
+///     the successor onto the node through <see cref="SetBrushCommand"/>. Its
+///     transform receives the face-anchoring <em>translation</em> and nothing
+///     else — a translation keeps the placement rigid, a scale would not.
 ///   </description></item>
 ///   <item><description>
 ///     A node with <em>no brush anywhere in its subtree</em> is resized by
-///     writing <c>LocalScale</c> through
+///     writing <c>LocalScale</c> (and the same anchoring translation) through
 ///     <see cref="SetLocalTransformCommand"/>, which is what scale means for a
-///     mesh.
+///     mesh. The factor comes from the mesh's own bounds, so the requested world
+///     size is what the object ends up measuring.
 ///   </description></item>
 ///   <item><description>
 ///     A node that carries no brush of its own but has brush
@@ -42,6 +70,7 @@ namespace SpectraEngine.Editing.Gizmos;
 ///     no selected node is resizable never starts at all.
 ///   </description></item>
 /// </list>
+/// </para>
 /// <para>
 /// <b>That third case is why the routing asks
 /// <see cref="SceneNode.SubtreeBrushCount"/> and not <c>node.Brush</c>.</b> A
@@ -54,6 +83,16 @@ namespace SpectraEngine.Editing.Gizmos;
 /// decline it rather than assume it away.
 /// </para>
 /// <para>
+/// <b>A node with no measurable size is the one proportional case left.</b> An
+/// empty group, or a mesh whose CPU-side positions were never kept, has no world
+/// size to add an increment to; those targets fall back to the old proportional
+/// mapping (one gizmo length of travel doubles them, snapped on a
+/// <see cref="ProportionalFactorIncrement"/> factor ladder). It is reported
+/// through <see cref="ProportionalFallbackCount"/> and logged once per gesture
+/// through <see cref="Logger"/> rather than silently looking like a fixed
+/// increment that is not one.
+/// </para>
+/// <para>
 /// <b>This gizmo has no world/local toggle</b> (<see cref="SupportsOrientation"/>
 /// is false) and is always laid out in the reference node's own frame. A
 /// non-uniform scale is only defined relative to a set of axes: applying
@@ -63,65 +102,95 @@ namespace SpectraEngine.Editing.Gizmos;
 /// local-only for exactly this reason.
 /// </para>
 /// <para>
-/// <b>Each node resizes about its own origin</b>, and no node's position moves.
-/// A multi-selection resize therefore makes each object bigger where it stands
-/// rather than also pushing them apart — the behaviour Unity has in Pivot mode,
-/// and the only one that stays exact when the selected nodes have different
-/// rotations. Nodes whose rotation differs from the gizmo's frame receive the
-/// factors along their <em>own</em> axes.
+/// <b>Each node resizes along its OWN axes and lands on its OWN increment.</b>
+/// A multi-selection never shares one factor — that is precisely what made the
+/// world-space step size-dependent — so a 0.4-unit brush and a 10-unit brush
+/// dragged together both grow by exactly one increment. Nodes whose rotation
+/// differs from the gizmo's frame receive the change along their own axes.
 /// </para>
 /// <para>
 /// <b>Cost.</b> Rebuilding a brush re-runs its plane validation and face clipping
 /// and therefore allocates — a resize drag of a brush node is the one gesture in
 /// the editing layer that is not per-frame allocation-free, and it cannot be:
 /// brushes are immutable by design. The tool only rebuilds when the (snapped)
-/// factor actually changed since the previous frame, so a snapped drag rebuilds
-/// once per grid step rather than once per frame, and a drag that has not left
-/// its starting size rebuilds nothing at all.
+/// size actually changed since the previous frame, so a snapped drag rebuilds
+/// once per increment rather than once per frame, and a drag that has not left
+/// its starting size rebuilds nothing at all. That holds because the only other
+/// quantity the pass keys on — the proportional fallback factor, which does move
+/// continuously with the cursor — is computed <em>only</em> when the gesture
+/// actually contains an unmeasurable target
+/// (<see cref="ProportionalFallbackCount"/>). A selection that mixes one in pays
+/// the fallback ladder's rebuild rate for the whole selection; that is the cost
+/// of the fallback, not of the ordinary case.
 /// </para>
 /// <para>
-/// <b>Threading:</b> render thread only. A grab allocates one command per node.
+/// <b>Threading:</b> render thread only. A grab allocates one or two commands per
+/// node.
 /// </para>
 /// </remarks>
 public sealed class ScaleGizmo : GizmoTool
 {
     /// <summary>
-    /// The smallest factor a drag will apply. Zero would collapse a mesh to a
-    /// plane and is rejected outright by <see cref="Brush.WithScaledExtents"/>;
-    /// negative would mirror the object, turning a brush inside out.
+    /// The smallest world size a resize will produce along an axis. Zero would
+    /// collapse a mesh to a plane and is rejected outright by
+    /// <see cref="Brush.WithScaledExtents"/>; negative would mirror the object,
+    /// turning a brush inside out.
+    /// </summary>
+    public const float MinimumSize = 0.01f;
+
+    /// <summary>
+    /// The smallest factor a drag will apply to a node. A clamp on the
+    /// <em>derived</em> factor, so a size change that would invert or collapse a
+    /// tiny object stops here as well as at <see cref="MinimumSize"/>.
     /// </summary>
     public const float MinimumFactor = 0.01f;
 
     /// <summary>
     /// The largest factor a single drag will apply. Not a safety limit so much
-    /// as a sanity one: past this the cursor is a handful of pixels from the
-    /// pivot and every further pixel multiplies the size again.
+    /// as a sanity one: past this the object is a thousand times its original
+    /// size and every further pixel multiplies it again.
     /// </summary>
     public const float MaximumFactor = 1000f;
 
-    // Below this the grab offset along the constraint is dominated by rounding,
-    // and the factor (a ratio against it) would explode. A fraction of the
-    // gizmo's own length, so it scales with the gizmo.
-    private const float MinimumGrabOffsetFactor = 0.05f;
+    /// <summary>
+    /// The snap step used for the proportional fallback — targets with no
+    /// measurable world size, where there is no absolute quantity to quantise.
+    /// A factor ladder, in the same spirit as the increment this tool used to
+    /// snap for everything.
+    /// </summary>
+    public const float ProportionalFactorIncrement = 0.25f;
 
-    // What one node needs for the whole gesture. At most one of the two
-    // commands is non-null, decided by the routing in the type remarks; BOTH
-    // are null for a node this tool declines to resize, whose slot exists only
-    // to keep the list index-aligned with Targets.
-    private readonly record struct ScaleTarget(
+    // What one node needs for the whole gesture. Transform is non-null for every
+    // node this tool accepts (a brush node gets one too — for the face-anchoring
+    // TRANSLATION, never a scale); Brush is non-null only for a brush node. BOTH
+    // are null for a node this tool declines to resize, whose slot exists only to
+    // keep the list index-aligned with Targets.
+    private readonly record struct ResizeTarget(
         SetLocalTransformCommand? Transform,
         SetBrushCommand? Brush,
-        Brush? StartBrush);
+        Brush? StartBrush,
+        Vector3 StartSize,
+        Vector3 LocalAnchor);
 
-    private readonly List<ScaleTarget> _scaleTargets = [];
+    private readonly List<ResizeTarget> _resizeTargets = [];
 
     private Vector3 _constraintAxis;
     private Vector3 _constraintNormal;
     private Vector3 _uniformDirection;
     private Vector3 _grabPoint;
+    private Vector3 _axisMask;
     private float _grabOffset;
     private float _grabAxisLength;
-    private Vector3 _appliedFactor = Vector3.One;
+
+    // The state the last ApplyDrag wrote, so a frame that asks for the same
+    // thing can skip the whole pass (a brush rebuild is expensive). The
+    // proportional term only ever leaves 1 when the gesture actually has an
+    // unmeasurable target — otherwise it is a constant and cannot spuriously
+    // defeat the skip. See ApplyDrag.
+    private float _appliedSizeChange;
+    private float _appliedProportional = 1f;
+    private bool _appliedSymmetric;
+    private bool _appliedEdit;
 
     /// <summary>
     /// Creates a resize tool over a scene and the history its edits land in.
@@ -142,17 +211,46 @@ public sealed class ScaleGizmo : GizmoTool
     /// </summary>
     public override bool SupportsOrientation => false;
 
-    /// <summary>Factor-snapping configuration for drags. See <see cref="ScaleSnapSettings"/>.</summary>
-    public ScaleSnapSettings Snap { get; } = new();
+    /// <summary>Size-snapping configuration for drags. See <see cref="ResizeSnapSettings"/>.</summary>
+    public ResizeSnapSettings Snap { get; } = new();
 
     /// <summary>
-    /// The per-axis factor applied so far in the current drag, in the gizmo's
-    /// frame; <see cref="Vector3.One"/> when no drag is in progress.
+    /// The modifier that switches a drag from face-anchored to symmetric: both
+    /// faces move, the node does not, and the snapped increment is still the
+    /// total size change. <see cref="KeyModifiers.None"/> removes the option.
     /// </summary>
-    public Vector3 DragFactor => _appliedFactor;
+    /// <remarks>
+    /// Shift, because Alt already inverts snapping for all three tools and
+    /// Shift/Control only mean add-to-selection and toggle-selection at the
+    /// instant of a press — by the time a drag is running they are free.
+    /// </remarks>
+    public KeyModifiers SymmetricModifier { get; set; } = KeyModifiers.Shift;
+
+    /// <summary>
+    /// Optional sink for the one thing this tool has to say out loud: that a
+    /// target had no measurable size and is being resized proportionally rather
+    /// than by the fixed increment. Null (the default) simply keeps quiet — the
+    /// count is still available on <see cref="ProportionalFallbackCount"/>.
+    /// </summary>
+    public ILogger? Logger { get; set; }
+
+    /// <summary>
+    /// How many of the last gesture's targets fall back to a proportional
+    /// factor because they have no measurable world size along the dragged axes.
+    /// Zero for the ordinary brush-and-mesh case.
+    /// </summary>
+    public int ProportionalFallbackCount { get; private set; }
+
+    /// <summary>
+    /// The world-unit size change the current drag is asking for — of the dragged
+    /// axis, or of the largest dimension for the uniform handle. Zero when no
+    /// drag is in progress, and after a snapped drag it is always a whole
+    /// multiple of <see cref="Snap"/>'s increment.
+    /// </summary>
+    public float DragSizeChange => _appliedSizeChange;
 
     /// <inheritdoc/>
-    protected override bool HasEdit => _appliedFactor != Vector3.One;
+    protected override bool HasEdit => _appliedEdit;
 
     /// <summary>
     /// Always the reference node's world rotation, whatever
@@ -177,9 +275,16 @@ public sealed class ScaleGizmo : GizmoTool
             return false;
 
         GizmoGeometry geometry = Geometry;
+
+        // The proportional fallback measures travel against this, so a degenerate
+        // gizmo (a viewport with no height) would divide by zero.
+        if (geometry.AxisLength <= 0f)
+            return false;
+
         _constraintAxis = geometry.Axis(ActiveHandle);
         _constraintNormal = geometry.ViewNormal;
         _grabAxisLength = geometry.AxisLength;
+        _axisMask = AxisMaskOf(ActiveHandle);
 
         // "Up and to the right makes it bigger" — the direction every uniform
         // resize handle in every editor grows along. Frozen at the grab so a
@@ -189,11 +294,6 @@ public sealed class ScaleGizmo : GizmoTool
         if (GizmoHandles.IsAxis(ActiveHandle))
         {
             if (!TryProjectOntoAxis(in ray, out float offset))
-                return false;
-
-            // The factor is a RATIO against this, so a grab at the pivot would
-            // make every later frame divide by (almost) nothing.
-            if (MathF.Abs(offset) < geometry.AxisLength * MinimumGrabOffsetFactor)
                 return false;
 
             _grabOffset = offset;
@@ -206,14 +306,18 @@ public sealed class ScaleGizmo : GizmoTool
             _grabPoint = grabPoint;
         }
 
-        _appliedFactor = Vector3.One;
+        _appliedSizeChange = 0f;
+        _appliedProportional = 1f;
+        _appliedSymmetric = false;
+        _appliedEdit = false;
         return true;
     }
 
     /// <inheritdoc/>
     protected override void RecordCommands()
     {
-        _scaleTargets.Clear();
+        _resizeTargets.Clear();
+        ProportionalFallbackCount = 0;
 
         IReadOnlyList<GizmoDragTarget> targets = Targets;
         for (int i = 0; i < targets.Count; i++)
@@ -223,28 +327,44 @@ public sealed class ScaleGizmo : GizmoTool
             // The routing decision, made once per gesture: a brush node's size
             // lives in its planes, a brush-free node's lives in its transform,
             // and a node with brush DESCENDANTS has nowhere to put it at all.
-            if (node.Brush is { } brush)
-            {
-                var command = new SetBrushCommand(node.Id, brush, brush) { Name = TransactionName };
-                _scaleTargets.Add(new ScaleTarget(null, command, brush));
-                Undo.Record(command);
-            }
-            else if (node.SubtreeBrushCount > 0)
+            if (node.Brush is null && node.SubtreeBrushCount > 0)
             {
                 // Declined: writing LocalScale here would make every brush below
                 // this node non-rigid and stall the static-world compile for the
                 // whole scene. Hold the slot so the list stays index-aligned.
-                _scaleTargets.Add(new ScaleTarget(null, null, null));
+                _resizeTargets.Add(default);
+                continue;
             }
-            else
+
+            if (!ResizeMath.TryMeasure(node, out Vector3 size, out Vector3 anchor) || !IsMeasurable(size))
             {
-                var command = new SetLocalTransformCommand(node.Id, targets[i].StartLocal, targets[i].StartLocal)
-                {
-                    Name = TransactionName,
-                };
-                _scaleTargets.Add(new ScaleTarget(command, null, null));
-                Undo.Record(command);
+                size = Vector3.Zero;
+                anchor = Vector3.Zero;
+                ProportionalFallbackCount++;
+                Logger?.LogWarning(
+                    "Resize: node '{Node}' has no measurable size along the dragged axes; " +
+                    "falling back to a proportional ×{Increment} factor step instead of the " +
+                    "{SizeIncrement}-unit resize increment",
+                    node.Name, ProportionalFactorIncrement, Snap.Increment);
             }
+
+            // Every accepted node gets a transform command. For a mesh it carries
+            // the scale AND the anchoring shift; for a brush it carries the shift
+            // alone — scale on a brush node is exactly what must never happen.
+            var transform = new SetLocalTransformCommand(node.Id, targets[i].StartLocal, targets[i].StartLocal)
+            {
+                Name = TransactionName,
+            };
+            Undo.Record(transform);
+
+            SetBrushCommand? brushCommand = null;
+            if (node.Brush is { } brush)
+            {
+                brushCommand = new SetBrushCommand(node.Id, brush, brush) { Name = TransactionName };
+                Undo.Record(brushCommand);
+            }
+
+            _resizeTargets.Add(new ResizeTarget(transform, brushCommand, node.Brush, size, anchor));
         }
     }
 
@@ -252,38 +372,68 @@ public sealed class ScaleGizmo : GizmoTool
     protected override void ApplyDrag(in EditorInputFrame frame, in Ray3 ray)
     {
         // A frame whose ray cannot be projected onto the constraint holds the
-        // last factor: the result is recomputed from the grab every frame, so a
+        // last size: the result is recomputed from the grab every frame, so a
         // skipped one leaves no residue.
-        if (!TryComputeRatio(in ray, out float ratio))
+        if (!TryComputeTravel(in ray, out float travel))
             return;
 
-        if (Snap.IsActiveWith(frame.Modifiers))
-            ratio = Snap.SnapScalar(ratio);
+        bool symmetric = ActiveHandle != GizmoHandle.Screen &&
+            SymmetricModifier != KeyModifiers.None &&
+            (frame.Modifiers & SymmetricModifier) == SymmetricModifier;
 
-        ratio = Math.Clamp(ratio, MinimumFactor, MaximumFactor);
+        // Symmetric moves BOTH faces, so the cursor's travel is half the size
+        // change. Doubling before the snap is what keeps the dragged face under
+        // the cursor while the snapped quantity stays the size.
+        float requested = symmetric ? travel * 2f : travel;
 
-        // An axis handle scales one frame axis; the centre cube scales all three.
-        Vector3 factor = ActiveHandle == GizmoHandle.Screen
-            ? new Vector3(ratio)
-            : new Vector3(
-                ActiveHandle == GizmoHandle.AxisX ? ratio : 1f,
-                ActiveHandle == GizmoHandle.AxisY ? ratio : 1f,
-                ActiveHandle == GizmoHandle.AxisZ ? ratio : 1f);
+        bool snapping = Snap.IsActiveWith(frame.Modifiers);
+        float sizeChange = snapping ? Snap.SnapScalar(requested) : requested;
 
-        ApplyFactor(factor);
+        // The fallback for targets with no measurable size: one gizmo length of
+        // travel doubles them, on a factor ladder of its own.
+        //
+        // Computed ONLY when some target in this gesture actually reads it. It is
+        // a function of the RAW cursor travel on a ladder of its own, so it moves
+        // several times within a single resize notch; feeding it to Apply's
+        // change-detection when nothing consults it turned "rebuild once per
+        // increment" into "rebuild whenever the fallback ladder happens to tick",
+        // which for a brush node means a full immutable rebuild, a carve-cache
+        // invalidation and another async CSG recompile per tick — all producing
+        // geometry bit-identical to what the node already holds. The count is
+        // fixed for the gesture (RecordCommands runs once, at the grab), and a
+        // target consults the fallback exactly when it was counted into it, so
+        // this is the precise gate and not an approximation of one.
+        float proportional = 1f;
+        if (ProportionalFallbackCount > 0)
+        {
+            proportional = 1f + travel / _grabAxisLength;
+            if (snapping)
+            {
+                proportional = MathF.Round(
+                    proportional / ProportionalFactorIncrement, MidpointRounding.AwayFromZero) *
+                    ProportionalFactorIncrement;
+            }
+            proportional = Math.Clamp(proportional, MinimumFactor, MaximumFactor);
+        }
+
+        Apply(sizeChange, proportional, symmetric);
     }
 
     /// <inheritdoc/>
     protected override void ClearDragState()
     {
-        _scaleTargets.Clear();
+        _resizeTargets.Clear();
         _constraintAxis = Vector3.Zero;
         _constraintNormal = Vector3.Zero;
         _uniformDirection = Vector3.Zero;
         _grabPoint = Vector3.Zero;
+        _axisMask = Vector3.Zero;
         _grabOffset = 0f;
         _grabAxisLength = 0f;
-        _appliedFactor = Vector3.One;
+        _appliedSizeChange = 0f;
+        _appliedProportional = 1f;
+        _appliedSymmetric = false;
+        _appliedEdit = false;
     }
 
     /// <inheritdoc/>
@@ -291,47 +441,44 @@ public sealed class ScaleGizmo : GizmoTool
         ScaleGizmoRenderer.Draw(output, in geometry, highlighted);
 
     /// <summary>
-    /// The factor the cursor is currently asking for. The two handle families
-    /// map it differently, and both maps are pure functions of the cursor that
-    /// return exactly 1 at the grab point — which is what makes a drag that comes
-    /// back where it started leave the object at exactly its original size.
+    /// How far the cursor has travelled along the constraint since the grab, in
+    /// <b>world units</b> — which is the size change the drag is asking for.
+    /// Both handle families map to it as a pure function of the cursor that
+    /// returns exactly zero at the grab point, so a drag that comes back where it
+    /// started leaves the object at exactly its original size.
     /// </summary>
     /// <remarks>
-    /// <b>An axis handle is a ratio</b> of the cursor's distance from the pivot
-    /// along that axis to the distance it was grabbed at: pull the cube twice as
-    /// far out as it started and the object is twice as big, which is the
-    /// mapping that makes the handle feel attached to the object's edge.
+    /// <b>An axis handle measures along its own axis</b>, so the dragged face
+    /// tracks the cursor one-for-one in world space — the mapping that makes the
+    /// handle feel attached to the face it is moving, and the reason the drag has
+    /// no ratio in it any more.
     /// <para>
-    /// <b>The uniform handle is linear instead</b>, because its cube sits ON the
-    /// pivot: a ratio against a grab offset of nearly zero would divide by noise
-    /// and send the size to infinity on the first pixel of movement. So it reads
-    /// the cursor's travel along a frozen up-and-right diagonal, measured in
-    /// units of the gizmo's own on-screen length — one gizmo-length up and right
-    /// doubles it, half a gizmo-length down and left halves it, and a full one
-    /// down and left runs into <see cref="MinimumFactor"/>.
+    /// <b>The uniform handle measures along a frozen up-and-right diagonal</b>,
+    /// because its cube sits ON the pivot and has no axis of its own; the travel
+    /// there is the growth of the object's largest dimension.
     /// </para>
     /// </remarks>
-    private bool TryComputeRatio(in Ray3 ray, out float ratio)
+    private bool TryComputeTravel(in Ray3 ray, out float travel)
     {
         if (GizmoHandles.IsAxis(ActiveHandle))
         {
             if (!TryProjectOntoAxis(in ray, out float offset))
             {
-                ratio = 1f;
+                travel = 0f;
                 return false;
             }
 
-            ratio = offset / _grabOffset;
+            travel = offset - _grabOffset;
             return true;
         }
 
         if (!TryProjectOntoViewPlane(in ray, out Vector3 point))
         {
-            ratio = 1f;
+            travel = 0f;
             return false;
         }
 
-        ratio = 1f + Vector3.Dot(point - _grabPoint, _uniformDirection) / _grabAxisLength;
+        travel = Vector3.Dot(point - _grabPoint, _uniformDirection);
         return true;
     }
 
@@ -359,21 +506,39 @@ public sealed class ScaleGizmo : GizmoTool
         return true;
     }
 
-    private void ApplyFactor(Vector3 factor)
+    /// <summary>
+    /// Writes one frame of the drag: per target, the factor its own measured size
+    /// needs to grow by <paramref name="sizeChange"/> world units, plus the
+    /// translation that keeps the opposite face planted.
+    /// </summary>
+    private void Apply(float sizeChange, float proportionalFactor, bool symmetric)
     {
-        // Rebuilding a brush is expensive (see the type remarks), and a drag
-        // spends most of its frames at the same snapped factor. Skipping the
+        // Rebuilding a brush is expensive (see the type remarks), and a snapped
+        // drag spends most of its frames asking for the same size. Skipping the
         // whole pass when nothing changed also keeps the scene from being
         // dirtied for a value it already holds.
-        if (factor == _appliedFactor)
+        if (sizeChange == _appliedSizeChange &&
+            proportionalFactor == _appliedProportional &&
+            symmetric == _appliedSymmetric)
+        {
             return;
+        }
 
-        _appliedFactor = factor;
+        _appliedSizeChange = sizeChange;
+        _appliedProportional = proportionalFactor;
+        _appliedSymmetric = symmetric;
 
+        bool edited = false;
         IReadOnlyList<GizmoDragTarget> targets = Targets;
         for (int i = 0; i < targets.Count; i++)
         {
-            ScaleTarget target = _scaleTargets[i];
+            ResizeTarget target = _resizeTargets[i];
+            if (target.Transform is null)
+                continue; // declined at record time; see RecordCommands
+
+            Transform start = targets[i].StartLocal;
+            Vector3 factor = SolveFactor(in target, sizeChange, proportionalFactor);
+            Vector3 shift = symmetric ? Vector3.Zero : SolveAnchorShift(in target, start.Scale, factor);
 
             if (target.Brush is { } brushCommand)
             {
@@ -382,21 +547,102 @@ public sealed class ScaleGizmo : GizmoTool
 
                 brushCommand.SetAfter(resized);
                 brushCommand.Do(Scene);
-                continue;
+            }
+            else
+            {
+                // Componentwise, in the node's OWN local axes — never a matrix, so
+                // a node's transform can never pick up a shear from this tool.
+                start.Scale *= factor;
             }
 
-            if (target.Transform is null)
-                continue; // declined at record time; see RecordCommands
+            // The anchoring shift is expressed along the node's local axes, so it
+            // rotates into the parent's frame by the node's own rotation.
+            if (shift != Vector3.Zero)
+                start.Position += Vector3.Transform(shift, start.Rotation);
 
-            SetLocalTransformCommand transformCommand = target.Transform!;
-            Transform after = targets[i].StartLocal;
-            // Componentwise, in the node's OWN local axes — never a matrix, so a
-            // node's transform can never pick up a shear from this tool.
-            after.Scale *= factor;
-            transformCommand.SetAfter(after);
-            transformCommand.Do(Scene);
+            target.Transform.SetAfter(start);
+            target.Transform.Do(Scene);
+
+            edited |= factor != Vector3.One || shift != Vector3.Zero;
         }
+
+        _appliedEdit = edited;
     }
+
+    /// <summary>
+    /// The per-axis factor one target needs: derived from its own measured size
+    /// wherever there is one, and from the proportional fallback where there is
+    /// not.
+    /// </summary>
+    private Vector3 SolveFactor(in ResizeTarget target, float sizeChange, float proportionalFactor)
+    {
+        if (ActiveHandle == GizmoHandle.Screen)
+        {
+            // Uniform: the largest dimension grows by the increment and the other
+            // two follow it, which is the only reading of "one uniform notch"
+            // that is a single world-unit quantity.
+            float reference = MathF.Max(target.StartSize.X, MathF.Max(target.StartSize.Y, target.StartSize.Z));
+            float uniform = reference > ResizeMath.MinimumMeasurableSize
+                ? ResizeMath.FactorForSizeChange(reference, sizeChange, MinimumSize, MinimumFactor, MaximumFactor)
+                : proportionalFactor;
+            return new Vector3(uniform);
+        }
+
+        return new Vector3(
+            AxisFactor(_axisMask.X, target.StartSize.X, sizeChange, proportionalFactor),
+            AxisFactor(_axisMask.Y, target.StartSize.Y, sizeChange, proportionalFactor),
+            AxisFactor(_axisMask.Z, target.StartSize.Z, sizeChange, proportionalFactor));
+    }
+
+    private static float AxisFactor(float mask, float startSize, float sizeChange, float proportionalFactor)
+    {
+        if (mask == 0f)
+            return 1f;
+
+        return startSize > ResizeMath.MinimumMeasurableSize
+            ? ResizeMath.FactorForSizeChange(startSize, sizeChange, MinimumSize, MinimumFactor, MaximumFactor)
+            : proportionalFactor;
+    }
+
+    /// <summary>
+    /// The translation that keeps the face opposite the dragged handle exactly
+    /// where it was. Zero for the uniform handle, which drags no single face, and
+    /// zero on every axis the handle does not drive.
+    /// </summary>
+    private Vector3 SolveAnchorShift(in ResizeTarget target, Vector3 localScale, Vector3 factor)
+    {
+        if (ActiveHandle == GizmoHandle.Screen)
+            return Vector3.Zero;
+
+        return new Vector3(
+            ResizeMath.AnchorShift(target.LocalAnchor.X, localScale.X, factor.X),
+            ResizeMath.AnchorShift(target.LocalAnchor.Y, localScale.Y, factor.Y),
+            ResizeMath.AnchorShift(target.LocalAnchor.Z, localScale.Z, factor.Z));
+    }
+
+    /// <summary>
+    /// Whether a measured size is usable on the axes this gesture drives — all
+    /// three for the uniform handle (where the largest one is what counts), the
+    /// dragged one otherwise.
+    /// </summary>
+    private bool IsMeasurable(Vector3 size)
+    {
+        if (ActiveHandle == GizmoHandle.Screen)
+        {
+            return MathF.Max(size.X, MathF.Max(size.Y, size.Z)) > ResizeMath.MinimumMeasurableSize;
+        }
+
+        // The mask is a unit axis, so the dot product IS the dragged component.
+        return Vector3.Dot(size, _axisMask) > ResizeMath.MinimumMeasurableSize;
+    }
+
+    private static Vector3 AxisMaskOf(GizmoHandle handle) => handle switch
+    {
+        GizmoHandle.AxisX => Vector3.UnitX,
+        GizmoHandle.AxisY => Vector3.UnitY,
+        GizmoHandle.AxisZ => Vector3.UnitZ,
+        _ => Vector3.One,
+    };
 
     /// <summary>
     /// Whether this node can receive a resize at all: a node carrying a brush

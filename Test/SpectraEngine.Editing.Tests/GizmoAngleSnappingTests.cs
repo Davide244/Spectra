@@ -155,6 +155,8 @@ public sealed class GizmoAngleSnappingTests
         harness.Gizmos.Apply(GizmoCommand.FinerSnap).ShouldBeTrue();
         harness.Translate.Snap.Increment.ShouldBe(0.5f);
         harness.Rotate.Snap.Increment.ShouldBe(5f);
-        harness.Scale.Snap.Increment.ShouldBe(0.1f, Tolerance);
+        // Move and resize are both world units on the same ladder, so "finer"
+        // lands them on the same rung.
+        harness.Scale.Snap.Increment.ShouldBe(0.5f, Tolerance);
     }
 }

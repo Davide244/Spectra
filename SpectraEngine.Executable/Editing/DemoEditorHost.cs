@@ -147,6 +147,10 @@ internal sealed class DemoEditorHost : ISceneEditor
 
         _undo = new UndoStack(scene);
         _gizmos = new GizmoController(scene, _undo);
+        // The resize tool's one diagnostic: a target with no measurable size
+        // cannot honour a world-unit increment and says so instead of quietly
+        // behaving like a factor drag.
+        _gizmos.Scale.Logger = loggerFactory.CreateLogger<ScaleGizmo>();
         // The input manager is the engine's ICursorLock: the camera asks for a
         // locked cursor from here (the render thread) and the main thread
         // applies it during its event pump. Handing over the interface rather

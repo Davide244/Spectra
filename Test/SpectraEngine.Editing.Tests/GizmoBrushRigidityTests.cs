@@ -58,12 +58,17 @@ public sealed class GizmoBrushRigidityTests
         harness.Gizmos.Update(harness.Frame(new Vector2(-10f, -10f)));
         GizmoGeometry geometry = harness.Gizmo.Geometry;
         harness.Grab(geometry.AxisX * geometry.AxisLength).ShouldBe(GizmoUpdateResult.DragBegan);
-        harness.DragTo(geometry.AxisX * (geometry.AxisLength * 2.5f));
+        // Three world units wider: the cursor's travel along the axis IS the
+        // size change, so the two-unit brush ends up five across.
+        harness.DragTo(geometry.AxisX * (geometry.AxisLength + 3f));
         harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
 
         node.LocalScale.ShouldBe(Vector3.One);
         ShouldBeRigid(node.WorldMatrix);
         node.Brush!.LocalBounds.Max.X.ShouldBe(2.5f, 1e-3f);
+        // Face-anchored, so the node carried half the growth — a translation,
+        // which is rigid, and never a scale.
+        node.LocalPosition.X.ShouldBe(1.5f, 1e-3f);
 
         harness.Scene.RebuildStaticWorld(renderer);
         harness.Scene.StaticWorld.ShouldNotBeNull();
@@ -141,7 +146,7 @@ public sealed class GizmoBrushRigidityTests
         // The declined node keeps a slot in the tool's per-target list, so the
         // mesh node beside it must still be resized — and by the right factor.
         var harness = GizmoHarness.ThreeQuarterView();
-        SceneNode mesh = harness.AddNode(new Vector3(-4f, 0f, 0f), "Mesh");
+        SceneNode mesh = harness.AddMeshNode(new Vector3(-4f, 0f, 0f), 0.5f, "Mesh");
         SceneNode group = harness.AddNode(new Vector3(4f, 0f, 0f), "Group");
         SceneNode child = group.CreateChild("BrushChild");
         child.Brush = Brush.CreateBox(new Vector3(-1f), new Vector3(1f));
@@ -157,7 +162,8 @@ public sealed class GizmoBrushRigidityTests
         Vector3 pivot = geometry.Pivot;
 
         harness.Grab(pivot + geometry.AxisX * geometry.AxisLength).ShouldBe(GizmoUpdateResult.DragBegan);
-        harness.DragTo(pivot + geometry.AxisX * (geometry.AxisLength * 2f));
+        // The mesh is one world unit across, so +1 is exactly a doubling.
+        harness.DragTo(pivot + geometry.AxisX * (geometry.AxisLength + 1f));
         harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
 
         mesh.LocalScale.X.ShouldBe(2f, 1e-2f);

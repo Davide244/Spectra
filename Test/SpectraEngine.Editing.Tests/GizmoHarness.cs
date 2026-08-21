@@ -1,4 +1,5 @@
 using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Editing.Gizmos;
@@ -111,6 +112,31 @@ internal sealed class GizmoHarness
         SceneNode node = AddNode(position, name);
         node.Brush = Brush.CreateBox(new Vector3(-halfExtent), new Vector3(halfExtent));
         Scene.Selection.Add(node);
+        return node;
+    }
+
+    /// <summary>
+    /// Adds a selected node carrying a centred box <em>mesh</em> of the given
+    /// half extent — a node with a measurable world size, which is what the
+    /// resize tool needs to honour a world-unit increment.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately distinct from <see cref="AddSelectedNode"/>: a bare node has
+    /// no geometry and therefore no size, and the resize tool falls back to a
+    /// proportional drag for it. A test that means "a mesh" has to say so.
+    /// </remarks>
+    public SceneNode AddSelectedMeshNode(Vector3 position, float halfExtent = 0.5f, string name = "Mesh")
+    {
+        SceneNode node = AddMeshNode(position, halfExtent, name);
+        Scene.Selection.Add(node);
+        return node;
+    }
+
+    /// <summary>Adds an unselected node carrying a centred box mesh. See <see cref="AddSelectedMeshNode"/>.</summary>
+    public SceneNode AddMeshNode(Vector3 position, float halfExtent = 0.5f, string name = "Mesh")
+    {
+        SceneNode node = AddNode(position, name);
+        node.MeshRenderer = new MeshRenderer(BoxMesh.Centred(new Vector3(halfExtent)), new Material(null));
         return node;
     }
 

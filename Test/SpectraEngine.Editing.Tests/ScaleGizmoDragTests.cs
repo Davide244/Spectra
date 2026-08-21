@@ -1,4 +1,5 @@
 using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Editing.Gizmos;
 using System.Numerics;
@@ -10,13 +11,23 @@ namespace SpectraEngine.Editing.Tests;
 /// does <em>not</em> do.
 /// </summary>
 /// <remarks>
-/// <b>The load-bearing claim of this suite is that a brush node's transform is
-/// never written.</b> Brush node transforms must stay rigid — the CSG epsilon
+/// <b>The load-bearing claim of this suite is that a brush node's transform never
+/// receives a scale.</b> Brush node transforms must stay rigid — the CSG epsilon
 /// scheme assumes unit-length plane normals, and <c>Scene</c>'s snapshot rejects
 /// a scaled brush node outright — so the resize tool edits the brush's local
-/// plane offsets and swaps the successor brush onto the node instead. Every
-/// brush test below asserts the transform is byte-identical afterwards, not
-/// merely "close".
+/// plane offsets and swaps the successor brush onto the node instead. Every brush
+/// test below asserts the scale is byte-identical afterwards, not merely "close".
+/// <para>
+/// The node's <em>position</em> does move, by design: a resize is face-anchored,
+/// so growing along +x plants the −x face and shifts the node half the growth.
+/// A translation keeps the placement rigid; a scale would not.
+/// <see cref="ResizeIncrementTests"/> owns that behaviour in detail.
+/// </para>
+/// <para>
+/// <b>Drags here are expressed in world units</b>, because that is now what the
+/// tool consumes: the cursor's travel along the constraint <em>is</em> the size
+/// change, so "drag the x handle by +1" means "make it one world unit wider".
+/// </para>
 /// </remarks>
 public sealed class ScaleGizmoDragTests
 {
@@ -26,60 +37,63 @@ public sealed class ScaleGizmoDragTests
     [InlineData(GizmoHandle.AxisX)]
     [InlineData(GizmoHandle.AxisY)]
     [InlineData(GizmoHandle.AxisZ)]
-    public void An_axis_drag_scales_a_mesh_node_along_that_axis_only(GizmoHandle handle)
+    public void An_axis_drag_resizes_a_mesh_node_along_that_axis_only(GizmoHandle handle)
     {
         var harness = GizmoHarness.ThreeQuarterView();
-        SceneNode node = harness.AddSelectedNode(Vector3.Zero);
+        // A one-unit cube, so a +1 size change is exactly a ×2 scale.
+        SceneNode node = harness.AddSelectedMeshNode(Vector3.Zero, halfExtent: 0.5f);
         ScaleGizmo scale = Scale(harness);
         scale.Snap.Enabled = false;
 
-        // Grabbed at the cube (one axis length out) and pulled to twice that:
-        // the factor is the ratio of the two, so this is exactly ×2.
-        DragAxisTo(harness, handle, 2f);
+        DragAxisBy(harness, handle, 1f);
 
-        Vector3 expected = handle switch
+        Vector3 expectedScale = handle switch
         {
             GizmoHandle.AxisX => new Vector3(2f, 1f, 1f),
             GizmoHandle.AxisY => new Vector3(1f, 2f, 1f),
             _ => new Vector3(1f, 1f, 2f),
         };
 
-        node.LocalScale.ShouldBeCloseTo(expected, Tolerance);
-        // A resize does not move anything.
-        node.LocalPosition.ShouldBe(Vector3.Zero);
+        node.LocalScale.ShouldBeCloseTo(expectedScale, Tolerance);
+        // Face-anchored: the far face stayed, so the node moved half the growth.
+        Vector3 expectedPosition = (expectedScale - Vector3.One) * 0.5f;
+        node.LocalPosition.ShouldBeCloseTo(expectedPosition, Tolerance);
         node.LocalRotation.ShouldBe(Quaternion.Identity);
     }
 
     [Fact]
-    public void A_half_length_drag_shrinks_a_mesh_node()
+    public void A_negative_drag_shrinks_a_mesh_node()
     {
         var harness = GizmoHarness.ThreeQuarterView();
-        SceneNode node = harness.AddSelectedNode(Vector3.Zero);
+        SceneNode node = harness.AddSelectedMeshNode(Vector3.Zero, halfExtent: 0.5f);
         Scale(harness).Snap.Enabled = false;
 
-        DragAxisTo(harness, GizmoHandle.AxisY, 0.5f);
+        DragAxisBy(harness, GizmoHandle.AxisY, -0.5f);
 
         node.LocalScale.ShouldBeCloseTo(new Vector3(1f, 0.5f, 1f), Tolerance);
+        node.LocalPosition.ShouldBeCloseTo(new Vector3(0f, -0.25f, 0f), Tolerance);
     }
 
     [Fact]
     public void An_existing_scale_is_multiplied_not_replaced()
     {
         var harness = GizmoHarness.ThreeQuarterView();
-        SceneNode node = harness.AddSelectedNode(Vector3.Zero);
+        SceneNode node = harness.AddSelectedMeshNode(Vector3.Zero, halfExtent: 0.5f);
         node.LocalScale = new Vector3(3f, 4f, 5f);
         Scale(harness).Snap.Enabled = false;
 
-        DragAxisTo(harness, GizmoHandle.AxisX, 2f);
+        // The node already measures 3 world units across x; +3 makes it 6, which
+        // is the ×2 the scale has to end up carrying.
+        DragAxisBy(harness, GizmoHandle.AxisX, 3f);
 
         node.LocalScale.ShouldBeCloseTo(new Vector3(6f, 4f, 5f), Tolerance * 10f);
     }
 
     [Fact]
-    public void The_uniform_handle_scales_all_three_axes_together()
+    public void The_uniform_handle_resizes_all_three_axes_together()
     {
         var harness = GizmoHarness.FrontView();
-        SceneNode node = harness.AddSelectedNode(Vector3.Zero);
+        SceneNode node = harness.AddSelectedMeshNode(Vector3.Zero, halfExtent: 0.5f);
         ScaleGizmo scale = Scale(harness);
         scale.Snap.Enabled = false;
 
@@ -89,35 +103,22 @@ public sealed class ScaleGizmoDragTests
         harness.Grab(pivot).ShouldBe(GizmoUpdateResult.DragBegan);
         scale.ActiveHandle.ShouldBe(GizmoHandle.Screen);
 
-        // One gizmo-length up and to the right doubles it, by the linear mapping
-        // the uniform handle documents.
+        // One world unit up and to the right grows the largest dimension — here
+        // the whole one-unit cube — by exactly one unit.
         Vector3 diagonal = Vector3.Normalize(geometry.ViewRight + geometry.ViewUp);
-        harness.DragTo(pivot + diagonal * geometry.AxisLength);
-        scale.DragFactor.ShouldBeCloseTo(new Vector3(2f), Tolerance);
+        harness.DragTo(pivot + diagonal);
+        scale.DragSizeChange.ShouldBe(1f, Tolerance);
         harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
 
         node.LocalScale.ShouldBeCloseTo(new Vector3(2f), Tolerance);
-    }
-
-    [Fact]
-    public void The_factor_snaps_to_the_configured_increment()
-    {
-        var harness = GizmoHarness.ThreeQuarterView();
-        SceneNode node = harness.AddSelectedNode(Vector3.Zero);
-        ScaleGizmo scale = Scale(harness);
-        scale.Snap.Enabled = true;
-        scale.Snap.Increment = 0.25f;
-
-        // 1.6× of cursor travel, which is nearest 1.5 on a quarter-step ladder.
-        DragAxisTo(harness, GizmoHandle.AxisX, 1.6f);
-
-        node.LocalScale.X.ShouldBe(1.5f, 1e-4f);
+        // The uniform handle drags no single face, so it stays centred.
+        node.LocalPosition.ShouldBe(Vector3.Zero);
     }
 
     // --- Brush nodes ---------------------------------------------------------
 
     [Fact]
-    public void Resizing_a_brush_node_edits_its_plane_extents_and_never_its_transform()
+    public void Resizing_a_brush_node_edits_its_plane_extents_and_never_its_scale()
     {
         var harness = GizmoHarness.ThreeQuarterView();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero, halfExtent: 1f);
@@ -125,21 +126,24 @@ public sealed class ScaleGizmoDragTests
         Transform before = node.LocalTransform;
 
         Scale(harness).Snap.Enabled = false;
-        DragAxisTo(harness, GizmoHandle.AxisX, 2f);
+        DragAxisBy(harness, GizmoHandle.AxisX, 2f);
 
-        // THE constraint: the transform is bit-identical, scale very much
-        // included. A gizmo that wrote node scale here would corrupt the CSG
-        // epsilon scheme and be rejected by the static-world snapshot.
+        // THE constraint: the scale is bit-identical. A gizmo that wrote node
+        // scale here would corrupt the CSG epsilon scheme and be rejected by the
+        // static-world snapshot.
         node.LocalTransform.Scale.ShouldBe(before.Scale);
         node.LocalTransform.Scale.ShouldBe(Vector3.One);
-        node.LocalTransform.Position.ShouldBe(before.Position);
         node.LocalTransform.Rotation.ShouldBe(before.Rotation);
 
         // The size moved into the brush instead: a NEW brush (reference identity
-        // is the carve cache's validity key) twice as wide and unchanged in y/z.
+        // is the carve cache's validity key) two units wider and unchanged in y/z.
         node.Brush.ShouldNotBeSameAs(original);
         node.Brush!.LocalBounds.Min.ShouldBeCloseTo(new Vector3(-2f, -1f, -1f), Tolerance);
         node.Brush.LocalBounds.Max.ShouldBeCloseTo(new Vector3(2f, 1f, 1f), Tolerance);
+
+        // ...and the node carried half the growth, which is what plants the −x
+        // face where it was.
+        node.LocalPosition.ShouldBeCloseTo(new Vector3(1f, 0f, 0f), Tolerance);
 
         // And the original instance is untouched — brushes are immutable.
         original.LocalBounds.Max.ShouldBeCloseTo(Vector3.One, Tolerance);
@@ -157,23 +161,26 @@ public sealed class ScaleGizmoDragTests
         Vector3 pivot = harness.Gizmo.Pivot;
         harness.Grab(pivot).ShouldBe(GizmoUpdateResult.DragBegan);
 
+        // Four units across, dragged two units smaller: half the size.
         Vector3 diagonal = Vector3.Normalize(geometry.ViewRight + geometry.ViewUp);
-        harness.DragTo(pivot - diagonal * (geometry.AxisLength * 0.5f)); // ×0.5
+        harness.DragTo(pivot - diagonal * 2f);
         harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
 
         node.LocalScale.ShouldBe(Vector3.One);
+        node.LocalPosition.ShouldBe(Vector3.Zero);
         node.Brush!.LocalBounds.Max.ShouldBeCloseTo(new Vector3(1f), Tolerance * 10f);
     }
 
     [Fact]
-    public void Undoing_a_brush_resize_puts_the_original_brush_instance_back()
+    public void Undoing_a_brush_resize_puts_the_original_brush_instance_and_position_back()
     {
         var harness = GizmoHarness.ThreeQuarterView();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero);
         Brush original = node.Brush!;
+        Transform before = node.LocalTransform;
         Scale(harness).Snap.Enabled = false;
 
-        DragAxisTo(harness, GizmoHandle.AxisZ, 3f);
+        DragAxisBy(harness, GizmoHandle.AxisZ, 3f);
         harness.Undo.Count.ShouldBe(1);
         harness.Undo.UndoName.ShouldBe("Resize");
 
@@ -182,6 +189,7 @@ public sealed class ScaleGizmoDragTests
         // The same instance, not an equal one: reference identity is what the
         // carve cache keys on, so restoring it restores the cached carve too.
         node.Brush.ShouldBeSameAs(original);
+        node.LocalPosition.ShouldBe(before.Position);
     }
 
     [Fact]
@@ -194,29 +202,32 @@ public sealed class ScaleGizmoDragTests
         Scale(harness).Snap.Enabled = false;
 
         GrabAxis(harness, GizmoHandle.AxisX, out Vector3 pivot, out Vector3 axis, out float length);
-        harness.DragTo(pivot + axis * (length * 2.5f));
+        harness.DragTo(pivot + axis * (length + 2.5f));
         node.Brush.ShouldNotBeSameAs(original); // the live drag really did swap it
 
         harness.PressEscape().ShouldBe(GizmoUpdateResult.DragCancelled);
 
         node.Brush.ShouldBeSameAs(original);
         node.LocalTransform.Scale.ShouldBe(before.Scale);
+        node.LocalTransform.Position.ShouldBe(before.Position);
         harness.Undo.Count.ShouldBe(0);
     }
 
     [Fact]
-    public void A_mixed_selection_scales_the_mesh_node_and_reshapes_the_brush_node()
+    public void A_mixed_selection_resizes_the_mesh_node_and_reshapes_the_brush_node()
     {
         var harness = GizmoHarness.ThreeQuarterView();
-        SceneNode mesh = harness.AddSelectedNode(new Vector3(-2f, 0f, 0f), "Mesh");
+        SceneNode mesh = harness.AddSelectedMeshNode(new Vector3(-2f, 0f, 0f), halfExtent: 0.5f, name: "Mesh");
         SceneNode brush = harness.AddSelectedBrushNode(new Vector3(2f, 0f, 0f));
         Scale(harness).Snap.Enabled = false;
 
-        DragAxisTo(harness, GizmoHandle.AxisY, 2f);
+        DragAxisBy(harness, GizmoHandle.AxisY, 1f);
 
+        // Both grew by exactly one world unit, from very different starting
+        // sizes — one through its scale, one through its planes.
         mesh.LocalScale.ShouldBeCloseTo(new Vector3(1f, 2f, 1f), Tolerance);
         brush.LocalScale.ShouldBe(Vector3.One);
-        brush.Brush!.LocalBounds.Max.ShouldBeCloseTo(new Vector3(1f, 2f, 1f), Tolerance);
+        brush.Brush!.LocalBounds.Max.ShouldBeCloseTo(new Vector3(1f, 1.5f, 1f), Tolerance);
     }
 
     [Fact]
@@ -229,7 +240,7 @@ public sealed class ScaleGizmoDragTests
         harness.Scene.StaticWorldDirty.ShouldBeFalse();
 
         Scale(harness).Snap.Enabled = false;
-        DragAxisTo(harness, GizmoHandle.AxisX, 2f);
+        DragAxisBy(harness, GizmoHandle.AxisX, 2f);
 
         // The node's own Brush setter dirtied the world, so the compile sees a
         // gizmo resize exactly as it would a scripted brush swap — and the
@@ -273,7 +284,7 @@ public sealed class ScaleGizmoDragTests
 
     // --- Helpers -------------------------------------------------------------
 
-    private static ScaleGizmo Scale(GizmoHarness harness)
+    internal static ScaleGizmo Scale(GizmoHarness harness)
     {
         harness.Use(GizmoMode.Scale);
         return harness.Scale;
@@ -282,13 +293,13 @@ public sealed class ScaleGizmoDragTests
     // One update with the cursor outside the viewport: builds the gizmo geometry
     // (and publishes the pivot) without claiming a hover, so aims below are
     // computed against what the gizmo actually chose.
-    private static GizmoGeometry Prime(GizmoHarness harness)
+    internal static GizmoGeometry Prime(GizmoHarness harness)
     {
         harness.Gizmos.Update(harness.Frame(new Vector2(-10f, -10f)));
         return harness.Gizmo.Geometry;
     }
 
-    private static void GrabAxis(
+    internal static void GrabAxis(
         GizmoHarness harness, GizmoHandle handle, out Vector3 pivot, out Vector3 axis, out float length)
     {
         GizmoGeometry geometry = Prime(harness);
@@ -296,17 +307,23 @@ public sealed class ScaleGizmoDragTests
         axis = geometry.Axis(handle);
         length = geometry.AxisLength;
 
-        // Aimed at the centre of the cube handle, so the grab offset is exactly
-        // one axis length and the ratio arithmetic below is exact.
+        // Aimed at the centre of the cube handle, so the travel measured below is
+        // exactly the world distance the cursor is moved.
         harness.Hover(pivot + axis * length);
         harness.Gizmo.HoveredHandle.ShouldBe(handle);
         harness.Grab(pivot + axis * length).ShouldBe(GizmoUpdateResult.DragBegan);
     }
 
-    private static void DragAxisTo(GizmoHarness harness, GizmoHandle handle, float factor)
+    /// <summary>
+    /// Grabs <paramref name="handle"/>'s cube and drags it <paramref name="worldDelta"/>
+    /// world units further along its axis, then commits. The travel IS the
+    /// requested size change, so this reads as "make it this much bigger".
+    /// </summary>
+    internal static void DragAxisBy(
+        GizmoHarness harness, GizmoHandle handle, float worldDelta, KeyModifiers modifiers = KeyModifiers.None)
     {
         GrabAxis(harness, handle, out Vector3 pivot, out Vector3 axis, out float length);
-        harness.DragTo(pivot + axis * (length * factor));
+        harness.DragTo(pivot + axis * (length + worldDelta), modifiers);
         harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
     }
 }
