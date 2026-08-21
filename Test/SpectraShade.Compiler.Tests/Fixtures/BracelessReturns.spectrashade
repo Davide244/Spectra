@@ -1,0 +1,37 @@
+// BracelessReturns.spectrashade — brace-less `if (c) return X;` bodies in
+// both stages. A stage-entry return lowers to SEVERAL sibling statements
+// (output assignments + bare return), so the generator must emit the body as
+// a braced block — otherwise everything after the first lowered statement
+// escapes the conditional and the shader always returns after the if.
+
+struct VertexInput {
+    [Location(0)] vec3 position;
+    [Location(1)] vec2 uv;
+}
+
+struct VertexOutput {
+    [Position] vec4 position;
+    vec2 uv;
+}
+
+struct FragmentInput {
+    vec2 uv;
+}
+
+shader BracelessReturns {
+    [Vertex]
+    VertexOutput VertexMain(VertexInput input) {
+        var result = new VertexOutput();
+        result.position = vec4(input.position, 1.0);
+        result.uv = input.uv;
+        if (input.position.x < 0.5) return result;
+        result.uv = vec2(0.0, 0.0);
+        return result;
+    }
+
+    [Fragment] [Target(0)]
+    vec4 FragmentMain(FragmentInput input) {
+        if (input.uv.x > 0.5) return vec4(1.0, 0.0, 0.0, 1.0);
+        return vec4(0.0, 1.0, 0.0, 1.0);
+    }
+}

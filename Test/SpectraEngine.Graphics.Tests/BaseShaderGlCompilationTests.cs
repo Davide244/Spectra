@@ -8,7 +8,8 @@ namespace SpectraEngine.Graphics.Tests;
 /// confirm the generator's output didn't change; these confirm the driver
 /// actually accepts what we emit.
 /// </summary>
-public sealed class BaseShaderGlCompilationTests : IClassFixture<GlRendererFixture>
+[Collection(GlRendererCollection.Name)]
+public sealed class BaseShaderGlCompilationTests
 {
     private readonly GlRendererFixture _fixture;
 

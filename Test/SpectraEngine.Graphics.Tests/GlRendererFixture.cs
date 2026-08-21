@@ -9,6 +9,23 @@ using SpectraShade.Compiler;
 namespace SpectraEngine.Graphics.Tests;
 
 /// <summary>
+/// Groups every test class that needs the one real GL context.
+/// </summary>
+/// <remarks>
+/// A collection fixture, not a class fixture: GLFW registers a process-global
+/// Win32 window class, so a second <see cref="GlRendererFixture"/> fails with
+/// "class already exists". One instance shared by the whole collection is the
+/// only arrangement that works, and it also serialises the classes so two of
+/// them never drive the context at once.
+/// </remarks>
+[CollectionDefinition(Name)]
+public sealed class GlRendererCollection : ICollectionFixture<GlRendererFixture>
+{
+    /// <summary>Name to put on each participating class's <c>[Collection]</c>.</summary>
+    public const string Name = "OpenGL renderer";
+}
+
+/// <summary>
 /// Stands up an invisible OpenGL window and a fully initialized
 /// <see cref="OpenGLRenderer"/> so tests can compile shaders against a real GL
 /// context. Initialization itself exercises the SpectraShade → GLSL pipeline.

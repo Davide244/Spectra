@@ -1,0 +1,20 @@
+// BareVertexReturn.spectrashade — a [Vertex] stage returning vec4 directly
+// instead of an output struct. The analyzer only rejects *void* vertex
+// returns, so this shape reaches the generators: the returned value is the
+// clip-space position and must be routed to the stage's position output.
+
+struct VertexInput {
+    [Location(0)] vec3 position;
+}
+
+shader BareVertexReturn {
+    [Vertex]
+    vec4 VertexMain(VertexInput input) {
+        return vec4(input.position, 1.0);
+    }
+
+    [Fragment] [Target(0)]
+    vec4 FragmentMain() {
+        return vec4(1.0, 0.0, 1.0, 1.0);
+    }
+}

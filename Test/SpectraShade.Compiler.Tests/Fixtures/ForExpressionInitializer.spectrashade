@@ -1,0 +1,45 @@
+// ForExpressionInitializer.spectrashade — for loops whose initializer is an
+// assignment to a pre-declared counter (an ExpressionStatement rather than a
+// VariableDeclaration). The generator must keep the initializer; dropping it
+// runs the loop on an uninitialized counter. Both spellings must parse: the
+// natural `i = 0` (one token of lookahead keeps a lone leading identifier out
+// of the type position) and the parenthesized `(j = 0)` form that used to be
+// the only way to reach this shape from source.
+
+struct VertexInput {
+    [Location(0)] vec3 position;
+    [Location(1)] vec2 uv;
+}
+
+struct VertexOutput {
+    [Position] vec4 position;
+    vec2 uv;
+}
+
+struct FragmentInput {
+    vec2 uv;
+}
+
+shader ForExpressionInitializer {
+    [Vertex]
+    VertexOutput VertexMain(VertexInput input) {
+        var result = new VertexOutput();
+        result.position = vec4(input.position, 1.0);
+        result.uv = input.uv;
+        return result;
+    }
+
+    [Fragment] [Target(0)]
+    vec4 FragmentMain(FragmentInput input) {
+        var brightness = 0.0;
+        var i = 0;
+        var j = 0;
+        for (i = 0; i < 4; i = i + 1) {
+            brightness = brightness + 0.25;
+        }
+        for ((j = 0); j < 2; j = j + 1) {
+            brightness = brightness - 0.125;
+        }
+        return vec4(brightness, brightness, brightness, 1.0);
+    }
+}

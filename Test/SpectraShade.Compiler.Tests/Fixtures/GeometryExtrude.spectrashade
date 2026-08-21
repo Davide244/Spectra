@@ -1,0 +1,52 @@
+// GeometryExtrude.spectrashade — full vertex → geometry → fragment pipeline.
+// The geometry stage pushes each triangle's vertices outward along their
+// normals. Varyings must flow vertex → geometry → fragment: in GLSL as loose
+// name-matched varyings (v_* into the geometry stage, g_* out of it), in HLSL
+// through the VertexOutput stream struct.
+
+struct VertexInput {
+    [Location(0)] vec3 position;
+    [Location(1)] vec3 normal;
+}
+
+struct VertexOutput {
+    [Position] vec4 position;
+    vec3 normal;
+}
+
+struct FragmentInput {
+    vec3 normal;
+}
+
+shader GeometryExtrude {
+    [Binding(0)] cbuffer Camera {
+        mat4 viewProjection;
+        float extrusion;
+    }
+
+    [Vertex]
+    VertexOutput VertexMain(VertexInput input) {
+        var output = new VertexOutput();
+        output.position = vec4(input.position, 1.0) * viewProjection;
+        output.normal = input.normal;
+        return output;
+    }
+
+    [Geometry]
+    [InputPrimitive(Triangles)]
+    [OutputPrimitive(TriangleStrip)]
+    [MaxVertexCount(3)]
+    void GeometryMain(VertexOutput[] vertices) {
+        for (int i = 0; i < 3; i = i + 1) {
+            Position = vertices[i].position + vec4(vertices[i].normal, 0.0) * extrusion;
+            normal = vertices[i].normal;
+            EmitVertex();
+        }
+        EndPrimitive();
+    }
+
+    [Fragment] [Target(0)]
+    vec4 FragmentMain(FragmentInput input) {
+        return vec4(input.normal, 1.0);
+    }
+}
