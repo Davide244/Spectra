@@ -36,10 +36,11 @@ public sealed class HlslGenerator : ICodeGenerator
     private const string GeomOutLocal = "_out";
     private const string GeomStreamParam = "_stream";
 
-    // Name → SpectraShade type name. Populated with globals (cbuffer fields, samplers),
-    // function parameters, and local var declarations. Used to decide when a binary
-    // '*' needs lowering to mul() for matrix multiplication.
-    private readonly Dictionary<string, string> _env = new();
+    // Shared name → SpectraShade-type environment (see TypeInference). Populated
+    // with globals (cbuffer fields, samplers), function parameters, and local var
+    // declarations. Used for var inference and to decide when a binary '*' needs
+    // lowering to mul() for matrix multiplication.
+    private readonly TypeInference _types = new();
 
     public HlslGenerator(GraphicsBackend backend)
     {
@@ -67,6 +68,7 @@ public sealed class HlslGenerator : ICodeGenerator
 
         _structs = new List<StructDeclaration>(unit.Structs);
         _structs.AddRange(shader.Members.OfType<StructDeclaration>());
+        _types.Configure(_structs, _helpers);
 
         byte[]? vertexData = null;
         byte[]? fragmentData = null;
@@ -80,7 +82,7 @@ public sealed class HlslGenerator : ICodeGenerator
         }
         if (fragmentFunc is not null)
         {
-            fragmentData = Encoding.UTF8.GetBytes(EmitFragmentStage(fragmentFunc));
+            fragmentData = Encoding.UTF8.GetBytes(EmitFragmentStage(fragmentFunc, vertexFunc));
             stages |= ShaderStageFlags.Fragment;
         }
         if (computeFunc is not null)
@@ -122,17 +124,32 @@ public sealed class HlslGenerator : ICodeGenerator
         EmitCBuffers(sb);
         EmitSamplers(sb);
         EmitHelpers(sb);
-        EmitEntryPoint(sb, func, entrySignatureSemantic: null);
+
+        // A struct return carries SV_Position on its [Position] field; a bare
+        // (non-struct) vertex return IS the clip-space position, so the entry
+        // signature itself must declare the semantic — FXC/DXC reject a vertex
+        // entry with no position output. Mirrors the fragment stage's bare
+        // SV_Target return.
+        string? entrySem = outputStruct is null ? ": SV_Position" : null;
+        EmitEntryPoint(sb, func, entrySem);
         return sb.ToString();
     }
 
-    private string EmitFragmentStage(FunctionDeclaration func)
+    private string EmitFragmentStage(FunctionDeclaration func, FunctionDeclaration? vertexFunc)
     {
         ResetEnv();
         SetStage(isFragment: true);
         var sb = new StringBuilder();
 
-        var inputStruct = func.Parameters.Count > 0 ? FindStruct(func.Parameters[0].Type.Name) : null;
+        // D3D links VS→PS by hardware register, not by semantic name: the PS
+        // input signature must mirror the upstream (vertex/geometry) output
+        // signature element-for-element, including SV_Position. So the entry
+        // point takes the vertex stage's output struct — cross-stage fields are
+        // matched by name, per the language contract — and the source-declared
+        // fragment input struct is used only for fragment-only compiles.
+        var declaredInput = func.Parameters.Count > 0 ? FindStruct(func.Parameters[0].Type.Name) : null;
+        var upstreamOutput = vertexFunc is not null ? FindStruct(vertexFunc.ReturnType.Name) : null;
+        var inputStruct = declaredInput is not null ? (upstreamOutput ?? declaredInput) : null;
         var outputStruct = FindStruct(func.ReturnType.Name);
 
         EmitInterfaceStructs(sb, inputStruct, outputStruct, InterfaceKind.Varying, InterfaceKind.FragmentOutput);
@@ -146,7 +163,7 @@ public sealed class HlslGenerator : ICodeGenerator
         string? entrySem = null;
         if (outputStruct is null)
             entrySem = $": SV_Target{GetIntArg(func.Attributes, "Target", 0)}";
-        EmitEntryPoint(sb, func, entrySem);
+        EmitEntryPoint(sb, func, entrySem, paramTypeOverride: inputStruct?.Name);
         return sb.ToString();
     }
 
@@ -157,8 +174,13 @@ public sealed class HlslGenerator : ICodeGenerator
         var sb = new StringBuilder();
 
         // Input: first parameter must be T[] where T is the vertex output struct.
+        // Same register-linkage rule as the fragment stage: the GS input
+        // signature must mirror the vertex output signature, so prefer the
+        // vertex stage's return struct over the source-declared input type.
         var inputParam = func.Parameters.Count > 0 ? func.Parameters[0] : null;
-        var inputStruct = inputParam is not null ? FindStruct(inputParam.Type.Name) : null;
+        var declaredInput = inputParam is not null ? FindStruct(inputParam.Type.Name) : null;
+        var vertexOutput = vertexFunc is not null ? FindStruct(vertexFunc.ReturnType.Name) : null;
+        var inputStruct = declaredInput is not null ? (vertexOutput ?? declaredInput) : null;
 
         // Output: the vertex stage return struct (has [Position]). The geometry
         // stream outputs this same struct so it reaches the rasterizer/fragment.
@@ -201,8 +223,8 @@ public sealed class HlslGenerator : ICodeGenerator
         string inName = inputParam?.Name ?? "vertices";
 
         PopulateGlobalEnv();
-        _env[inName] = inTypeName;
-        _env[GeomOutLocal] = outTypeName;
+        _types.Declare(inName, inTypeName);
+        _types.Declare(GeomOutLocal, outTypeName);
 
         sb.AppendLine($"[maxvertexcount({maxVerts})]");
         sb.AppendLine($"void main({inPrim} {inTypeName} {inName}[{inArrSize}], uint PrimitiveID : SV_PrimitiveID, inout {streamType}<{outTypeName}> {GeomStreamParam})");
@@ -265,7 +287,7 @@ public sealed class HlslGenerator : ICodeGenerator
 
         PopulateGlobalEnv();
         foreach (var p in func.Parameters)
-            _env[p.Name] = p.Type.Name;
+            _types.Declare(p.Name, p.Type.Name);
 
         sb.AppendLine($"[numthreads({x}, {y}, {z})]");
         sb.Append("void main(");
@@ -275,10 +297,10 @@ public sealed class HlslGenerator : ICodeGenerator
         sb.Append("uint LocalInvocationIndex : SV_GroupIndex");
         sb.AppendLine(")");
         sb.AppendLine("{");
-        _env["GlobalInvocationID"] = "uvec3";
-        _env["LocalInvocationID"] = "uvec3";
-        _env["WorkGroupID"] = "uvec3";
-        _env["LocalInvocationIndex"] = "uint";
+        _types.Declare("GlobalInvocationID", "uvec3");
+        _types.Declare("LocalInvocationID", "uvec3");
+        _types.Declare("WorkGroupID", "uvec3");
+        _types.Declare("LocalInvocationIndex", "uint");
         foreach (var stmt in func.Body.Statements)
             EmitStatement(sb, stmt, 1);
         sb.AppendLine("}");
@@ -387,7 +409,7 @@ public sealed class HlslGenerator : ICodeGenerator
         var saved = SnapshotEnv();
         PopulateGlobalEnv();
         foreach (var p in func.Parameters)
-            _env[p.Name] = p.Type.Name;
+            _types.Declare(p.Name, p.Type.Name);
         foreach (var stmt in func.Body.Statements)
             EmitStatement(sb, stmt, 1);
         RestoreEnv(saved);
@@ -396,14 +418,18 @@ public sealed class HlslGenerator : ICodeGenerator
         sb.AppendLine();
     }
 
-    private void EmitEntryPoint(StringBuilder sb, FunctionDeclaration func, string? entrySignatureSemantic)
+    private void EmitEntryPoint(StringBuilder sb, FunctionDeclaration func, string? entrySignatureSemantic, string? paramTypeOverride = null)
     {
         PopulateGlobalEnv();
-        foreach (var p in func.Parameters)
-            _env[p.Name] = p.Type.Name;
+        for (int i = 0; i < func.Parameters.Count; i++)
+        {
+            var p = func.Parameters[i];
+            _types.Declare(p.Name, i == 0 && paramTypeOverride is not null ? paramTypeOverride : p.Type.Name);
+        }
 
         string ret = HlslType(func.ReturnType.Name);
-        string parms = string.Join(", ", func.Parameters.Select(p => $"{HlslType(p.Type.Name)} {p.Name}"));
+        string parms = string.Join(", ", func.Parameters.Select((p, i) =>
+            $"{(i == 0 && paramTypeOverride is not null ? paramTypeOverride : HlslType(p.Type.Name))} {p.Name}"));
         var sig = $"{ret} main({parms})";
         if (entrySignatureSemantic is not null)
             sig += " " + entrySignatureSemantic;
@@ -451,10 +477,14 @@ public sealed class HlslGenerator : ICodeGenerator
                 sb.Append($"{pad}for (");
                 if (f.Initializer is VariableDeclaration fv)
                 {
-                    string ftype = fv.Type.Name == "var" ? "int" : HlslType(fv.Type.Name);
-                    _env[fv.Name] = fv.Type.Name == "var" ? "int" : fv.Type.Name;
+                    // Loop counters declared `var` infer from the initializer,
+                    // defaulting to int (matches the GLSL generator).
+                    string fSpec = fv.Type.Name == "var"
+                        ? (fv.Initializer is not null ? _types.Infer(fv.Initializer) ?? "int" : "int")
+                        : fv.Type.Name;
+                    _types.Declare(fv.Name, fSpec);
                     string fi = fv.Initializer is not null ? $" = {EmitExpression(fv.Initializer)}" : "";
-                    sb.Append($"{ftype} {fv.Name}{fi}");
+                    sb.Append($"{HlslType(fSpec)} {fv.Name}{fi}");
                 }
                 else if (f.Initializer is ExpressionStatement fes)
                 {
@@ -518,7 +548,7 @@ public sealed class HlslGenerator : ICodeGenerator
         string specType;
         if (v.Type.Name == "var")
         {
-            specType = InferType(v.Initializer!) ?? "float";
+            specType = _types.Infer(v.Initializer!) ?? "float";
             varType = HlslType(specType);
         }
         else
@@ -526,7 +556,7 @@ public sealed class HlslGenerator : ICodeGenerator
             specType = v.Type.Name;
             varType = HlslType(specType);
         }
-        _env[v.Name] = specType;
+        _types.Declare(v.Name, specType);
 
         string arr = EmitArraySuffix(v.Type);
         string init = v.Initializer is not null ? $" = {EmitExpression(v.Initializer)}" : "";
@@ -577,8 +607,8 @@ public sealed class HlslGenerator : ICodeGenerator
                 // matN(singleMatrix) → (floatNxN)matrix. HLSL has no single-matrix
                 // constructor; the GLSL idiom mat3(uModel) for upper-left
                 // extraction has to lower to an explicit truncating cast.
-                if (IsMatrixType(ctor.Type.Name) && ctor.Arguments.Count == 1
-                    && IsMatrixType(InferType(ctor.Arguments[0])))
+                if (TypeInference.IsMatrixType(ctor.Type.Name) && ctor.Arguments.Count == 1
+                    && TypeInference.IsMatrixType(_types.Infer(ctor.Arguments[0])))
                 {
                     return $"(({HlslType(ctor.Type.Name)}){EmitExpression(ctor.Arguments[0])})";
                 }
@@ -612,11 +642,11 @@ public sealed class HlslGenerator : ICodeGenerator
     {
         if (bin.Operator == TokenKind.Star)
         {
-            var lt = InferType(bin.Left);
-            var rt = InferType(bin.Right);
+            var lt = _types.Infer(bin.Left);
+            var rt = _types.Infer(bin.Right);
             // HLSL '*' is componentwise on matrices/vectors — mul() is required for actual
             // linear-algebra multiply whenever a matrix is involved.
-            if (IsMatrixType(lt) || IsMatrixType(rt))
+            if (TypeInference.IsMatrixType(lt) || TypeInference.IsMatrixType(rt))
                 return $"mul({EmitExpression(bin.Left)}, {EmitExpression(bin.Right)})";
         }
         return $"({EmitExpression(bin.Left)} {MapOperator(bin.Operator)} {EmitExpression(bin.Right)})";
@@ -670,103 +700,6 @@ public sealed class HlslGenerator : ICodeGenerator
         return "/* unresolved sampler ref */";
     }
 
-    // ─── Type inference (minimal, for mul() lowering) ────────
-
-    private string? InferType(Expression expr)
-    {
-        switch (expr)
-        {
-            case IdentifierExpression id:
-                return _env.TryGetValue(id.Name, out var t) ? t : null;
-
-            case ConstructorExpression c:
-                return c.Type.Name;
-
-            case NewExpression n:
-                return n.Type.Name;
-
-            case IntLiteralExpression:
-                return "int";
-
-            case FloatLiteralExpression:
-                return "float";
-
-            case BoolLiteralExpression:
-                return "bool";
-
-            case MemberAccessExpression ma:
-                return InferMember(ma);
-
-            case BinaryExpression b:
-            {
-                var lt = InferType(b.Left);
-                var rt = InferType(b.Right);
-                if (IsMatrixType(lt) && IsVectorType(rt)) return rt;
-                if (IsVectorType(lt) && IsMatrixType(rt)) return lt;
-                return lt ?? rt;
-            }
-
-            case CallExpression call:
-                return InferCall(call);
-
-            case IndexExpression ix:
-                return InferType(ix.Object);
-
-            case UnaryExpression un:
-                return InferType(un.Operand);
-
-            case AssignmentExpression a:
-                return InferType(a.Target);
-        }
-        return null;
-    }
-
-    private string? InferMember(MemberAccessExpression ma)
-    {
-        var objType = InferType(ma.Object);
-        if (objType is null) return null;
-
-        if (IsVectorType(objType))
-        {
-            int dim = ma.Member.Length;
-            string scalar = VectorScalar(objType);
-            return dim switch
-            {
-                1 => scalar,
-                2 => ScalarToVec(scalar, 2),
-                3 => ScalarToVec(scalar, 3),
-                4 => ScalarToVec(scalar, 4),
-                _ => null,
-            };
-        }
-
-        var s = FindStruct(objType);
-        if (s is not null)
-        {
-            var field = s.Fields.FirstOrDefault(f => f.Name == ma.Member);
-            return field?.Type.Name;
-        }
-        return null;
-    }
-
-    private string? InferCall(CallExpression call)
-    {
-        if (call.Target is MemberAccessExpression ma
-            && ma.Object is IdentifierExpression o && o.Name == "Math")
-        {
-            // Math.* mostly return the same type as the first argument.
-            return call.Arguments.Count > 0 ? InferType(call.Arguments[0]) : null;
-        }
-        if (call.Target is MemberAccessExpression sa && sa.Member == "Sample")
-            return "vec4";
-        if (call.Target is IdentifierExpression fid)
-        {
-            var fn = _helpers.FirstOrDefault(f => f.Name == fid.Name);
-            return fn?.ReturnType.Name;
-        }
-        return null;
-    }
-
     // ─── Helpers ─────────────────────────────────────────────
 
     private enum InterfaceKind { None, VertexInput, Varying, FragmentOutput }
@@ -796,22 +729,10 @@ public sealed class HlslGenerator : ICodeGenerator
             : "[]";
     }
 
-    private void PopulateGlobalEnv()
-    {
-        foreach (var cb in _cbuffers)
-            foreach (var f in cb.Fields)
-                _env[f.Name] = f.Type.Name;
-        foreach (var s in _samplers)
-            _env[s.Name] = s.Type.Name;
-    }
-
-    private void ResetEnv() => _env.Clear();
-    private Dictionary<string, string> SnapshotEnv() => new(_env);
-    private void RestoreEnv(Dictionary<string, string> snapshot)
-    {
-        _env.Clear();
-        foreach (var kv in snapshot) _env[kv.Key] = kv.Value;
-    }
+    private void PopulateGlobalEnv() => _types.DeclareGlobals(_cbuffers, _samplers);
+    private void ResetEnv() => _types.Reset();
+    private Dictionary<string, string> SnapshotEnv() => _types.Snapshot();
+    private void RestoreEnv(Dictionary<string, string> snapshot) => _types.Restore(snapshot);
 
     private void SetStage(bool isVertex = false, bool isFragment = false, bool isGeometry = false, bool isCompute = false)
     {
@@ -830,32 +751,6 @@ public sealed class HlslGenerator : ICodeGenerator
     }
 
     // ─── Type / builtin tables ───────────────────────────────
-
-    private static bool IsMatrixType(string? t) => t is "mat2" or "mat3" or "mat4"
-        or "float2x2" or "float3x3" or "float4x4";
-
-    private static bool IsVectorType(string? t) => t is
-        "vec2" or "vec3" or "vec4"
-        or "ivec2" or "ivec3" or "ivec4"
-        or "uvec2" or "uvec3" or "uvec4"
-        or "bvec2" or "bvec3" or "bvec4";
-
-    private static string VectorScalar(string t) => t[0] switch
-    {
-        'i' => "int",
-        'u' => "uint",
-        'b' => "bool",
-        _ => "float",
-    };
-
-    private static string ScalarToVec(string scalar, int dim)
-        => scalar switch
-        {
-            "int" => $"ivec{dim}",
-            "uint" => $"uvec{dim}",
-            "bool" => $"bvec{dim}",
-            _ => $"vec{dim}",
-        };
 
     private static string HlslType(string name) => name switch
     {
@@ -917,6 +812,7 @@ public sealed class HlslGenerator : ICodeGenerator
         TokenKind.MinusAssign => "-=",
         TokenKind.StarAssign => "*=",
         TokenKind.SlashAssign => "/=",
+        TokenKind.PercentAssign => "%=",
         _ => "?",
     };
 

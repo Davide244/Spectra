@@ -89,8 +89,11 @@ internal sealed class CliOptions
 
         if (targets.Count == 0)
         {
+            // Default to the backends with working code generators. Vulkan is
+            // deliberately excluded until SPIR-V emission exists — including it
+            // would make every bare `ssc <file>` invocation fail; request it
+            // explicitly via -t vulkan or -t all.
             targets.Add(GraphicsBackend.OpenGL);
-            targets.Add(GraphicsBackend.Vulkan);
             targets.Add(GraphicsBackend.D3D11);
             targets.Add(GraphicsBackend.D3D12);
         }
@@ -175,7 +178,7 @@ internal sealed class CliOptions
         WriteOption(w, s, "-t, --target", "<backend>",
             "Target backend(s). Repeatable or comma-separated.",
             $"Values: {s.Value}opengl, vulkan, d3d11, d3d12, all{s.Reset}",
-            $"Default: {s.Value}all{s.Reset}");
+            $"Default: {s.Value}opengl, d3d11, d3d12{s.Reset} {s.Dim}(vulkan pending SPIR-V codegen){s.Reset}");
         WriteOption(w, s, "    --emit-source", "<dir>",
             "Also emit generated source text per backend",
             "into <dir> (for debugging codegen).");

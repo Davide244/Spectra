@@ -197,7 +197,7 @@ public sealed class Lexer
             case '.': return MakeToken(TokenKind.Dot, ".", start, _pos);
             case ':': return MakeToken(TokenKind.Colon, ":", start, _pos);
             case '~': return MakeToken(TokenKind.BitwiseNot, "~", start, _pos);
-            case '%': return MatchNext('=') ? MakeToken(TokenKind.SlashAssign, "%=", start, _pos) : MakeToken(TokenKind.Percent, "%", start, _pos);
+            case '%': return MatchNext('=') ? MakeToken(TokenKind.PercentAssign, "%=", start, _pos) : MakeToken(TokenKind.Percent, "%", start, _pos);
 
             case '+':
                 if (MatchNext('=')) return MakeToken(TokenKind.PlusAssign, "+=", start, _pos);

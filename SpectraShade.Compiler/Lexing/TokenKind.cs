@@ -99,6 +99,7 @@ public enum TokenKind
     MinusAssign,
     StarAssign,
     SlashAssign,
+    PercentAssign,
 
     // Punctuation
     LeftParen,
