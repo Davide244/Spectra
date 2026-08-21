@@ -9,8 +9,36 @@
     <EmbeddedResource Include="Graphics\BaseShaders\**\*.spectrashade" />
   </ItemGroup>
 
+  <!--
+    Repo content (textures, and later materials/models) ships as real files, not
+    embedded resources: the asset pipeline loads them from disk and hot-reloads
+    them on save. Copying them under <output>\Assets mirrors the repo's Assets\
+    layout so AssetManager's content root resolves identically in a deployed
+    build, where the source tree is gone. TargetPath (not just Link) is what
+    makes the copy flow to projects that reference this one.
+  -->
+  <ItemGroup>
+    <Content Include="..\Assets\Textures\**\*.*"
+             Link="Assets\Textures\%(RecursiveDir)%(Filename)%(Extension)"
+             TargetPath="Assets\Textures\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\Assets\Materials\**\*.spectramat"
+             Link="Assets\Materials\%(RecursiveDir)%(Filename)%(Extension)"
+             TargetPath="Assets\Materials\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+    <!--
+      Models ship whole: a .obj needs its .mtl beside it and a .gltf may need a
+      .bin, so this copies the folder rather than a single extension.
+    -->
+    <Content Include="..\Assets\Models\**\*.*"
+             Link="Assets\Models\%(RecursiveDir)%(Filename)%(Extension)"
+             TargetPath="Assets\Models\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="StbImageSharp" />
     <PackageReference Include="Silk.NET" />
     <PackageReference Include="Silk.NET.Assimp" />
     <PackageReference Include="Silk.NET.Direct3D11" />

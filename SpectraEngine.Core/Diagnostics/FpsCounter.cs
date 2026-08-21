@@ -31,7 +31,7 @@ public sealed class FpsCounter
         _elapsed += deltaTime;
         _frames++;
 
-        if (_elapsed < _refreshInterval || _frames == 0)
+        if (_elapsed < _refreshInterval)
             return false;
 
         Fps = _frames / _elapsed;

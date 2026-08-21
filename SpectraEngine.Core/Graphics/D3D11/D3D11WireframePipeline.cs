@@ -1,13 +1,14 @@
-using Silk.NET.Core.Native;
+﻿using Silk.NET.Core.Native;
 using Silk.NET.Direct3D11;
 using Silk.NET.Maths;
 using SpectraEngine.Core.Scene;
+using System.Collections.Generic;
 using System.Numerics;
 
 namespace SpectraEngine.Core.Graphics.D3D11;
 
 /// <summary>
-/// Wireframe variant of <see cref="D3D11ForwardPipeline"/>: same draw walk,
+/// Wireframe variant of <see cref="D3D11ForwardPipeline"/>: same draw list,
 /// but with a wireframe rasterizer state (no fill, no cull) bound for the
 /// scene pass. Restored to solid before debug flush so lines rasterize normally.
 /// </summary>
@@ -56,7 +57,9 @@ public sealed unsafe class D3D11WireframePipeline : ID3D11RenderPipeline
         var rtvPtr = (ID3D11RenderTargetView*)context.BackBufferRtv.Handle;
         var dsvPtr = (ID3D11DepthStencilView*)context.DepthView.Handle;
 
-        Vector2D<int> size = context.Window.FramebufferSize;
+        // Latched on the main thread by the engine — GLFW forbids querying the
+        // window's framebuffer size from this (render) thread.
+        Vector2D<int> size = context.Renderer.FramebufferSize;
         var viewport = new Viewport
         {
             TopLeftX = 0, TopLeftY = 0,
@@ -82,32 +85,53 @@ public sealed unsafe class D3D11WireframePipeline : ID3D11RenderPipeline
             camera.AspectRatio = (float)size.X / size.Y;
 
         ctx->RSSetState((ID3D11RasterizerState*)_wireframeState.Handle);
-        DrawNode(context.Scene.Root, camera);
+        DrawView(context.View, camera);
         ctx->RSSetState((ID3D11RasterizerState*)_solidState.Handle);
 
         _renderer!.FlushDebugDraw(camera);
     }
 
-    private void DrawNode(SceneNode node, Camera camera)
+    // Draws the engine-built view: the flat, frustum-culled item list replaces
+    // the recursive scene walk that used to live here (the walk now happens
+    // once per frame in Scene.BuildRenderView, shared by every backend).
+    private void DrawView(RenderView view, Camera camera)
     {
-        if (node.MeshRenderer is { } meshRenderer)
+        IReadOnlyList<RenderItem> items = view.Items;
+        for (int i = 0; i < items.Count; i++)
         {
-            var material = meshRenderer.Material;
-            var shader = material.Shader;
-
-            shader.SetUniform("uModel", node.WorldMatrix);
-            shader.SetUniform("uView", camera.View);
-            shader.SetUniform("uProjection", camera.Projection * D3D11Renderer.GlToD3dClipZ);
-            shader.SetUniform("uLightDir", LightDirection);
-            material.Apply();
-            shader.Use();
-
-            meshRenderer.Mesh.Draw();
+            RenderItem item = items[i];
+            if (item.Material is { } material)
+                DrawRenderable(item.Mesh, material, item.World, camera);
         }
 
-        var children = node.Children;
-        for (int i = 0; i < children.Count; i++)
-            DrawNode(children[i], camera);
+        // The derived static world's chunks arrive pre-culled like the items,
+        // one item per (chunk, material) with the material already resolved by
+        // the swap; chunk meshes are already in world space, so each draws with
+        // the identity model matrix its item carries.
+        IReadOnlyList<RenderItem> worldItems = view.WorldItems;
+        for (int i = 0; i < worldItems.Count; i++)
+        {
+            RenderItem item = worldItems[i];
+            if (item.Material is { } material)
+                DrawRenderable(item.Mesh, material, item.World, camera);
+        }
+    }
+
+    private void DrawRenderable(Mesh mesh, Material material, Matrix4x4 model, Camera camera)
+    {
+        // A material with no program (the fallback built before a renderer had
+        // one, or a shader that failed to resolve) is skipped rather than
+        // dereferenced: one bad material must not take the frame down.
+        if (material.Shader is not { } shader) return;
+
+        shader.SetUniform("uModel", model);
+        shader.SetUniform("uView", camera.View);
+        shader.SetUniform("uProjection", camera.Projection * D3D11Renderer.GlToD3dClipZ);
+        shader.SetUniform("uLightDir", LightDirection);
+        material.Apply();
+        shader.Use();
+
+        mesh.Draw();
     }
 
     public void Dispose()

@@ -215,5 +215,10 @@ internal sealed unsafe class D3D11Mesh : Mesh
         _inputLayout.Dispose();
         _indexBuffer.Dispose();
         _vertexBuffer.Dispose();
+        // GetImmediateContext in Create AddRef'd the context; without this
+        // release every mesh pins the device context (and transitively the
+        // device) for the process lifetime. Mirrors D3D11Texture's balanced
+        // Release in its mip-generation path.
+        _context.Dispose();
     }
 }

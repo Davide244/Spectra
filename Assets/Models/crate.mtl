@@ -1,0 +1,14 @@
+# Materials for crate.obj.
+#
+# The texture paths are relative to THIS file, which is how every real exporter
+# writes them; the importer resolves them against the model's directory and then
+# re-expresses them relative to the content root, so they come out as
+# "Textures/checker_orange.png" and feed straight into the texture cache.
+
+newmtl crate_body
+Kd 1.000000 1.000000 1.000000
+map_Kd ../Textures/checker_orange.png
+
+newmtl crate_trim
+Kd 0.750000 0.800000 0.850000
+map_Kd ../Textures/dev_grid.png

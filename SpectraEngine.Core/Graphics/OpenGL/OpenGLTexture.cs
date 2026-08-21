@@ -32,9 +32,12 @@ internal sealed class OpenGLTexture : Texture
 
         (InternalFormat internalFormat, PixelFormat pixelFormat) = GlFormats(format);
 
-        // Single-channel (R8) needs alignment of 1; the default of 4 reads past
-        // the row for non-multiple-of-4 widths and corrupts the upload.
-        if (pixelFormat == PixelFormat.Red)
+        // Decoded image rows are tightly packed, but GL assumes 4-byte row
+        // alignment by default and would then read past each row (skewing the
+        // image) whenever the stride is not a multiple of 4 — which R8 hits at
+        // any odd width and RGB8 hits at any width not divisible by 4. RGBA8 is
+        // always 4-aligned, so it keeps the faster default.
+        if (pixelFormat != PixelFormat.Rgba)
             gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
 
         fixed (byte* p = pixels)

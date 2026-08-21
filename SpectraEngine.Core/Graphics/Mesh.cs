@@ -27,6 +27,14 @@ public abstract class Mesh : IDisposable
     /// <summary>AABB enclosing <see cref="Positions"/> in the mesh's local frame.</summary>
     public Aabb LocalBounds { get; protected set; }
 
+    /// <summary>
+    /// Removes this mesh from the creating renderer's tracking list; the
+    /// renderer hands it over at creation time and <see cref="Renderer.DestroyMesh"/>
+    /// invokes it exactly once. Unsynchronized on purpose: resource creation
+    /// and destruction both happen on the render thread.
+    /// </summary>
+    internal Action? Unregister { get; set; }
+
     public abstract void Draw();
 
     public abstract void Dispose();

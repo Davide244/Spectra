@@ -1,15 +1,16 @@
-using Silk.NET.Core.Native;
+﻿using Silk.NET.Core.Native;
 using Silk.NET.Direct3D11;
 using Silk.NET.Maths;
 using SpectraEngine.Core.Scene;
+using System.Collections.Generic;
 using System.Numerics;
 
 namespace SpectraEngine.Core.Graphics.D3D11;
 
 /// <summary>
-/// Default D3D11 rendering strategy: clear, walk the scene tree drawing each
-/// mesh with its material's shader, then flush the debug-draw overlay.
-/// Mirrors <c>OpenGL.ForwardPipeline</c> step-for-step.
+/// Default D3D11 rendering strategy: clear, draw the frame's pre-culled
+/// <see cref="RenderView"/> items with their materials' shaders, then flush
+/// the debug-draw overlay. Mirrors <c>OpenGL.ForwardPipeline</c> step-for-step.
 /// </summary>
 public sealed unsafe class D3D11ForwardPipeline : ID3D11RenderPipeline
 {
@@ -27,7 +28,9 @@ public sealed unsafe class D3D11ForwardPipeline : ID3D11RenderPipeline
         var rtvPtr = (ID3D11RenderTargetView*)context.BackBufferRtv.Handle;
         var dsvPtr = (ID3D11DepthStencilView*)context.DepthView.Handle;
 
-        Vector2D<int> size = context.Window.FramebufferSize;
+        // Latched on the main thread by the engine — GLFW forbids querying the
+        // window's framebuffer size from this (render) thread.
+        Vector2D<int> size = context.Renderer.FramebufferSize;
         var viewport = new Viewport
         {
             TopLeftX = 0, TopLeftY = 0,
@@ -53,33 +56,54 @@ public sealed unsafe class D3D11ForwardPipeline : ID3D11RenderPipeline
         if (size.Y > 0)
             camera.AspectRatio = (float)size.X / size.Y;
 
-        DrawNode(context.Scene.Root, camera);
+        DrawView(context.View, camera);
 
         _renderer!.FlushDebugDraw(camera);
     }
 
-    private void DrawNode(SceneNode node, Camera camera)
+    // Draws the engine-built view: the flat, frustum-culled item list replaces
+    // the recursive scene walk that used to live here (the walk now happens
+    // once per frame in Scene.BuildRenderView, shared by every backend).
+    private void DrawView(RenderView view, Camera camera)
     {
-        if (node.MeshRenderer is { } meshRenderer)
+        IReadOnlyList<RenderItem> items = view.Items;
+        for (int i = 0; i < items.Count; i++)
         {
-            var material = meshRenderer.Material;
-            var shader = material.Shader;
-
-            // Same shader uniforms as the OpenGL forward path, only the
-            // projection needs the GL→D3D Z remap before being uploaded.
-            shader.SetUniform("uModel", node.WorldMatrix);
-            shader.SetUniform("uView", camera.View);
-            shader.SetUniform("uProjection", camera.Projection * D3D11Renderer.GlToD3dClipZ);
-            shader.SetUniform("uLightDir", LightDirection);
-            material.Apply();
-            shader.Use();
-
-            meshRenderer.Mesh.Draw();
+            RenderItem item = items[i];
+            if (item.Material is { } material)
+                DrawRenderable(item.Mesh, material, item.World, camera);
         }
 
-        var children = node.Children;
-        for (int i = 0; i < children.Count; i++)
-            DrawNode(children[i], camera);
+        // The derived static world's chunks arrive pre-culled like the items,
+        // one item per (chunk, material) with the material already resolved by
+        // the swap; chunk meshes are already in world space, so each draws with
+        // the identity model matrix its item carries.
+        IReadOnlyList<RenderItem> worldItems = view.WorldItems;
+        for (int i = 0; i < worldItems.Count; i++)
+        {
+            RenderItem item = worldItems[i];
+            if (item.Material is { } material)
+                DrawRenderable(item.Mesh, material, item.World, camera);
+        }
+    }
+
+    private void DrawRenderable(Mesh mesh, Material material, Matrix4x4 model, Camera camera)
+    {
+        // A material with no program (the fallback built before a renderer had
+        // one, or a shader that failed to resolve) is skipped rather than
+        // dereferenced: one bad material must not take the frame down.
+        if (material.Shader is not { } shader) return;
+
+        // Same shader uniforms as the OpenGL forward path, only the
+        // projection needs the GL→D3D Z remap before being uploaded.
+        shader.SetUniform("uModel", model);
+        shader.SetUniform("uView", camera.View);
+        shader.SetUniform("uProjection", camera.Projection * D3D11Renderer.GlToD3dClipZ);
+        shader.SetUniform("uLightDir", LightDirection);
+        material.Apply();
+        shader.Use();
+
+        mesh.Draw();
     }
 
     public void Dispose() { }

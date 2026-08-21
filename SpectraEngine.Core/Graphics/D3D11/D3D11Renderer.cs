@@ -38,21 +38,32 @@ public sealed unsafe class D3D11Renderer : Renderer
     private ComPtr<ID3D11DepthStencilView> _depthView;
     private ComPtr<ID3D11RasterizerState> _solidRasterizer;
     private ComPtr<ID3D11DepthStencilState> _defaultDepth;
+    private ComPtr<ID3D11DepthStencilState> _overlayDepth;
 
+    // Every resource built by the Create* factories is tracked here so
+    // Shutdown can free stragglers. Meshes/textures leave early through
+    // Renderer.DestroyMesh/DestroyTexture via the Unregister callback handed
+    // out at creation. Unsynchronized: creation and destruction both happen
+    // on the render thread.
     private readonly List<Mesh> _meshes = [];
     private readonly List<Texture> _textures = [];
     private readonly List<ShaderProgram> _shaders = [];
     private readonly List<ID3D11RenderPipeline> _pipelines = [];
     private int _pipelineIndex;
 
-    // Resize is reported on the window thread but the immediate context belongs
-    // to the render thread, so we cache the latest pending size and drain it
-    // from Render() before the pipeline runs.
-    private readonly object _resizeLock = new();
-    private Vector2D<int>? _pendingResize;
+    // Size the swap chain currently has. Render() compares it against the
+    // engine-fed base-class framebuffer latch each frame and reruns the resize
+    // path when the window has changed; the immediate context belongs to this
+    // (render) thread, so the resize must happen here, never in a window event.
+    private Vector2D<int> _swapChainSize;
 
     private D3D11LineBatch? _lineBatch;
     private ShaderProgram? _debugShader;
+
+    // Debug-layer message queue, present only when the device was created with
+    // the Debug flag. Drained into the logger once per frame (and after init)
+    // so validation errors are visible without a native debugger attached.
+    private ComPtr<ID3D11InfoQueue> _infoQueue;
 
     // GL clip-space Z is [-1, 1]; D3D clip-space Z is [0, 1]. SpectraShade
     // shaders are authored once and used with both; we post-mul the projection
@@ -79,6 +90,48 @@ public sealed unsafe class D3D11Renderer : Renderer
     {
         if (_swapChain.Handle is not null)
             SilkMarshal.ThrowHResult(((IDXGISwapChain1*)_swapChain.Handle)->Present(0, 0));
+        DrainDebugMessages();
+    }
+
+    // Pops every message the debug layer accumulated and logs it. No-ops on
+    // release-mode devices (no info queue). Runs on the render thread.
+    private void DrainDebugMessages()
+    {
+        if (_infoQueue.Handle is null) return;
+
+        var queue = (ID3D11InfoQueue*)_infoQueue.Handle;
+        ulong count = queue->GetNumStoredMessages();
+        for (ulong i = 0; i < count; i++)
+        {
+            nuint byteLength = 0;
+            if (queue->GetMessageA(i, null, &byteLength) < 0 || byteLength == 0)
+                continue;
+
+            byte[] storage = new byte[(int)byteLength];
+            fixed (byte* p = storage)
+            {
+                var msg = (Message*)p;
+                if (queue->GetMessageA(i, msg, &byteLength) < 0)
+                    continue;
+
+                string text = Encoding.ASCII.GetString(msg->PDescription, (int)msg->DescriptionByteLength).TrimEnd('\0');
+                switch (msg->Severity)
+                {
+                    case MessageSeverity.Corruption:
+                    case MessageSeverity.Error:
+                        _logger.LogError("D3D11 debug layer: {Message}", text);
+                        break;
+                    case MessageSeverity.Warning:
+                        _logger.LogWarning("D3D11 debug layer: {Message}", text);
+                        break;
+                    default:
+                        _logger.LogDebug("D3D11 debug layer: {Message}", text);
+                        break;
+                }
+            }
+        }
+        if (count > 0)
+            queue->ClearStoredMessages();
     }
 
     internal ComPtr<ID3D11Device> Device => _device;
@@ -92,7 +145,13 @@ public sealed unsafe class D3D11Renderer : Renderer
     public override void Initialize(IWindow window)
     {
         _window = window;
-        Vector2D<int> size = window.FramebufferSize;
+
+        // Read the engine-fed latch, not window.FramebufferSize: this runs on
+        // the render thread while the main thread is already pumping
+        // glfwPollEvents, and GLFW guarantees no thread safety for that pair.
+        // The engine seeded the latch before this thread started.
+        Vector2D<int> size = FramebufferSize;
+        _swapChainSize = size;
 
         CreateDeviceAndSwapChain(window, size.X, size.Y);
         CreateBackBufferViews((uint)size.X, (uint)size.Y);
@@ -111,8 +170,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         RegisterPipeline(new D3D11ForwardPipeline());
         RegisterPipeline(new D3D11WireframePipeline());
 
-        window.FramebufferResize += OnFramebufferResize;
-
+        DrainDebugMessages();
         _logger.LogInformation("Renderer initialized (D3D11, pipeline={Pipeline})", CurrentPipelineName);
     }
 
@@ -131,7 +189,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         return CurrentPipelineName;
     }
 
-    public override void Render(Scene.Scene? scene, double deltaTime)
+    public override void Render(Scene.Scene? scene, RenderView view, double deltaTime)
     {
         DrainPendingResize();
         HotReloader.PumpPendingReloads();
@@ -145,8 +203,8 @@ public sealed unsafe class D3D11Renderer : Renderer
             Context = _context,
             BackBufferRtv = _backBufferRtv,
             DepthView = _depthView,
-            Window = _window,
             Scene = scene,
+            View = view,
             DeltaTime = deltaTime,
         };
         _pipelines[_pipelineIndex].Execute(ctx);
@@ -164,7 +222,12 @@ public sealed unsafe class D3D11Renderer : Renderer
         debug.SetUniform("uView", camera.View);
         debug.SetUniform("uProjection", camera.Projection * GlToD3dClipZ);
         debug.Use();
+        // Always-on-top: swap to the depth-off overlay state for the lines and
+        // restore the default so the next frame's main pass is depth-correct.
+        var ctx = (ID3D11DeviceContext*)_context.Handle;
+        ctx->OMSetDepthStencilState((ID3D11DepthStencilState*)_overlayDepth.Handle, 0);
         _lineBatch.Draw(DebugDraw.Vertices, (uint)DebugDraw.VertexCount);
+        ctx->OMSetDepthStencilState((ID3D11DepthStencilState*)_defaultDepth.Handle, 0);
     }
 
     public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
@@ -172,6 +235,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         var litShader = (D3D11ShaderProgram?)DefaultShader
             ?? throw new InvalidOperationException("Default shader must be created before meshes.");
         var mesh = D3D11Mesh.Create(_device, vertices, indices, attributes, litShader.VertexBytecode);
+        mesh.Unregister = () => _meshes.Remove(mesh);
         _meshes.Add(mesh);
         return mesh;
     }
@@ -181,6 +245,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         TextureFormat format, TextureFilter filter, TextureWrap wrap)
     {
         var texture = D3D11Texture.Create(_device, pixels, width, height, format, filter, wrap);
+        texture.Unregister = () => _textures.Remove(texture);
         _textures.Add(texture);
         return texture;
     }
@@ -209,9 +274,6 @@ public sealed unsafe class D3D11Renderer : Renderer
 
     public override void Shutdown()
     {
-        if (_window is not null)
-            _window.FramebufferResize -= OnFramebufferResize;
-
         foreach (var pipeline in _pipelines)
             pipeline.Dispose();
         _pipelines.Clear();
@@ -231,7 +293,9 @@ public sealed unsafe class D3D11Renderer : Renderer
         ReleaseBackBufferViews();
         _solidRasterizer.Dispose();
         _defaultDepth.Dispose();
+        _overlayDepth.Dispose();
         _swapChain.Dispose();
+        _infoQueue.Dispose();
         _context.Dispose();
         _device.Dispose();
 
@@ -289,6 +353,11 @@ public sealed unsafe class D3D11Renderer : Renderer
             else
             {
                 _logger.LogInformation("D3D11 debug layer active.");
+
+                ID3D11InfoQueue* infoQueue = null;
+                Guid infoQueueGuid = ID3D11InfoQueue.Guid;
+                if (((ID3D11Device*)_device.Handle)->QueryInterface(&infoQueueGuid, (void**)&infoQueue) >= 0)
+                    _infoQueue = new ComPtr<ID3D11InfoQueue>(infoQueue);
             }
         }
 
@@ -416,24 +485,29 @@ public sealed unsafe class D3D11Renderer : Renderer
         SilkMarshal.ThrowHResult(((ID3D11Device*)_device.Handle)->CreateDepthStencilState(&depthDesc, &depth));
         _defaultDepth = new ComPtr<ID3D11DepthStencilState>(depth);
         ((ID3D11DeviceContext*)_context.Handle)->OMSetDepthStencilState(depth, 0);
-    }
 
-    private void OnFramebufferResize(Vector2D<int> newSize)
-    {
-        // Window-thread callback — do NOT touch the immediate context here.
-        // Latch the size; the render thread drains it from DrainPendingResize.
-        lock (_resizeLock) _pendingResize = newSize;
+        // Debug-overlay state: depth test and writes off, so debug lines draw
+        // always-on-top exactly like the OpenGL backend's flush (which brackets
+        // its lines with glDisable(GL_DEPTH_TEST)).
+        var overlayDesc = new DepthStencilDesc
+        {
+            DepthEnable = 0,
+            DepthWriteMask = DepthWriteMask.Zero,
+            DepthFunc = ComparisonFunc.Always,
+            StencilEnable = 0,
+        };
+        ID3D11DepthStencilState* overlay = null;
+        SilkMarshal.ThrowHResult(((ID3D11Device*)_device.Handle)->CreateDepthStencilState(&overlayDesc, &overlay));
+        _overlayDepth = new ComPtr<ID3D11DepthStencilState>(overlay);
     }
 
     private void DrainPendingResize()
     {
-        Vector2D<int>? pending;
-        lock (_resizeLock)
-        {
-            pending = _pendingResize;
-            _pendingResize = null;
-        }
-        if (pending is not { } newSize) return;
+        // The engine feeds the base-class latch from the main thread; when it
+        // disagrees with what the swap chain was built for, resize here on the
+        // render thread, which owns the immediate context.
+        Vector2D<int> newSize = FramebufferSize;
+        if (newSize == _swapChainSize) return;
         if (newSize.X <= 0 || newSize.Y <= 0 || _swapChain.Handle is null) return;
 
         // ResizeBuffers fails with DXGI_ERROR_INVALID_CALL if anything still
@@ -453,6 +527,7 @@ public sealed unsafe class D3D11Renderer : Renderer
             Silk.NET.DXGI.Format.FormatUnknown,
             0u));
         CreateBackBufferViews((uint)newSize.X, (uint)newSize.Y);
+        _swapChainSize = newSize;
 
         // ClearState reset our default rasterizer/depth state; restore them so
         // the next frame starts from the same baseline as a fresh Initialize().

@@ -1,13 +1,15 @@
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D11;
-using Silk.NET.Windowing;
 
 namespace SpectraEngine.Core.Graphics.D3D11;
 
 /// <summary>
 /// Per-frame inputs handed to an <see cref="ID3D11RenderPipeline"/>. The
 /// renderer owns the device and context; the pipeline borrows them for the
-/// duration of <see cref="ID3D11RenderPipeline.Execute"/>.
+/// duration of <see cref="ID3D11RenderPipeline.Execute"/>. Deliberately
+/// excludes the window: GLFW window queries are main-thread-only, so pipelines
+/// read sizes from the renderer's <see cref="Graphics.Renderer.FramebufferSize"/>
+/// latch instead.
 /// </summary>
 public readonly unsafe struct D3D11RenderContext
 {
@@ -16,7 +18,13 @@ public readonly unsafe struct D3D11RenderContext
     public required ComPtr<ID3D11DeviceContext> Context { get; init; }
     public required ComPtr<ID3D11RenderTargetView> BackBufferRtv { get; init; }
     public required ComPtr<ID3D11DepthStencilView> DepthView { get; init; }
-    public required IWindow Window { get; init; }
     public required Scene.Scene? Scene { get; init; }
+
+    /// <summary>
+    /// The engine-built, frustum-culled draw list for this frame; pipelines
+    /// iterate it instead of walking the scene graph themselves.
+    /// </summary>
+    public required RenderView View { get; init; }
+
     public required double DeltaTime { get; init; }
 }

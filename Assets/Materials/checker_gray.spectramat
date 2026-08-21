@@ -1,0 +1,8 @@
+// checker_gray.spectramat — neutral checker for scale and UV checks.
+// Nearest filtering on purpose: a checker that blurs is useless for spotting
+// texel density problems.
+
+shader = lit
+
+texture uDiffuse = Textures/checker_gray.png, nearest, repeat
+color   uBaseColor = 0.30 0.60 1.00

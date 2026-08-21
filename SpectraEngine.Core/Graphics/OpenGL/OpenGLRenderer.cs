@@ -12,6 +12,12 @@ public class OpenGLRenderer : Renderer
 {
     private GL? _gl;
     private IWindow? _window;
+
+    // Every resource built by the Create* factories is tracked here so
+    // Shutdown can free stragglers. Meshes/textures leave early through
+    // Renderer.DestroyMesh/DestroyTexture via the Unregister callback handed
+    // out at creation. Unsynchronized: creation and destruction both happen
+    // on the render thread.
     private readonly List<Mesh> _meshes = [];
     private readonly List<ShaderProgram> _shaders = [];
     private readonly List<Texture> _textures = [];
@@ -34,6 +40,11 @@ public class OpenGLRenderer : Renderer
     {
         _window = window;
         _gl = window.CreateOpenGL();
+
+        // No framebuffer-size handling here: the engine seeds the base-class
+        // latch on the main thread before this thread starts and feeds it from
+        // the window's resize event. Querying window.FramebufferSize on this
+        // (render) thread would race the main thread's glfwPollEvents.
 
         _gl.Enable(EnableCap.DepthTest);
         _gl.DepthFunc(DepthFunction.Less);
@@ -74,7 +85,7 @@ public class OpenGLRenderer : Renderer
         return CurrentPipelineName;
     }
 
-    public override void Render(Scene.Scene? scene, double deltaTime)
+    public override void Render(Scene.Scene? scene, RenderView view, double deltaTime)
     {
         // Apply any shader source-file changes that came in since the last
         // frame. We're on the render thread here, so GL calls are safe.
@@ -87,8 +98,8 @@ public class OpenGLRenderer : Renderer
         {
             Renderer = this,
             Gl = _gl,
-            Window = _window,
             Scene = scene,
+            View = view,
             DeltaTime = deltaTime,
         };
         _pipelines[_pipelineIndex].Execute(context);
@@ -148,6 +159,7 @@ public class OpenGLRenderer : Renderer
     public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
     {
         var mesh = OpenGLMesh.Create(_gl!, vertices, indices, attributes);
+        mesh.Unregister = () => _meshes.Remove(mesh);
         _meshes.Add(mesh);
         return mesh;
     }
@@ -157,6 +169,7 @@ public class OpenGLRenderer : Renderer
         TextureFormat format, TextureFilter filter, TextureWrap wrap)
     {
         var texture = OpenGLTexture.Create(_gl!, pixels, width, height, format, filter, wrap);
+        texture.Unregister = () => _textures.Remove(texture);
         _textures.Add(texture);
         return texture;
     }
