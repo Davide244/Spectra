@@ -10,6 +10,7 @@ using SpectraEngine.Core.Graphics.OpenGL;
 using SpectraEngine.Core.Graphics.Shaders;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
+using SpectraEngine.Executable.Editing;
 using SpectraShade.Compiler;
 
 // Configure Serilog
@@ -47,6 +48,17 @@ try
     var assetManager = new AssetManager(loggerFactory.CreateLogger<AssetManager>());
     var audioManager = new AudioManager(loggerFactory.CreateLogger<AudioManager>());
     var inputManager = new InputManager(loggerFactory.CreateLogger<InputManager>());
+
+    // This host is the demo's editor, so it installs the editing layer. The
+    // engine drives it through Core's ISceneEditor seam — Core cannot name
+    // SpectraEngine.Editing, which is exactly what keeps gizmo/undo/tool code
+    // out of a shipped game binary that simply never sets this.
+    //
+    // A factory rather than an instance because the scene does not exist until
+    // the render thread has built it; SceneManager invokes this once, on that
+    // thread, with the finished scene.
+    sceneManager.EditorFactory = scene => new DemoEditorHost(
+        loggerFactory, scene, renderer, inputManager, sceneManager.SelfTestNode);
 
     var engine = new Engine(
         loggerFactory.CreateLogger<Engine>(),

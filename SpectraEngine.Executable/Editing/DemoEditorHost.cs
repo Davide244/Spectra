@@ -1,0 +1,328 @@
+using Microsoft.Extensions.Logging;
+using Silk.NET.Input;
+using SpectraEngine.Core.Graphics;
+using SpectraEngine.Core.Input;
+using SpectraEngine.Core.Scene;
+using SpectraEngine.Editing.Cameras;
+using SpectraEngine.Editing.Gizmos;
+using SpectraEngine.Editing.Input;
+using SpectraEngine.Editing.Undo;
+using SpectraEngine.Editing.Viewport;
+using System;
+using System.Collections.Generic;
+using System.Numerics;
+
+namespace SpectraEngine.Executable.Editing;
+
+/// <summary>
+/// The demo's editor: everything needed to turn the running engine into a
+/// manipulable viewport — an <see cref="EditorInputFrame"/> built per frame from
+/// the live input manager and the renderer's framebuffer latch, the viewport's
+/// pick/gizmo/marquee arbitration, an orbit camera, an undo history, and the
+/// keyboard that drives them.
+/// </summary>
+/// <remarks>
+/// <b>This class is the whole of the host seam.</b> It is the only type in the
+/// process that names both <c>Silk.NET.Input.Key</c> and
+/// <c>SpectraEngine.Editing</c>: the editing assembly carries no keyboard
+/// vocabulary at all (see <see cref="GizmoShortcuts"/>), so somebody has to
+/// resolve a physical key into a <see cref="GizmoCommand"/>, and that somebody
+/// is the host. Re-hosting the viewport in an Uno editor means writing a sibling
+/// of this class against WinUI's input stack — the tools, the history and the
+/// arbitration below the seam are untouched.
+/// <para>
+/// <b>Two navigation models, one toggle.</b> The engine's original
+/// <c>FlyCameraController</c> (WASD + right-drag look) is still there and still
+/// works; <see cref="Update"/> returns whether the editor drove the camera this
+/// frame, and the engine parks the fly camera exactly on the frames it did. The
+/// toggle only chooses the camera — picking, manipulation and box select run in
+/// both modes, so the old navigation loses nothing but the orbit. The one
+/// casualty is <c>W</c>: it means "move tool" to the editor and "forward" to the
+/// fly camera, so the letter-row tool bindings stand down while the fly camera
+/// has the keyboard (the Roblox-style 2/3/4 row keeps working in both).
+/// </para>
+/// <para>
+/// <b>Key names are resolved once, not per frame.</b> The shortcut tables match
+/// on key <em>names</em>, which would mean a <c>ToString()</c> allocation per
+/// key per frame if it were done in the loop. The bindings are therefore
+/// resolved in the constructor into a flat array, and the per-frame path is an
+/// array walk over already-decided verbs — so a steady-state frame with no
+/// keypress allocates nothing at all.
+/// </para>
+/// <para>
+/// <b>Threading:</b> render thread only, like the scene it edits and the
+/// <see cref="DebugDraw"/> it fills. It is constructed on the render thread too
+/// (from <c>SceneManager.EditorFactory</c>, inside the scene load).
+/// </para>
+/// </remarks>
+internal sealed class DemoEditorHost : ISceneEditor
+{
+    /// <summary>Toggles between the editor's orbit camera and the engine's fly camera.</summary>
+    private const Key NavigationToggleKey = Key.F7;
+
+    // Candidate manipulator keys, offered to the editing layer's own default
+    // table. Anything it does not recognise is silently dropped, so this list
+    // can stay a superset of whatever the defaults happen to bind today.
+    private static readonly Key[] GizmoKeyCandidates =
+    [
+        Key.W, Key.E, Key.R,
+        Key.Number2, Key.Number3, Key.Number4,
+        Key.X, Key.G, Key.LeftBracket, Key.RightBracket,
+    ];
+
+    // Keys the engine's fly camera owns while it is driving. Only the overlap
+    // with GizmoKeyCandidates matters (today: W), but listing the whole set
+    // keeps the conflict rule honest if either table grows.
+    private static readonly Key[] FlyCameraKeys =
+    [
+        Key.W, Key.A, Key.S, Key.D, Key.Space, Key.ControlLeft, Key.ShiftLeft,
+    ];
+
+    private readonly ILogger<DemoEditorHost> _logger;
+    private readonly Scene _scene;
+    private readonly Renderer _renderer;
+    private readonly InputManager _input;
+
+    private readonly UndoStack _undo;
+    private readonly GizmoController _gizmos;
+    private readonly EditorCameraController _camera;
+    private readonly ViewportInteractionController _viewport;
+    private readonly EngineEditorInputSource _inputSource;
+    private readonly GizmoBinding[] _gizmoBindings;
+    private readonly EditingSelfTest? _selfTest;
+
+    // Last frame's framebuffer latch, kept so Draw can size the marquee without
+    // asking the renderer a second time.
+    private Vector2 _viewportSize;
+    private bool _editorNavigation = true;
+
+    /// <summary>
+    /// Builds the demo's editor over a freshly loaded scene.
+    /// </summary>
+    /// <param name="loggerFactory">Used for this host's log and the self-test's.</param>
+    /// <param name="scene">The scene to edit; supplies the camera and the selection.</param>
+    /// <param name="renderer">Supplies the framebuffer latch the viewport is sized from.</param>
+    /// <param name="input">The live input manager the per-frame snapshot is built from.</param>
+    /// <param name="selfTestNode">
+    /// The brush node the synthetic self-test manipulates, or null to run
+    /// without one.
+    /// </param>
+    public DemoEditorHost(
+        ILoggerFactory loggerFactory,
+        Scene scene,
+        Renderer renderer,
+        InputManager input,
+        SceneNode? selfTestNode)
+    {
+        ArgumentNullException.ThrowIfNull(loggerFactory);
+        ArgumentNullException.ThrowIfNull(scene);
+        ArgumentNullException.ThrowIfNull(renderer);
+        ArgumentNullException.ThrowIfNull(input);
+
+        _logger = loggerFactory.CreateLogger<DemoEditorHost>();
+        _scene = scene;
+        _renderer = renderer;
+        _input = input;
+
+        _undo = new UndoStack(scene);
+        _gizmos = new GizmoController(scene, _undo);
+        _camera = new EditorCameraController(scene);
+        _viewport = new ViewportInteractionController(scene, _gizmos) { CameraController = _camera };
+        _inputSource = new EngineEditorInputSource(input, renderer);
+        _gizmoBindings = BuildGizmoBindings();
+
+        // Seed the viewport size before the first frame so a pick that happens
+        // on frame one is not measured against a zero-sized viewport.
+        renderer.GetFramebufferSize(out int width, out int height);
+        _viewportSize = new Vector2(width, height);
+
+        if (selfTestNode is not null)
+            _selfTest = new EditingSelfTest(loggerFactory.CreateLogger<EditingSelfTest>(), scene, selfTestNode);
+
+        _logger.LogInformation(
+            "Editor viewport ready: left-drag picks/moves, marquee on empty space; " +
+            "W/E/R or 2/3/4 pick the tool, X flips world/local, G and [ ] drive snap, " +
+            "F frames the selection, Ctrl+Z / Ctrl+Y walk {Capacity} entries of history; " +
+            "F7 toggles between the editor orbit camera and the fly camera (starting: {Mode})",
+            _undo.Capacity, _editorNavigation ? "editor orbit" : "fly camera");
+    }
+
+    /// <inheritdoc/>
+    public int SelectionCount => _scene.Selection.Count;
+
+    /// <inheritdoc/>
+    /// <remarks>Interned literals, never a formatted enum — see <see cref="ISceneEditor"/>.</remarks>
+    public string GizmoModeName => _gizmos.Mode switch
+    {
+        GizmoMode.Rotate => "rotate",
+        GizmoMode.Scale => "resize",
+        _ => "move",
+    };
+
+    /// <inheritdoc/>
+    public int UndoDepth => _undo.UndoCount;
+
+    /// <inheritdoc/>
+    public int RedoDepth => _undo.RedoCount;
+
+    /// <inheritdoc/>
+    public bool Update(double deltaTime)
+    {
+        _renderer.GetFramebufferSize(out int width, out int height);
+        if (width <= 0 || height <= 0)
+        {
+            // Minimized. There is no viewport to hit-test against, and every
+            // ray through a zero-sized one is undefined — so abandon whatever
+            // gesture was live rather than resuming it later against a viewport
+            // that changed underneath it.
+            _viewport.Reset();
+            return _editorNavigation;
+        }
+
+        _viewportSize = new Vector2(width, height);
+
+        HandleShortcuts();
+
+        EditorInputFrame frame = _inputSource.CaptureFrame((float)deltaTime);
+
+        // BEFORE the viewport, and standing down on the very frame a press could
+        // claim the pointer — both halves matter. The self-test deliberately
+        // leaves its subject node displaced for the whole compile watch, so a
+        // viewport update that ran first would let a gizmo grab CAPTURE that
+        // displaced transform as the drag's start; the self-test would then see
+        // a non-idle viewport in the same frame, restore the node underneath the
+        // live gesture, and the drag would jump a unit and commit — and undo —
+        // to a position the user never authored. Asking the frame whether a
+        // press is arriving, rather than asking the viewport what it did with
+        // one, is what closes that window: the node is back at rest before
+        // anything can capture it.
+        //
+        // The self-test borrows and hands back the camera within its own call,
+        // so running it first costs nothing: the camera controller writes the
+        // pose afterwards either way.
+        bool viewportIdle =
+            _viewport.DragMode == ViewportDragMode.None && !frame.WasPressed(_viewport.DragButton);
+        _selfTest?.Update(deltaTime, _viewportSize, viewportIdle);
+
+        // Escape arrives as the cancel flag rather than as a GizmoCommand: it
+        // has to reach the marquee as well as the manipulator, and Update is the
+        // one call that routes it to whichever owns the pointer.
+        _viewport.Update(in frame, _input.WasKeyPressed(Key.Escape));
+
+        return _editorNavigation;
+    }
+
+    /// <inheritdoc/>
+    public void Draw(DebugDraw output) => _viewport.Draw(output, _viewportSize);
+
+    // --- Keyboard ------------------------------------------------------------
+
+    private void HandleShortcuts()
+    {
+        if (_input.WasKeyPressed(NavigationToggleKey))
+            ToggleNavigation();
+
+        KeyModifiers modifiers = _input.Modifiers;
+
+        // Control chords are handled first and never fall through to a bare-key
+        // verb: Ctrl+Z must not also be read as "Z", and no bare key the editor
+        // binds is meant to fire while Control is held.
+        if ((modifiers & KeyModifiers.Control) != 0)
+        {
+            bool shift = (modifiers & KeyModifiers.Shift) != 0;
+            if (_input.WasKeyPressed(Key.Z))
+            {
+                if (shift) Redo();
+                else Undo();
+            }
+            else if (_input.WasKeyPressed(Key.Y))
+            {
+                Redo();
+            }
+            return;
+        }
+
+        for (int i = 0; i < _gizmoBindings.Length; i++)
+        {
+            GizmoBinding binding = _gizmoBindings[i];
+            if (binding.ConflictsWithFlyCamera && !_editorNavigation)
+                continue;
+
+            if (_input.WasKeyPressed(binding.Key))
+                _gizmos.Apply(binding.Command);
+        }
+
+        // The camera verbs are a table of one, so asking by the literal name
+        // costs nothing and keeps the binding where the editing layer documents
+        // it rather than duplicated here.
+        if (_input.WasKeyPressed(Key.F) &&
+            EditorCameraShortcuts.TryResolve("F", modifiers, out EditorCameraCommand cameraCommand))
+        {
+            _camera.Apply(cameraCommand);
+        }
+    }
+
+    private void ToggleNavigation()
+    {
+        _editorNavigation = !_editorNavigation;
+
+        if (_editorNavigation)
+        {
+            // Adopt whatever pose the fly camera left behind, so the toggle
+            // never teleports the view: the orbit takes the current position and
+            // angles and puts its focus a fixed distance straight ahead.
+            _camera.AdoptCamera();
+            _viewport.CameraController = _camera;
+        }
+        else
+        {
+            // Handing navigation back mid-orbit would leave the orbit chasing a
+            // target the fly camera is simultaneously walking away from.
+            _viewport.CameraController = null;
+        }
+
+        _logger.LogInformation(
+            "Navigation: {Mode} ({Key} toggles)",
+            _editorNavigation ? "editor orbit" : "fly camera", NavigationToggleKey);
+    }
+
+    private void Undo()
+    {
+        // A history step in the middle of a gesture would interleave with the
+        // edit in progress — the stack refuses it outright while a transaction
+        // is open — so abandon the gesture first, which also restores whatever
+        // it had moved so far.
+        _viewport.Reset();
+        if (_undo.Undo())
+            _logger.LogInformation("Undo '{Name}' (undo {UndoDepth} / redo {RedoDepth})", _undo.RedoName, _undo.UndoCount, _undo.RedoCount);
+    }
+
+    private void Redo()
+    {
+        _viewport.Reset();
+        if (_undo.Redo())
+            _logger.LogInformation("Redo '{Name}' (undo {UndoDepth} / redo {RedoDepth})", _undo.UndoName, _undo.UndoCount, _undo.RedoCount);
+    }
+
+    // Resolves every candidate key through the editing layer's default table
+    // once, at construction. Keys the table does not bind are dropped rather
+    // than mapped to a fallback: an unbound key must stay unbound.
+    private static GizmoBinding[] BuildGizmoBindings()
+    {
+        var bindings = new List<GizmoBinding>(GizmoKeyCandidates.Length);
+        foreach (Key key in GizmoKeyCandidates)
+        {
+            if (!GizmoShortcuts.TryResolve(key.ToString(), out GizmoCommand command))
+                continue;
+
+            bindings.Add(new GizmoBinding(key, command, Array.IndexOf(FlyCameraKeys, key) >= 0));
+        }
+
+        return [.. bindings];
+    }
+
+    // One pre-resolved keyboard binding. ConflictsWithFlyCamera marks the keys
+    // the engine's fly camera claims while it is driving, which must therefore
+    // stop meaning "switch tool" for as long as it is.
+    private readonly record struct GizmoBinding(Key Key, GizmoCommand Command, bool ConflictsWithFlyCamera);
+}

@@ -6,8 +6,16 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
+  <!--
+    The editing layer is referenced HERE and nowhere below: this executable is
+    the engine's editor-shaped demo host, so it is the one binary allowed to
+    pull gizmo/undo/tool code in. A shipped game host would simply drop this
+    reference and get a build with none of it — which is the whole reason
+    SpectraEngine.Editing is a separate assembly.
+  -->
   <ItemGroup>
     <ProjectReference Include="..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
+    <ProjectReference Include="..\SpectraEngine.Editing\SpectraEngine.Editing.csproj" />
     <ProjectReference Include="..\SpectraShade.Compiler\SpectraShade.Compiler.csproj" />
   </ItemGroup>
 

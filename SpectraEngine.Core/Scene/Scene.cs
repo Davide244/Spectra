@@ -5,6 +5,7 @@ using SpectraEngine.Core.Graphics;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using System.Threading.Tasks;
 
@@ -125,12 +126,22 @@ public sealed class Scene
     internal void OnNodeAdded(SceneNode node)
     {
         _graphStructureVersion++;
+        // Index BEFORE the event so handlers (and anything they call) can
+        // already resolve the arriving node through TryFindById.
+        _nodesById[node.Id] = node;
         NodeAdded?.Invoke(node);
     }
 
     internal void OnNodeRemoved(SceneNode node)
     {
         _graphStructureVersion++;
+        // De-index before the event, mirroring how Owner is repointed before
+        // the notification: a NodeRemoved handler must not be able to look the
+        // departing node up in the scene it is leaving. Identity-checked so a
+        // stale duplicate id (see the indexer note above) cannot unmap the
+        // node that currently owns the key.
+        if (_nodesById.TryGetValue(node.Id, out SceneNode? indexed) && ReferenceEquals(indexed, node))
+            _nodesById.Remove(node.Id);
         NodeRemoved?.Invoke(node);
     }
 
@@ -148,6 +159,38 @@ public sealed class Scene
         _graphStructureVersion++;
         Bvh.OnSubtreeMoved(node);
     }
+
+    // --- Node identity index ------------------------------------------------
+
+    // Guid -> node for every node currently in this scene's graph, maintained
+    // from the membership events above (which fire once per node of an attached
+    // or detached subtree, so whole-subtree edits are covered without a walk).
+    // A reparent WITHIN this scene raises no membership events and needs none:
+    // the nodes never left, so their mappings stay valid.
+    //
+    // Written with the indexer rather than Add: these run inside the ownership
+    // walk, where a throw would leave the graph half-owned. Ids are expected to
+    // be unique within a scene (Guid.NewGuid, or a deliberate reuse by undo of
+    // an id whose node has already left) — if two live nodes ever share one,
+    // the most recently added wins rather than crashing the edit.
+    private readonly Dictionary<Guid, SceneNode> _nodesById = [];
+
+    /// <summary>
+    /// Resolves a <see cref="SceneNode.Id"/> to the live node in this scene, or
+    /// returns false when no node with that id is currently attached. This is
+    /// the lookup editor commands use: edit history is addressed by id, not by
+    /// object reference, because an undo can destroy and recreate a node — the
+    /// reference goes stale, the id does not. O(1) and allocation-free; render
+    /// thread only, like every other scene member.
+    /// </summary>
+    public bool TryFindById(Guid id, [MaybeNullWhen(false)] out SceneNode node) =>
+        _nodesById.TryGetValue(id, out node);
+
+    /// <summary>
+    /// The number of nodes currently indexed by id — i.e. the node count of
+    /// this scene's graph, root included. Render thread only.
+    /// </summary>
+    public int NodeCount => _nodesById.Count;
 
     // --- Spatial queries ----------------------------------------------------
 
@@ -175,6 +218,25 @@ public sealed class Scene
     /// </summary>
     public void QueryFrustum(in Frustum frustum, List<SceneNode> results) =>
         Bvh.QueryFrustum(in frustum, results);
+
+    /// <summary>
+    /// The tight world AABB the spatial index already maintains for
+    /// <paramref name="node"/> — brush bounds, mesh bounds, or their union —
+    /// reflecting any transform change made since the last query. False when
+    /// the node is not spatial or does not belong to this scene.
+    /// </summary>
+    /// <remarks>
+    /// The editor's selection highlight, box select and frame-selection all
+    /// need a node's bounds every frame; handing them the index's cached box
+    /// keeps them from recomputing what culling and raycasts already paid for,
+    /// and guarantees all four agree on where a node is. Render thread only,
+    /// allocation-free.
+    /// </remarks>
+    public bool TryGetWorldBounds(SceneNode node, out Aabb bounds)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        return Bvh.TryGetWorldBounds(node, out bounds);
+    }
 
     // Scratch list reused by BuildRenderView's frustum query — capacity is
     // retained across frames so steady-state builds allocate nothing.

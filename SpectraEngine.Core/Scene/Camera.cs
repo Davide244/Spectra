@@ -230,6 +230,85 @@ public sealed class Camera
         return new Ray3(nearWorld, Vector3.Normalize(farWorld - nearWorld));
     }
 
+    /// <summary>
+    /// Builds the sub-frustum of this camera bounded by a screen-space
+    /// rectangle — the volume a marquee/box selection sweeps. The two corners
+    /// are given in the same pixel convention as
+    /// <see cref="ScreenPointToRay"/> (top-left origin, y growing downward) and
+    /// in either order; the near and far planes are the camera's own, so the
+    /// result is exactly this camera's frustum with its four side planes pulled
+    /// in to the rectangle.
+    /// </summary>
+    /// <remarks>
+    /// <b>Why a matrix and not four corner rays.</b> The rectangle's side
+    /// planes are derived by post-multiplying the view-projection with the
+    /// affine NDC remap that stretches the rectangle back out to the full
+    /// [-1, 1] clip square, then running the same Gribb–Hartmann extraction
+    /// <see cref="GetFrustum"/> uses. That reuses one tested plane derivation
+    /// instead of adding a second one built from cross products of corner ray
+    /// directions, and it gets the near and far planes right for free.
+    /// Cross-checked against <see cref="ScreenPointToRay"/> in the tests: every
+    /// corner ray lies on the two side planes that meet at its corner.
+    /// <para>
+    /// A rectangle thinner than one pixel in either axis is widened to one
+    /// pixel rather than producing degenerate (zero-normal) side planes: a
+    /// click is a one-pixel rectangle, not an empty volume, so a caller that
+    /// forwards a click here still gets a usable frustum. Callers that want
+    /// click-versus-drag semantics decide that above this call.
+    /// </para>
+    /// </remarks>
+    /// <param name="cornerA">One corner of the rectangle, in viewport pixels.</param>
+    /// <param name="cornerB">The opposite corner, in viewport pixels.</param>
+    /// <param name="viewportSize">Viewport extent in the same pixel units.</param>
+    public Frustum ScreenRectToFrustum(Vector2 cornerA, Vector2 cornerB, Vector2 viewportSize)
+    {
+        if (viewportSize.X <= 0f || viewportSize.Y <= 0f)
+            return GetFrustum(); // Nothing has been laid out yet; the rect means nothing.
+
+        Vector2 min = Vector2.Min(cornerA, cornerB);
+        Vector2 max = Vector2.Max(cornerA, cornerB);
+
+        // One pixel is the floor on either axis (see the remarks): half a pixel
+        // out from the rectangle's own centre on the offending axis.
+        if (max.X - min.X < 1f)
+        {
+            float centerX = 0.5f * (min.X + max.X);
+            min.X = centerX - 0.5f;
+            max.X = centerX + 0.5f;
+        }
+        if (max.Y - min.Y < 1f)
+        {
+            float centerY = 0.5f * (min.Y + max.Y);
+            min.Y = centerY - 0.5f;
+            max.Y = centerY + 0.5f;
+        }
+
+        // Pixels → NDC, with the same y flip ScreenPointToRay applies. Note the
+        // flip swaps which pixel edge is the NDC minimum on y.
+        float ndcMinX = 2f * min.X / viewportSize.X - 1f;
+        float ndcMaxX = 2f * max.X / viewportSize.X - 1f;
+        float ndcMaxY = 1f - 2f * min.Y / viewportSize.Y;
+        float ndcMinY = 1f - 2f * max.Y / viewportSize.Y;
+
+        float centerNdcX = 0.5f * (ndcMinX + ndcMaxX);
+        float centerNdcY = 0.5f * (ndcMinY + ndcMaxY);
+        float halfNdcX = 0.5f * (ndcMaxX - ndcMinX);
+        float halfNdcY = 0.5f * (ndcMaxY - ndcMinY);
+
+        // The remap, in the engine's row-vector convention: after the
+        // perspective divide it sends the rectangle's NDC box to [-1, 1]², and
+        // it leaves z and w alone so the near and far planes survive untouched.
+        // Expressed pre-divide it is x' = x/hx − (cx/hx)·w, y' likewise.
+        var remap = Matrix4x4.Identity;
+        remap.M11 = 1f / halfNdcX;
+        remap.M22 = 1f / halfNdcY;
+        remap.M41 = -centerNdcX / halfNdcX;
+        remap.M42 = -centerNdcY / halfNdcY;
+
+        EnsureViewProjection();
+        return Frustum.FromViewProjection(_viewProjection * remap);
+    }
+
     /// <summary>Maps an NDC point back to world space through the cached inverse view-projection.</summary>
     private Vector3 UnprojectNdc(float x, float y, float z)
     {

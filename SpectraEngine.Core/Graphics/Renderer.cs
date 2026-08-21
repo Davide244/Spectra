@@ -34,6 +34,22 @@ public abstract class Renderer
     }
 
     /// <summary>
+    /// The same latched framebuffer size as <see cref="FramebufferSize"/>, but
+    /// in plain ints. Layers that must not reference Silk.NET — the editing
+    /// assembly and any future non-Silk host — read the viewport through this
+    /// overload, because merely naming <see cref="Vector2D{T}"/> would drag
+    /// Silk.NET.Maths into their assembly references.
+    /// </summary>
+    public void GetFramebufferSize(out int width, out int height)
+    {
+        lock (_framebufferSizeLock)
+        {
+            width = _framebufferSize.X;
+            height = _framebufferSize.Y;
+        }
+    }
+
+    /// <summary>
     /// Publishes a new framebuffer size to the render side. Main thread only —
     /// the engine calls this once before the render thread starts and then
     /// from the window's FramebufferResize event.

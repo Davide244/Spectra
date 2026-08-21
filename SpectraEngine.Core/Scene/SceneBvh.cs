@@ -8,6 +8,10 @@ using SpectraEngine.Core.Graphics;
 // The BVH's structural invariants (and a few other scene internals) are
 // verified directly by the headless scene test suite.
 [assembly: InternalsVisibleTo("SpectraEngine.Bsp.Tests")]
+// The editing suite drives the renderer's framebuffer latch (internal, since
+// only the engine's main thread may publish to it) to prove the editor input
+// adapter reads the viewport from it.
+[assembly: InternalsVisibleTo("SpectraEngine.Editing.Tests")]
 
 namespace SpectraEngine.Core.Scene;
 

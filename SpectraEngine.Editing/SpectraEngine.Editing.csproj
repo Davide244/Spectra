@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SpectraEngine.Editing</RootNamespace>
+    <!--
+      Same reasoning as SpectraEngine.Core: the engine ships NativeAOT, so the
+      trim/AOT analysers run on this project's ordinary build rather than at
+      ILC time in whatever executable happens to pull it in.
+    -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <!--
+    Core is the ONLY reference, and deliberately no Silk.NET package is listed
+    here. Editor tooling (gizmos, undo, tools) must not ship inside every AOT
+    game binary, and it must not bind to the windowing/input backend either:
+    everything this assembly needs from input and the viewport arrives through
+    Core's backend-neutral seam (PointerButtons/KeyModifiers,
+    Renderer.GetFramebufferSize) so re-hosting the editor in Uno is a swap of
+    the input adapter, not a rewrite. Silk.NET does flow in transitively from
+    Core at compile time; EditingAssemblyBoundaryTests asserts that nothing
+    here actually uses it, which is what keeps the seam honest.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
+  </ItemGroup>
+
+</Project>
