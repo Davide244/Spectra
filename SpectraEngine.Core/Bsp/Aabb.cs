@@ -30,9 +30,25 @@ public readonly struct Aabb
     /// </summary>
     public Vector3 ClosestPoint(Vector3 point) => Vector3.Clamp(point, Min, Max);
 
-    /// <summary>Whether a sphere overlaps this box.</summary>
+    /// <summary>
+    /// Whether a sphere overlaps this box. <b>Touching counts</b>, matching
+    /// <see cref="Intersects"/>'s inclusive convention — the two must agree, or
+    /// a broad phase would answer differently depending on which shape the
+    /// caller happened to pass.
+    /// </summary>
+    /// <remarks>
+    /// A negative radius describes no sphere and overlaps nothing, which the
+    /// squared comparison delivers without a branch: no squared distance is
+    /// less than a negative number's square... except zero against radius
+    /// zero, so the degenerate point-sphere on the box's surface is treated as
+    /// touching, consistently with the rest of the convention. Callers that
+    /// mean "no query" should not call rather than pass a negative radius.
+    /// </remarks>
     public bool IntersectsSphere(Vector3 center, float radius)
     {
+        if (radius < 0f)
+            return false;
+
         Vector3 delta = center - ClosestPoint(center);
         return Vector3.Dot(delta, delta) <= radius * radius;
     }

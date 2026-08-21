@@ -59,8 +59,17 @@ public readonly record struct SceneQueryFilter
     /// </summary>
     public bool IgnoreQueryFlags { get; init; }
 
-    /// <summary>The filter editor tooling uses: everything visible, flags disregarded.</summary>
-    public static SceneQueryFilter EditorPicking => new() { IgnoreQueryFlags = true };
+    /// <summary>
+    /// Report subtractive brushes, which every other query deliberately skips
+    /// because a hole contributes no solid. Editor tooling needs this — an
+    /// author must be able to select the negative brush that cut their
+    /// doorway — and gameplay never does.
+    /// </summary>
+    public bool IncludeSubtractiveBrushes { get; init; }
+
+    /// <summary>The filter editor tooling uses: everything selectable, flags disregarded.</summary>
+    public static SceneQueryFilter EditorPicking =>
+        new() { IgnoreQueryFlags = true, IncludeSubtractiveBrushes = true };
 
     /// <summary>Whether <paramref name="node"/> may be reported by this query.</summary>
     public bool Accepts(SceneNode node)
@@ -86,8 +95,24 @@ public readonly record struct SceneQueryFilter
                 return false;
         }
 
-        if (Groups is { } groups && !groups.AreCollidable(CollisionGroup, node.CollisionGroup))
+        // Interacts, not AreCollidable: the node's id is node-supplied and may
+        // legally name a group this registry has not registered, and a
+        // broad-phase walk must never be where that is diagnosed. The query
+        // group is validated eagerly at the Scene entry point instead, where a
+        // caller's mistake is reported deterministically.
+        if (Groups is { } groups && !groups.Interacts(CollisionGroup, node.CollisionGroup))
             return false;
+
+        // A subtractive brush is a HOLE — it contributes no solid anywhere, so
+        // reporting a hit on its own box is wrong under every reading: a shot
+        // fired at a doorway would stop in mid-air, on geometry that is not
+        // drawn. Editor tooling still needs to select one, which is what
+        // IncludeSubtractiveBrushes is for.
+        if (!IncludeSubtractiveBrushes &&
+            node.Brush is { Operation: Bsp.BrushOperation.Subtractive })
+        {
+            return false;
+        }
 
         return true;
     }

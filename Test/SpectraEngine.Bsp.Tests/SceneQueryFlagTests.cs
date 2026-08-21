@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using SpectraEngine.Core.Bsp;
@@ -195,6 +196,82 @@ public sealed class SceneQueryFlagTests
         scene.Raycast(RayAlongX(), out SceneRaycastHit hit, filter).ShouldBeTrue();
 
         hit.Node.ShouldBeSameAs(far);
+    }
+
+    [Fact]
+    public void An_unregistered_node_group_is_answered_not_thrown()
+    {
+        // Found by adversarial review of the first cut of this feature.
+        // SceneNode.CollisionGroup validates only the 64 ceiling — deliberately,
+        // because a node may be assigned a group before it is attached to any
+        // scene and a deserializer may restore ids before names. The registry's
+        // strict accessor treats an unnamed id as out of range, so joining the
+        // two in the filter threw ArgumentOutOfRangeException FROM INSIDE the
+        // BVH walk — and only when a box happened to overlap, leaving the
+        // caller's results list partially filled.
+        var (scene, near, _) = TwoBrushesInALine();
+        int rays = scene.CollisionGroups.Register("Rays");
+        near.CollisionGroup = 40;   // legal on the node, named by nobody
+
+        var filter = new SceneQueryFilter { Groups = scene.CollisionGroups, CollisionGroup = rays };
+
+        scene.Raycast(RayAlongX(), out SceneRaycastHit hit, filter).ShouldBeTrue();
+        hit.Node.ShouldBeSameAs(near, "an unnamed group interacts, per its all-ones mask");
+
+        var results = new List<SceneNode>();
+        scene.GetPartBoundsInRadius(Vector3.Zero, 3f, results, filter);
+        results.ShouldContain(near);
+    }
+
+    [Fact]
+    public void An_unregistered_QUERY_group_is_reported_at_the_call_site()
+    {
+        // The mirror discipline, and the asymmetry is the point: the CALLER
+        // naming a group it never registered is a mistake at the call site, so
+        // it is reported there — deterministically, before any traversal —
+        // rather than from inside a walk if some box happens to overlap.
+        var (scene, _, _) = TwoBrushesInALine();
+        var filter = new SceneQueryFilter { Groups = scene.CollisionGroups, CollisionGroup = 40 };
+        var results = new List<SceneNode>();
+
+        Should.Throw<ArgumentOutOfRangeException>(
+            () => scene.Raycast(RayAlongX(), out _, filter));
+        Should.Throw<ArgumentOutOfRangeException>(
+            () => scene.GetPartBoundsInRadius(Vector3.Zero, 3f, results, filter));
+
+        results.ShouldBeEmpty("nothing was traversed, so nothing was appended");
+    }
+
+    [Fact]
+    public void A_subtractive_brush_is_not_hit_by_a_query()
+    {
+        // A hole contributes no solid, so reporting a hit on its own box would
+        // stop a shot in mid-air on geometry that is not drawn.
+        var scene = new Scene("Test");
+        SceneNode hole = scene.Root.CreateChild("hole");
+        hole.Brush = UnitBrush().WithOperation(BrushOperation.Subtractive);
+
+        scene.Raycast(RayAlongX(), out _).ShouldBeFalse();
+
+        var results = new List<SceneNode>();
+        scene.GetPartBoundsInRadius(Vector3.Zero, 3f, results);
+        results.ShouldNotContain(hole);
+    }
+
+    [Fact]
+    public void Editor_picking_can_still_select_a_subtractive_brush()
+    {
+        // An author has to be able to select the negative brush that cut their
+        // doorway — it renders nothing, so the viewport is the only place they
+        // can reach it other than the Explorer.
+        var scene = new Scene("Test");
+        SceneNode hole = scene.Root.CreateChild("hole");
+        hole.Brush = UnitBrush().WithOperation(BrushOperation.Subtractive);
+
+        scene.Raycast(RayAlongX(), out SceneRaycastHit hit, SceneQueryFilter.EditorPicking)
+            .ShouldBeTrue();
+
+        hit.Node.ShouldBeSameAs(hole);
     }
 
     // --- Overlap queries ----------------------------------------------------

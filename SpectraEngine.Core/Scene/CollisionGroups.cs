@@ -120,13 +120,40 @@ public sealed class CollisionGroups
         }
     }
 
-    /// <summary>Whether two groups interact. Unregistered ids are out of range, not "false".</summary>
+    /// <summary>
+    /// Whether two groups interact. <b>The strict, author-facing accessor:</b>
+    /// an id that names no registered group is out of range and throws, because
+    /// asking about a group you never made is a mistake worth reporting. A
+    /// query traversal must use <see cref="Interacts"/> instead — see there for
+    /// why the two cannot be the same method.
+    /// </summary>
     public bool AreCollidable(int groupA, int groupB)
     {
         ValidateId(groupA, nameof(groupA));
         ValidateId(groupB, nameof(groupB));
         return (_masks[groupA] & (1UL << groupB)) != 0;
     }
+
+    /// <summary>
+    /// Whether two ids interact, treating an id that is in range but not yet
+    /// named as <em>interacting</em> — which is the value its all-ones mask
+    /// word already holds.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is the accessor a query traversal uses, and the split is not a
+    /// convenience.</b> <see cref="SceneNode.CollisionGroup"/> is deliberately
+    /// validated only against the 64 ceiling, because a node may be assigned a
+    /// group before it is attached to any scene and a deserializer may restore
+    /// ids before names. So a node can legally carry an id this registry has
+    /// not named — and a broad-phase walk is the worst possible place to
+    /// discover that: the throw fires only when a box happens to overlap, from
+    /// inside the traversal, leaving the caller's results list partially
+    /// filled. Answering "interacts" is both the safe verdict and the one the
+    /// default mask already encodes.
+    /// </remarks>
+    public bool Interacts(int groupA, int groupB) =>
+        (uint)groupA < MaxGroups && (uint)groupB < MaxGroups &&
+        (_masks[groupA] & (1UL << groupB)) != 0;
 
     /// <summary>
     /// The raw mask word for <paramref name="group"/> — bit <c>j</c> set means
