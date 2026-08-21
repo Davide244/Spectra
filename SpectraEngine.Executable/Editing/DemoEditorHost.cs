@@ -7,6 +7,7 @@ using SpectraEngine.Editing.Cameras;
 using SpectraEngine.Editing.Gizmos;
 using SpectraEngine.Editing.Input;
 using SpectraEngine.Editing.Undo;
+using SpectraEngine.Editing.Commands;
 using SpectraEngine.Editing.Viewport;
 using System;
 using System.Collections.Generic;
@@ -71,6 +72,11 @@ internal sealed class DemoEditorHost : ISceneEditor
 {
     /// <summary>Toggles between the editor's freelook camera and the engine's fly camera.</summary>
     private const Key NavigationToggleKey = Key.F7;
+
+    // Ctrl+T, echoing Hammer's Ctrl+T (tie to entity) — the nearest thing in
+    // that editor to "change what this brush fundamentally is". A Control chord
+    // deliberately, so the bare letter row stays free for tool switching.
+    private const Key BrushKindToggleKey = Key.T;
 
     // Interned labels for ISceneEditor.NavigationModeName — the stats line that
     // reads it is otherwise allocation-free, so this must never be a formatted
@@ -180,8 +186,10 @@ internal sealed class DemoEditorHost : ISceneEditor
             "looking and zooms otherwise; Alt+drag orbits, middle-drag pans, F frames the " +
             "selection; left-drag picks/moves, marquee on empty space; W/E/R or 2/3/4 pick the " +
             "tool, X flips world/local, G and [ ] drive snap, Ctrl+Z / Ctrl+Y walk {Capacity} " +
-            "entries of history; F7 toggles between the editor camera and the engine fly camera " +
-            "(starting: {Mode})",
+            "entries of history; Ctrl+T converts the selected brushes between world geometry and " +
+            "parts (parts leave the CSG carve, so they stop merging with what they touch and cost " +
+            "no recompile when they move — they are outlined in cyan); F7 toggles between the " +
+            "editor camera and the engine fly camera (starting: {Mode})",
             _undo.Capacity, NavigationModeName);
     }
 
@@ -323,6 +331,10 @@ internal sealed class DemoEditorHost : ISceneEditor
             {
                 Redo();
             }
+            else if (_input.WasKeyPressed(BrushKindToggleKey))
+            {
+                ToggleSelectionBrushKind();
+            }
             return;
         }
 
@@ -374,6 +386,67 @@ internal sealed class DemoEditorHost : ISceneEditor
         }
 
         _logger.LogInformation("Navigation: {Mode} ({Key} toggles)", NavigationModeName, NavigationToggleKey);
+    }
+
+    // Ctrl+T: convert the selected brushes between world geometry and parts —
+    // the one edit that changes whether a brush is admitted to the fused static
+    // world, and therefore the one a user must perform deliberately rather than
+    // discover by dragging something somewhere.
+    //
+    // A mixed selection NORMALISES rather than flipping each node
+    // independently: "toggle" on a set means the whole set ends up the same
+    // way, and per-node flipping would leave a selection the user can never get
+    // back into one state. If anything in it is still world geometry, the whole
+    // selection becomes parts; only an all-part selection converts back.
+    private void ToggleSelectionBrushKind()
+    {
+        // Mid-gesture the manipulator is holding an open transaction, and a
+        // conversion inside it would land in the drag's undo entry.
+        _viewport.Reset();
+
+        IReadOnlyList<SceneNode> selected = _scene.Selection.Items;
+        var commands = new List<IEditorCommand>();
+        bool anyWorld = false;
+        int skipped = 0;
+
+        for (int i = 0; i < selected.Count; i++)
+        {
+            if (selected[i].Brush is null)
+            {
+                skipped++;
+                continue;
+            }
+            if (selected[i].BrushKind == BrushKind.World)
+                anyWorld = true;
+        }
+
+        BrushKind target = anyWorld ? BrushKind.Part : BrushKind.World;
+        for (int i = 0; i < selected.Count; i++)
+        {
+            SceneNode node = selected[i];
+            if (node.Brush is null || node.BrushKind == target)
+                continue;
+            commands.Add(SetBrushKindCommand.Capture(node, target));
+        }
+
+        if (commands.Count == 0)
+        {
+            // Never a silent no-op: "I pressed the key and nothing happened" is
+            // indistinguishable from a broken binding.
+            _logger.LogInformation(
+                "Convert brush: nothing to convert ({Selected} selected, {Skipped} without a brush)",
+                selected.Count, skipped);
+            return;
+        }
+
+        string name = target == BrushKind.Part ? "Convert to Part" : "Convert to World";
+        _undo.Execute(commands.Count == 1 ? commands[0] : new CompositeCommand(name, commands));
+
+        _logger.LogInformation(
+            "{Name}: {Converted} brush(es), {Skipped} selected node(s) had no brush. " +
+            "Part brushes leave the CSG carve — they no longer merge with the geometry around them, " +
+            "and they cost no static-world recompile when they move.",
+            name, commands.Count, skipped);
     }
 
     private void Undo()
