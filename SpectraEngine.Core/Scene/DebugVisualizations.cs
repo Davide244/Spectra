@@ -44,9 +44,13 @@ public static class DebugVisualizations
     private static readonly Vector3 AxisYColor = new(0.25f, 1f, 0.25f);
     private static readonly Vector3 AxisZColor = new(0.35f, 0.55f, 1f);
     private static readonly Vector3 HierarchyColor = new(0.6f, 0.6f, 0.8f);
+    // Magenta: unused by any opt-in visualisation, so a selected node stays
+    // recognisable even with every debug flag enabled at once.
+    private static readonly Vector3 SelectionColor = new(1f, 0.3f, 0.9f);
     private const float VertexCrossSize = 0.04f;
     private const float NormalArrowLength = 0.25f;
     private const float NodeAxisLength = 0.3f;
+    private const float SelectionMarkerSize = 0.15f;
 
     /// <summary>Pushes every visualisation enabled in <paramref name="flags"/> into <paramref name="output"/>.</summary>
     public static void Draw(DebugDraw output, Scene scene, DebugVisualization flags)
@@ -74,6 +78,30 @@ public static class DebugVisualizations
             DrawMeshNormals(output, scene);
         if (flags.HasFlag(DebugVisualization.SceneGraph))
             DrawSceneGraph(output, scene);
+    }
+
+    /// <summary>
+    /// Outlines every selected node's world AABB. Deliberately NOT part of
+    /// <see cref="Draw"/>'s flag-gated visualisations: selection feedback is
+    /// editor UI, so the engine calls this every frame regardless of debug
+    /// flags. Bounds come from the scene's spatial index — the same boxes
+    /// culling and raycasts use (brush world bounds for brush nodes, mesh
+    /// bounds for mesh nodes, their union for both) — rather than being
+    /// recomputed here. A selected non-spatial node (a pure group) has no
+    /// bounds and gets a small cross at its origin instead. With nothing
+    /// selected this is a zero-iteration loop — effectively free.
+    /// </summary>
+    public static void DrawSelectionHighlight(DebugDraw output, Scene scene)
+    {
+        IReadOnlyList<SceneNode> selection = scene.Selection.Items;
+        for (int i = 0; i < selection.Count; i++)
+        {
+            SceneNode node = selection[i];
+            if (scene.Bvh.TryGetWorldBounds(node, out Aabb bounds))
+                output.Box(bounds.Min, bounds.Max, SelectionColor);
+            else
+                output.Cross(node.WorldPosition, SelectionMarkerSize, SelectionColor);
+        }
     }
 
     private static void DrawCsgWireframe(DebugDraw output, CsgWorld world)
@@ -129,9 +157,12 @@ public static class DebugVisualizations
 
     private static void DrawBrushAabbs(DebugDraw output, CsgWorld world)
     {
-        foreach (Brush brush in world.Brushes)
+        // Placements, not Brush.WorldBounds: the compiled world was carved at
+        // the snapshot transforms, which a live (still-moving) brush node's
+        // own Transform no longer reflects.
+        foreach (BrushPlacement placement in world.Placements)
         {
-            Aabb b = brush.WorldBounds;
+            Aabb b = placement.WorldBounds;
             output.Box(b.Min, b.Max, AabbColor);
         }
     }

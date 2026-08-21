@@ -19,6 +19,9 @@
     <!-- Language Server -->
     <PackageVersion Include="OmniSharp.Extensions.LanguageServer" Version="0.19.9" />
 
+    <!-- Image decoding (pure managed, AOT-safe: PNG/JPG/TGA/BMP) -->
+    <PackageVersion Include="StbImageSharp" Version="2.30.16" />
+
     <!-- Testing (xunit v3 on Microsoft.Testing.Platform) -->
     <PackageVersion Include="xunit.v3.mtp-v2" Version="3.2.2" />
     <PackageVersion Include="Verify.XunitV3" Version="31.16.1" />

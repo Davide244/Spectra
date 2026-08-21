@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Silk.NET.Maths;
 using Silk.NET.Windowing;
 using SpectraEngine.Core.Graphics.Shaders;
 using System;
@@ -12,6 +13,36 @@ public abstract class Renderer
     private readonly IShaderCompiler _shaderCompiler;
 
     public abstract GraphicsBackend Backend { get; }
+
+    // GLFW answers window-size queries only on the thread that created the
+    // window, so the size is latched here: the engine seeds it on the main
+    // thread before the render thread starts and refreshes it from the
+    // FramebufferResize event (fired during DoEvents, also main thread).
+    // Everything render-side reads the latch instead of touching IWindow.
+    private readonly object _framebufferSizeLock = new();
+    private Vector2D<int> _framebufferSize;
+
+    /// <summary>
+    /// The window's framebuffer size as last reported by the main thread.
+    /// Render-side code (backends, pipelines) must read this instead of
+    /// <see cref="IWindow.FramebufferSize"/>, which GLFW only allows querying
+    /// on the thread that owns the window.
+    /// </summary>
+    public Vector2D<int> FramebufferSize
+    {
+        get { lock (_framebufferSizeLock) return _framebufferSize; }
+    }
+
+    /// <summary>
+    /// Publishes a new framebuffer size to the render side. Main thread only —
+    /// the engine calls this once before the render thread starts and then
+    /// from the window's FramebufferResize event.
+    /// </summary>
+    internal void SetFramebufferSize(Vector2D<int> size)
+    {
+        lock (_framebufferSizeLock)
+            _framebufferSize = size;
+    }
 
     /// <summary>
     /// The graphics API the host window should be created with. OpenGL needs
@@ -99,7 +130,13 @@ public abstract class Renderer
         _logger.LogInformation("Renderer initialized");
     }
 
-    public virtual void Render(Scene.Scene? scene, double deltaTime)
+    /// <summary>
+    /// Renders one frame: <paramref name="view"/> is the engine-built,
+    /// frustum-culled draw list for this frame (see
+    /// <see cref="Scene.Scene.BuildRenderView"/>); <paramref name="scene"/>
+    /// stays available for camera and debug access. Render thread only.
+    /// </summary>
+    public virtual void Render(Scene.Scene? scene, RenderView view, double deltaTime)
     {
     }
 
@@ -118,6 +155,23 @@ public abstract class Renderer
     public abstract Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes);
 
     /// <summary>
+    /// Disposes a mesh created by <see cref="CreateMesh"/> and drops it from the
+    /// creating renderer's tracking list. Meshes destroyed mid-run (e.g. the
+    /// static world mesh, rebuilt on every CSG edit) must go through here rather
+    /// than <see cref="Mesh.Dispose"/>, which would leave the dead instance in
+    /// the list until shutdown. Render thread only — creation and destruction
+    /// share that thread, which is why deregistration takes no lock.
+    /// </summary>
+    public void DestroyMesh(Mesh mesh)
+    {
+        // The callback closes over the list of the renderer that created the
+        // mesh, so this deregisters correctly even on the wrong renderer.
+        mesh.Unregister?.Invoke();
+        mesh.Unregister = null;
+        mesh.Dispose();
+    }
+
+    /// <summary>
     /// Uploads <paramref name="pixels"/> as a 2D texture in the given format and
     /// returns a renderer-owned handle. Pixel data is expected as tightly packed
     /// rows from bottom-left to top-right (OpenGL convention).
@@ -129,6 +183,18 @@ public abstract class Renderer
         TextureFormat format,
         TextureFilter filter = TextureFilter.Linear,
         TextureWrap wrap = TextureWrap.Repeat);
+
+    /// <summary>
+    /// Disposes a texture created by <see cref="CreateTexture"/> and drops it
+    /// from the creating renderer's tracking list. Same contract as
+    /// <see cref="DestroyMesh"/>: render thread only.
+    /// </summary>
+    public void DestroyTexture(Texture texture)
+    {
+        texture.Unregister?.Invoke();
+        texture.Unregister = null;
+        texture.Dispose();
+    }
 
     public abstract ShaderProgram CreateShader(string vertexSource, string fragmentSource);
 

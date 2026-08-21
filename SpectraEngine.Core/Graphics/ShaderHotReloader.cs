@@ -36,10 +36,25 @@ public sealed class ShaderHotReloader : IDisposable
         _backend = backend;
     }
 
-    /// <summary>Registers <paramref name="program"/> for reloads sourced from <paramref name="absolutePath"/>.</summary>
+    /// <summary>
+    /// Registers <paramref name="program"/> for reloads sourced from
+    /// <paramref name="absolutePath"/>. Last registration wins: registering a
+    /// path again replaces the previous registration, so only the most recently
+    /// registered program receives reloads for that file.
+    /// </summary>
     public void Register(string absolutePath, ShaderProgram program)
     {
         string normalized = Path.GetFullPath(absolutePath);
+
+        // Replace-with-dispose: overwriting the dictionary entry alone would
+        // leak the previous FileSystemWatcher (native buffer + watcher thread
+        // work) and leave it raising events for a program we no longer track.
+        if (_watchers.TryGetValue(normalized, out Registration previous))
+        {
+            previous.Watcher.Dispose();
+            _logger.LogInformation("Replacing shader watch registration: {Path}", normalized);
+        }
+
         var watcher = new FileSystemWatcher(Path.GetDirectoryName(normalized)!, Path.GetFileName(normalized))
         {
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,

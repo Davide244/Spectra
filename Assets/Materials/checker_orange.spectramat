@@ -1,0 +1,7 @@
+// checker_orange.spectramat — the warm counterpart to checker_gray, so two
+// adjacent test surfaces are always told apart at a glance.
+
+shader = lit
+
+texture uDiffuse = Textures/checker_orange.png, nearest, repeat
+color   uBaseColor = #FF8C33

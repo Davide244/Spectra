@@ -32,11 +32,18 @@ public static class VertexSnapper
         var result = new Polygon[polygons.Count];
         for (int i = 0; i < polygons.Count; i++)
         {
-            var oldVerts = polygons[i].Vertices;
-            var newVerts = new Vector3[oldVerts.Count];
-            for (int j = 0; j < oldVerts.Count; j++)
+            // Exact-size result array — the new polygon owns it. (The span
+            // avoids interface-dispatch per vertex; snapping allocates nothing
+            // beyond its actual outputs.)
+            ReadOnlySpan<Vector3> oldVerts = polygons[i].VertexSpan;
+            var newVerts = new Vector3[oldVerts.Length];
+            for (int j = 0; j < oldVerts.Length; j++)
                 newVerts[j] = SnapVertex(oldVerts[j]);
-            result[i] = new Polygon(newVerts, polygons[i].Surface);
+            // Payload rides along untouched: snapping nudges vertices onto the
+            // lattice, it never changes what the face wears. (The texture axes
+            // are world directions, so the UVs simply follow the moved
+            // vertices — nothing to re-derive.)
+            result[i] = new Polygon(newVerts, polygons[i].Surface, polygons[i].Face);
         }
         return result;
     }

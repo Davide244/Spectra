@@ -1,14 +1,15 @@
-using Silk.NET.OpenGL;
+﻿using Silk.NET.OpenGL;
 using SpectraEngine.Core.Scene;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Numerics;
 
 namespace SpectraEngine.Core.Graphics.OpenGL;
 
 /// <summary>
-/// The default rendering strategy: clear, walk the scene tree drawing each
-/// mesh with its material's shader, then flush the debug-draw overlay with
-/// depth-test off so wires sit on top of geometry.
+/// The default rendering strategy: clear, draw the frame's pre-culled
+/// <see cref="RenderView"/> items with their materials' shaders, then flush
+/// the debug-draw overlay with depth-test off so wires sit on top of geometry.
 /// </summary>
 public sealed class ForwardPipeline : IOpenGLRenderPipeline
 {
@@ -27,7 +28,9 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
     public void Execute(in OpenGLRenderContext context)
     {
         var gl = context.Gl;
-        var size = context.Window.FramebufferSize;
+        // Latched on the main thread by the engine — GLFW forbids querying the
+        // window's framebuffer size from this (render) thread.
+        var size = context.Renderer.FramebufferSize;
         gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
 
         gl.ClearColor(Color.CornflowerBlue);
@@ -40,31 +43,52 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
         if (size.Y > 0)
             camera.AspectRatio = size.X / (float)size.Y;
 
-        DrawNode(gl, context.Scene.Root, camera);
+        DrawView(context.View, camera);
 
         _renderer!.FlushDebugDraw(camera);
     }
 
-    private void DrawNode(GL gl, SceneNode node, Camera camera)
+    // Draws the engine-built view: the flat, frustum-culled item list replaces
+    // the recursive scene walk that used to live here (the walk now happens
+    // once per frame in Scene.BuildRenderView, shared by every backend).
+    private void DrawView(RenderView view, Camera camera)
     {
-        if (node.MeshRenderer is { } meshRenderer)
+        IReadOnlyList<RenderItem> items = view.Items;
+        for (int i = 0; i < items.Count; i++)
         {
-            var material = meshRenderer.Material;
-            var shader = material.Shader;
-
-            shader.Use();
-            shader.SetUniform("uModel", node.WorldMatrix);
-            shader.SetUniform("uView", camera.View);
-            shader.SetUniform("uProjection", camera.Projection);
-            shader.SetUniform("uLightDir", LightDirection);
-            material.Apply();
-
-            meshRenderer.Mesh.Draw();
+            RenderItem item = items[i];
+            if (item.Material is { } material)
+                DrawRenderable(item.Mesh, material, item.World, camera);
         }
 
-        var children = node.Children;
-        for (int i = 0; i < children.Count; i++)
-            DrawNode(gl, children[i], camera);
+        // The derived static world's chunks arrive pre-culled like the items,
+        // one item per (chunk, material) with the material already resolved by
+        // the swap; chunk meshes are already in world space, so each draws with
+        // the identity model matrix its item carries.
+        IReadOnlyList<RenderItem> worldItems = view.WorldItems;
+        for (int i = 0; i < worldItems.Count; i++)
+        {
+            RenderItem item = worldItems[i];
+            if (item.Material is { } material)
+                DrawRenderable(item.Mesh, material, item.World, camera);
+        }
+    }
+
+    private void DrawRenderable(Mesh mesh, Material material, Matrix4x4 model, Camera camera)
+    {
+        // A material with no program (the fallback built before a renderer had
+        // one, or a shader that failed to resolve) is skipped rather than
+        // dereferenced: one bad material must not take the frame down.
+        if (material.Shader is not { } shader) return;
+
+        shader.Use();
+        shader.SetUniform("uModel", model);
+        shader.SetUniform("uView", camera.View);
+        shader.SetUniform("uProjection", camera.Projection);
+        shader.SetUniform("uLightDir", LightDirection);
+        material.Apply();
+
+        mesh.Draw();
     }
 
     public void Dispose()

@@ -1,0 +1,6 @@
+// wall.spectramat — brick wall surface for blocked-out rooms.
+
+shader = lit
+
+texture uDiffuse = Textures/wall_brick.png, linearmipmap, repeat
+color   uBaseColor = #B4A08C

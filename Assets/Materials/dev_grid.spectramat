@@ -1,0 +1,10 @@
+// dev_grid.spectramat — the neutral development grid, used for untextured
+// world geometry while a level is being blocked out.
+//
+// Format: one directive per line, "// " starts a comment. See
+// SpectraEngine.Core/Assets/MaterialParser.cs for the full spec.
+
+shader = lit
+
+texture uDiffuse = Textures/dev_grid.png, linearmipmap, repeat
+color   uBaseColor = #8C8C99
