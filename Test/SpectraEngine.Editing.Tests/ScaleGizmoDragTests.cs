@@ -1,0 +1,312 @@
+using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Scene;
+using SpectraEngine.Editing.Gizmos;
+using System.Numerics;
+
+namespace SpectraEngine.Editing.Tests;
+
+/// <summary>
+/// What a resize drag does — and, for brush nodes, what it very deliberately
+/// does <em>not</em> do.
+/// </summary>
+/// <remarks>
+/// <b>The load-bearing claim of this suite is that a brush node's transform is
+/// never written.</b> Brush node transforms must stay rigid — the CSG epsilon
+/// scheme assumes unit-length plane normals, and <c>Scene</c>'s snapshot rejects
+/// a scaled brush node outright — so the resize tool edits the brush's local
+/// plane offsets and swaps the successor brush onto the node instead. Every
+/// brush test below asserts the transform is byte-identical afterwards, not
+/// merely "close".
+/// </remarks>
+public sealed class ScaleGizmoDragTests
+{
+    private const float Tolerance = 1e-3f;
+
+    [Theory]
+    [InlineData(GizmoHandle.AxisX)]
+    [InlineData(GizmoHandle.AxisY)]
+    [InlineData(GizmoHandle.AxisZ)]
+    public void An_axis_drag_scales_a_mesh_node_along_that_axis_only(GizmoHandle handle)
+    {
+        var harness = GizmoHarness.ThreeQuarterView();
+        SceneNode node = harness.AddSelectedNode(Vector3.Zero);
+        ScaleGizmo scale = Scale(harness);
+        scale.Snap.Enabled = false;
+
+        // Grabbed at the cube (one axis length out) and pulled to twice that:
+        // the factor is the ratio of the two, so this is exactly ×2.
+        DragAxisTo(harness, handle, 2f);
+
+        Vector3 expected = handle switch
+        {
+            GizmoHandle.AxisX => new Vector3(2f, 1f, 1f),
+            GizmoHandle.AxisY => new Vector3(1f, 2f, 1f),
+            _ => new Vector3(1f, 1f, 2f),
+        };
+
+        node.LocalScale.ShouldBeCloseTo(expected, Tolerance);
+        // A resize does not move anything.
+        node.LocalPosition.ShouldBe(Vector3.Zero);
+        node.LocalRotation.ShouldBe(Quaternion.Identity);
+    }
+
+    [Fact]
+    public void A_half_length_drag_shrinks_a_mesh_node()
+    {
+        var harness = GizmoHarness.ThreeQuarterView();
+        SceneNode node = harness.AddSelectedNode(Vector3.Zero);
+        Scale(harness).Snap.Enabled = false;
+
+        DragAxisTo(harness, GizmoHandle.AxisY, 0.5f);
+
+        node.LocalScale.ShouldBeCloseTo(new Vector3(1f, 0.5f, 1f), Tolerance);
+    }
+
+    [Fact]
+    public void An_existing_scale_is_multiplied_not_replaced()
+    {
+        var harness = GizmoHarness.ThreeQuarterView();
+        SceneNode node = harness.AddSelectedNode(Vector3.Zero);
+        node.LocalScale = new Vector3(3f, 4f, 5f);
+        Scale(harness).Snap.Enabled = false;
+
+        DragAxisTo(harness, GizmoHandle.AxisX, 2f);
+
+        node.LocalScale.ShouldBeCloseTo(new Vector3(6f, 4f, 5f), Tolerance * 10f);
+    }
+
+    [Fact]
+    public void The_uniform_handle_scales_all_three_axes_together()
+    {
+        var harness = GizmoHarness.FrontView();
+        SceneNode node = harness.AddSelectedNode(Vector3.Zero);
+        ScaleGizmo scale = Scale(harness);
+        scale.Snap.Enabled = false;
+
+        GizmoGeometry geometry = Prime(harness);
+        Vector3 pivot = harness.Gizmo.Pivot;
+
+        harness.Grab(pivot).ShouldBe(GizmoUpdateResult.DragBegan);
+        scale.ActiveHandle.ShouldBe(GizmoHandle.Screen);
+
+        // One gizmo-length up and to the right doubles it, by the linear mapping
+        // the uniform handle documents.
+        Vector3 diagonal = Vector3.Normalize(geometry.ViewRight + geometry.ViewUp);
+        harness.DragTo(pivot + diagonal * geometry.AxisLength);
+        scale.DragFactor.ShouldBeCloseTo(new Vector3(2f), Tolerance);
+        harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
+
+        node.LocalScale.ShouldBeCloseTo(new Vector3(2f), Tolerance);
+    }
+
+    [Fact]
+    public void The_factor_snaps_to_the_configured_increment()
+    {
+        var harness = GizmoHarness.ThreeQuarterView();
+        SceneNode node = harness.AddSelectedNode(Vector3.Zero);
+        ScaleGizmo scale = Scale(harness);
+        scale.Snap.Enabled = true;
+        scale.Snap.Increment = 0.25f;
+
+        // 1.6× of cursor travel, which is nearest 1.5 on a quarter-step ladder.
+        DragAxisTo(harness, GizmoHandle.AxisX, 1.6f);
+
+        node.LocalScale.X.ShouldBe(1.5f, 1e-4f);
+    }
+
+    // --- Brush nodes ---------------------------------------------------------
+
+    [Fact]
+    public void Resizing_a_brush_node_edits_its_plane_extents_and_never_its_transform()
+    {
+        var harness = GizmoHarness.ThreeQuarterView();
+        SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero, halfExtent: 1f);
+        Brush original = node.Brush!;
+        Transform before = node.LocalTransform;
+
+        Scale(harness).Snap.Enabled = false;
+        DragAxisTo(harness, GizmoHandle.AxisX, 2f);
+
+        // THE constraint: the transform is bit-identical, scale very much
+        // included. A gizmo that wrote node scale here would corrupt the CSG
+        // epsilon scheme and be rejected by the static-world snapshot.
+        node.LocalTransform.Scale.ShouldBe(before.Scale);
+        node.LocalTransform.Scale.ShouldBe(Vector3.One);
+        node.LocalTransform.Position.ShouldBe(before.Position);
+        node.LocalTransform.Rotation.ShouldBe(before.Rotation);
+
+        // The size moved into the brush instead: a NEW brush (reference identity
+        // is the carve cache's validity key) twice as wide and unchanged in y/z.
+        node.Brush.ShouldNotBeSameAs(original);
+        node.Brush!.LocalBounds.Min.ShouldBeCloseTo(new Vector3(-2f, -1f, -1f), Tolerance);
+        node.Brush.LocalBounds.Max.ShouldBeCloseTo(new Vector3(2f, 1f, 1f), Tolerance);
+
+        // And the original instance is untouched — brushes are immutable.
+        original.LocalBounds.Max.ShouldBeCloseTo(Vector3.One, Tolerance);
+    }
+
+    [Fact]
+    public void A_uniform_brush_resize_scales_all_three_extents()
+    {
+        var harness = GizmoHarness.FrontView();
+        SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero, halfExtent: 2f);
+        ScaleGizmo scale = Scale(harness);
+        scale.Snap.Enabled = false;
+
+        GizmoGeometry geometry = Prime(harness);
+        Vector3 pivot = harness.Gizmo.Pivot;
+        harness.Grab(pivot).ShouldBe(GizmoUpdateResult.DragBegan);
+
+        Vector3 diagonal = Vector3.Normalize(geometry.ViewRight + geometry.ViewUp);
+        harness.DragTo(pivot - diagonal * (geometry.AxisLength * 0.5f)); // ×0.5
+        harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
+
+        node.LocalScale.ShouldBe(Vector3.One);
+        node.Brush!.LocalBounds.Max.ShouldBeCloseTo(new Vector3(1f), Tolerance * 10f);
+    }
+
+    [Fact]
+    public void Undoing_a_brush_resize_puts_the_original_brush_instance_back()
+    {
+        var harness = GizmoHarness.ThreeQuarterView();
+        SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero);
+        Brush original = node.Brush!;
+        Scale(harness).Snap.Enabled = false;
+
+        DragAxisTo(harness, GizmoHandle.AxisZ, 3f);
+        harness.Undo.Count.ShouldBe(1);
+        harness.Undo.UndoName.ShouldBe("Resize");
+
+        harness.Undo.Undo().ShouldBeTrue();
+
+        // The same instance, not an equal one: reference identity is what the
+        // carve cache keys on, so restoring it restores the cached carve too.
+        node.Brush.ShouldBeSameAs(original);
+    }
+
+    [Fact]
+    public void A_cancelled_brush_resize_restores_the_original_brush_and_leaves_no_history()
+    {
+        var harness = GizmoHarness.ThreeQuarterView();
+        SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero);
+        Brush original = node.Brush!;
+        Transform before = node.LocalTransform;
+        Scale(harness).Snap.Enabled = false;
+
+        GrabAxis(harness, GizmoHandle.AxisX, out Vector3 pivot, out Vector3 axis, out float length);
+        harness.DragTo(pivot + axis * (length * 2.5f));
+        node.Brush.ShouldNotBeSameAs(original); // the live drag really did swap it
+
+        harness.PressEscape().ShouldBe(GizmoUpdateResult.DragCancelled);
+
+        node.Brush.ShouldBeSameAs(original);
+        node.LocalTransform.Scale.ShouldBe(before.Scale);
+        harness.Undo.Count.ShouldBe(0);
+    }
+
+    [Fact]
+    public void A_mixed_selection_scales_the_mesh_node_and_reshapes_the_brush_node()
+    {
+        var harness = GizmoHarness.ThreeQuarterView();
+        SceneNode mesh = harness.AddSelectedNode(new Vector3(-2f, 0f, 0f), "Mesh");
+        SceneNode brush = harness.AddSelectedBrushNode(new Vector3(2f, 0f, 0f));
+        Scale(harness).Snap.Enabled = false;
+
+        DragAxisTo(harness, GizmoHandle.AxisY, 2f);
+
+        mesh.LocalScale.ShouldBeCloseTo(new Vector3(1f, 2f, 1f), Tolerance);
+        brush.LocalScale.ShouldBe(Vector3.One);
+        brush.Brush!.LocalBounds.Max.ShouldBeCloseTo(new Vector3(1f, 2f, 1f), Tolerance);
+    }
+
+    [Fact]
+    public void A_brush_resize_marks_the_static_world_dirty_like_any_other_brush_edit()
+    {
+        var harness = GizmoHarness.ThreeQuarterView();
+        SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero);
+        var renderer = new CompilingRenderer();
+        harness.Scene.RebuildStaticWorld(renderer);
+        harness.Scene.StaticWorldDirty.ShouldBeFalse();
+
+        Scale(harness).Snap.Enabled = false;
+        DragAxisTo(harness, GizmoHandle.AxisX, 2f);
+
+        // The node's own Brush setter dirtied the world, so the compile sees a
+        // gizmo resize exactly as it would a scripted brush swap — and the
+        // recompile is scoped to the cells that brush occupies.
+        harness.Scene.StaticWorldDirty.ShouldBeTrue();
+        harness.Scene.RebuildStaticWorld(renderer);
+        harness.Scene.LastCompileDirtyCells.ShouldNotBeEmpty();
+        node.LocalScale.ShouldBe(Vector3.One);
+    }
+
+    [Fact]
+    public void A_resize_that_never_left_its_starting_size_commits_nothing()
+    {
+        var harness = GizmoHarness.ThreeQuarterView();
+        SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero);
+        Brush original = node.Brush!;
+        Scale(harness);
+
+        GrabAxis(harness, GizmoHandle.AxisX, out _, out _, out _);
+        harness.Release().ShouldBe(GizmoUpdateResult.DragCancelled);
+
+        harness.Undo.Count.ShouldBe(0);
+        node.Brush.ShouldBeSameAs(original);
+    }
+
+    [Fact]
+    public void The_resize_gizmo_offers_no_world_orientation()
+    {
+        var harness = GizmoHarness.ThreeQuarterView();
+        SceneNode node = harness.AddSelectedNode(Vector3.Zero);
+        node.LocalRotation = Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2f);
+
+        ScaleGizmo scale = Scale(harness);
+        scale.SupportsOrientation.ShouldBeFalse();
+
+        // Even asked for world alignment, the handles follow the node: its local
+        // +x points along world −z after the quarter turn.
+        harness.Gizmos.Orientation = GizmoOrientation.World;
+        Prime(harness).AxisX.ShouldBeCloseTo(-Vector3.UnitZ, Tolerance);
+    }
+
+    // --- Helpers -------------------------------------------------------------
+
+    private static ScaleGizmo Scale(GizmoHarness harness)
+    {
+        harness.Use(GizmoMode.Scale);
+        return harness.Scale;
+    }
+
+    // One update with the cursor outside the viewport: builds the gizmo geometry
+    // (and publishes the pivot) without claiming a hover, so aims below are
+    // computed against what the gizmo actually chose.
+    private static GizmoGeometry Prime(GizmoHarness harness)
+    {
+        harness.Gizmos.Update(harness.Frame(new Vector2(-10f, -10f)));
+        return harness.Gizmo.Geometry;
+    }
+
+    private static void GrabAxis(
+        GizmoHarness harness, GizmoHandle handle, out Vector3 pivot, out Vector3 axis, out float length)
+    {
+        GizmoGeometry geometry = Prime(harness);
+        pivot = harness.Gizmo.Pivot;
+        axis = geometry.Axis(handle);
+        length = geometry.AxisLength;
+
+        // Aimed at the centre of the cube handle, so the grab offset is exactly
+        // one axis length and the ratio arithmetic below is exact.
+        harness.Hover(pivot + axis * length);
+        harness.Gizmo.HoveredHandle.ShouldBe(handle);
+        harness.Grab(pivot + axis * length).ShouldBe(GizmoUpdateResult.DragBegan);
+    }
+
+    private static void DragAxisTo(GizmoHarness harness, GizmoHandle handle, float factor)
+    {
+        GrabAxis(harness, handle, out Vector3 pivot, out Vector3 axis, out float length);
+        harness.DragTo(pivot + axis * (length * factor));
+        harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
+    }
+}

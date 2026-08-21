@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SpectraEngine.Editing.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\SpectraEngine.Editing\SpectraEngine.Editing.csproj" />
+  </ItemGroup>
+
+</Project>
