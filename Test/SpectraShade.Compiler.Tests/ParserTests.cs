@@ -36,6 +36,60 @@ public sealed class ParserTests
         functions.ShouldContain(f => f.Name == "FragmentMain" && f.HasAttribute("Fragment"));
     }
 
+    [Fact]
+    public void Braceless_if_with_declaration_body_reports_diagnostic_instead_of_throwing()
+    {
+        // A declaration as the sole body of a brace-less if. VariableDeclaration
+        // is not a Statement, so this used to crash the parser with an
+        // InvalidCastException — escaping the diagnostics contract — instead
+        // of reporting an error.
+        var source = """
+            shader Crash {
+                [Vertex]
+                vec4 VertexMain([Location(0)] vec3 position) {
+                    if (position.x > 0.0) float y = 1.0;
+                    return vec4(position, 1.0);
+                }
+
+                [Fragment]
+                vec4 FragmentMain() {
+                    return vec4(1.0, 1.0, 1.0, 1.0);
+                }
+            }
+            """;
+
+        var (_, diagnostics) = Parse(source);
+
+        diagnostics.ShouldContain(d =>
+            d.Severity == DiagnosticSeverity.Error && d.Message.Contains("brace-less"));
+    }
+
+    [Fact]
+    public void Braceless_loop_with_declaration_body_reports_diagnostic_instead_of_throwing()
+    {
+        // Same crash shape through the for and while body paths.
+        var source = """
+            shader Crash {
+                [Vertex]
+                vec4 VertexMain([Location(0)] vec3 position) {
+                    for (var i = 0; i < 4; i = i + 1) float a = 1.0;
+                    while (position.x > 0.0) float b = 2.0;
+                    return vec4(position, 1.0);
+                }
+
+                [Fragment]
+                vec4 FragmentMain() {
+                    return vec4(1.0, 1.0, 1.0, 1.0);
+                }
+            }
+            """;
+
+        var (_, diagnostics) = Parse(source);
+
+        diagnostics.Count(d =>
+            d.Severity == DiagnosticSeverity.Error && d.Message.Contains("brace-less")).ShouldBe(2);
+    }
+
     private static (CompilationUnit Unit, IReadOnlyList<Diagnostic> Diagnostics) Parse(string source)
     {
         var tokens = new Lexer(source).Tokenize();
