@@ -382,6 +382,21 @@ public sealed class SceneManager
             .WithFaceMaterial(BoxFacePlusZ, accentMaterial);
         SelfTestNode = pillarB;
 
+        // One PART brush, floating clear of everything else so the difference
+        // is legible rather than a z-fight. It proves the other half of the
+        // brush story renders at all: it is not in the placement list, carves
+        // nothing, is carved by nothing, and draws from its own brush-local
+        // mesh under its node's world matrix. A regression here is an invisible
+        // box — which the periodic stats line catches ("N of N part brush(es)")
+        // even when nobody is looking at the window.
+        var floatingPart = scene.Root.CreateChild("FloatingPart");
+        floatingPart.LocalPosition = new Vector3(0f, 2.6f, -3f);
+        floatingPart.LocalRotation = Quaternion.CreateFromYawPitchRoll(0.6f, 0.3f, 0f);
+        floatingPart.BrushKind = BrushKind.Part;
+        floatingPart.Brush = Brush
+            .CreateBox(new Vector3(-0.4f, -0.4f, -0.4f), new Vector3(0.4f, 0.4f, 0.4f), pillarMaterial)
+            .WithFaceMaterial(BoxFacePlusZ, accentMaterial);
+
         int partCount = AddScatteredParts(scene);
 
         // Initial build stays synchronous: the sanity checks below need the
@@ -575,7 +590,8 @@ public sealed class SceneManager
                     "{Models} model(s) requested / {Placed} placed; " +
                     "world: {ChunksVisible} of {ChunksTotal} chunks visible, " +
                     "{BatchesVisible} of {BatchesTotal} material batches; " +
-                    "scene: {NodesVisible} of {NodesTotal} mesh nodes; " +
+                    "scene: {NodesVisible} of {NodesTotal} mesh nodes, " +
+                    "{PartsVisible} of {PartsTotal} part brush(es); " +
                     "recompiled {Count} times, last touched {DirtyCells} dirty cell(s); " +
                     "editing: {Selected} selected, {GizmoMode} gizmo, {Navigation} navigation, " +
                     "undo {UndoDepth} / redo {RedoDepth}",
@@ -584,6 +600,7 @@ public sealed class SceneManager
                     renderView.WorldChunksVisible, renderView.WorldChunksTotal,
                     renderView.WorldMaterialBatchesVisible, renderView.WorldMaterialBatchesTotal,
                     renderView.VisibleCount, renderView.TotalCount,
+                    renderView.PartBrushesVisible, renderView.PartBrushesTotal,
                     scene.StaticWorldCompileCount, scene.LastCompileDirtyCells.Count,
                     editor?.SelectionCount ?? 0, editor?.GizmoModeName ?? "none",
                     editor?.NavigationModeName ?? "none",

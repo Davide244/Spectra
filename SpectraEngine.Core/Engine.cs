@@ -295,6 +295,12 @@ public sealed class Engine
                 // brush nodes have changed since the last one.
                 _sceneManager.ActiveScene?.ProcessStaticWorldCompilation(_renderer, _logger);
 
+                // The other half of the same story: part brushes are NOT in
+                // that compile, so their meshes are built and collected here
+                // instead. Proportional to the number of distinct part brushes,
+                // never to the world — a part that merely moved is a cache hit.
+                _sceneManager.ActiveScene?.ProcessPartBrushMeshes(_renderer);
+
                 // Same shape, for content: background decodes hand their pixel
                 // buffers over here and the GPU textures are created on this
                 // thread. Costs nothing on a frame with nothing pending.
@@ -368,7 +374,9 @@ public sealed class Engine
             }
 
             // Asset-owned textures are destroyed through the renderer, so they
-            // have to go before it shuts down — and on this thread.
+            // have to go before it shuts down — and on this thread. Part-brush
+            // meshes are scene-owned and go the same way, for the same reason.
+            _sceneManager.ActiveScene?.ReleasePartBrushMeshes(_renderer);
             _assetManager.ReleaseGraphicsResources();
             _renderer.Shutdown();
             _renderer.ReleaseContext(window);

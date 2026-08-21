@@ -18,14 +18,33 @@ public class SceneNode
     private Matrix4x4 _worldMatrix = Matrix4x4.Identity;
     private bool _worldDirty = true;
     private Bsp.Brush? _brush;
+    private BrushKind _brushKind = BrushKind.World;
     private MeshRenderer? _meshRenderer;
 
-    // Number of brushes attached in this node's subtree (itself included).
-    // Maintained on the whole ancestor chain by the Brush setter and by
-    // reparenting, so a transform edit can decide in O(1) whether it affects
-    // the static world: moving a camera or a brushless prop must not trigger
-    // a recompile, while moving a group node with brush descendants must.
+    // Two lanes, one writer. Both count brushes in this node's subtree (itself
+    // included) and are maintained on the whole ancestor chain by the Brush
+    // setter, the BrushKind setter and reparenting, so both reads are O(1).
+    //
+    // They answer DIFFERENT questions and neither can be derived from the
+    // other, which is why the split is not a rename:
+    //
+    //   _subtreeBrushCount            "is there a brush of ANY kind below me?"
+    //                                 — rigidity. A scale written anywhere above
+    //                                   a brush makes its placement non-rigid,
+    //                                   and that is true of part brushes too, so
+    //                                   ScaleGizmo's group refusal must read it.
+    //   _subtreeStaticWorldBrushCount "is there a brush below me that the CSG
+    //                                 compile can SEE?" — dirtying. A transform
+    //                                   edit only costs a recompile when this is
+    //                                   non-zero.
+    //
+    // Deliberately two int fields rather than two lanes packed into one long:
+    // packing buys nothing here (render-thread only, adjacent fields, same cache
+    // line) and costs a real hazard — a decrement that borrows across the lane
+    // boundary corrupts BOTH counts silently. What actually makes desync
+    // impossible is that AdjustSubtreeBrushCounts is the only writer of either.
     private int _subtreeBrushCount;
+    private int _subtreeStaticWorldBrushCount;
 
     public SceneNode(string name = "Node")
     {
@@ -123,27 +142,93 @@ public class SceneNode
 
             bool had = _brush is not null;
             bool has = value is not null;
+            // Read the CURRENT kind, so both assignment orders are safe:
+            // stamping the kind first costs nothing at all, and attaching the
+            // brush first costs one dirty plus one admission bump when the kind
+            // follows. Neither order can corrupt, so neither needs a convention.
+            bool world = _brushKind == BrushKind.World;
             _brush = value;
 
             // Attach/detach changes the subtree brush population on the whole
             // ancestor chain; a brush-for-brush swap leaves the counts alone.
+            // The static-world lane moves with it only for a World brush.
             if (had != has)
-                AdjustSubtreeBrushCount(this, has ? 1 : -1);
+                AdjustSubtreeBrushCounts(this, has ? 1 : -1, world ? (has ? 1 : -1) : 0);
 
-            // Any change — attach, detach, or replace — changes the carved
-            // world. Attach/detach changes the PLACEMENT COUNT, which the
-            // scene's retained snapshot cannot patch (slots shift), so it
-            // goes through the conservative full-walk dirtying; a
-            // brush-for-brush swap keeps the slot layout and reports just
+            // Any change to a WORLD brush — attach, detach, or replace —
+            // changes the carved world. Attach/detach changes the PLACEMENT
+            // COUNT, which the scene's retained snapshot cannot patch (slots
+            // shift), so it goes through the conservative full-walk dirtying;
+            // a brush-for-brush swap keeps the slot layout and reports just
             // this node.
-            if (had != has)
-                Owner?.MarkStaticWorldDirty();
-            else
-                Owner?.MarkBrushSubtreeDirty(this);
-            // It also changes what (or whether) the spatial index tracks here.
+            //
+            // A PART brush is not in the placement list at all, so none of this
+            // applies to one: attaching, swapping or detaching a part brush must
+            // signal NOTHING. This is the gate the whole zero-cost claim rests
+            // on — MarkStaticWorldDirty sets the force-full flag, so an ungated
+            // attach makes every script-spawned part cost an O(world) walk.
+            if (world)
+            {
+                if (had != has)
+                    Owner?.MarkStaticWorldDirty();
+                else
+                    Owner?.MarkBrushSubtreeDirty(this);
+            }
+
+            // It also changes what (or whether) the spatial index tracks here —
+            // and THIS one is deliberately kind-blind. The BVH indexes brush
+            // nodes and unions their bounds regardless of kind, because part
+            // brushes must still be frustum-culled and must still be pickable
+            // in the editor. Gating it here would make them invisible to both.
             Owner?.OnNodeSpatialComponentChanged(this);
         }
     }
+
+    /// <summary>
+    /// Whether this node's brush is fused into the compiled static world, or
+    /// stands alone as a movable object. Defaults to
+    /// <see cref="BrushKind.World"/>, whose own documentation carries the
+    /// argument for why the bit is declared rather than derived, and never
+    /// inherited.
+    /// </summary>
+    /// <remarks>
+    /// The one admission write in the graph, and deliberately conditional and
+    /// idempotent: an equal write does nothing (the same exact-equality
+    /// discipline the transform setters use), and a kind flip on a node
+    /// carrying no brush signals nothing at all — it is a stamp for a brush
+    /// that may arrive later. On a real change to a brush-bearing node it moves
+    /// the node between the counter's two lanes and tells the scene that the
+    /// set of admitted brushes changed, which is the one thing the incremental
+    /// compile's trusted diff cannot infer for itself.
+    /// </remarks>
+    public BrushKind BrushKind
+    {
+        get => _brushKind;
+        set
+        {
+            if (_brushKind == value)
+                return;
+
+            _brushKind = value;
+
+            // No brush here: nothing is admitted or un-admitted, so nothing is
+            // counted and nothing is dirtied.
+            if (_brush is null)
+                return;
+
+            AdjustSubtreeBrushCounts(this, 0, value == BrushKind.World ? 1 : -1);
+            Owner?.MarkAdmissionChanged(this);
+        }
+    }
+
+    /// <summary>
+    /// True when this node carries a brush that the static-world compile is
+    /// allowed to see. This is the single predicate the CSG snapshot path asks;
+    /// everything downstream of it — rigidity validation, placement slots, the
+    /// per-cell BSP, the chunk meshes — inherits the world/part split for free
+    /// by consuming the one placement list.
+    /// </summary>
+    public bool IsStaticWorldBrush => _brush is not null && _brushKind == BrushKind.World;
 
     /// <summary>The node's transform relative to its parent.</summary>
     /// <remarks>
@@ -221,6 +306,22 @@ public class SceneNode
     /// </remarks>
     public int SubtreeBrushCount => _subtreeBrushCount;
 
+    /// <summary>
+    /// How many brushes in this node's subtree are admitted to the static world
+    /// — that is, how many of the <see cref="SubtreeBrushCount"/> are
+    /// <see cref="BrushKind.World"/>. Always between zero and that total.
+    /// </summary>
+    /// <remarks>
+    /// This is the <em>dirtying</em> question, and it is the one the transform
+    /// path asks: a subtree full of part brushes can be moved every frame for
+    /// free, because nothing in it is in the placement list. It is deliberately
+    /// NOT the question a tool about to write <see cref="LocalScale"/> asks —
+    /// see <see cref="SubtreeBrushCount"/>, which is about rigidity and stays
+    /// kind-blind, because a scale above a <em>part</em> brush is just as
+    /// illegal as a scale above a world one.
+    /// </remarks>
+    public int SubtreeStaticWorldBrushCount => _subtreeStaticWorldBrushCount;
+
     /// <summary>The node's accumulated world matrix (local composed with all ancestors).</summary>
     public Matrix4x4 WorldMatrix
     {
@@ -255,8 +356,11 @@ public class SceneNode
             oldParent._children.Remove(child);
             if (child._subtreeBrushCount > 0)
             {
-                AdjustSubtreeBrushCount(oldParent, -child._subtreeBrushCount);
-                child.Owner?.MarkStaticWorldDirty();
+                AdjustSubtreeBrushCounts(oldParent, -child._subtreeBrushCount, -child._subtreeStaticWorldBrushCount);
+                // Both lanes move, but only admitted brushes changed the
+                // compiled world: a folder of parts can be reparented for free.
+                if (child._subtreeStaticWorldBrushCount > 0)
+                    child.Owner?.MarkStaticWorldDirty();
             }
         }
 
@@ -270,8 +374,9 @@ public class SceneNode
 
         if (child._subtreeBrushCount > 0)
         {
-            AdjustSubtreeBrushCount(this, child._subtreeBrushCount);
-            Owner?.MarkStaticWorldDirty();
+            AdjustSubtreeBrushCounts(this, child._subtreeBrushCount, child._subtreeStaticWorldBrushCount);
+            if (child._subtreeStaticWorldBrushCount > 0)
+                Owner?.MarkStaticWorldDirty();
         }
 
         // A reparent WITHIN one scene raises no membership events (the subtree
@@ -297,9 +402,11 @@ public class SceneNode
             child.Parent = null;
             if (child._subtreeBrushCount > 0)
             {
-                // The removed subtree's brushes leave the compiled world.
-                AdjustSubtreeBrushCount(this, -child._subtreeBrushCount);
-                Owner?.MarkStaticWorldDirty();
+                // The removed subtree's admitted brushes leave the compiled
+                // world; its part brushes were never in it.
+                AdjustSubtreeBrushCounts(this, -child._subtreeBrushCount, -child._subtreeStaticWorldBrushCount);
+                if (child._subtreeStaticWorldBrushCount > 0)
+                    Owner?.MarkStaticWorldDirty();
             }
             child.SetOwner(null);
             child.MarkWorldDirty();
@@ -357,11 +464,16 @@ public class SceneNode
             _children[i].SetOwner(owner);
     }
 
-    // Adds `delta` brushes to `node` and every ancestor's subtree count.
-    private static void AdjustSubtreeBrushCount(SceneNode node, int delta)
+    // The ONLY writer of either subtree lane. Walks `node` and every ancestor
+    // once, moving both counts together — which is what makes it structurally
+    // impossible for the two to disagree about the same subtree.
+    private static void AdjustSubtreeBrushCounts(SceneNode node, int totalDelta, int worldDelta)
     {
         for (SceneNode? n = node; n is not null; n = n.Parent)
-            n._subtreeBrushCount += delta;
+        {
+            n._subtreeBrushCount += totalDelta;
+            n._subtreeStaticWorldBrushCount += worldDelta;
+        }
     }
 
     // Shared tail of every transform setter, run only after the value actually
@@ -370,13 +482,17 @@ public class SceneNode
     {
         MarkWorldDirty();
 
-        // A transform edit only affects the static world when a brush sits
-        // somewhere in this node's subtree — its placement derives from this
-        // node's world matrix. The subtree count makes that an O(1) test.
-        // Node-scoped dirtying: the scene records WHICH subtree moved, so the
-        // next compile launch re-captures only it (the per-frame drag path
+        // A transform edit only affects the static world when an ADMITTED
+        // brush sits somewhere in this node's subtree — its placement derives
+        // from this node's world matrix. The subtree count makes that an O(1)
+        // test. Node-scoped dirtying: the scene records WHICH subtree moved, so
+        // the next compile launch re-captures only it (the per-frame drag path
         // must stay O(edit neighbourhood) end to end).
-        if (_subtreeBrushCount > 0)
+        //
+        // The static-world lane, not the total: a subtree of part brushes may
+        // be moved by physics every tick and must cost nothing here, which is
+        // the entire reason the kind exists.
+        if (_subtreeStaticWorldBrushCount > 0)
             Owner?.MarkBrushSubtreeDirty(this);
 
         // The change event, by contrast, fires for every owned node — editors
