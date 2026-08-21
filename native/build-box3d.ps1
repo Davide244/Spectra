@@ -29,7 +29,12 @@ param(
     [ValidateSet('Release', 'Debug', 'RelWithDebInfo')]
     [string]$Config = 'Release',
 
-    [switch]$Clean
+    [switch]$Clean,
+
+    # Rebuild the ABI manifest from the C compiler and overwrite the committed
+    # copy. A deliberate step, taken when the submodule pin moves, so the layout
+    # diff lands in review instead of in a corrupted stack.
+    [switch]$Abi
 )
 
 $ErrorActionPreference = 'Stop'
@@ -96,6 +101,37 @@ Copy-Item -Path $dll.FullName -Destination $outDir -Force
 
 $pdb = [IO.Path]::ChangeExtension($dll.FullName, '.pdb')
 if (Test-Path $pdb) { Copy-Item -Path $pdb -Destination $outDir -Force }
+
+if ($Abi) {
+    $probeSource = Join-Path $PSScriptRoot 'abi-probe'
+    $probeBuild = Join-Path $repoRoot "build/abi-probe-$Rid"
+    $manifest = Join-Path $PSScriptRoot 'box3d-abi.manifest'
+
+    Write-Host "Configuring ABI probe"
+    & cmake -S $probeSource -B $probeBuild -A $arch "-DBOX3D_BUILD_DIR=$buildDir"
+    if ($LASTEXITCODE -ne 0) { throw "ABI probe configure failed ($LASTEXITCODE)." }
+
+    & cmake --build $probeBuild --config $Config
+    if ($LASTEXITCODE -ne 0) { throw "ABI probe build failed ($LASTEXITCODE)." }
+
+    $probeExe = Get-ChildItem -Path $probeBuild -Recurse -Filter 'abi_probe.exe' | Select-Object -First 1
+    if ($null -eq $probeExe) { throw "ABI probe built but produced no abi_probe.exe." }
+
+    # The probe calls into the library for its version line, so the DLL has to
+    # sit beside it.
+    Copy-Item -Path (Join-Path $outDir 'box3d.dll') -Destination $probeExe.DirectoryName -Force
+
+    $lines = & $probeExe.FullName
+    if ($LASTEXITCODE -ne 0) { throw "ABI probe run failed ($LASTEXITCODE)." }
+
+    # WriteAllLines, not Set-Content: PowerShell 5.1's -Encoding utf8 emits a
+    # BOM, and this file is meant to be a clean, diffable, reviewable text
+    # artifact. (.NET reads past a BOM happily, so the BOM was invisible until
+    # someone read the diff.)
+    [System.IO.File]::WriteAllLines($manifest, [string[]]$lines)
+
+    Write-Host "ABI manifest -> $manifest"
+}
 
 $pinned = (& git -C $source rev-parse HEAD).Trim()
 Write-Host ""

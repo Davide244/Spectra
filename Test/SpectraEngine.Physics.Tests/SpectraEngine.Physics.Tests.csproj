@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SpectraEngine.Physics.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\SpectraEngine.Physics.Box3D\SpectraEngine.Physics.Box3D.csproj" />
+  </ItemGroup>
+
+</Project>

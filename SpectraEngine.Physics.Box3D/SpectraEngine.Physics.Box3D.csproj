@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- Ships inside a game binary, so the trim/AOT analysers run on the
+         ordinary build rather than only at publish time. -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
+  </ItemGroup>
+
+  <!-- The native library is BUILD OUTPUT of the pinned submodule, not a
+       committed binary (see native/README.md). It is copied beside the managed
+       assembly when it exists, and its absence is a deliberate no-op rather
+       than a build break: a shader-only tool build, or a fresh clone that has
+       not run native/build-box3d.ps1 yet, must still compile. -->
+  <ItemGroup>
+    <None Include="..\native\runtimes\win-x64\native\box3d.dll"
+          Condition="Exists('..\native\runtimes\win-x64\native\box3d.dll')">
+      <Link>box3d.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

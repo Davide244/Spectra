@@ -63,14 +63,38 @@ is not a pure length — gravity, sleep thresholds, density — which is why tho
 live in `SpectraEngine.Core/Physics/PhysicsDefaults.cs` rather than being
 inherited.
 
-### Still owed before the binding is trusted
+### The ABI guard
 
-An **ABI guard**: regenerate `sizeof`/`_Alignof`/`offsetof` for every bound
-struct from the C compiler in CI and diff them against the managed layouts, so
-an upstream struct change is a red build rather than a corrupted stack. Box3D is
-alpha and its API is already breaking — recent upstream commits bump
-`b3HullData` and `b3CompoundData` versions — so this is not optional hygiene,
-it is the thing that makes a moving pin safe to move.
+```powershell
+native/build-box3d.ps1 -Abi        # rebuild box3d.dll AND regenerate the manifest
+```
+
+`native/abi-probe` is a small C program compiled against the **same headers and
+the same precision flag** as `box3d.dll`. It prints the real `sizeof`,
+`_Alignof` and `offsetof` of every struct the managed binding mirrors;
+`native/box3d-abi.manifest` is that output, **committed**.
+
+`Box3DAbiTests` then checks every managed struct against it, field by field.
+That test needs no C toolchain and no native library — it reads the committed
+text — so every developer and every CI job gets the check for free, and
+regenerating the manifest is a deliberate act when the pin moves, with the
+layout diff landing in review.
+
+**Why it matters more here than usual:** a P/Invoke struct whose layout
+disagrees with the library's does not fail to compile and does not throw. It
+silently reads and writes the wrong bytes. Box3D is alpha and its API is already
+breaking — recent upstream commits bump `b3HullData` and `b3CompoundData`
+versions — so "the pin moved and a struct grew a field" *will* happen; the only
+question is whether it surfaces as a red build or as physics that is subtly
+wrong and irreproducible.
+
+The guard has been watched to fail, which is the only way to know a guard works:
+swapping `b3Quat`'s scalar and vector fields — a mistake that leaves `sizeof`
+**identical at 16 bytes** and produces rotations that look almost right — is
+caught on field offsets. A size-only check would have missed it entirely.
+
+**Still owed:** a CI job that regenerates the manifest and fails on a diff, so
+upstream drift is caught even when nobody re-runs the probe locally.
 
 ### Do not take a third-party C# binding as a dependency
 
