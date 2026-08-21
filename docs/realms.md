@@ -8,6 +8,42 @@
 
 ---
 
+## At a glance
+
+Roblox asks *"who can see this?"* by making you drag the object into a particular folder. Spectra asks the same question with a property on the object, wherever it already lives.
+
+The same game, both ways:
+
+```
+ROBLOX                              SPECTRA
+Workspace                           World
+  └ Enemy                             └ Enemy           (Shared — inherited; you set nothing)
+ServerStorage                         └ EnemyTemplate   (Server + Dormant)
+  └ EnemyTemplate                     └ EnemySpawner    (Server)
+ServerScriptService                   └ HealthBar       (Client)
+  └ EnemySpawner
+StarterGui
+  └ HealthBar
+```
+
+Note what moved: **the spawner now sits next to the enemies it spawns.** In Roblox it cannot — it has to live in `ServerScriptService`, structurally separated from the thing it is about, because that folder *is* how you said "server only".
+
+| Roblox container | Spectra |
+| --- | --- |
+| `Workspace` | nothing to set — `Shared` + `Active` are the defaults |
+| `ServerStorage` | `Realm = Server`, `State = Dormant` |
+| `ServerScriptService` | `Realm = Server` on a script node |
+| `ReplicatedStorage` | `Realm = Shared`, `State = Dormant` |
+| `StarterGui` / `StarterPack` | `Realm = Client` |
+| `Script` | a script node whose realm resolves to `Server` |
+| `LocalScript` | a script node whose realm is `Client` |
+
+Eight containers with unwritten rules become two dropdowns. Inheritance behaves exactly as a folder did — mark one node `Server` and its whole subtree is server-only — except the mark goes on *any* node, so the tree stays organised around the game rather than around the replication system.
+
+The rest of this document is the precise version of that idea: the lattice, the resolution rule, the enforcement seam, and the one hard refusal on the static world.
+
+---
+
 ## 1. What this replaces, and the precise diagnosis
 
 The ask was: *"Let's take the opportunity of us reinventing the wheel to actually change this to a good intuitive system that fits us."* The thing being replaced is Roblox's container zoo — `ServerStorage`, `ServerScriptService`, `ReplicatedStorage`, `ReplicatedFirst`, `StarterGui`, `StarterPack`, `StarterPlayerScripts`, `StarterCharacterScripts`, with `Workspace` as the ninth that everything else is defined against.
