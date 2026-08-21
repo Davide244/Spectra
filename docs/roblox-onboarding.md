@@ -213,9 +213,14 @@ Also here: `O1`'s value types bound for real — `Vector3` on Luau's native vect
 - A rule for which one `Instance.new("Part")` yields, keyed on mode: authored/edit-mode parts are brushes; parts created during Play are dynamic. (This is a sign-off — §5.)
 - The `NodeClassRegistry` factory path from `O2` becomes the construction-by-name mechanism, which deserialization needs anyway.
 
-**Build this on `P7`'s counter split, not beside it.** `ROADMAP.md` `P7` already splits `_subtreeBrushCount` into a static-world-only counter and filters the snapshot on an `IsStaticWorldBrush` predicate, so that entity-owned brushes leave the carve. That is *the same mechanism* a Static/Movable part split needs. Two independently-maintained subtree invariants of this shape is how silent corruption happens — `P7`'s own named hazard is that forgetting the counter split makes an animating door launch a background compile **every frame, forever**, while everything still renders correctly.
+**Build this on `P7a`'s admission bit, not beside it.** *(This paragraph said `P7`'s counter split; the mechanism moved and got a milestone of its own.)* `ROADMAP.md` **`P7a`** — designed in [`docs/physics.md`](physics.md) §2.3a — ships `SceneNode.BrushKind { World, Part }`, the `IsStaticWorldBrush` predicate the snapshot filters on, and the counter as **two lanes in one field with one writer** (not a split producing a second counter: the *total* lane stays, because `ScaleGizmo` reads it to refuse scaling a group node with brush descendants). That is *exactly* the mechanism a Static/Movable part split needs, and `O7` must reuse it rather than build a parallel Static/Movable invariant — two independently-maintained subtree invariants of this shape is how silent corruption happens. Two consequences for this milestone specifically:
 
-**Depends on** — `O5` (so the binding surface exists to expose it), `P7`. Independent of `O8`/`O9`.
+- **`P7a` is cheaper to wait for than `P7` was.** It needs only `F1` — no entity system, no `P4` — so `O7` is no longer transitively blocked on the entity arc.
+- **It also gives `O7` a second, better answer for a spawned part.** A `BrushKind.Part` brush renders its own faces and moves at zero recompile cost, so *"parts created during Play are dynamic"* need not mean *"parts created during Play are `MeshRenderer` boxes"*. The `MeshRenderer` path stays right for an imported mesh; the part-brush path keeps planes, per-face materials and a hull. Which one `Instance.new("Part")` yields is still the §5 sign-off, and `physics.md` §2.3a explicitly declines to answer it — but the sign-off now has two viable answers rather than one, and the **enum spelling** collides with it: `Part` would name two engine representations behind one Luau word.
+
+`P7a`'s own named hazard is inherited verbatim: forgetting to gate the `Brush` setter's `MarkStaticWorldDirty` (`SceneNode.cs:140`) makes a spawn loop full-recompile the world every frame it runs, exactly as the paragraph above this one describes, **while everything still renders correctly**.
+
+**Depends on** — `O5` (so the binding surface exists to expose it), **`P7a`** (not `P7`, which no longer owns the mechanism). Independent of `O8`/`O9`.
 
 **Risk** — HIGH. It is the first scripting feature that changes *what enters the static placement list*, and that list is guarded by the chunked-vs-monolithic equivalence oracles and the bit-identical determinism tests. Mitigating: a filtered list is just a smaller list, so no oracle should need changing — but per §12 of `ROADMAP.md`, show it, do not assume it, and add a `CsgBench` scenario that spawns and destroys N dynamic parts per frame and re-asserts the *world-size independent* verdict line.
 
@@ -279,10 +284,10 @@ Also here: `O1`'s value types bound for real — `Vector3` on Luau's native vect
 - **`O6`** (Command Bar) once `O4`/`O5` exist.
 
 **Must be sequenced against the editor arc, not run beside it:**
-- **`O1`, `O2`, `O3`** all edit `SceneNode`'s lifecycle, counters and setters — the same surgery as `E4` (brush resize), `E6` (structural commands) and `P7` (entity brush ownership). Ruling `R‑9` gives `P7` a quiet tree; extend that to this group. Sequence: `F2` first (it is small and everything wants its Guid index and `NodeRenamed`), then either the `E` group or the `O1`–`O3` group, not both.
+- **`O1`, `O2`, `O3`** all edit `SceneNode`'s lifecycle, counters and setters — the same surgery as `E4` (brush resize), `E6` (structural commands), `P7a` (`BrushKind` and the two-lane counter) and `P7` (entity brush ownership). Ruling `R‑9` gives `P7`/`P7a` a quiet tree; extend that to this group. Sequence: `F2` first (it is small and everything wants its Guid index and `NodeRenamed`), then either the `E` group or the `O1`–`O3` group, not both.
 - **`O2`'s `Size`** should be built on `E4`'s derivation API, so `E4` first.
 - **`O5`'s binding generator** and **`P5`'s entity generator** are the same analyzer project. Whichever lands first creates it.
-- **`O7`** must be built on `P7`'s counter split, so `P7` first. Do not build a parallel Static/Movable invariant.
+- **`O7`** must be built on **`P7a`**'s `BrushKind` bit and two-lane counter, so `P7a` first — **not `P7`**, which no longer owns that mechanism and which drags in the whole entity arc. Do not build a parallel Static/Movable invariant.
 
 **Genuinely blocked, and honest about it:**
 - **`O9`** waits on `P11a`, which waits on `E6`. It does *not* wait on `P2` and must not be allowed to acquire that dependency.
