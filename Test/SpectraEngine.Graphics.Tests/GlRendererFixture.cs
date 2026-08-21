@@ -2,6 +2,7 @@ using System;
 using Microsoft.Extensions.Logging.Abstractions;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
+using SpectraEngine.Core;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.OpenGL;
 using SpectraShade.Compiler;
@@ -38,6 +39,11 @@ public sealed class GlRendererFixture : IDisposable
 
     public GlRendererFixture()
     {
+        // Same call the engine makes before its own Window.Create: the fixture
+        // must not rely on Silk.NET's reflection-based backend discovery either,
+        // so a trimmed/AOT test host behaves identically to this JIT one.
+        SilkPlatform.EnsureRegistered();
+
         var options = WindowOptions.Default with
         {
             IsVisible = false,

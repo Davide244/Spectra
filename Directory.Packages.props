@@ -42,6 +42,13 @@
     <PackageVersion Include="Silk.NET.DXGI" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.GLFW" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Input" Version="2.23.0" />
+    <!--
+      The two .Glfw backends are pulled in transitively by Silk.NET.Windowing /
+      Silk.NET.Input, but SilkPlatform references their RegisterPlatform types
+      directly (that static reference is what survives trimming), so they are
+      listed explicitly rather than relying on transitive compile-time assets.
+    -->
+    <PackageVersion Include="Silk.NET.Input.Glfw" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Maths" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.OpenAL" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.OpenCL" Version="2.23.0" />
@@ -49,6 +56,7 @@
     <PackageVersion Include="Silk.NET.Vulkan" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Windowing" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Windowing.Common" Version="2.23.0" />
+    <PackageVersion Include="Silk.NET.Windowing.Glfw" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.XInput" Version="2.23.0" />
   </ItemGroup>
 
