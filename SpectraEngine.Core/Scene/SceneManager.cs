@@ -3,6 +3,7 @@ using Silk.NET.Maths;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
+using SpectraEngine.Core.Physics;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -130,6 +131,30 @@ public sealed class SceneManager
     /// the host supplies the construction.
     /// </remarks>
     public Func<Scene, ISceneEditor>? EditorFactory { get; set; }
+
+    /// <summary>
+    /// Builds the physics backend for a freshly loaded scene, or null to run
+    /// without one. Same shape as <see cref="EditorFactory"/>, and invoked in
+    /// the same slot.
+    /// </summary>
+    /// <remarks>
+    /// The reason for the seam is NOT the editor's reason. Gizmo code must
+    /// never ship in a game binary; physics must. What this factory buys is
+    /// that Core — and therefore the compiler tests, the BSP tests and any
+    /// shader-only tool build — never needs a native physics library to
+    /// resolve. A host that sets nothing gets
+    /// <see cref="Physics.NullScenePhysics"/>, which is a supported
+    /// configuration and is exactly what Edit mode is.
+    /// </remarks>
+    public Func<Scene, IScenePhysics>? PhysicsFactory { get; set; }
+
+    /// <summary>
+    /// The physics backend this run installed — never null once a scene is
+    /// loaded, because a host that wired nothing gets
+    /// <see cref="Physics.NullScenePhysics"/> rather than a null to check for
+    /// on every call site in the engine loop.
+    /// </summary>
+    public IScenePhysics Physics { get; private set; } = NullScenePhysics.Instance;
 
     /// <summary>
     /// The editing layer this run installed, or null when the host supplied no
@@ -267,6 +292,14 @@ public sealed class SceneManager
         // the camera and reads the selection the moment it is built, so it must
         // not see a half-authored world.
         Editor = EditorFactory?.Invoke(scene);
+
+        // Physics comes up with the scene and goes down with it. Falling back
+        // to the null backend rather than leaving this null is what keeps the
+        // engine loop free of per-call null checks on a path that runs every
+        // frame and every tick.
+        Physics = PhysicsFactory?.Invoke(scene) ?? NullScenePhysics.Instance;
+        if (Physics.IsSimulating)
+            _logger.LogInformation("Physics backend installed: {Backend}", Physics.GetType().Name);
 
         loadClock.Stop();
 
@@ -732,6 +765,11 @@ public sealed class SceneManager
     {
         ActiveScene = null;
         Editor = null;
+
+        // The null backend is shared and outlives any scene, so disposing it is
+        // deliberately harmless — see NullScenePhysics.Dispose.
+        Physics.Dispose();
+        Physics = NullScenePhysics.Instance;
         SelfTestNode = null;
         _spinner = null;
         _pillarBob = null;
