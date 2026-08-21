@@ -61,6 +61,8 @@ public sealed class Box3DAbiTests
     [InlineData(typeof(B3WorldId), "b3WorldId")]
     [InlineData(typeof(B3BodyId), "b3BodyId")]
     [InlineData(typeof(B3ShapeId), "b3ShapeId")]
+    [InlineData(typeof(B3Capacity), "b3Capacity")]
+    [InlineData(typeof(B3WorldDef), "b3WorldDef")]
     public void A_managed_struct_matches_its_native_layout(Type managed, string nativeName)
     {
         AbiManifest m = Manifest.Value;

@@ -58,10 +58,25 @@ engine already has, and the unit tests are upstream's and run upstream.
 `b3SetLengthUnitsPerMeter(1.0f)` at startup, because **one spectraunit is one
 metre**. Box3D scales its own collision and constraint tolerance macros by that
 value, so the solver runs at exactly the scale it was tuned for and nothing
-converts at the binding boundary. What does *not* rescale is anything whose unit
-is not a pure length — gravity, sleep thresholds, density — which is why those
-live in `SpectraEngine.Core/Physics/PhysicsDefaults.cs` rather than being
-inherited.
+converts at the binding boundary.
+
+**Two corrections to an earlier version of this note, both from reading the
+sources rather than the docs:**
+
+1. **The call must precede the first `b3Default*Def()`, not merely the first
+   world.** Those constructors bake the scale in *at call time* —
+   `b3DefaultWorldDef` computes `contactSpeed = 3.0f * lengthUnits` and
+   `maximumLinearSpeed = 400.0f * lengthUnits`, `b3DefaultBodyDef` computes
+   `sleepThreshold = 0.05f * lengthUnits`, `b3DefaultShapeDef` computes
+   `density = 1000.0f / lengthUnits³`. Setting the unit after taking a default
+   def gives a def tuned for the old scale.
+2. **Density is not "a quantity that does not rescale" — it rescales by the
+   inverse cube.** It reads as 1000 only because our unit happens to be 1 m.
+   Gravity genuinely does not rescale (Box3D's default is −10 on Y and it
+   declares no up axis), which is why `PhysicsDefaults` states it.
+
+Anything whose unit is not a pure length still belongs in
+`SpectraEngine.Core/Physics/PhysicsDefaults.cs` rather than being inherited.
 
 ### The ABI guard
 

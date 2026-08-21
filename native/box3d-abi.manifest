@@ -23,6 +23,34 @@ struct b3Pos size=12 align=4
 struct b3WorldTransform size=28 align=4
   field p offset=0 size=12
   field q offset=12 size=16
+struct b3Capacity size=20 align=4
+  field staticShapeCount offset=0 size=4
+  field dynamicShapeCount offset=4 size=4
+  field staticBodyCount offset=8 size=4
+  field dynamicBodyCount offset=12 size=4
+  field contactCount offset=16 size=4
+struct b3WorldDef size=144 align=8
+  field gravity offset=0 size=12
+  field restitutionThreshold offset=12 size=4
+  field hitEventThreshold offset=16 size=4
+  field contactHertz offset=20 size=4
+  field contactDampingRatio offset=24 size=4
+  field contactSpeed offset=28 size=4
+  field maximumLinearSpeed offset=32 size=4
+  field frictionCallback offset=40 size=8
+  field restitutionCallback offset=48 size=8
+  field enableSleep offset=56 size=1
+  field enableContinuous offset=57 size=1
+  field workerCount offset=60 size=4
+  field enqueueTask offset=64 size=8
+  field finishTask offset=72 size=8
+  field userTaskContext offset=80 size=8
+  field userData offset=88 size=8
+  field createDebugShape offset=96 size=8
+  field destroyDebugShape offset=104 size=8
+  field userDebugShapeContext offset=112 size=8
+  field capacity offset=120 size=20
+  field internalValue offset=140 size=4
 struct b3WorldId size=4 align=2
   field index1 offset=0 size=2
   field generation offset=2 size=2

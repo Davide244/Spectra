@@ -90,6 +90,41 @@ int main( void )
 	DUMP_FIELD( b3WorldTransform, p );
 	DUMP_FIELD( b3WorldTransform, q );
 
+	// --- world creation ---------------------------------------------------
+	// b3WorldDef is the one struct here with NO upstream _Static_assert on its
+	// size, so measuring it is the only check that exists. It also mixes
+	// floats, one-byte bools, a uint32, seven pointers and a nested struct —
+	// the exact shape where a hand-derived layout goes wrong quietly.
+	DUMP_STRUCT( b3Capacity );
+	DUMP_FIELD( b3Capacity, staticShapeCount );
+	DUMP_FIELD( b3Capacity, dynamicShapeCount );
+	DUMP_FIELD( b3Capacity, staticBodyCount );
+	DUMP_FIELD( b3Capacity, dynamicBodyCount );
+	DUMP_FIELD( b3Capacity, contactCount );
+
+	DUMP_STRUCT( b3WorldDef );
+	DUMP_FIELD( b3WorldDef, gravity );
+	DUMP_FIELD( b3WorldDef, restitutionThreshold );
+	DUMP_FIELD( b3WorldDef, hitEventThreshold );
+	DUMP_FIELD( b3WorldDef, contactHertz );
+	DUMP_FIELD( b3WorldDef, contactDampingRatio );
+	DUMP_FIELD( b3WorldDef, contactSpeed );
+	DUMP_FIELD( b3WorldDef, maximumLinearSpeed );
+	DUMP_FIELD( b3WorldDef, frictionCallback );
+	DUMP_FIELD( b3WorldDef, restitutionCallback );
+	DUMP_FIELD( b3WorldDef, enableSleep );
+	DUMP_FIELD( b3WorldDef, enableContinuous );
+	DUMP_FIELD( b3WorldDef, workerCount );
+	DUMP_FIELD( b3WorldDef, enqueueTask );
+	DUMP_FIELD( b3WorldDef, finishTask );
+	DUMP_FIELD( b3WorldDef, userTaskContext );
+	DUMP_FIELD( b3WorldDef, userData );
+	DUMP_FIELD( b3WorldDef, createDebugShape );
+	DUMP_FIELD( b3WorldDef, destroyDebugShape );
+	DUMP_FIELD( b3WorldDef, userDebugShapeContext );
+	DUMP_FIELD( b3WorldDef, capacity );
+	DUMP_FIELD( b3WorldDef, internalValue );
+
 	// --- ids --------------------------------------------------------------
 	// Passed BY VALUE on nearly every call, so their layout is on the hot path
 	// of every mistake.
