@@ -51,6 +51,7 @@ public sealed unsafe class D3D12Renderer : Renderer
     private ComPtr<ID3D12CommandAllocator> _commandAllocator;
     private ComPtr<ID3D12GraphicsCommandList> _commandList;
     private ComPtr<ID3D12InfoQueue> _infoQueue;
+    private DxgiDebugMessages? _dxgiMessages;
 
     private ComPtr<ID3D12DescriptorHeap> _rtvHeap;
     private ComPtr<ID3D12DescriptorHeap> _dsvHeap;
@@ -118,6 +119,20 @@ public sealed unsafe class D3D12Renderer : Renderer
     // path when the window has changed; the resize must run on this (render)
     // thread between frames, never in a window event.
     private Vector2D<int> _swapChainSize;
+
+    // The last size ResizeBuffers refused, if any. A recoverable resize failure
+    // leaves the swap chain on its old buffers, so the latch keeps disagreeing
+    // and the path would be re-entered — and re-fail — every single frame,
+    // burning a WaitForGpu and a view rebuild each time and drowning the log.
+    // Cleared by the next resize that succeeds, so going away and coming back
+    // to the same size does get retried.
+    private Vector2D<int>? _failedResizeSize;
+
+    // Set once the device is gone. Everything that would otherwise call into a
+    // dead device — the fence wait, Present, the shutdown teardown — checks it,
+    // so the run ends on the one clear diagnosis instead of a cascade of
+    // secondary COM failures.
+    private bool _deviceLost;
 
     private D3D12LineBatch? _lineBatch;
     private ShaderProgram? _debugShader;
@@ -228,12 +243,12 @@ public sealed unsafe class D3D12Renderer : Renderer
         Guid deviceGuid = ID3D12Device.Guid;
         SilkMarshal.ThrowHResult(D3D12Api.CreateDevice(
             default(ComPtr<IUnknown>), D3DFeatureLevel.Level110, &deviceGuid, (void**)&device));
-        _device = new ComPtr<ID3D12Device>(device);
+        _device = ComOwnership.Own(device);
 
         ID3D12InfoQueue* infoQueue = null;
         Guid infoQueueGuid = ID3D12InfoQueue.Guid;
         if (device->QueryInterface(&infoQueueGuid, (void**)&infoQueue) >= 0)
-            _infoQueue = new ComPtr<ID3D12InfoQueue>(infoQueue);
+            _infoQueue = ComOwnership.Own(infoQueue);
     }
 
     private void CreateQueueAndSwapChain(IWindow window, uint width, uint height)
@@ -253,14 +268,38 @@ public sealed unsafe class D3D12Renderer : Renderer
         ID3D12CommandQueue* queue = null;
         Guid queueGuid = ID3D12CommandQueue.Guid;
         SilkMarshal.ThrowHResult(DevicePtr->CreateCommandQueue(&queueDesc, &queueGuid, (void**)&queue));
-        _queue = new ComPtr<ID3D12CommandQueue>(queue);
+        _queue = ComOwnership.Own(queue);
 
+        // Ask for the DXGI debug layer first and fall back silently, same shape
+        // as the D3D12 debug layer above: it is what turns a bare
+        // DXGI_ERROR_INVALID_CALL out of ResizeBuffers into a sentence saying
+        // which reference is still outstanding.
         IDXGIFactory2* factory = null;
         Guid factoryGuid = IDXGIFactory2.Guid;
-        SilkMarshal.ThrowHResult(_dxgi.CreateDXGIFactory2(0u, &factoryGuid, (void**)&factory));
+        int factoryHr = _dxgi.CreateDXGIFactory2(
+            DxgiDebugMessages.CreateFactoryDebug, &factoryGuid, (void**)&factory);
+        if (factoryHr >= 0)
+        {
+            _dxgiMessages = DxgiDebugMessages.Acquire(_dxgi);
+            _logger.LogInformation(
+                "DXGI debug layer {State}.", _dxgiMessages.IsAvailable ? "active" : "requested but no info queue");
+        }
+        else
+        {
+            _logger.LogInformation("DXGI debug layer unavailable (hr=0x{Hr:X}); creating the factory without it.", factoryHr);
+            SilkMarshal.ThrowHResult(_dxgi.CreateDXGIFactory2(0u, &factoryGuid, (void**)&factory));
+        }
 
         // Flip model is mandatory on D3D12. The per-frame full fence sync means
         // the rotating back buffer is never in flight when we touch it.
+        //
+        // Flags stays 0 on purpose — in particular WITHOUT
+        // DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH. This engine never switches
+        // display modes: fullscreen is borderless windowed driven by
+        // WindowModeLatch, and MakeWindowAssociation below stops DXGI from
+        // driving a mode switch behind our back. A swap chain created without
+        // that flag being put into a fullscreen transition anyway is precisely
+        // the state ResizeBuffers rejects with DXGI_ERROR_INVALID_CALL.
         var desc = new SwapChainDesc1
         {
             Width = width,
@@ -284,7 +323,13 @@ public sealed unsafe class D3D12Renderer : Renderer
         Guid sc3Guid = IDXGISwapChain3.Guid;
         SilkMarshal.ThrowHResult(swapChain1->QueryInterface(&sc3Guid, (void**)&swapChain3));
         swapChain1->Release();
-        _swapChain = new ComPtr<IDXGISwapChain3>(swapChain3);
+        _swapChain = ComOwnership.Own(swapChain3);
+
+        // Before the factory goes: the window association is per-factory, so it
+        // has to be made on THIS one — the one that created the chain — and
+        // therefore before the Release below. See DxgiInterop.SuppressAltEnter
+        // for what DXGI does to the render thread if we skip it.
+        DxgiInterop.SuppressAltEnter(factory, hwnd, _logger, "D3D12");
         factory->Release();
 
         _frameIndex = _swapChain.GetCurrentBackBufferIndex();
@@ -303,19 +348,19 @@ public sealed unsafe class D3D12Renderer : Renderer
         ID3D12CommandAllocator* allocator = null;
         Guid allocGuid = ID3D12CommandAllocator.Guid;
         SilkMarshal.ThrowHResult(DevicePtr->CreateCommandAllocator(CommandListType.Direct, &allocGuid, (void**)&allocator));
-        _commandAllocator = new ComPtr<ID3D12CommandAllocator>(allocator);
+        _commandAllocator = ComOwnership.Own(allocator);
 
         ID3D12GraphicsCommandList* list = null;
         Guid listGuid = ID3D12GraphicsCommandList.Guid;
         SilkMarshal.ThrowHResult(DevicePtr->CreateCommandList(
             0, CommandListType.Direct, allocator, (ID3D12PipelineState*)null, &listGuid, (void**)&list));
-        _commandList = new ComPtr<ID3D12GraphicsCommandList>(list);
+        _commandList = ComOwnership.Own(list);
         SilkMarshal.ThrowHResult(list->Close()); // lists are created open
 
         ID3D12Fence* fence = null;
         Guid fenceGuid = ID3D12Fence.Guid;
         SilkMarshal.ThrowHResult(DevicePtr->CreateFence(0, FenceFlags.None, &fenceGuid, (void**)&fence));
-        _fence = new ComPtr<ID3D12Fence>(fence);
+        _fence = ComOwnership.Own(fence);
         _fenceEvent = Kernel32.CreateEvent(0, 0, 0, null);
         if (_fenceEvent == 0)
             throw new InvalidOperationException("Failed to create fence event.");
@@ -345,7 +390,13 @@ public sealed unsafe class D3D12Renderer : Renderer
             ID3D12Resource* backBuffer = null;
             Guid resGuid = ID3D12Resource.Guid;
             SilkMarshal.ThrowHResult(((IDXGISwapChain3*)_swapChain.Handle)->GetBuffer(i, &resGuid, (void**)&backBuffer));
-            _backBuffers[i] = new ComPtr<ID3D12Resource>(backBuffer);
+            // Own, not `new ComPtr<>(...)`: the ComPtr constructor AddRefs, so
+            // wrapping GetBuffer's already-owned pointer would leave TWO
+            // references on the back buffer and ReleaseBackBufferViews would
+            // only ever drop it to one. DXGI then refuses every ResizeBuffers
+            // with DXGI_ERROR_INVALID_CALL — which is exactly why resizing this
+            // backend's window used to kill the render thread. See ComOwnership.
+            _backBuffers[i] = ComOwnership.Own(backBuffer);
 
             var handle = new CpuDescriptorHandle { Ptr = rtvStart.Ptr + i * _rtvStride };
             DevicePtr->CreateRenderTargetView(backBuffer, null, handle);
@@ -372,21 +423,23 @@ public sealed unsafe class D3D12Renderer : Renderer
         Guid depthGuid = ID3D12Resource.Guid;
         SilkMarshal.ThrowHResult(DevicePtr->CreateCommittedResource(
             &heapProps, HeapFlags.None, &depthDesc, ResourceStates.DepthWrite, &clearValue, &depthGuid, (void**)&depth));
-        _depthBuffer = new ComPtr<ID3D12Resource>(depth);
+        // Same ownership handover: without it the depth texture survives every
+        // ReleaseBackBufferViews and each resize leaks a full-screen surface.
+        _depthBuffer = ComOwnership.Own(depth);
 
         var dsvHandle = ((ID3D12DescriptorHeap*)_dsvHeap.Handle)->GetCPUDescriptorHandleForHeapStart();
         DevicePtr->CreateDepthStencilView(depth, null, dsvHandle);
     }
 
+    // Idempotent on purpose: the resize path releases the buffers and a device
+    // loss can throw before they are rebuilt, after which Shutdown releases
+    // them again. Clearing each field is what keeps that second pass a no-op
+    // rather than an over-release. See ComOwnership.Release.
     private void ReleaseBackBufferViews()
     {
         for (int i = 0; i < _backBuffers.Length; i++)
-        {
-            _backBuffers[i].Dispose();
-            _backBuffers[i] = default;
-        }
-        _depthBuffer.Dispose();
-        _depthBuffer = default;
+            ComOwnership.Release(ref _backBuffers[i]);
+        ComOwnership.Release(ref _depthBuffer);
     }
 
     // ─── Frame loop ──────────────────────────────────────────
@@ -475,8 +528,20 @@ public sealed unsafe class D3D12Renderer : Renderer
 
     public override void Present(IWindow window)
     {
-        if (_swapChain.Handle is null) return;
-        SilkMarshal.ThrowHResult(((IDXGISwapChain3*)_swapChain.Handle)->Present(0, 0));
+        if (_swapChain.Handle is null || _deviceLost) return;
+
+        // Present is the other call that reports a lost device, and it reports
+        // it far more often than ResizeBuffers does (a TDR lands here). Same
+        // treatment: a named diagnosis with the removed reason, not an opaque
+        // COMException from deep inside SilkMarshal.
+        int hr = ((IDXGISwapChain3*)_swapChain.Handle)->Present(0, 0);
+        if (hr < 0)
+        {
+            if (DxgiInterop.IsDeviceLost(hr))
+                throw DeviceLost(hr, "presenting a frame");
+            SilkMarshal.ThrowHResult(hr);
+        }
+
         WaitForGpu();
 
         // GPU idle and no list recording: the only safe point to free upload
@@ -492,6 +557,9 @@ public sealed unsafe class D3D12Renderer : Renderer
     private void DisposeRetiredUploadRings()
     {
         if (_retiredUploadRings.Count == 0) return;
+        // Dispose is enough here (rather than ComOwnership.Release) only
+        // because the Clear below drops the entries: each retired ring holds
+        // exactly one reference and is released exactly once.
         foreach (var ring in _retiredUploadRings)
             ring.Dispose();
         _retiredUploadRings.Clear();
@@ -553,7 +621,10 @@ public sealed unsafe class D3D12Renderer : Renderer
             target = target > maximum / 2 ? maximum : target * 2;
         }
 
-        ring.Dispose();
+        // Release before the new heap is created: if creation throws, the
+        // field must be empty rather than holding a freed handle Shutdown
+        // would release a second time.
+        ComOwnership.Release(ref ring);
         ring = CreateDescriptorHeap(type, target, shaderVisible: true);
         _logger.LogInformation(
             "D3D12 {Label} descriptor ring sized to {Capacity} slots for a {Required}-descriptor frame",
@@ -576,7 +647,7 @@ public sealed unsafe class D3D12Renderer : Renderer
             uint newCapacity = _srvRingCapacity;
             while (_srvRingPeak * 4 > newCapacity * 3)
                 newCapacity *= 2;
-            _srvRing.Dispose();
+            ComOwnership.Release(ref _srvRing);
             _srvRing = CreateDescriptorHeap(DescriptorHeapType.CbvSrvUav, newCapacity, shaderVisible: true);
             _srvRingCapacity = newCapacity;
             _logger.LogInformation("D3D12 SRV descriptor ring grown to {Capacity} slots", newCapacity);
@@ -587,7 +658,7 @@ public sealed unsafe class D3D12Renderer : Renderer
             uint newCapacity = _samplerRingCapacity;
             while (_samplerRingPeak * 4 > newCapacity * 3 && newCapacity < MaxSamplerRingCapacity)
                 newCapacity *= 2;
-            _samplerRing.Dispose();
+            ComOwnership.Release(ref _samplerRing);
             _samplerRing = CreateDescriptorHeap(DescriptorHeapType.Sampler, newCapacity, shaderVisible: true);
             _samplerRingCapacity = newCapacity;
             _logger.LogInformation("D3D12 sampler descriptor ring grown to {Capacity} slots", newCapacity);
@@ -600,7 +671,10 @@ public sealed unsafe class D3D12Renderer : Renderer
     /// <summary>Blocks until the queue has finished all submitted work.</summary>
     internal void WaitForGpu()
     {
-        if (_fence.Handle is null) return;
+        // A dead device never signals, so the wait below would either fail or
+        // block forever. Returning is the only thing that lets the teardown
+        // path finish and the run end on its real diagnosis.
+        if (_fence.Handle is null || _deviceLost) return;
         ulong value = ++_fenceValue;
         SilkMarshal.ThrowHResult(((ID3D12CommandQueue*)_queue.Handle)->Signal((ID3D12Fence*)_fence.Handle, value));
         if (((ID3D12Fence*)_fence.Handle)->GetCompletedValue() < value)
@@ -808,7 +882,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         ID3D12DescriptorHeap* heap = null;
         Guid heapGuid = ID3D12DescriptorHeap.Guid;
         SilkMarshal.ThrowHResult(DevicePtr->CreateDescriptorHeap(&desc, &heapGuid, (void**)&heap));
-        return new ComPtr<ID3D12DescriptorHeap>(heap);
+        return ComOwnership.Own(heap);
     }
 
     internal ComPtr<ID3D12Resource> CreateUploadBuffer(uint sizeBytes, string debugName)
@@ -831,7 +905,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         Guid resGuid = ID3D12Resource.Guid;
         SilkMarshal.ThrowHResult(DevicePtr->CreateCommittedResource(
             &heapProps, HeapFlags.None, &desc, ResourceStates.GenericRead, null, &resGuid, (void**)&res));
-        return new ComPtr<ID3D12Resource>(res);
+        return ComOwnership.Own(res);
     }
 
     internal ComPtr<ID3D12Resource> CreateTexture2D(uint width, uint height, ushort mipLevels, Format format)
@@ -854,7 +928,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         Guid resGuid = ID3D12Resource.Guid;
         SilkMarshal.ThrowHResult(DevicePtr->CreateCommittedResource(
             &heapProps, HeapFlags.None, &desc, ResourceStates.CopyDest, null, &resGuid, (void**)&res));
-        return new ComPtr<ID3D12Resource>(res);
+        return ComOwnership.Own(res);
     }
 
     /// <summary>
@@ -980,22 +1054,125 @@ public sealed unsafe class D3D12Renderer : Renderer
 
     // ─── Resize / shutdown ───────────────────────────────────
 
+    /// <summary>
+    /// Reconciles the swap chain with the engine's framebuffer-size latch.
+    /// Render thread only, between frames — never from a window event.
+    /// </summary>
+    /// <remarks>
+    /// <b>A resize failure must not take the render thread down.</b> The three
+    /// outcomes are kept apart deliberately: a degenerate size is not a resize
+    /// at all and is skipped; a device loss ends the run with a diagnosis; and
+    /// anything else is logged with its HRESULT and the attempted size, the
+    /// previous swap-chain state is rebuilt so the next frame has valid views,
+    /// and the engine keeps running at the old size.
+    /// </remarks>
     private void DrainPendingResize()
     {
         // The engine feeds the base-class latch from the main thread; when it
         // disagrees with what the swap chain was built for, resize here on the
         // render thread before the frame starts recording.
+        //
+        // Read the latch exactly ONCE. The main thread may publish another size
+        // while ResizeBuffers is running (a live window drag, or the borderless
+        // fullscreen toggle landing), and _swapChainSize below records the size
+        // the buffers were actually built at — so the next frame sees the fresh
+        // mismatch and resizes again, instead of this one claiming a size that
+        // never happened.
         Vector2D<int> newSize = FramebufferSize;
-        if (newSize == _swapChainSize) return;
-        if (newSize.X <= 0 || newSize.Y <= 0 || _swapChain.Handle is null) return;
+
+        // Every "should we touch the swap chain at all" rule — unchanged size,
+        // no chain, dead device, degenerate (minimised) size, a size that
+        // already failed — lives in the shared policy, so this backend and
+        // D3D11 cannot drift apart on it. See SwapChainResizePolicy.
+        if (!SwapChainResizePolicy.ShouldResize(
+                newSize, _swapChainSize, _failedResizeSize, _swapChain.Handle is not null, _deviceLost))
+            return;
 
         WaitForGpu();
         ReleaseBackBufferViews();
-        SilkMarshal.ThrowHResult(((IDXGISwapChain3*)_swapChain.Handle)->ResizeBuffers(
-            BufferCount, (uint)newSize.X, (uint)newSize.Y, Format.FormatUnknown, 0u));
+
+        int hr = ((IDXGISwapChain3*)_swapChain.Handle)->ResizeBuffers(
+            BufferCount, (uint)newSize.X, (uint)newSize.Y, Format.FormatUnknown, 0u);
+
+        if (hr < 0)
+        {
+            if (DxgiInterop.IsDeviceLost(hr))
+                throw DeviceLost(hr, $"resizing the swap chain to {newSize.X}×{newSize.Y}");
+
+            _logger.LogError(
+                "D3D12 ResizeBuffers to {Width}×{Height} failed: {Code} (0x{Hr:X8}). Staying at {OldWidth}×{OldHeight}.",
+                newSize.X, newSize.Y, DxgiInterop.Describe(hr), hr, _swapChainSize.X, _swapChainSize.Y);
+            _failedResizeSize = newSize;
+
+            // A failed ResizeBuffers leaves the chain on its PREVIOUS buffers,
+            // so the views released above have to come back at the old size.
+            // Skipping this would turn one bad resize into a guaranteed crash
+            // on the very next frame, which renders through a null RTV.
+            CreateBackBufferViews((uint)_swapChainSize.X, (uint)_swapChainSize.Y);
+            _frameIndex = _swapChain.GetCurrentBackBufferIndex();
+            DrainDebugMessages();
+            return;
+        }
+
         CreateBackBufferViews((uint)newSize.X, (uint)newSize.Y);
         _frameIndex = _swapChain.GetCurrentBackBufferIndex();
         _swapChainSize = newSize;
+        _failedResizeSize = null;
+    }
+
+    /// <summary>
+    /// Belt-and-braces before the swap chain is released: DXGI documents that
+    /// releasing a swap chain still in exclusive fullscreen is undefined
+    /// behaviour, and the classic symptom is a hang or a crash on exit.
+    /// </summary>
+    /// <remarks>
+    /// The engine never asks for exclusive fullscreen and, since
+    /// <see cref="DxgiInterop.SuppressAltEnter"/>, DXGI cannot enter it behind
+    /// our back either — so this should always find the chain windowed. It
+    /// stays because the cost is one virtual call at shutdown and the failure
+    /// it guards against is unrecoverable and machine-dependent (the
+    /// association call itself can fail on an odd driver, and that failure is
+    /// only a warning).
+    /// </remarks>
+    private void EnsureSwapChainWindowed()
+    {
+        if (_swapChain.Handle is null || _deviceLost) return;
+
+        int fullscreen = 0;
+        IDXGIOutput* output = null;
+        if (((IDXGISwapChain3*)_swapChain.Handle)->GetFullscreenState(&fullscreen, &output) >= 0)
+        {
+            if (fullscreen != 0)
+            {
+                _logger.LogWarning("D3D12 swap chain was in exclusive fullscreen at shutdown; returning it to windowed first.");
+                ((IDXGISwapChain3*)_swapChain.Handle)->SetFullscreenState(false, (IDXGIOutput*)null);
+            }
+            if (output is not null)
+                output->Release();
+        }
+    }
+
+    /// <summary>
+    /// Builds the one exception a lost device gets, having first asked the
+    /// device why it went — the HRESULT alone only says "gone", the removed
+    /// reason names the actual fault.
+    /// </summary>
+    private GraphicsDeviceLostException DeviceLost(int hr, string action)
+    {
+        int reason = _device.Handle is not null ? DevicePtr->GetDeviceRemovedReason() : 0;
+
+        // Flip the flag before anything else: the throw unwinds through
+        // Engine's crash handler straight into Shutdown, which must not try to
+        // fence-wait on a dead queue and mask this diagnosis with its own.
+        _deviceLost = true;
+
+        // Last chance to get the debug layer's account of it into the log.
+        DrainDebugMessages();
+
+        return new GraphicsDeviceLostException(
+            $"D3D12 device lost while {action}: {DxgiInterop.Describe(hr)} (0x{hr:X8}); " +
+            $"ID3D12Device::GetDeviceRemovedReason = {DxgiInterop.Describe(reason)} (0x{reason:X8}). " +
+            "The engine cannot recreate a device mid-run, so this ends the session.");
     }
 
     public override void Shutdown()
@@ -1020,30 +1197,37 @@ public sealed unsafe class D3D12Renderer : Renderer
         _shaders.Clear();
         DefaultShader = null;
 
+        // Release, not Dispose: Engine.RenderLoop calls Shutdown a second time
+        // from its crash handler when the first one threw, and a ComPtr keeps
+        // its handle after Dispose — so plain disposal here would over-release
+        // everything the first pass already freed. See ComOwnership.
         ReleaseBackBufferViews();
-        _samplerRing.Dispose();
-        _srvRing.Dispose();
+        ComOwnership.Release(ref _samplerRing);
+        ComOwnership.Release(ref _srvRing);
         if (_uploadRingCpu is not null)
         {
             ((ID3D12Resource*)_uploadRing.Handle)->Unmap(0, null);
             _uploadRingCpu = null;
         }
-        _uploadRing.Dispose();
+        ComOwnership.Release(ref _uploadRing);
         DisposeRetiredUploadRings(); // safe: WaitForGpu ran above
-        _rtvHeap.Dispose();
-        _dsvHeap.Dispose();
-        _commandList.Dispose();
-        _commandAllocator.Dispose();
-        _fence.Dispose();
+        ComOwnership.Release(ref _rtvHeap);
+        ComOwnership.Release(ref _dsvHeap);
+        ComOwnership.Release(ref _commandList);
+        ComOwnership.Release(ref _commandAllocator);
+        ComOwnership.Release(ref _fence);
         if (_fenceEvent != 0)
         {
             Kernel32.CloseHandle(_fenceEvent);
             _fenceEvent = 0;
         }
-        _swapChain.Dispose();
-        _queue.Dispose();
-        _infoQueue.Dispose();
-        _device.Dispose();
+        EnsureSwapChainWindowed();
+        ComOwnership.Release(ref _swapChain);
+        ComOwnership.Release(ref _queue);
+        ComOwnership.Release(ref _infoQueue);
+        _dxgiMessages?.Dispose();
+        _dxgiMessages = null;
+        ComOwnership.Release(ref _device);
 
         base.Shutdown();
         _logger.LogInformation("Renderer shut down (D3D12)");
@@ -1053,6 +1237,11 @@ public sealed unsafe class D3D12Renderer : Renderer
 
     private void DrainDebugMessages()
     {
+        // DXGI validates on its own queue, separate from the device's: every
+        // swap-chain rejection (ResizeBuffers, Present) is explained there and
+        // nowhere else, so it is drained in the same slot.
+        _dxgiMessages?.Drain(_logger, "D3D12");
+
         if (_infoQueue.Handle is null) return;
 
         var queue = (ID3D12InfoQueue*)_infoQueue.Handle;

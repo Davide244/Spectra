@@ -51,7 +51,8 @@ internal enum SelfTestSource
 internal sealed record DemoStartupOptions(
     GraphicsBackend Backend,
     bool SelfTestEnabled,
-    SelfTestSource SelfTestSource)
+    SelfTestSource SelfTestSource,
+    TimeSpan? FullscreenCycleInterval = null)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -61,7 +62,8 @@ internal sealed record DemoStartupOptions(
 
     /// <summary>One line of usage, appended to every argument error.</summary>
     private const string Usage =
-        "Usage: SpectraEngine.Executable [opengl|d3d11|d3d12] [--selftest[=true|false]].";
+        "Usage: SpectraEngine.Executable [opengl|d3d11|d3d12] [--selftest[=true|false]] " +
+        "[--fullscreen-cycle[=seconds]].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -85,6 +87,7 @@ internal sealed record DemoStartupOptions(
 
         GraphicsBackend? backend = null;
         bool? selfTest = null;
+        TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
         {
@@ -111,6 +114,10 @@ internal sealed record DemoStartupOptions(
                 case "backend":
                     backend = ParseBackend(value ?? string.Empty, token);
                     continue;
+
+                case "fullscreen-cycle" or "fullscreencycle":
+                    fullscreenCycle = ParseInterval(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -123,17 +130,19 @@ internal sealed record DemoStartupOptions(
         }
 
         if (selfTest is bool fromCommandLine)
-            return new DemoStartupOptions(backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine);
+            return new DemoStartupOptions(
+                backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine, fullscreenCycle);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
             bool fromEnvironment = ParseBoolean(
                 selfTestEnvironmentValue.Trim(), SelfTestEnvironmentVariable);
             return new DemoStartupOptions(
-                backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment);
+                backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment, fullscreenCycle);
         }
 
-        return new DemoStartupOptions(backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default);
+        return new DemoStartupOptions(
+            backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default, fullscreenCycle);
     }
 
     // Aliases mirror the SpectraShade compiler CLI for consistency.
@@ -146,6 +155,26 @@ internal sealed record DemoStartupOptions(
             "vulkan" or "vk" => GraphicsBackend.Vulkan,
             _ => throw new ArgumentException($"Unknown backend '{token}'. Try: opengl, d3d11, d3d12."),
         };
+
+    // A bare --fullscreen-cycle means the harness's own default interval; a
+    // value overrides it. Zero or negative would spin the window-mode latch as
+    // fast as the pump runs, which measures nothing and cannot be watched, so
+    // it is refused rather than clamped.
+    private static TimeSpan ParseInterval(string? value, string origin)
+    {
+        if (value is null)
+            return TimeSpan.FromSeconds(FullscreenCycleHarness.DefaultIntervalSeconds);
+
+        if (!double.TryParse(value.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds)
+            || double.IsNaN(seconds) || seconds <= 0.0)
+        {
+            throw new ArgumentException(string.Format(
+                CultureInfo.InvariantCulture,
+                "'{0}' expects a positive number of seconds, not '{1}'. {2}", origin, value, Usage));
+        }
+
+        return TimeSpan.FromSeconds(seconds);
+    }
 
     // A bare switch means "on"; an explicit value is honoured so a harness can
     // pass --selftest=false to override an inherited environment variable.

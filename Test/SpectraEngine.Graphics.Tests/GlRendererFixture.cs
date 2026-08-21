@@ -37,6 +37,14 @@ public sealed class GlRendererFixture : IDisposable
 
     public OpenGLRenderer Renderer { get; }
 
+    /// <summary>
+    /// The one real window this process may own. Exposed because the
+    /// borderless-fullscreen test needs a real one too, and per the remarks on
+    /// <see cref="GlRendererCollection"/> a second is not possible — so it
+    /// borrows this one and puts its geometry back.
+    /// </summary>
+    public IWindow HostWindow => _window;
+
     public GlRendererFixture()
     {
         // Same call the engine makes before its own Window.Create: the fixture

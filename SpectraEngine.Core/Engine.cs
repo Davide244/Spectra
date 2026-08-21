@@ -7,6 +7,7 @@ using SpectraEngine.Core.Diagnostics;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
+using SpectraEngine.Core.Windowing;
 using System.Diagnostics;
 using System.Threading;
 
@@ -28,6 +29,7 @@ public sealed class Engine
     private readonly AssetManager _assetManager;
     private readonly AudioManager _audioManager;
     private readonly InputManager _inputManager;
+    private readonly WindowModeLatch _windowModeLatch;
 
     private IWindow? _window;
     private FlyCameraController? _cameraController;
@@ -72,7 +74,27 @@ public sealed class Engine
         _assetManager = assetManager;
         _audioManager = audioManager;
         _inputManager = inputManager;
+        _windowModeLatch = new WindowModeLatch(logger);
     }
+
+    /// <summary>
+    /// Windowed / borderless-fullscreen, as a request latch. Callable from any
+    /// thread — the request is applied by the main thread in its event pump,
+    /// exactly like the title and cursor-mode latches beside it.
+    /// </summary>
+    /// <remarks>
+    /// The engine owns fullscreen on purpose. Left to itself, DXGI turns
+    /// Alt+Enter into a <c>SetFullscreenState</c> transition inside the window
+    /// procedure, on the main thread, while the render thread is presenting and
+    /// resizing the same swap chain — which is what used to kill the render
+    /// thread with <c>DXGI_ERROR_INVALID_CALL</c> out of <c>ResizeBuffers</c>.
+    /// Both D3D backends now take Alt+Enter away from DXGI, and fullscreen
+    /// becomes plain window-state work: no display mode switch, no device-lost
+    /// transition, and the OpenGL backend gets it for free because there is no
+    /// backend code involved at all — only the window, and the framebuffer-size
+    /// latch that every backend already reconciles against.
+    /// </remarks>
+    public IWindowModeLatch WindowMode => _windowModeLatch;
 
     /// <summary>
     /// Creates the window, runs the render thread, and pumps OS events until
@@ -139,6 +161,10 @@ public sealed class Engine
         };
         renderThread.Start();
 
+        // The window-mode latch drives the window through this adapter — the
+        // one object in the fullscreen path that names a windowing backend.
+        var windowModeTarget = new SilkWindowModeTarget(_window);
+
         // Window events must be pumped on the thread that created the window.
         // While Windows runs its modal move/size loop during a title-bar drag,
         // this thread blocks inside DoEvents — but the render thread keeps
@@ -166,6 +192,24 @@ public sealed class Engine
             // cursor calls here. A no-op on every frame but the two that begin
             // and end a freelook.
             _inputManager.ApplyPendingCursorMode();
+
+            // The fourth main-thread latch, same slot, same reason: F11 is read
+            // on the render thread but undecorating and moving the window is
+            // window-thread work. A no-op on every frame but the one that
+            // toggles.
+            if (_windowModeLatch.ApplyPendingWindowMode(windowModeTarget) is { } newWindowMode)
+            {
+                // Re-seed the size latch from the window we just reshaped. GLFW
+                // does fire FramebufferResize for this, but it is delivered
+                // through whichever callback pass the backend chooses, and the
+                // render thread must not present one frame at the old size into
+                // buffers the OS already resized. Reading it here — on the only
+                // thread allowed to — makes the hand-off immediate.
+                var framebuffer = _window.FramebufferSize;
+                _renderer.SetFramebufferSize(framebuffer);
+                _logger.LogInformation(
+                    "Window mode -> {Mode} ({Width}x{Height})", newWindowMode, framebuffer.X, framebuffer.Y);
+            }
 
             Thread.Sleep(1);
         }
@@ -266,6 +310,14 @@ public sealed class Engine
                 // F6 cycles render pipelines (Forward, Wireframe, ...).
                 if (_inputManager.WasKeyPressed(Key.F6))
                     _renderer.NextPipeline();
+
+                // F11 toggles borderless fullscreen. Only the REQUEST happens
+                // here — the window itself is reshaped by the main thread in
+                // Run's pump, because window calls belong to the thread that
+                // created the window. Same key on all three backends: nothing
+                // about this touches a graphics API.
+                if (_inputManager.WasKeyPressed(Key.F11))
+                    _windowModeLatch.ToggleFullscreen();
 
                 _renderer.DebugDraw.Clear();
                 if (_sceneManager.ActiveScene is { } scene)

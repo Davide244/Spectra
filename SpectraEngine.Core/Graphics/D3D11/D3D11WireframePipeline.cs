@@ -37,7 +37,7 @@ public sealed unsafe class D3D11WireframePipeline : ID3D11RenderPipeline
         };
         ID3D11RasterizerState* wire = null;
         SilkMarshal.ThrowHResult(dev->CreateRasterizerState(&wireDesc, &wire));
-        _wireframeState = new ComPtr<ID3D11RasterizerState>(wire);
+        _wireframeState = ComOwnership.Own(wire);
 
         var solidDesc = new RasterizerDesc
         {
@@ -48,7 +48,7 @@ public sealed unsafe class D3D11WireframePipeline : ID3D11RenderPipeline
         };
         ID3D11RasterizerState* solid = null;
         SilkMarshal.ThrowHResult(dev->CreateRasterizerState(&solidDesc, &solid));
-        _solidState = new ComPtr<ID3D11RasterizerState>(solid);
+        _solidState = ComOwnership.Own(solid);
     }
 
     public void Execute(in D3D11RenderContext context)

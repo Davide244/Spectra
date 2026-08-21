@@ -71,7 +71,7 @@ internal sealed unsafe class D3D11LineBatch : IDisposable
                 SilkMarshal.ThrowHResult(((ID3D11Device*)device.Handle)->CreateInputLayout(
                     pElements, (uint)elements.Length, pin.Pointer, (nuint)vsBytecode.Length, &layoutPtr));
             }
-            return new ComPtr<ID3D11InputLayout>(layoutPtr);
+            return ComOwnership.Own(layoutPtr);
         }
     }
 
@@ -116,7 +116,7 @@ internal sealed unsafe class D3D11LineBatch : IDisposable
         };
         ID3D11Buffer* bufPtr = null;
         SilkMarshal.ThrowHResult(((ID3D11Device*)_device.Handle)->CreateBuffer(&desc, null, &bufPtr));
-        _vb = new ComPtr<ID3D11Buffer>(bufPtr);
+        _vb = ComOwnership.Own(bufPtr);
         _vertexCapacity = vertexCount;
     }
 

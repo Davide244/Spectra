@@ -66,9 +66,11 @@ internal sealed unsafe class D3D11Mesh : Mesh
         (Vector3[] positions, Vector3[] normals) = ExtractStreams(vertices, attributes);
         Aabb localBounds = ComputeBounds(positions);
 
+        // GetImmediateContext hands out a counted reference like any Create*
+        // call, so it is Own'd (not wrapped) and released by Dispose below.
         ID3D11DeviceContext* ctxPtr = null;
         ((ID3D11Device*)device.Handle)->GetImmediateContext(&ctxPtr);
-        var ctx = new ComPtr<ID3D11DeviceContext>(ctxPtr);
+        var ctx = ComOwnership.Own(ctxPtr);
 
         return new D3D11Mesh(ctx, vb, ib, layout, stride, (uint)indices.Length,
             positions, normals, indices.ToArray(), localBounds);
@@ -92,7 +94,7 @@ internal sealed unsafe class D3D11Mesh : Mesh
             var init = new SubresourceData { PSysMem = p };
             SilkMarshal.ThrowHResult(((ID3D11Device*)device.Handle)->CreateBuffer(&desc, &init, &bufPtr));
         }
-        return new ComPtr<ID3D11Buffer>(bufPtr);
+        return ComOwnership.Own(bufPtr);
     }
 
     private static ComPtr<ID3D11InputLayout> CreateInputLayout(
@@ -133,7 +135,7 @@ internal sealed unsafe class D3D11Mesh : Mesh
                     (nuint)vsBytecode.Length,
                     &layoutPtr));
             }
-            return new ComPtr<ID3D11InputLayout>(layoutPtr);
+            return ComOwnership.Own(layoutPtr);
         }
     }
 
@@ -212,13 +214,13 @@ internal sealed unsafe class D3D11Mesh : Mesh
     {
         if (_disposed) return;
         _disposed = true;
+        // Every one of these owns exactly one reference (see ComOwnership), so
+        // disposing here is what actually frees the GPU memory — and it has to
+        // happen, because the static-world recompile destroys and recreates
+        // chunk meshes continuously while brushes are edited.
         _inputLayout.Dispose();
         _indexBuffer.Dispose();
         _vertexBuffer.Dispose();
-        // GetImmediateContext in Create AddRef'd the context; without this
-        // release every mesh pins the device context (and transitively the
-        // device) for the process lifetime. Mirrors D3D11Texture's balanced
-        // Release in its mip-generation path.
         _context.Dispose();
     }
 }

@@ -141,4 +141,58 @@ public sealed class DemoStartupOptionsTests
     {
         DemoStartupOptions.Parse([], null).Backend.ShouldBe(GraphicsBackend.OpenGL);
     }
+
+    [Fact]
+    public void The_fullscreen_cycle_is_off_when_nothing_asks_for_it()
+    {
+        // Same gate, same reason as the self-test above: a window that resizes
+        // itself every couple of seconds is right for an automated run and
+        // wrong for anybody trying to use the editor.
+        DemoStartupOptions.Parse(["d3d12"], null).FullscreenCycleInterval.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("--fullscreen-cycle")]
+    [InlineData("fullscreen-cycle")]
+    [InlineData("--fullscreencycle")]
+    public void A_bare_fullscreen_cycle_switch_uses_the_harness_default(string argument)
+    {
+        DemoStartupOptions.Parse([argument], null).FullscreenCycleInterval
+            .ShouldBe(TimeSpan.FromSeconds(FullscreenCycleHarness.DefaultIntervalSeconds));
+    }
+
+    [Fact]
+    public void The_fullscreen_cycle_interval_is_read_invariantly()
+    {
+        // Parsed with the invariant culture on purpose: this switch is typed by
+        // gate scripts, and on a comma-decimal machine a current-culture parse
+        // would reject the seconds value every script writes.
+        DemoStartupOptions.Parse(["--fullscreen-cycle=0.5"], null).FullscreenCycleInterval
+            .ShouldBe(TimeSpan.FromSeconds(0.5));
+    }
+
+    [Theory]
+    [InlineData("--fullscreen-cycle=0")]
+    [InlineData("--fullscreen-cycle=-2")]
+    [InlineData("--fullscreen-cycle=soon")]
+    public void A_non_positive_or_unparsable_interval_is_a_usage_error(string argument)
+    {
+        // Clamping a zero would spin the window-mode latch as fast as the event
+        // pump runs, which measures nothing and cannot be watched.
+        Should.Throw<ArgumentException>(() => DemoStartupOptions.Parse([argument], null));
+    }
+
+    [Fact]
+    public void The_fullscreen_cycle_survives_the_self_test_environment_path()
+    {
+        // The three Parse exits each construct the record separately, so the
+        // cycle interval has to be threaded through all of them — this pins the
+        // one an environment-driven gate run takes.
+        DemoStartupOptions options = DemoStartupOptions.Parse(["d3d11", "--fullscreen-cycle=1"], "true");
+
+        options.SelfTestEnabled.ShouldBeTrue();
+        options.SelfTestSource.ShouldBe(SelfTestSource.Environment);
+        options.Backend.ShouldBe(GraphicsBackend.D3D11);
+        options.FullscreenCycleInterval.ShouldBe(TimeSpan.FromSeconds(1));
+    }
 }
