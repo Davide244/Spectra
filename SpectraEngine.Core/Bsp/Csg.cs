@@ -238,23 +238,99 @@ public static class Csg
         List<Polygon> next = scratch.Next;
         localSurfaces.Clear();
 
-        foreach (Polygon face in placement.Brush.LocalFaces)
+        // SKIN SUPPRESSION. A subtractive brush emits no outward skin of its
+        // own, ever — its contribution is the cavity walls seeded into the
+        // brushes it cuts, below. So its carved array is ALWAYS length 0: an
+        // invariant, not a case, and a fully supported shape everywhere
+        // downstream (Concatenate copies it, ChunkGrid.AddOwned no-ops, and
+        // ChunkMeshBuilder's non-empty filter stops a subtractive-only cell
+        // ever reaching the artifact bounds seed).
+        bool additive = placement.Brush.Operation == BrushOperation.Additive;
+        if (additive)
         {
-            current.Clear();
-            current.Add(face);
-
-            for (int k = 0; k < neighborIndices.Length; k++)
+            foreach (Polygon face in placement.Brush.LocalFaces)
             {
-                next.Clear();
-                foreach (Polygon fragment in current)
-                    CarveFragment(fragment, in carvers[k], planeBuffer, next);
+                current.Clear();
+                current.Add(face);
 
-                (current, next) = (next, current);
-                if (current.Count == 0)
-                    break;
+                for (int k = 0; k < neighborIndices.Length; k++)
+                {
+                    next.Clear();
+                    foreach (Polygon fragment in current)
+                        CarveFragment(fragment, in carvers[k], planeBuffer, next, seedIsWall: false, seedOrigin: -1, carverIndex: k);
+
+                    (current, next) = (next, current);
+                    if (current.Count == 0)
+                        break;
+                }
+
+                localSurfaces.AddRange(current);
             }
 
-            localSurfaces.AddRange(current);
+            // CAVITY WALLS, attributed to the CUT brush's slot — which is what
+            // makes every downstream stage (chunk ownership, weld candidate
+            // sets, render bounds) correct with no formula changes: a wall is
+            // inside this brush's convex solid, hence inside its LocalBounds.
+            //
+            // Emitted AFTER every face seed, in carver-list order, and within a
+            // carver in the negative's LocalFaces order. Order is output-visible
+            // three times over (Concatenate copies verbatim, BspTree's splitter
+            // choice strides positionally, BuildMeshArrays packs in array
+            // order), so leaving it loose would be a determinism hole — and
+            // appending after the faces is what makes the no-subtractive-brush
+            // non-regression positional rather than argued.
+            for (int k = 0; k < neighborIndices.Length; k++)
+            {
+                if (!carvers[k].Subtractive || !carvers[k].Bounds.Intersects(placement.Brush.LocalBounds))
+                    continue;
+
+                Brush negative = placements[neighborIndices[k]].Brush;
+                foreach (Polygon negativeFace in negative.LocalFaces)
+                {
+                    // (a) into this brush's frame — Transformed maps the
+                    // FaceSurface payload too, which is the whole of why a
+                    // cavity wears the negative's materials with no plumbing.
+                    // (b) flipped HERE, at seed construction: a wall is born as
+                    // the boundary of the REMOVED region, so it obeys the same
+                    // solid-behind-Surface convention as every other polygon
+                    // from the moment it exists. Flipping later would run it
+                    // through the clip loops under the wrong convention.
+                    Polygon? wall = negativeFace.Transformed(carvers[k].Combined).Flipped();
+
+                    // (c) clip to inside(this brush). Load-bearing twice: it
+                    // confines the wall to where solid is actually removed, and
+                    // — because Split reports a Coplanar polygon on the FRONT
+                    // side, and we keep the back — it kills a wall coincident
+                    // with one of this brush's own planes with no special case.
+                    IReadOnlyList<Plane> ownPlanes = placement.Brush.LocalPlanes;
+                    for (int i = 0; i < ownPlanes.Count && wall is not null; i++)
+                    {
+                        wall.Split(ownPlanes[i], out _, out Polygon? inside);
+                        wall = inside;
+                    }
+
+                    if (wall is null)
+                        continue;
+
+                    // (d) the same carver ping-pong the faces use, skipping
+                    // carver k itself — see the origin-skip row of the table.
+                    current.Clear();
+                    current.Add(wall);
+
+                    for (int c = 0; c < neighborIndices.Length; c++)
+                    {
+                        next.Clear();
+                        foreach (Polygon fragment in current)
+                            CarveFragment(fragment, in carvers[c], planeBuffer, next, seedIsWall: true, seedOrigin: k, carverIndex: c);
+
+                        (current, next) = (next, current);
+                        if (current.Count == 0)
+                            break;
+                    }
+
+                    localSurfaces.AddRange(current);
+                }
+            }
         }
 
         // Push this brush's local fragments out to world coordinates,
@@ -356,13 +432,51 @@ public static class Csg
     // Appends to `output` the parts of `fragment` that lie OUTSIDE the carver.
     // `planes` is the worker's packed plane buffer; the carver's planes occupy
     // [carver.PlaneStart, carver.PlaneStart + carver.PlaneCount).
-    private static void CarveFragment(Polygon fragment, in CarverInFrame carver, Plane[] planes, List<Polygon> output)
+    //
+    // `seedIsWall` says whether the fragment descends from a cavity-wall seed
+    // rather than one of the carved brush's own faces; `seedOrigin` is the
+    // carver-list position of the subtractive brush that produced that wall
+    // (-1 for a face seed); `carverIndex` is this carver's list position.
+    //
+    // THE VERDICT TABLE, five rows:
+    //
+    //   FACE / ADDITIVE      today's code, character for character.
+    //   FACE / SUBTRACTIVE   bypass CoplanarOrientation; drop the footprint on
+    //                        Split-Coplanar AND same-facing, else generic.
+    //   WALL / its ORIGIN    skip the carver (mandatory, not an optimisation).
+    //   WALL / ADDITIVE      Wins ? generic : skip the carver.
+    //   WALL / other SUBTR.  as FACE/SUBTRACTIVE, plus an opposite-facing
+    //                        coincidence tie-break on list position.
+    private static void CarveFragment(
+        Polygon fragment, in CarverInFrame carver, Plane[] planes, List<Polygon> output,
+        bool seedIsWall, int seedOrigin, int carverIndex)
     {
         // Whole fragment clear of the carver: nothing to remove.
         if (!fragment.Bounds.Intersects(carver.Bounds))
         {
             output.Add(fragment);
             return;
+        }
+
+        if (seedIsWall)
+        {
+            // A wall meeting its OWN negative would find that negative's plane
+            // coincident-and-opposite and the wall/wall tie-break would compare
+            // the origin position against itself with a strict <, deleting the
+            // wall. Skipping is mandatory.
+            //
+            // A wall meeting an ADDITIVE carver it does not lose to is also
+            // skipped: by the wall/face partition theorem every point of a
+            // surviving wall is in the OPEN INTERIOR of the brush it was seeded
+            // into, so a coincident additive carver's plane only touches the
+            // wall's boundary and can remove nothing. The carver's own face is
+            // deleted at exactly the wall's points by the ordinary path, so
+            // precisely one surface exists on that plane everywhere.
+            if (carverIndex == seedOrigin || (!carver.Subtractive && !carver.Wins))
+            {
+                output.Add(fragment);
+                return;
+            }
         }
 
         Polygon? remaining = fragment;
@@ -373,6 +487,55 @@ public static class Csg
                 return;
 
             Plane plane = planes[p];
+
+            if (carver.Subtractive)
+            {
+                // DELIBERATELY NOT CoplanarOrientation. That predicate accepts
+                // |dD| < 1e-3 while Polygon.Split classifies at 1e-4 — ten
+                // times looser, and per-plane rather than per-vertex. In the
+                // band where they disagree the rule's own premise ("the
+                // fragment lies ON this plane") is false, and the footprint
+                // would be dropped while the replacement wall, sitting delta
+                // away, survives its own clip — leaving the boundary open in a
+                // delta-tall ring all round the cavity mouth. Using Split's own
+                // classification is not merely tighter, it is the SAME
+                // tolerance that decides whether the wall survives, so the two
+                // decisions cannot disagree.
+                if (remaining.Classify(plane) == PolygonClassification.Coplanar)
+                {
+                    bool sameFacing = Vector3.Dot(remaining.Surface.Normal, plane.Normal) > 0f;
+
+                    // Same-facing: the negative's interior is behind this
+                    // surface, so it removes exactly the material this surface
+                    // bounded. Drop the footprint — this is the flush
+                    // through-cut, and both sides of a slab hit it at once.
+                    //
+                    // Opposite-facing: the negative merely RESTS on this
+                    // surface and removes nothing, so the fragment survives
+                    // whole. (Unmodified code fails precisely here:
+                    // CoplanarOrientation returns -1 for that pair and the
+                    // interior-interface rule would delete a face under a
+                    // negative that took nothing away — an open solid.)
+                    // Two coincident negatives produce two identical walls and
+                    // exactly one must emit: list position breaks the tie, and
+                    // it decides only which negative's material paints the
+                    // shared patch, never a topology.
+                    if (sameFacing)
+                        continue;
+
+                    if (seedIsWall && seedOrigin >= carverIndex)
+                        continue;
+
+                    output.Add(remaining);
+                    return;
+                }
+
+                remaining.Split(plane, out Polygon? outside, out Polygon? behind);
+                if (outside is not null)
+                    output.Add(outside);
+                remaining = behind;
+                continue;
+            }
 
             int orientation = CoplanarOrientation(remaining.Surface, plane);
             if (orientation != 0)
@@ -427,12 +590,26 @@ public static class Csg
         public Aabb Bounds { get; }
         public bool Wins { get; }
 
-        private CarverInFrame(int planeStart, int planeCount, Aabb bounds, bool wins)
+        /// <summary>Whether this carver removes solid rather than adding it.</summary>
+        public bool Subtractive { get; }
+
+        /// <summary>
+        /// The carver-local to carved-local matrix. Build already computes it;
+        /// cavity-wall seeding needs it to bring a subtractive brush's own
+        /// faces into the frame of the brush it cuts.
+        /// </summary>
+        public Matrix4x4 Combined { get; }
+
+        private CarverInFrame(
+            int planeStart, int planeCount, Aabb bounds, bool wins,
+            bool subtractive, Matrix4x4 combined)
         {
             PlaneStart = planeStart;
             PlaneCount = planeCount;
             Bounds = bounds;
             Wins = wins;
+            Subtractive = subtractive;
+            Combined = combined;
         }
 
         // Writes the carver's transformed planes into `planeBuffer` starting
@@ -459,7 +636,9 @@ public static class Csg
                 planeBuffer[planeStart + i] = Plane.Transform(localPlanes[i], combined);
 
             Aabb bounds = carverBrush.LocalBounds.Transform(combined);
-            return new CarverInFrame(planeStart, localPlanes.Count, bounds, carverWins);
+            return new CarverInFrame(
+                planeStart, localPlanes.Count, bounds, carverWins,
+                carverBrush.Operation == BrushOperation.Subtractive, combined);
         }
     }
 }
