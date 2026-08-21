@@ -81,8 +81,8 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
         }
 
         return new D3D11ShaderProgram(compiler, device, context,
-            new ComPtr<ID3D11VertexShader>(vsPtr),
-            new ComPtr<ID3D11PixelShader>(psPtr),
+            ComOwnership.Own(vsPtr),
+            ComOwnership.Own(psPtr),
             vsBlob, psBlob);
     }
 
@@ -132,8 +132,8 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
         var oldVs = _vs;
         var oldPs = _ps;
         DisposeCBuffers();
-        _vs = new ComPtr<ID3D11VertexShader>(newVsPtr);
-        _ps = new ComPtr<ID3D11PixelShader>(newPsPtr);
+        _vs = ComOwnership.Own(newVsPtr);
+        _ps = ComOwnership.Own(newPsPtr);
         _vsBytecode = vsBlob;
         BuildReflection(psBlob);
         oldVs.Dispose();
@@ -308,7 +308,7 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
         };
         ID3D11Buffer* bufPtr = null;
         SilkMarshal.ThrowHResult(((ID3D11Device*)device.Handle)->CreateBuffer(&desc, null, &bufPtr));
-        return new ComPtr<ID3D11Buffer>(bufPtr);
+        return ComOwnership.Own(bufPtr);
     }
 
     private static string MarshalUtf8(byte* ptr)

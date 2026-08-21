@@ -94,6 +94,20 @@ try
         audioManager,
         inputManager);
 
+    // The fullscreen-cycle harness, when asked for: a driver thread that hits
+    // the window-mode latch on a timer so an unattended run performs the exact
+    // windowed <-> fullscreen transition a human does with F11. It only
+    // requests; Engine.Run reshapes the window on the window thread while the
+    // render thread presents and resizes the swap chain, which is the overlap
+    // being gated. Disposed with the engine so the thread cannot outlive it.
+    using var fullscreenCycle = options.FullscreenCycleInterval is { } cycleInterval
+        ? new FullscreenCycleHarness(
+            loggerFactory.CreateLogger<FullscreenCycleHarness>(), engine.WindowMode, cycleInterval)
+        : null;
+
+    if (options.FullscreenCycleInterval is { } describedInterval)
+        Log.Information("{Message}", FullscreenCycleHarness.DescribeStartup(describedInterval));
+
     // No renderer disposal here: GPU teardown is thread-affine and happens in
     // Renderer.Shutdown on the render thread (Engine handles the crash path too).
     // A render-thread crash is caught and logged inside Engine, so Run returns

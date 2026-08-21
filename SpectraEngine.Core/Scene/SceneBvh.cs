@@ -12,6 +12,10 @@ using SpectraEngine.Core.Graphics;
 // only the engine's main thread may publish to it) to prove the editor input
 // adapter reads the viewport from it.
 [assembly: InternalsVisibleTo("SpectraEngine.Editing.Tests")]
+// The graphics suite verifies the DXGI HRESULT classification that decides
+// whether a failed resize is recoverable or a lost device — internal, because
+// it is backend plumbing rather than engine API.
+[assembly: InternalsVisibleTo("SpectraEngine.Graphics.Tests")]
 
 namespace SpectraEngine.Core.Scene;
 

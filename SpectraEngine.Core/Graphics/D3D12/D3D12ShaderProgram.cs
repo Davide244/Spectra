@@ -335,7 +335,7 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
         Guid rsGuid = ID3D12RootSignature.Guid;
         SilkMarshal.ThrowHResult(_renderer.DevicePtr->CreateRootSignature(
             0, blob.GetBufferPointer(), blob.GetBufferSize(), &rsGuid, (void**)&rs));
-        _rootSignature = new ComPtr<ID3D12RootSignature>(rs);
+        _rootSignature = ComOwnership.Own(rs);
         blob.Dispose();
         error.Dispose();
     }
@@ -488,7 +488,7 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
                     ID3D12PipelineState* pso = null;
                     Guid psoGuid = ID3D12PipelineState.Guid;
                     SilkMarshal.ThrowHResult(_renderer.DevicePtr->CreateGraphicsPipelineState(&desc, &psoGuid, (void**)&pso));
-                    return new ComPtr<ID3D12PipelineState>(pso);
+                    return ComOwnership.Own(pso);
                 }
             }
         }

@@ -2,6 +2,9 @@
 
   <PropertyGroup>
     <RootNamespace>SpectraEngine.Graphics.Tests</RootNamespace>
+    <!-- ComOwnershipTests builds a real COM object (vtable + refcount) in
+         native memory to prove ComPtr's AddRef semantics without a GPU. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

@@ -165,9 +165,9 @@ internal sealed unsafe class D3D11Texture : Texture
         SilkMarshal.ThrowHResult(dev->CreateSamplerState(&samplerDesc, &samplerPtr));
 
         return new D3D11Texture(
-            new ComPtr<ID3D11Texture2D>(texPtr),
-            new ComPtr<ID3D11ShaderResourceView>(srvPtr),
-            new ComPtr<ID3D11SamplerState>(samplerPtr),
+            ComOwnership.Own(texPtr),
+            ComOwnership.Own(srvPtr),
+            ComOwnership.Own(samplerPtr),
             width, height, format);
     }
 
