@@ -271,4 +271,37 @@ public sealed class Polygon
             verts[i] = Vector3.Transform(_vertices[i], transform);
         return new Polygon(verts, Plane.Transform(Surface, transform), Face.Transformed(transform));
     }
+
+    /// <summary>
+    /// Returns this polygon facing the other way: vertex order reversed
+    /// <em>and</em> surface plane negated, in one expression.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Both channels or neither — that is the entire point of this method
+    /// existing.</b> The two are genuinely independent downstream: winding
+    /// drives rasterization (<c>CsgWorld.BuildMeshArrays</c> fans triangles in
+    /// stored order and every forward pipeline culls back faces CCW-front),
+    /// while <see cref="Surface"/> drives the written per-vertex normal
+    /// <em>and</em> all BSP solidity. Flipping one without the other produces
+    /// two different wrong worlds — geometry that renders inside-out but reads
+    /// solid, or reads inverted but renders correctly — and both are the kind
+    /// of failure that shows up as "the renderer is broken".
+    /// </para>
+    /// <para>
+    /// This is the only function in the engine that can produce a reversed
+    /// polygon, which is what makes the half-flip unreachable rather than
+    /// merely unlikely. It is named <c>Flipped</c> and not <c>Reversed</c> for
+    /// the same reason: "reversed" names only the vertex order, which is
+    /// precisely the half of the job that must never be done alone.
+    /// </para>
+    /// </remarks>
+    public Polygon Flipped()
+    {
+        int count = _vertices.Length;
+        var verts = new Vector3[count];
+        for (int i = 0; i < count; i++)
+            verts[i] = _vertices[count - 1 - i];
+        return new Polygon(verts, new Plane(-Surface.Normal, -Surface.D), Face);
+    }
 }

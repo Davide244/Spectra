@@ -353,6 +353,20 @@ public sealed class SceneManager
         AddBrushNode(scene, "WallNorth", new Vector3(0f, -0.1f, -3.1f), new Vector3(3.1f, 1f, 0.1f), wallMaterial);
         AddBrushNode(scene, "WallWest", new Vector3(-3.1f, -0.1f, 0.05f), new Vector3(0.1f, 1f, 3.05f), wallMaterial);
 
+        // A doorway, cut with a SUBTRACTIVE brush. It is deliberately flush
+        // through the north wall's full thickness — its ±z planes coincide
+        // exactly with the wall's — because that is the archetypal authored cut
+        // AND the coplanar case unmodified carve handling gets wrong, so a
+        // regression shows up as a door that has silently sealed itself rather
+        // than as a crash. The negative renders nothing of its own; what you see
+        // through the opening is the cavity walls it induced in the wall, and
+        // they wear this brush's own material.
+        var doorway = scene.Root.CreateChild("DoorwayCut");
+        doorway.LocalPosition = new Vector3(0f, -0.45f, -3.1f);
+        doorway.Brush = Brush
+            .CreateBox(new Vector3(-0.5f, -0.65f, -0.15f), new Vector3(0.5f, 0.65f, 0.15f), accentMaterial)
+            .WithOperation(BrushOperation.Subtractive);
+
         // The bobbing pillar re-compiles continuously, so its cells prove the
         // per-material split survives every incremental recompile — not just
         // the initial build. It stays editable while it does: the animation
@@ -418,13 +432,24 @@ public sealed class SceneManager
         bool rayHitsFloor = world.Raycast(
             new Vector3(0f, 3f, 0f), -Vector3.UnitY, 10f, out var hit);
 
+        // The subtraction, checked both ways in one breath. A doorway that
+        // silently seals itself renders as a solid wall — correct-looking
+        // geometry, no exception anywhere — so "open" has to be asserted, not
+        // eyeballed; and the lintel above it proves the cut did not take more
+        // than it was asked for, which is the failure mode of a wall/face
+        // partition that has gone wrong.
+        bool doorwayOpen = !world.ContainsPoint(new Vector3(0f, -0.45f, -3.1f));
+        bool lintelSolid = world.ContainsPoint(new Vector3(0f, 0.75f, -3.1f));
+
         _logger.LogInformation(
             "Static world: {Brushes} brush nodes ({Parts} scattered parts) -> {Surfaces} carved surfaces " +
             "in {Chunks} chunks wearing {Materials} distinct face material(s), compiled in {Ms:0.0} ms; " +
-            "floor-solid={Floor}, pillar-solid={Pillar}, air-empty={Air}, ray-hit={Hit} at y={Y:0.000}",
+            "floor-solid={Floor}, pillar-solid={Pillar}, air-empty={Air}, ray-hit={Hit} at y={Y:0.000}, " +
+            "doorway-open={Doorway}, lintel-solid={Lintel}",
             world.Brushes.Count, partCount, world.Surfaces.Count, world.Chunks.Count,
             CountFaceMaterials(scene), stopwatch.Elapsed.TotalMilliseconds,
-            floorSolid, pillarSolid, airEmpty, rayHitsFloor, hit.Point.Y);
+            floorSolid, pillarSolid, airEmpty, rayHitsFloor, hit.Point.Y,
+            doorwayOpen, lintelSolid);
 
         return stopwatch.Elapsed.TotalMilliseconds;
     }

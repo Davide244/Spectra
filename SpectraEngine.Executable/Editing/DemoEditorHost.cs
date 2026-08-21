@@ -121,6 +121,10 @@ internal sealed class DemoEditorHost : ISceneEditor
     // linked into one.
     private readonly PartBrushOverlay _partOutlines = new();
 
+    // Subtractive brushes render nothing at all, so this pass is not an
+    // affordance — it is the only way one can be seen.
+    private readonly SubtractiveBrushOverlay _negativeOutlines = new();
+
     // Last frame's framebuffer latch, kept so Draw can size the marquee without
     // asking the renderer a second time.
     private Vector2 _viewportSize;
@@ -269,6 +273,7 @@ internal sealed class DemoEditorHost : ISceneEditor
         // is aiming at, an outline is context, and both share the depth-off
         // line pass so neither hides behind the geometry it describes.
         _partOutlines.Draw(output, _scene);
+        _negativeOutlines.Draw(output, _scene);
         _viewport.Draw(output, _viewportSize);
     }
 

@@ -77,8 +77,13 @@ public sealed class Brush
     /// assign it back to its scene node; the new instance is what makes the
     /// stale carve provably unreachable instead of merely unlikely.
     /// </remarks>
-    public Brush(IReadOnlyList<Plane> localPlanes, Matrix4x4 transform, IReadOnlyList<FaceSurface>? faceSurfaces)
+    public Brush(
+        IReadOnlyList<Plane> localPlanes,
+        Matrix4x4 transform,
+        IReadOnlyList<FaceSurface>? faceSurfaces,
+        BrushOperation operation = BrushOperation.Additive)
     {
+        Operation = operation;
         if (localPlanes.Count < 4)
             throw new ArgumentException("A brush needs at least 4 planes to bound a volume.", nameof(localPlanes));
         if (faceSurfaces is not null && faceSurfaces.Count != localPlanes.Count)
@@ -113,6 +118,52 @@ public sealed class Brush
 
         LocalBounds = ComputeBounds(_localFaces);
     }
+
+    // Operation-only successor: every plane, face, payload and bound is shared
+    // verbatim rather than rebuilt. No plane moved, so BuildFaces would produce
+    // provably identical geometry at the price of a full re-clip — and Polygon,
+    // Plane and FaceSurface are all deeply immutable, so sharing the arrays is
+    // safe. Transform is copied because it is a mutable property used by the
+    // standalone Csg.Carve(IReadOnlyList<Brush>) path; both existing successor
+    // factories carry it the same way, and dropping it here would silently
+    // change behaviour for a flipped brush in tests and tools.
+    private Brush(Brush source, BrushOperation operation)
+    {
+        _localPlanes = source._localPlanes;
+        _localFaces = source._localFaces;
+        _faceSurfaces = source._faceSurfaces;
+        LocalBounds = source.LocalBounds;
+        Transform = source.Transform;
+        Operation = operation;
+    }
+
+    /// <summary>
+    /// Whether this brush adds solid to the compiled world or removes it. See
+    /// <see cref="BrushOperation"/> for the composition rule and why it is
+    /// unordered.
+    /// </summary>
+    /// <remarks>
+    /// Construction-time state like the planes, because the CSG carve cache
+    /// keys reuse on <see cref="Brush"/> reference identity — so reference
+    /// identity must imply identical carve inputs, and the operation changes
+    /// the carve as fundamentally as a plane does. Change it with
+    /// <see cref="WithOperation"/> and assign the successor back to the node.
+    /// </remarks>
+    public BrushOperation Operation { get; }
+
+    /// <summary>
+    /// Returns a copy of this brush with a different
+    /// <see cref="BrushOperation"/> — the supported way to turn a solid into a
+    /// hole, or back.
+    /// </summary>
+    /// <remarks>
+    /// Returns <c>this</c> on an equal write, like
+    /// <see cref="WithScaledExtents"/>: nothing changed, so the cached carve
+    /// keyed on this instance stays valid and re-using the reference is not
+    /// merely an optimisation but the correct answer.
+    /// </remarks>
+    public Brush WithOperation(BrushOperation operation) =>
+        operation == Operation ? this : new Brush(this, operation);
 
     /// <summary>
     /// The world-from-local transform for <em>standalone</em> use (tests, tools,
@@ -251,7 +302,9 @@ public sealed class Brush
         var faces = new FaceSurface[_faceSurfaces.Length];
         Array.Copy(_faceSurfaces, faces, faces.Length);
         faces[planeIndex] = face;
-        return new Brush(_localPlanes, Transform, faces);
+        // Operation must ride along, or retexturing a hole turns it into a
+        // solid block — silently, and only once somebody edits a face.
+        return new Brush(_localPlanes, Transform, faces, Operation);
     }
 
     /// <summary>
@@ -333,7 +386,10 @@ public sealed class Brush
             planes[i] = new Plane(mapped / length, plane.D / length);
         }
 
-        return new Brush(planes, Transform, _faceSurfaces);
+        // Operation must ride along, or resizing a hole turns it into a solid
+        // block — the same silent failure as WithFaceSurface's, reached through
+        // the resize gizmo instead.
+        return new Brush(planes, Transform, _faceSurfaces, Operation);
     }
 
     private static void ThrowIfUnusableScale(float component, string paramName)

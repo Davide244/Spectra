@@ -147,6 +147,7 @@ public sealed class Scene
         // leaving whatever it carries, and its meshes are collected by the next
         // pump's sweep.
         _partBrushNodes.Remove(node);
+        _subtractiveBrushNodes.Remove(node);
         NodeRemoved?.Invoke(node);
     }
 
@@ -172,10 +173,25 @@ public sealed class Scene
     // node" rather than reasoning about which transition happened.
     internal void UpdatePartBrushMembership(SceneNode node)
     {
-        if (node.Brush is not null && node.BrushKind == BrushKind.Part)
+        // ADDITIVE part brushes only. A subtractive brush has no outward skin —
+        // its geometry is the cavity walls it induces in the brushes it cuts —
+        // so building a mesh from its own faces would upload the OUTWARD skin
+        // of a hole: a solid block standing exactly where the author asked for
+        // a void, rendered correctly, with nothing anywhere reporting an error.
+        if (node.Brush is { Operation: BrushOperation.Additive } &&
+            node.BrushKind == BrushKind.Part)
+        {
             _partBrushNodes.Add(node);
+        }
         else
+        {
             _partBrushNodes.Remove(node);
+        }
+
+        if (node.Brush is { Operation: BrushOperation.Subtractive })
+            _subtractiveBrushNodes.Add(node);
+        else
+            _subtractiveBrushNodes.Remove(node);
     }
 
     internal void OnNodeSubtreeMoved(SceneNode node)
@@ -404,6 +420,17 @@ public sealed class Scene
     private readonly HashSet<SceneNode> _partBrushNodes = [];
     private readonly PartBrushMeshCache _partBrushMeshes = new();
 
+    // Every owned node carrying a SUBTRACTIVE brush, of either kind.
+    //
+    // Deliberately kind-BLIND, and deliberately not a filter over the part set.
+    // A subtractive brush renders nothing of its own by construction — a World
+    // one contributes cavity walls to the brushes it cuts and no skin, a Part
+    // one contributes nothing at all — so it is invisible in the viewport
+    // whichever kind it is, and the editor overlay that draws it must therefore
+    // see both. Deriving it from _partBrushNodes would silence the outline on
+    // exactly the population that renders nothing.
+    private readonly HashSet<SceneNode> _subtractiveBrushNodes = [];
+
     // Cached so the per-brush upload path can hand the resolver down without
     // allocating a delegate per call.
     private Func<MaterialRef, Material?>? _resolveWorldMaterial;
@@ -535,6 +562,17 @@ public sealed class Scene
     /// to walk the graph. Order is unspecified. Render thread only.
     /// </summary>
     public IReadOnlyCollection<SceneNode> PartBrushNodes => _partBrushNodes;
+
+    /// <summary>
+    /// Every node in this scene carrying a subtractive brush, of either
+    /// <see cref="BrushKind"/> — the population that renders nothing of its own
+    /// and therefore has to be drawn by the editor or it cannot be seen at all.
+    /// Order is unspecified. Render thread only.
+    /// </summary>
+    public IReadOnlyCollection<SceneNode> SubtractiveBrushNodes => _subtractiveBrushNodes;
+
+    /// <summary>How many nodes in this scene carry a subtractive brush.</summary>
+    public int SubtractiveBrushNodeCount => _subtractiveBrushNodes.Count;
 
     /// <summary>Destroys every GPU mesh the part-brush cache owns. Render thread, before renderer shutdown.</summary>
     public void ReleasePartBrushMeshes(Renderer renderer) => _partBrushMeshes.ReleaseGraphicsResources(renderer);
