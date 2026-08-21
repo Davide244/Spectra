@@ -20,6 +20,8 @@ public class SceneNode
     private Bsp.Brush? _brush;
     private BrushKind _brushKind = BrushKind.World;
     private MeshRenderer? _meshRenderer;
+    private PhysicsFlags _physicsFlags = PhysicsFlags.Default;
+    private byte _collisionGroup;
 
     // Two lanes, one writer. Both count brushes in this node's subtree (itself
     // included) and are maintained on the whole ancestor chain by the Brush
@@ -229,6 +231,89 @@ public class SceneNode
     /// by consuming the one placement list.
     /// </summary>
     public bool IsStaticWorldBrush => _brush is not null && _brushKind == BrushKind.World;
+
+    /// <summary>
+    /// The node's physics and query bits. See <see cref="Scene.PhysicsFlags"/>
+    /// for what each one means and why they are a byte rather than a payload.
+    /// </summary>
+    /// <remarks>
+    /// A plain field with no side effects, deliberately: none of these bits
+    /// changes the compiled static world, the spatial index, or anything the
+    /// CSG snapshot reads. They are consulted at query time and at body-creation
+    /// time, so writing one must not dirty anything — which is also what makes
+    /// a script toggling <c>CanCollide</c> on a world brush free.
+    /// </remarks>
+    public PhysicsFlags PhysicsFlags
+    {
+        get => _physicsFlags;
+        set => _physicsFlags = value;
+    }
+
+    /// <summary>Whether this node's geometry participates in collision.</summary>
+    public bool CanCollide
+    {
+        get => (_physicsFlags & PhysicsFlags.CanCollide) != 0;
+        set => SetFlag(PhysicsFlags.CanCollide, value);
+    }
+
+    /// <summary>
+    /// Whether this node's geometry is visible to spatial queries. Independent
+    /// of <see cref="CanCollide"/>, and honoured for every kind of node —
+    /// including static world brushes, because <see cref="Scene.Raycast"/>
+    /// traverses the spatial index per node rather than the compiled BSP.
+    /// </summary>
+    public bool CanQuery
+    {
+        get => (_physicsFlags & PhysicsFlags.CanQuery) != 0;
+        set => SetFlag(PhysicsFlags.CanQuery, value);
+    }
+
+    /// <summary>Whether this node generates touch and trigger events.</summary>
+    public bool CanTouch
+    {
+        get => (_physicsFlags & PhysicsFlags.CanTouch) != 0;
+        set => SetFlag(PhysicsFlags.CanTouch, value);
+    }
+
+    /// <summary>
+    /// Whether this node is exempt from simulation. Default <c>true</c>; see
+    /// <see cref="PhysicsFlags.Anchored"/> for why that differs from Roblox.
+    /// </summary>
+    public bool Anchored
+    {
+        get => (_physicsFlags & PhysicsFlags.Anchored) != 0;
+        set => SetFlag(PhysicsFlags.Anchored, value);
+    }
+
+    /// <summary>
+    /// Which collision group this node belongs to — an id from the scene's
+    /// <see cref="Scene.CollisionGroups"/> registry. Zero
+    /// (<see cref="Scene.CollisionGroups.DefaultGroup"/>) unless assigned, so a
+    /// world that never mentions groups behaves as one without the feature.
+    /// </summary>
+    /// <remarks>
+    /// Stored as a byte and validated only against the 64-group ceiling here:
+    /// the registry that gives ids their meaning belongs to a scene, and a node
+    /// may be assigned its group before it is attached to one.
+    /// </remarks>
+    public int CollisionGroup
+    {
+        get => _collisionGroup;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(value, CollisionGroups.MaxGroups);
+            _collisionGroup = (byte)value;
+        }
+    }
+
+    private void SetFlag(PhysicsFlags flag, bool on)
+    {
+        if (on)
+            _physicsFlags |= flag;
+        else
+            _physicsFlags &= ~flag;
+    }
 
     /// <summary>The node's transform relative to its parent.</summary>
     /// <remarks>

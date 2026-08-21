@@ -245,8 +245,95 @@ public sealed class Scene
     /// solid report no hit for that solid. Render thread only, allocation-free
     /// in steady state.
     /// </summary>
+    /// <remarks>
+    /// <b>This overload honours <see cref="SceneNode.CanQuery"/></b> — see the
+    /// filtered overload for why that is true even of static world brushes.
+    /// Editor tooling that must pick what the user can see should pass
+    /// <see cref="SceneQueryFilter.EditorPicking"/> instead.
+    /// </remarks>
     public bool Raycast(in Ray3 ray, out SceneRaycastHit hit, float maxDistance = float.PositiveInfinity) =>
-        Bvh.Raycast(in ray, out hit, maxDistance);
+        Bvh.Raycast(in ray, out hit, default, maxDistance);
+
+    /// <summary>
+    /// As <see cref="Raycast(in Ray3, out SceneRaycastHit, float)"/>, reporting
+    /// only nodes <paramref name="filter"/> accepts.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b><see cref="SceneNode.CanQuery"/> is honoured for every node, static
+    /// world brushes included.</b> That is worth stating because it was once
+    /// designed the other way round, on the premise that a world brush's
+    /// queries route through the compiled per-cell BSP — which cannot exclude
+    /// one brush, since the BSP is derived from the carve and excluding a brush
+    /// would change compiled output the determinism oracles compare. The
+    /// premise is false for <em>this</em> entry point: it traverses the spatial
+    /// index per node, where a flag test is one bit on a cache line already
+    /// read. What genuinely cannot honour the flag is
+    /// <see cref="Bsp.CsgWorld.Raycast"/>/<see cref="Bsp.CsgWorld.ContainsPoint"/>,
+    /// which answer about the compiled authored world and are demoted for
+    /// exactly that reason — so the honest rule is one sentence about which
+    /// query you called, not a refusal on the setter.
+    /// </para>
+    /// <para>
+    /// Refusing the flag on world brushes would also have created an ordering
+    /// trap with no good exit: clear <c>CanQuery</c> on a part brush, convert it
+    /// to world geometry, and the refusal has to either reject the conversion —
+    /// making conversion a refusal site, which is precisely what
+    /// <see cref="BrushKind"/> was designed to avoid — or silently rewrite the
+    /// author's flag.
+    /// </para>
+    /// </remarks>
+    public bool Raycast(
+        in Ray3 ray, out SceneRaycastHit hit, in SceneQueryFilter filter,
+        float maxDistance = float.PositiveInfinity) =>
+        Bvh.Raycast(in ray, out hit, in filter, maxDistance);
+
+    /// <summary>
+    /// The scene's collision-group registry: up to 64 named groups and the
+    /// symmetric matrix saying which pairs interact. Every node starts in
+    /// <see cref="CollisionGroups.DefaultGroup"/> and everything collides, so a
+    /// scene that never touches this behaves as one without the feature.
+    /// </summary>
+    public CollisionGroups CollisionGroups { get; } = new();
+
+    /// <summary>
+    /// Appends every spatial node whose world AABB intersects
+    /// <paramref name="box"/> to <paramref name="results"/> (the list is NOT
+    /// cleared — reuse one across frames and clear it yourself).
+    /// </summary>
+    /// <remarks>
+    /// <b>The name says <c>Bounds</c> because the answer is about bounds.</b>
+    /// This is the broad phase: a node whose AABB overlaps the box but whose
+    /// geometry does not is reported, so the result is a superset and a caller
+    /// needing an exact answer runs its own narrow phase over it. Naming this
+    /// <c>GetPartsInBox</c> would promise an exactness the traversal does not
+    /// deliver, and the caller would not find out until a corner case.
+    /// </remarks>
+    public void GetPartBoundsInBox(in Aabb box, List<SceneNode> results) =>
+        Bvh.QueryBox(in box, results, default);
+
+    /// <summary>
+    /// As <see cref="GetPartBoundsInBox(in Aabb, List{SceneNode})"/>, reporting
+    /// only nodes <paramref name="filter"/> accepts.
+    /// </summary>
+    public void GetPartBoundsInBox(in Aabb box, List<SceneNode> results, in SceneQueryFilter filter) =>
+        Bvh.QueryBox(in box, results, in filter);
+
+    /// <summary>
+    /// Appends every spatial node whose world AABB overlaps the sphere to
+    /// <paramref name="results"/> (the list is NOT cleared). Bounds-level, like
+    /// <see cref="GetPartBoundsInBox(in Aabb, List{SceneNode})"/>.
+    /// </summary>
+    public void GetPartBoundsInRadius(Vector3 center, float radius, List<SceneNode> results) =>
+        Bvh.QuerySphere(center, radius, results, default);
+
+    /// <summary>
+    /// As <see cref="GetPartBoundsInRadius(Vector3, float, List{SceneNode})"/>,
+    /// reporting only nodes <paramref name="filter"/> accepts.
+    /// </summary>
+    public void GetPartBoundsInRadius(
+        Vector3 center, float radius, List<SceneNode> results, in SceneQueryFilter filter) =>
+        Bvh.QuerySphere(center, radius, results, in filter);
 
     /// <summary>
     /// Appends every spatial node whose world AABB intersects

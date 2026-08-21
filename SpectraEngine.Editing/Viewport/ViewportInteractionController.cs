@@ -430,7 +430,12 @@ public sealed class ViewportInteractionController
             return false;
 
         Ray3 ray = Scene.Camera.ScreenPointToRay(frame.CursorPosition, frame.ViewportSize);
-        if (!Scene.Raycast(in ray, out SceneRaycastHit hit, PickDistance))
+        // Editor picking disregards CanQuery on purpose: a designer must be
+        // able to select the thing they can see, whatever its gameplay flags
+        // say. Honouring the flag here would make clearing CanQuery turn a
+        // brush unselectable in the viewport, with the Explorer as the only way
+        // back — a setting that hides its own undo.
+        if (!Scene.Raycast(in ray, out SceneRaycastHit hit, SceneQueryFilter.EditorPicking, PickDistance))
             return false;
 
         node = hit.Node;

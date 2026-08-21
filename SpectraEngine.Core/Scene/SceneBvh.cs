@@ -493,7 +493,25 @@ internal sealed class SceneBvh
     /// reports the nearest hit. See <see cref="Scene.Raycast"/> for the public
     /// contract.
     /// </summary>
-    public bool Raycast(in Ray3 ray, out SceneRaycastHit hit, float maxDistance = float.PositiveInfinity)
+    public bool Raycast(in Ray3 ray, out SceneRaycastHit hit, float maxDistance = float.PositiveInfinity) =>
+        Raycast(ray, out hit, default, maxDistance);
+
+    /// <summary>
+    /// As <see cref="Raycast(in Ray3, out SceneRaycastHit, float)"/>, reporting
+    /// only nodes <paramref name="filter"/> accepts.
+    /// </summary>
+    /// <remarks>
+    /// <b>The filter is applied at the LEAF, after the box test and before the
+    /// narrow phase.</b> That ordering is deliberate on both sides: testing it
+    /// before the narrow phase means a rejected node costs no plane clipping,
+    /// and testing it at the leaf rather than during the descent means an
+    /// internal node is never pruned for its children's flags — which would be
+    /// wrong, since a subtree's box says nothing about which of its leaves are
+    /// queryable.
+    /// </remarks>
+    public bool Raycast(
+        in Ray3 ray, out SceneRaycastHit hit, in SceneQueryFilter filter,
+        float maxDistance = float.PositiveInfinity)
     {
         FlushDirtyLeaves();
 
@@ -521,6 +539,9 @@ internal sealed class SceneBvh
                 // Cheap filter against the tight box with the CURRENT best —
                 // it may have shrunk since this leaf was pushed.
                 if (!RayIntersectsBox(ray, _nodes[index].TightBox, best, out _))
+                    continue;
+
+                if (!filter.Accepts(sceneNode))
                     continue;
 
                 if (sceneNode.Brush is { } brush &&
@@ -607,6 +628,89 @@ internal sealed class SceneBvh
             }
 
             if (!frustum.Intersects(_nodes[index].FatBox))
+                continue;
+
+            if (stackTop + 2 > _traversalStack.Length)
+                Array.Resize(ref _traversalStack, _traversalStack.Length * 2);
+            _traversalStack[stackTop++] = _nodes[index].Child1;
+            _traversalStack[stackTop++] = _nodes[index].Child2;
+        }
+    }
+
+    /// <summary>
+    /// Appends every indexed node whose tight world AABB intersects
+    /// <paramref name="box"/> and passes <paramref name="filter"/>. See
+    /// <see cref="Scene.GetPartBoundsInBox"/> for the public contract.
+    /// </summary>
+    public void QueryBox(in Aabb box, List<SceneNode> results, in SceneQueryFilter filter)
+    {
+        FlushDirtyLeaves();
+
+        if (_root == Null)
+            return;
+
+        int stackTop = 0;
+        _traversalStack[stackTop++] = _root;
+
+        while (stackTop > 0)
+        {
+            int index = _traversalStack[--stackTop];
+
+            if (_nodes[index].Leaf is { } sceneNode)
+            {
+                // Leaves test their TIGHT box, like the frustum walk: internal
+                // fat boxes keep the descent conservative (no false negatives)
+                // while the per-node verdict still matches a brute-force test
+                // over true bounds.
+                if (_nodes[index].TightBox.Intersects(box) && filter.Accepts(sceneNode))
+                    results.Add(sceneNode);
+                continue;
+            }
+
+            if (!_nodes[index].FatBox.Intersects(box))
+                continue;
+
+            if (stackTop + 2 > _traversalStack.Length)
+                Array.Resize(ref _traversalStack, _traversalStack.Length * 2);
+            _traversalStack[stackTop++] = _nodes[index].Child1;
+            _traversalStack[stackTop++] = _nodes[index].Child2;
+        }
+    }
+
+    /// <summary>
+    /// Appends every indexed node whose tight world AABB overlaps the sphere
+    /// and passes <paramref name="filter"/>.
+    /// </summary>
+    /// <remarks>
+    /// <b>The verdict is bounds-vs-sphere, not geometry-vs-sphere</b>, exactly
+    /// as the box query's is bounds-vs-box. That is a deliberate contract, not
+    /// an approximation to tighten later: this is the broad phase, its answer
+    /// is a superset, and the caller that needs an exact answer runs a narrow
+    /// phase over the (small) result. Callers are told so by name — the scene
+    /// wrappers say <c>GetPartBounds…</c> rather than <c>GetParts…</c>.
+    /// </remarks>
+    public void QuerySphere(Vector3 center, float radius, List<SceneNode> results, in SceneQueryFilter filter)
+    {
+        FlushDirtyLeaves();
+
+        if (_root == Null || radius < 0f)
+            return;
+
+        int stackTop = 0;
+        _traversalStack[stackTop++] = _root;
+
+        while (stackTop > 0)
+        {
+            int index = _traversalStack[--stackTop];
+
+            if (_nodes[index].Leaf is { } sceneNode)
+            {
+                if (_nodes[index].TightBox.IntersectsSphere(center, radius) && filter.Accepts(sceneNode))
+                    results.Add(sceneNode);
+                continue;
+            }
+
+            if (!_nodes[index].FatBox.IntersectsSphere(center, radius))
                 continue;
 
             if (stackTop + 2 > _traversalStack.Length)

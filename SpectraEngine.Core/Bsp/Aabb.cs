@@ -21,6 +21,22 @@ public readonly struct Aabb
     public Vector3 Size => Max - Min;
 
     /// <summary>True when this box overlaps <paramref name="other"/> (touching counts).</summary>
+    /// <summary>
+    /// The point of this box closest to <paramref name="point"/> — the point
+    /// itself when it is inside. This is the primitive a sphere overlap is
+    /// built from: a sphere meets a box exactly when the squared distance from
+    /// its centre to this point is within the squared radius, which keeps the
+    /// whole test free of square roots.
+    /// </summary>
+    public Vector3 ClosestPoint(Vector3 point) => Vector3.Clamp(point, Min, Max);
+
+    /// <summary>Whether a sphere overlaps this box.</summary>
+    public bool IntersectsSphere(Vector3 center, float radius)
+    {
+        Vector3 delta = center - ClosestPoint(center);
+        return Vector3.Dot(delta, delta) <= radius * radius;
+    }
+
     public bool Intersects(in Aabb other) =>
         Min.X <= other.Max.X && Max.X >= other.Min.X &&
         Min.Y <= other.Max.Y && Max.Y >= other.Min.Y &&
