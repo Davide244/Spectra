@@ -1,0 +1,784 @@
+# Realms: audience and liveness as node properties
+
+> **Status.** Design, not implementation. Nothing in this document exists in the tree today. Every claim about the current codebase carries a `file:line` and was read on 2026-08-21; every claim about Roblox behaviour was verified against `create.roblox.com/docs` rather than recalled.
+>
+> **Naming is not locked.** This document says *realm*. `docs/networking.md` already uses *scope* for interest management, and the value goes into every `.smap` and every `.scmap` payload-flag bit, so it cannot be renamed after content exists. See §9, Q8 — this one needs a sign-off, not another opinion.
+>
+> **This supersedes `docs/networking.md` §4.1's container paragraph** (lines 412–414, "Replication scope is defined by WHERE a node lives, not by a flag… There is deliberately no setter") and **`docs/roblox-to-spectra.md` lines 33–34**. All three must be corrected in the same change that lands the realm byte. Leaving either asserting the container model is worse than either model alone. Everything else in §4.1 — the four leak channels, the accessor gate, the scope-aware resolver, the CSG/BVH admission conditions, `net_strictlocalclient` — survives unchanged; only the *source* of the byte changes, from "nearest well-known ancestor" to "nearest explicit declaration".
+
+---
+
+## 1. What this replaces, and the precise diagnosis
+
+The ask was: *"Let's take the opportunity of us reinventing the wheel to actually change this to a good intuitive system that fits us."* The thing being replaced is Roblox's container zoo — `ServerStorage`, `ServerScriptService`, `ReplicatedStorage`, `ReplicatedFirst`, `StarterGui`, `StarterPack`, `StarterPlayerScripts`, `StarterCharacterScripts`, with `Workspace` as the ninth that everything else is defined against.
+
+### The diagnosis
+
+Roblox encodes **four orthogonal axes** in **one dimension — tree location**:
+
+| Axis | The question it answers | How Roblox asks it |
+| --- | --- | --- |
+| **Audience** | who holds this data at all | `ServerStorage`/`ServerScriptService` vs `ReplicatedStorage` vs `Workspace` |
+| **Replication timing** | when does it arrive on a client | `ReplicatedFirst` vs everything else |
+| **Liveness** | is this live world content, or a parked template | `Workspace` vs any storage container |
+| **Per-player templating** | is this copied per player, and when | the four `Starter*` containers |
+
+One dimension cannot carry four independent values. The consequences are mechanical, not stylistic:
+
+- **The axes cannot be combined.** `ServerStorage` and `ServerScriptService` have *identical* audience and differ only in liveness — that is why there are two folders with one word of difference in their names and no documentation that says so plainly. `Shared + parked` is not expressible at all.
+- **The rules are tribal knowledge, because a folder name cannot carry a rule.** Each container silently answers "does it replicate / in which direction / do scripts run / is content copied / when / does it render", and the answers live in forum threads. Roblox's own partial fix proves it: `Script.RunContext` (shipped 2022, `{ Legacy, Server, Client, Plugin }`) decoupled exactly one axis — run location — and left the rest coupled, so a `RunContext = Client` script placed in `ServerScriptService` **silently does not run** (the container does not replicate, so the client never receives the script), and in `StarterPlayerScripts` Roblox's own announcement records the failure verbatim: *"Starter containers are copied to clients, though, so the original script and the copy run, which isn't desirable."* A feature whose documented guidance is "don't use it here" is a partial decoupling failing in public.
+- **And the one that actually hurts every day: you cannot put a server-only spawner next to the enemies it spawns.** The spawner must live in `ServerScriptService`; the enemies must live in `Workspace`; the templates must live in `ServerStorage`. Three folders, one feature, and the tree is organised for the replication system instead of for the game.
+
+The fix is not a better folder set. It is to stop overloading location: **the tree is organised for the game, and the exceptions are marked where they naturally sit.**
+
+### What this document decides
+
+Two inherited node properties, one lattice, one resolution rule, one enforcement seam, and one hard refusal on the static world. It is a scene-graph and data-model design first — it changes `SceneNode`, `Scene`, the CSG admission predicate and the BVH — and a networking design only second, which is why it is its own document and not a section of `networking.md`.
+
+---
+
+## 2. The two properties
+
+### 2.1 Why two, and not one
+
+The tempting version of this design is one inherited property answering "who sees it", with parked templates handled by prefabs. **That is false today, and verifiably so.**
+
+- **Prefabs are `ROADMAP.md` `P10`, size L, on the `P4 → P5 → P6 → P7 → P8 → P9 → P10` chain, and `ROADMAP.md` line 92 lists prefabs explicitly among the things that are *off the critical path*.** `.scmap` reserves `PayloadKind 5 PrefabRoot` and nothing else exists. Pointing at prefabs for "a model I clone later" leaves a developer with nothing for a very long time.
+- **There is no way to make a brush inert.** `Scene.SnapshotFullWalk` (`SpectraEngine.Core/Scene/Scene.cs:1349–1369`) iterates `Nodes` and admits **every** node carrying a `Brush`, unconditionally — there is no enable flag anywhere on that path. `SceneBvh.IsSpatial` (`SpectraEngine.Core/Scene/SceneBvh.cs:146`) is `node.MeshRenderer is not null || node.Brush is not null` — ancestry-blind.
+
+So a parked brush template **carves the world**. It punches its shape as a hole through every neighbouring brush, in the one compiled artifact every client renders and collides against. A design that deletes `ServerStorage` and offers nothing for its second job does not simplify the model; it removes a capability.
+
+Therefore: **two inherited bytes. Ship both or ship neither.**
+
+### 2.2 The enums
+
+```csharp
+// SpectraEngine.Core/Scene/NodeRealm.cs
+
+/// <summary>
+/// WHO holds this node. Declared per node, inherited down the subtree.
+/// This is Roblox's ServerStorage / ServerScriptService / ReplicatedStorage
+/// axis, lifted off tree location so the tree can be organised for the game.
+/// </summary>
+public enum NodeRealm : byte
+{
+    /// <summary>Take the parent's answer. The default for every node, and the
+    /// value that is omitted from the serialized record.</summary>
+    Inherit = 0,
+    /// <summary>Server and every client.</summary>
+    Shared  = 1,
+    /// <summary>Server only.</summary>
+    Server  = 2,
+    /// <summary>Every client, each holding a private divergent copy. This is
+    /// LocalScript and StarterPlayerScripts, collapsed.</summary>
+    Client  = 3,
+}
+
+/// <summary>
+/// Whether this node is LIVE: carving the static world, occupying the BVH,
+/// drawn, queried, ticking its script. This is Roblox's Workspace-versus-
+/// storage axis. A Dormant subtree is a template you can park next to the
+/// thing that clones it.
+/// </summary>
+public enum NodeState : byte { Inherit = 0, Active = 1, Dormant = 2 }
+```
+
+**`NodeRealm.Owner` is deliberately absent**, and this is a correction to an earlier proposal rather than an omission. "Server plus exactly one player" (Roblox's `PlayerGui`/`Backpack`) cannot be a realm, because owner-realm content is by definition replicated — to exactly one client — so it needs a wire identity, while NetIds are assigned only to `Shared` nodes so that a client-target and a server-target cook of one `.smap` produce identical numbering. Those two rules are mutually exclusive. **Per-player content is a per-client replication filter over `Shared` nodes**, which is what `networking.md` §4.3's per-client interest bitset already provides, and what Roblox actually does underneath. It is not a fifth audience.
+
+### 2.3 The effective values, and why they are sets
+
+The declared value is an enum. The **effective** value is a *set*, because resolution is an intersection (§3) and an intersection can be empty:
+
+```csharp
+/// <summary>The RESOLVED audience: which sides hold this node. Never a
+/// declaration — always the intersection of this node's declaration with its
+/// parent's resolved answer. The empty set is a real, reachable value.</summary>
+[Flags]
+public enum RealmSet : byte
+{
+    /// <summary>Inert: no side holds this node as live content. Reachable only
+    /// by reparenting a Client subtree under a Server ancestor or the reverse.
+    /// Its scripts run nowhere; the Explorer badges every affected node.</summary>
+    Inert  = 0,
+    Server = 1 << 0,
+    Client = 1 << 1,
+    /// <summary>Both sides. The root's permanent value.</summary>
+    Shared = Server | Client,
+}
+```
+
+`NodeState` resolves the same way over a one-bit set (`Live`), so the two properties share **one** implementation:
+
+```csharp
+// The whole resolution rule, both axes, no branches.
+private static RealmSet ToSet(NodeRealm d) => d switch
+{
+    NodeRealm.Server => RealmSet.Server,
+    NodeRealm.Client => RealmSet.Client,
+    _                => RealmSet.Shared,   // Inherit and Shared are both "the full set"
+};
+
+effectiveRealm = ToSet(declaredRealm) & inheritedRealm;
+effectiveLive  = (declaredState != NodeState.Dormant) & inheritedLive;
+```
+
+`Inherit` and `Shared` map to the same set on purpose. They differ in exactly two places: whether an explicit write is legality-checked (R4), and whether the value is written to disk (R18). That is the whole difference, and stating it plainly heads off the first question every implementer will ask.
+
+### 2.4 Fields, defaults, and packing
+
+```csharp
+public partial class SceneNode
+{
+    private NodeRealm _declaredRealm = NodeRealm.Inherit;   // authored; serialized when != Inherit
+    private NodeState _declaredState = NodeState.Inherit;
+    private RealmSet  _effectiveRealm = RealmSet.Shared;    // resolved; never a declaration
+    private bool      _effectiveLive  = true;
+
+    /// <summary>The resolved audience. O(1) — a cached field, maintained on
+    /// declaration change and on reparent only, NEVER on the transform path.</summary>
+    public RealmSet EffectiveRealm => _effectiveRealm;
+
+    /// <summary>True when this node participates in the live world: carve, BVH,
+    /// draw, query, tick. The single predicate every subsystem consults.</summary>
+    public bool IsLive => _effectiveLive;
+
+    /// <summary>One AND and one compare. This is the entire enforcement primitive.</summary>
+    public bool IsVisibleTo(RealmSet mask) => (_effectiveRealm & mask) != 0;
+}
+```
+
+Four bytes added to `SceneNode`. **Do not claim they land in existing padding** — the CLR reorders fields and nobody has measured this node's layout; if the 50k-part benchmark is the gate, measure it there rather than asserting it here.
+
+Defaults are chosen so that the 99% of nodes that never think about either axis pay two zero bytes and no decision: **`Inherit` is `0` for both, the root resolves to `Shared` and `Active`, and a detached subtree root resolves its own declaration against `Shared`/`Active`** so effective values are total and there is never a null state.
+
+### 2.5 Where the bytes live on disk
+
+| Carrier | Encoding | Rule |
+| --- | --- | --- |
+| `.smap` node record | `"realm"`, `"state"` — lowercase strings from a closed vocabulary (`shared \| server \| client`, `active \| dormant`) | **Omitted iff the declared value is `Inherit`.** Written after `"name"`, before `"transform"`. Never a numeric enum, never the *effective* value (that is derived data, and `P2` forbids storing derived data). |
+| `.scmap` `NODE` record | **declared** realm + state in reserved `PayloadFlags` bits | Effective is derived in the pre-order forward pass that already rebuilds the tree (records are ordered `ParentIndex < SelfIndex`, so it is free). **Storing effective only is wrong** — a runtime reparent could not recompute. |
+| `.sentdef` keyvalue record | per-property realm in `Flags` **bits 6–7**, as a 2-bit value | Bits 0–2 are `readOnly`/`hideInEditor`/`requiresRestart` (`formats-and-pipeline.md:460`); bits 3–5 are `replicated`/`unreliable`/`clientWritable` (`networking.md:329`). **Do not touch 3–5 and do not grow the fixed 32-byte record.** `D15`'s C#↔Luau byte-identity parity pin extends to the new bits in the same change. |
+
+`"realm"` and `"state"` join `"editor"` on the **reserved-key list** and are never captured by `formats-and-pipeline.md` §2.6's unknown-member preservation. A misspelled realm silently falling through to `Shared` is a data leak on load.
+
+---
+
+## 3. The lattice and the rules
+
+Two operations, and they behave differently on purpose. **An explicit write is checked. A reparent is clamped.**
+
+### R1 — Resolution is an intersection, and it is one line per axis
+
+```
+effectiveRealm(node) = ToSet(node.declaredRealm) & effectiveRealm(node.Parent)
+effectiveLive(node)  = (node.declaredState != Dormant) && effectiveLive(node.Parent)
+```
+
+with `effectiveRealm(root) = RealmSet.Shared` and `effectiveLive(root) = true`. `EffectiveRealm` is never a declaration and is never `Inherit`. Every consumer reads the effective value; nothing outside `SceneNode`, the serializer and the editor's Properties panel reads the declared one.
+
+### R2 — Realm may only narrow going down, and the reason is this engine's, not a policy preference
+
+`SceneNode.WorldMatrix` is `local * Parent.WorldMatrix` (`SceneNode.cs:225–237`). Consider a `Shared` child under a `Server` parent — a widened child under a hidden ancestor. The client does not have the parent. So the client must do one of exactly two things:
+
+1. **Reparent the child to its nearest visible ancestor**, which silently changes its world transform. Server and client now disagree about where a replicated object *is*. That is geometry divergence with no error anywhere — the worst failure shape available, because it is invisible until a player is standing inside a wall.
+2. **Ghost-replicate the hidden ancestor chain**, sending the names and transforms of exactly the nodes that were marked hidden — leaking the thing the declaration existed to hide.
+
+Both are unacceptable, so the case is refused rather than resolved. The same argument closes the third option (dropping the child): a node whose parent is server-only genuinely has no client-side position, and pretending otherwise is what options 1 and 2 are.
+
+**The `State` axis does not inherit this argument, and must not be given it.** A live child under a dormant parent has a perfectly computable world transform — the parent is still in the graph, just not admitted. The reason `State` narrows anyway is different and weaker, and should be stated as what it is: `Dormant` means *this whole subtree is parked*, and if one descendant could escape, admission stops being a subtree property and becomes a per-node walk on the CSG snapshot's hot path. It narrows for the compile's sake, not for correctness's.
+
+### R3 — Clamping is an INTERSECTION, and the empty intersection has a name
+
+`Server ∩ Client` is **empty**, not "the ancestor's value". A rule that clamps a reparented subtree "to the ancestor's realm" takes a `Client` HUD/VFX subtree dragged under a `Server` parent and turns its scripts into **server** scripts — code that ran on each client with no authority now runs once, on the authority, *with* authority, from a drag, behind one warning line. That is a privilege escalation performed by a mouse gesture, and it is a more severe version of the exact flaw ("moving an object silently changes its semantics") this redesign exists to delete.
+
+So the empty intersection resolves to **`RealmSet.Inert`**: the subtree exists nowhere as live content, its scripts run nowhere, it is not drawn, not carved, not queried, not replicated — and the Explorer badges every affected node with the reason. **Never promote.**
+
+### R4 — An explicit write must name a legal subset; it never clamps
+
+```csharp
+public NodeRealm Realm
+{
+    get => _declaredRealm;
+    set
+    {
+        if (value == _declaredRealm) return;          // house idiom: a no-op write does nothing
+        if (Parent is null && Owner is not null)
+            throw new InvalidOperationException("The scene root's realm is permanently Shared.");
+
+        RealmSet inherited = Parent?._effectiveRealm ?? RealmSet.Shared;
+        RealmSet requested = ToSet(value);
+        if (value != NodeRealm.Inherit && (requested & inherited) != requested)
+            throw new InvalidOperationException(RealmMessages.CannotWiden(this, value, inherited));
+
+        // R11 — the static-world refusal, checked before anything moves.
+        if (value is NodeRealm.Server or NodeRealm.Client && _subtreeBrushCount > 0)
+            throw new InvalidOperationException(RealmMessages.BrushSubtree(this, value));
+
+        _declaredRealm = value;
+        PropagateRealm(inherited);
+    }
+}
+```
+
+The subset test does all the work: `Shared` under a `Server` parent throws (widening), and `Client` under a `Server` parent throws too (disjoint) — which is right, because an *explicit* write that could only ever produce `Inert` is a typo, not an intent. `Inert` is reachable only by reparenting, where it is a consequence of a gesture the user can undo. Explicit writes name a legal subset or fail, and **the failure message names both realms and the node**.
+
+### R5 — A reparent into a narrower parent clamps, does not rewrite declarations, and is exactly reversible
+
+Reparenting never throws on realm grounds (the one exception is R11's brush refusal). It recomputes the effective set as the intersection and leaves every declaration untouched. Moving the subtree back restores it **exactly**, because there was nothing to restore — the declarations never changed. This is what makes `Inert` survivable: it is a visible, reversible state, not a lossy coercion.
+
+`State` clamps the same way. A subtree dragged into a `Dormant` parent goes dormant and comes back live when dragged out.
+
+### R6 — Propagation uses `SetOwner`'s early-out, and only it
+
+```csharp
+// Same shape and the same early-out as SetOwner (SceneNode.cs:343-358): if this
+// node's answer did not change, no descendant's did either, so stop.
+internal void PropagateRealm(RealmSet inherited)
+{
+    RealmSet resolved = ToSet(_declaredRealm) & inherited;
+    if (resolved == _effectiveRealm) return;
+
+    RealmSet previous = _effectiveRealm;
+    _effectiveRealm = resolved;
+    Owner?.OnNodeRealmChanged(this, previous, resolved);
+
+    for (int i = 0; i < _children.Count; i++)
+        _children[i].PropagateRealm(resolved);
+}
+```
+
+Maintained at **exactly four sites** — the two declaration setters, `AddChild` and `RemoveChild`. A fifth site is a bug.
+
+**It must never be attached to `MarkWorldDirty` or any transform setter.** Those run every frame of every gizmo drag; realm changes at human rate.
+
+**The trap, which is worth a comment in the source.** `SetOwner` early-outs when the owner is *unchanged* (`SceneNode.cs:345–346`), and an unchanged owner is precisely the **same-scene reparent** — the case where realm and state *do* need recomputing. Do not fold the realm walk into `SetOwner`. Hook it explicitly, and cover it with a 4×4 reparent matrix test asserting the effective byte on every descendant.
+
+### R7 — In `AddChild`, the legality check is the FIRST statement of the method
+
+Read the real method (`SceneNode.cs:247–284`). By the end of its detach block the child has been removed from `oldParent._children` (`:255`), its brush count unwound from the old ancestor chain (`:258`) and the old scene marked dirty (`:259`) — while `child.Parent` still points at the old parent (`Parent` is only repointed at `:263`). **A throw placed after that block leaves a node that is unreachable from the root, still claims a parent that does not list it, is still in `_nodesById`, and whose brushes have been unwound from a chain it has not left. There is no rollback path.**
+
+So:
+
+```csharp
+public SceneNode AddChild(SceneNode child)
+{
+    // BEFORE ANY MUTATION. A half-applied reparent is worse than a refusal, and
+    // the detach block below is already destructive by its second statement.
+    if (child._subtreeBrushCount > 0 && _effectiveRealm != RealmSet.Shared)
+        throw new InvalidOperationException(RealmMessages.BrushSubtreeUnderScopedParent(this, child));
+    if (child._subtreeBrushCount > 0 && !_effectiveLive)
+        throw new InvalidOperationException(RealmMessages.BrushSubtreeUnderDormantParent(this, child));
+
+    Scene? previousOwner = child.Owner;
+
+    if (child.Parent is { } oldParent) { /* ...unchanged detach + brush-count unwind... */ }
+
+    child.Parent = this;
+    _children.Add(child);
+    child.MarkWorldDirty();
+
+    // REALM AND STATE BEFORE SetOwner. SetOwner raises NodeAdded, and NodeAdded
+    // handlers (the BVH; NetId allocation) branch on both — exactly the same
+    // reason MarkWorldDirty already precedes SetOwner on the line above.
+    RealmSet beforeRealm = child._effectiveRealm;
+    bool beforeLive = child._effectiveLive;
+    child.PropagateRealm(_effectiveRealm);
+    child.PropagateState(_effectiveLive);
+
+    child.SetOwner(Owner);
+
+    if (child._subtreeBrushCount > 0) { /* ...unchanged adjust + MarkStaticWorldDirty... */ }
+    if (beforeLive != child._effectiveLive)
+        Owner?.MarkAdmissionChanged();          // R13 — bumps _graphStructureVersion
+
+    if (previousOwner is not null && ReferenceEquals(previousOwner, Owner))
+        previousOwner.OnNodeSubtreeMoved(child);
+
+    return child;
+}
+```
+
+`RemoveChild` mirrors it: after `SetOwner(null)`, re-propagate the detached root against `RealmSet.Shared` / live, so a detached subtree resolves its own declarations and is never left holding a stale ancestor's answer.
+
+### R8 — A realm change on a node carrying a runnable script is a distinct, non-suppressible editor event
+
+No other inherited property in this engine changes whether **code runs**. Reparenting already changes a subtree's world matrix, its `Owner`, and its static-world membership — adding a fourth inherited property is consistent with that model, not a new sin. But run location is genuinely new, and it gets a rule the others do not: a reparent that changes the effective realm of any node carrying a runnable `Script` raises a distinct, non-suppressible editor notice naming **every script whose run location changed**, and at runtime it is a structural event with explicit semantics (R16).
+
+---
+
+## 4. Enforcement — where the guarantee actually lives
+
+`networking.md` §4.1's correction already established the shape of the problem: for a **remote** client the guarantee is structural (the data never crossed the wire, so there is nothing to enumerate), but for the **local** client on a listen host — which shares one `Scene` — the node is physically in the same graph, and four channels reach it today with no realm concept anywhere in the path. This section is where the local client is closed.
+
+### R9 — One `lua_State`, one handle table and one `require` cache per net context
+
+The visibility mask is a **readonly field on the VM**, not an ambient `NetContext`.
+
+Without this the entire accessor design is decorative. `O8` caches required modules by `SceneNode.Id` and `O5` caches one handle per node so identity comparison works (`part.Parent == workspace` must be true). On a single shared VM, a server script stashes a hidden node's userdata in a module table and a client script reads it out — **the gate never runs, because the userdata already exists**. Separate states make the transfer *impossible* rather than *checked*, which is a different quality of guarantee.
+
+It is also what Roblox does: a `ModuleScript` required from both sides yields separate instances with independent state, so this matches what a migrating developer already expects rather than surprising them.
+
+```csharp
+internal sealed class LuauHost
+{
+    // A readonly per-VM constant, NOT an ambient mutable: one lua_State per net
+    // context, so there is no set/clear discipline to get wrong and the mask is a
+    // JIT-visible constant at every gate.
+    private readonly RealmSet _visibility;   // ServerVm: Server | Shared bits. ClientVm: Client bits.
+    private readonly bool _isEditor;         // Editor bypasses — see R12.
+}
+```
+
+### R10 — The gate covers ISSUE, RESOLVE **and COUNT**
+
+Three surfaces, not one. The third is the one every version of this design missed.
+
+1. **Issue.** `LuauHost.PushNode` is the only function that converts a `SceneNode` into a Luau value. It pushes `nil` when the node is not visible to the VM's mask. `O2`'s entire query surface — `FindFirstChild`, `GetChildren`, `GetDescendants`, `Parent`, `GetFullName`, `IsDescendantOf`, `WaitForChild` — inherits the gate without being patched individually.
+2. **Resolve.** A `Guid` or `NodeRef` obtained in one context and handed to another must fail **at the point of use**, not merely at the point of handout. `Scene.TryFindById` stays realm-blind **by permanent contract** (the editor legitimately addresses every node, and that is the entire basis of `IEditorCommand` id-addressing); the realm-aware resolver is a separately-named member beside it.
+3. **Count.** **Any scene-level index or count that spans hidden nodes is a bypass**, because an exact count is an existence oracle that survives every handle-boundary check: a client script reads it before and after and detects server-side spawns without ever holding a handle. Named, because they are real and they are public today:
+   - **`Scene.NodeCount`** — `public int NodeCount => _nodesById.Count` (`Scene.cs:193`). Exact count of every node in the graph.
+   - **`RenderView.TotalCount`** — `view.TotalCount = Bvh.MeshLeafCount` (`Scene.cs:321`, backed by `SceneBvh._meshLeafCount`, `SceneBvh.cs:142`). Exact count of every mesh leaf, hidden ones included.
+   - **`O3`'s planned `Scene.GetTagged(tag)` reverse index and `ObserveTag(tag, onAdded, onRemoved)`**, which *replays already-tagged nodes before connecting*. That is a direct enumeration bypass with no handle involved anywhere, for a feature that is already designed rather than hypothetical.
+
+   The rule generalises: **any new public API returning or counting `SceneNode`s is a bypass by default.** The realm-aware forms take a mask (`Scene.VisibleNodeCount(mask)`, `Scene.GetTagged(tag, mask)`, `ObserveTag(tag, mask, …)`), and the Luau binding layer must never name the blind form.
+
+   Enforce it with a **reflection-based test in the test assembly**, or a Roslyn analyzer. Reflection is legal there — test assemblies are not AOT-published, and `Test/SpectraEngine.Editing.Tests/EditingAssemblyBoundaryTests.cs` already uses `System.Reflection` and `Assembly.GetReferencedAssemblies` (`:4`, `:26`, `:44`) as the existing precedent. A "reflection-free test over the public surface" is not implementable; enumerating every public API that returns a `SceneNode` needs reflection or an analyzer.
+
+### R11 — A denial looks like ABSENCE, routed into the surface's existing absent path
+
+Never a new error kind. A bespoke `ScopeViolationException` is an existence oracle under `pcall` — the caller learns the node exists by the *shape* of the failure — and it makes hosting behave differently from joining, which is the "works solo, breaks in multiplayer" trap wearing the costume of its own fix.
+
+| Surface | Denial |
+| --- | --- |
+| Child lookup (`FindFirstChild`, `.Name` index) | `nil` |
+| `GetChildren` | omitted from the table |
+| `GetDescendants` | subtree **pruned**, not per-node tested |
+| Property read | falls to the generated `__index` switch's existing `default` — *"X is not a valid member of Y"* |
+| `Guid` / `NodeRef` resolution | `false` / absent |
+| Raycast, frustum query | no hit / not in results |
+| Signal connection | the connection is **skipped**, not invoked with `nil` |
+| Attribute bag holding a `NodeRef` to a hidden node | the **attribute** is omitted entirely — it reads as absent, not as an unresolvable Guid, because a remote client's schema would not contain it |
+
+Debuggability comes from a **separate, rate-limited diagnostic** naming script, line, node and surface — never from the return value. It is dev-build only, and it is what stops "returns nil" from becoming an afternoon of confusion.
+
+### R12 — Filtering happens at the query boundary; the BVH stays realm-blind
+
+`SceneBvh.IsSpatial` does **not** gain a realm condition. One `Scene` instance serves both sides, and a server script must still be able to raycast server-realm content. The mask is threaded **through** BVH traversal and tested **at leaf-test time**, not applied afterwards: a post-hoc filter of a nearest-hit raycast returns the wrong nearest hit, because the walk early-outs on distance.
+
+`IsSpatial` **does** gain the liveness condition, because a `Dormant` node is not in the world at all:
+
+```csharp
+private static bool IsSpatial(SceneNode node) =>
+    node.IsLive && (node.MeshRenderer is not null || node.Brush is not null);
+```
+
+Signature policy, and the asymmetry is deliberate:
+
+```csharp
+// Defaulted: every existing editor/engine call site stays correct, unchanged.
+public bool Raycast(in Ray3 ray, out SceneRaycastHit hit,
+                    float maxDistance = float.PositiveInfinity,
+                    RealmSet mask = RealmSet.Shared | RealmSet.Server | RealmSet.Client);
+public void QueryFrustum(in Frustum frustum, List<SceneNode> results, RealmSet mask = /* everything */);
+
+// NOT defaulted, deliberately: the render path is where the VISIBLE leak lives
+// (a MeshRenderer under a Server node is drawn on the local client's screen
+// today), so adding realm must break every render call site exactly once, and
+// each one must be decided rather than defaulted.
+public void BuildRenderView(Camera camera, RenderView view, RealmSet mask);
+```
+
+### R13 — The editor is a bypass, not a mask value, and `Inert` is why
+
+The obvious implementation makes the editor just another mask (`Server | Client`) — and it is wrong, because `Inert` is the empty set and `0 & anything == 0`. An `Inert` subtree would be invisible and unpickable in the editor, which is exactly the subtree the user most needs to drag back out.
+
+So the editor context short-circuits **true** before the AND:
+
+```csharp
+internal bool CanSee(SceneNode node) => _isEditor || node.IsVisibleTo(_visibility);
+```
+
+Consequences worth stating: edit mode and C# engine code see the whole graph, which is the same trust split the codebase already has. The **Command Bar** therefore carries an explicit, visible context selector (Editor / Server / Client), defaulting to Editor in edit mode and Server in Play — a text box that executes arbitrary Luau against the live scene is a hole otherwise. Console entity commands (`ent_dump`, `ent_fire`, `!picker`, trailing-`*`) refuse to name a node not visible to the **executing** context, on top of their existing `Cheat` flag.
+
+### What a script actually observes
+
+The point of R11 is that neither side needs to know the gate exists. Same map, two contexts:
+
+```lua
+-- Arena/Spawner   node Realm = "Server", declared on the spawner itself, which
+-- sits RIGHT NEXT TO the enemies it spawns. No ServerScriptService, no
+-- ServerStorage, and the tree is organised for the game.
+local arena     = script.Parent                    -- Shared
+local templates = script.Templates                 -- State = "Dormant": parked, never carved
+local chest     = workspace.Vault.Chest            -- Shared node
+
+print(chest.LootTable)                             --> "boss_tier3"   (Server-realm keyvalue)
+
+for i = 1, 8 do
+    local grunt = templates.Grunt:Clone()
+    grunt.State  = "Active"                        -- joins the live world
+    grunt.Parent = arena                           -- Shared: every client sees it
+end
+```
+
+```lua
+-- Hud/FollowCam   node Realm = "Client". This is a LocalScript, with no new type.
+local arena = workspace.Arena
+
+print(#arena:GetChildren())                        --> 8    (Spawner simply omitted)
+print(arena:FindFirstChild("Spawner"))             --> nil
+print(arena.Grunt1.Health)                         --> 42   (Shared keyvalue)
+print(arena.Grunt1.LootTable)
+--  error: LootTable is not a valid member of Grunt1
+--  ...which is the generated __index switch's EXISTING default case, byte for
+--  byte the same error a misspelled name produces. Not a new error kind.
+
+-- Every one of these is the answer a REMOTE client gives, because for a remote
+-- client the node is genuinely not in its pack. Hosting and joining agree.
+```
+
+Declarations are readable and writable from Luau as interned strings, so no enum userdata is needed and the printed value is the value:
+
+```lua
+print(spawner.Realm)            --> "Server"     -- declared HERE
+print(spawner.EffectiveRealm)   --> "Server"     -- resolved
+print(arena.Realm)              --> "Inherit"
+print(arena.EffectiveRealm)     --> "Shared"     -- resolved from the root
+print(templates.EffectiveState) --> "Dormant"
+
+vfx.Parent = spawner            -- vfx.Realm == "Client", spawner is Server
+print(vfx.EffectiveRealm)       --> "Inert"      -- Client ∩ Server = ∅ (R3)
+print(vfx.Realm)                --> "Client"     -- the DECLARATION is untouched
+vfx.Parent = arena              -- and moving it back restores it exactly (R5)
+print(vfx.EffectiveRealm)       --> "Client"
+```
+
+Per-property realm carries the same vocabulary from both producers, into one byte-identical `.sentdef` record:
+
+```csharp
+[SpectraEntity("game_chest")]
+public sealed partial class Chest : Entity
+{
+    [Keyvalue("isOpen"), Replicated]              public partial bool   IsOpen    { get; set; }
+    [Keyvalue("lootTable", Realm = NodeRealm.Server)] public partial string LootTable { get; set; }
+    [Keyvalue("openSound", Realm = NodeRealm.Client)] public partial string OpenSound { get; set; }
+}
+```
+
+```lua
+Entity.define("game_chest", {
+    keyvalues = {
+        IsOpen    = { type = "bool",   default = "0", replicated = true },
+        LootTable = { type = "string", default = "",  realm = "server" },
+        OpenSound = { type = "string", default = "",  realm = "client" },
+    },
+})
+```
+
+Two boundaries, stated up front because implementers will hit both. **A property's effective realm is the narrower of its own declaration and the node's** — declaring `shared` on a `Server` node does not widen it. And **per-property realm covers entity keyvalues and node attributes ONLY**: `LocalTransform` and its components, `Brush`, `MeshRenderer`, `Name` and `Parent` carry the node's realm and none of their own, because `networking.md` §3.4 pins built-ins to a hand-written 16-entry table deliberately outside the generator. **Say so in the attribute's own XML doc** — `LocalPosition` is the first place people will reach.
+
+Enforcement of per-property realm is **not** at the C# property. C# is trusted engine code; the generator emits the realm into the `.sentdef` bits and into the per-context binding table, and the wire and Luau are where it bites.
+
+### R14 — Do not optimise the gate
+
+A proposed `Scene.ScopedNodeCount == 0` short-circuit — skip the check when the project has no realm-marked content — should be **deleted from the design**. `(effective & mask) != 0` is one load, one AND, one compare, against an `__index` metamethod plus an interned-name lookup plus a generated switch: it is unmeasurable. The short-circuit costs a field load through a `Scene` reference, and it makes a security check depend on a separately-maintained counter whose drift is a **total silent bypass**. Keep such a counter as a diagnostic and as a fast path for whole-subtree *enumeration* if it earns it; never guard an individual visibility test with it.
+
+---
+
+## 5. The static world rule
+
+This is the sharpest rule in the document, and the one most likely to be softened by someone who has not read `Scene.cs`.
+
+### R15 — A node admitted to the static-world carve must have `EffectiveRealm == Shared`
+
+Refused at **three O(1) sites**:
+
+1. **The `Brush` setter** — throw if the node's effective realm is not `Shared`.
+2. **The `Realm` setter** — throw if the requested value is non-`Shared` and `_subtreeBrushCount > 0`. **The SUBTREE counter, never `Brush is not null`**: a group node carrying no brush of its own can still be the root of a subtree full of them (`SceneNode.cs:218–222` says exactly this about `LocalScale`, for exactly this reason).
+3. **`AddChild`** — throw, as the method's first statement, if `child._subtreeBrushCount > 0` and the parent is not `Shared` (R7).
+
+**Never "excluded with a warning."** Two independent reasons, and the second is the deciding one:
+
+- *Ergonomics.* A map that compiles to different geometry depending on a property is a feature someone will use, and then a brush that visibly does nothing is indistinguishable from a CSG bug.
+- *Correctness.* Excluding-with-a-warning makes **admission depend on a mutable property**, which is what opens R17's hole below. Hard refusal means a brush node is **always** `Shared`, so admission can never change by realm and that entire corruption class cannot exist. This is a stronger argument than the ergonomic one and it is why the rule is a refusal.
+
+Why the rule exists at all: a server-only brush that carves a shared brush **publishes its exact shape as the hole it leaves** in geometry every client renders. That is a blueprint, not a leak. And two compiled worlds is worse — it doubles the background compile that the shared-`Scene` model exists to save, and it makes client prediction and server validation disagree about collision *by design*, because `IServerAuthority.Validate` (`networking.md` §4.4) tests movement against exactly that world. The player rubber-bands into a wall they cannot see.
+
+**The payoffs are large enough to be worth naming.** Brush nodes are always `Shared`, so R12's mask branch is only ever reachable for `MeshRenderer` leaves; and the client and server packs contain **bit-identical** `CMSH`/`CBSP` sections, so compiled geometry needs no stripping and no divergence handling at all.
+
+**When `P7` splits the brush counter, migrate all three checks to `IsStaticWorldBrush` / `SubtreeStaticWorldBrushCount` in the same commit.** Do not add a third subtree invariant — `O7` already names two independently-maintained subtree invariants of this shape as how silent corruption happens.
+
+**And give the capability back in the message.** Refusing non-`Shared` brushes takes away a designer's only route to "park this region", and there is no enable flag on the brush path today. `State = Dormant` is that route, so the refusal text names it **first** and the `MeshRenderer` fallback second — `Dormant` is the answer to *"I want this parked"*, `MeshRenderer` is the answer to *"I want this drawn but not carved"*:
+
+```csharp
+internal static string BrushSubtree(SceneNode node, NodeRealm requested) =>
+    $"'{node.Name}' has {node.SubtreeBrushCount} brush(es) in its subtree, so it is world " +
+    $"geometry: brushes are carved into the one shared static world that every peer renders " +
+    $"AND collides against, so they cannot be {requested}. To park this subtree — not carved, " +
+    $"not drawn, not queried, ready to clone — set State = Dormant. For content that is drawn " +
+    $"but never carved, use a MeshRenderer node, which lives outside CSG. For a server-side " +
+    $"volume, use a trigger/query volume (P8), which never enters the carve.";
+```
+
+### R16 — Geometry secrecy is not offered, and the docs say so in one sentence
+
+Anything compiled into the shared world is reconstructible by any client that renders it. The supported answers are: a separate map, a trigger/query volume, or a `Server`-realm `MeshRenderer` node outside CSG. **Do not add a flag that claims otherwise.**
+
+### R17 — Any change to which nodes are admitted to the placement list must bump `Scene._graphStructureVersion`
+
+This is the finding that makes the whole feature dangerous if implemented naively, and it is verified end to end.
+
+- `_graphStructureVersion` is bumped **only** by `OnNodeAdded` (`Scene.cs:128`), `OnNodeRemoved` (`Scene.cs:137`) and `OnNodeSubtreeMoved` (`Scene.cs:159`). Its documented meaning, in the comment above them (`Scene.cs:120–125`), is *"the signal that the brush snapshot's TRAVERSAL ORDER may have changed"*.
+- `MarkStaticWorldDirty()` sets **only** `_staticWorldVersion++` and `_snapshotForceFull = true` (`Scene.cs:724–728`). It does not touch the structure version.
+- The compile launch reads `bool orderStable = carry is not null && _carryStructureVersion == _graphStructureVersion;` (`Scene.cs:996`) and hands the carry over as **trusted** when that holds.
+- `CsgIncrementalCompiler.TryBuild` catches a pure count change — `if (n == 0 || n != prevPlacements.Count) return false;` (`CsgIncrementalCompiler.cs:99`) — but **not a count-preserving pair in one frame**: node A leaves the placement list because it went `Dormant` while node B gains a `Brush`. Count identical, slot mapping shifted, carry trusted.
+- The order half of the contract is checked by `VerifyTrustedDiff`, which is `[Conditional("DEBUG")]` (`CsgIncrementalCompiler.cs:590–592`) and compiled out in Release **by design**. So a dev build throws and a shipping build silently compiles corrupt geometry.
+
+`State` is an admission filter. A `Dormant` toggle on a brush-bearing subtree changes *which* nodes are admitted, i.e. the slot mapping, while leaving the structure version equal.
+
+**So: every `State` transition on a brush-bearing subtree bumps `_graphStructureVersion`, and so does any future admission predicate.** `MarkStaticWorldDirty()` alone is not sufficient. Add a named entry point (`Scene.MarkAdmissionChanged()`) that bumps both, so the requirement is visible at the call site rather than remembered.
+
+**Pin it with a test that runs in the Release configuration**, precisely because `VerifyTrustedDiff` does not. The oracle is the one the CSG suite already knows how to write: toggle `State` on one brush subtree while attaching a brush elsewhere in the same frame, then assert the incrementally compiled world is element-identical to a from-scratch compile of the same placements.
+
+Realm cannot hit this hole, because R15 makes a brush node permanently `Shared` — which is the deciding technical argument for R15 being a refusal rather than an exclusion.
+
+---
+
+## 6. Scripts
+
+### 6.1 The corrected position on run location
+
+**Retire the slogan "where a script exists is where it runs."** It is false as stated, and the two designs that owned it contradicted each other outright — one ruling that a `Shared` runnable runs on the *server*, the other that it runs in *every* context. Both cannot ship, and the slogan is what let the contradiction survive unnoticed, because it sounds like an answer.
+
+The honest rule, which is what goes in the onboarding doc and on the editor badge:
+
+> **A script runs on the narrowest side its node exists on — and `Shared` means server.**
+
+| `EffectiveRealm` | runnable (`IsModule == false`) | module (`IsModule == true`) |
+| --- | --- | --- |
+| `Shared` | runs on the **server**, once | requirable from **both** sides; **one instance per side** |
+| `Server` | runs on the server | server-context `require` only |
+| `Client` | runs on **every** client, one private instance each | client-context `require` only |
+| `Inert` | **runs nowhere** | requirable nowhere |
+
+### 6.2 What a `Shared` runnable script does, and why
+
+It runs **on the server, once.** Not on both sides.
+
+The rejected alternative — "runs in every context holding it" — was argued as the one genuinely useful case Roblox cannot express (shared cosmetic behaviour, correct on both sides, zero replication). It is rejected for two reasons:
+
+1. **It is unsafe without R9 and merely surprising with it.** On a single shared VM, "runs in every context" is two runs sharing one global table — two executions of the same chunk mutating the same state, which is a class of bug with no good diagnostic. With one VM per context it becomes safe but still surprising: a script that mutates authoritative state now does so twice, once with authority and once without.
+2. **The useful case already has a mechanism that is strictly better.** Shared logic is a **`Shared` module**, required from each side. That produces one instance per side with no shared state, which is what the "runs on both" author actually wanted, and it is what a Roblox `ModuleScript` in `ReplicatedStorage` already does — so the migrating developer already knows it.
+
+There is therefore **no value meaning "runs on both"**, and `ScriptKind` loses its `Server` and `Client` members entirely:
+
+```csharp
+public sealed class Script
+{
+    public string? Source { get; init; }   // exactly one of Source or Path
+    public string? Path   { get; init; }
+    public bool Disabled  { get; set; }
+
+    /// <summary>A module is required, not run. This is the ONLY surviving axis of
+    /// the old ScriptKind. There is no per-script realm field: a script node is a
+    /// leaf, and marking the leaf is the natural gesture.</summary>
+    public bool IsModule { get; init; }
+}
+```
+
+**`roblox-onboarding.md` `O8`'s "reserve `ScriptKind.Client`" is spent, not honoured, and must be corrected in the same change.**
+
+### 6.3 Roblox already collapsed `Script`/`LocalScript` — corroboration, not coincidence
+
+Roblox shipped `Enum.RunContext { Legacy, Server, Client, Plugin }` in 2022 for exactly this reason, with the stated motivation *"consolidating Script and LocalScript behavior to simplify future script type development."* **Roblox agrees the two-script-types design is a mistake** and is trying to unwind it against fifteen years of content. We have no content, so we do it once, and we do all the axes at the same time instead of one — which is precisely where their attempt failed (§1).
+
+**Scope the parity claim honestly, or the first migrating developer reports it as a bug.** `Shared`-resolves-to-server matches `RunContext.Legacy` *under `Workspace`*, not `Legacy` generally: Roblox's docs say Legacy *"a) is a server-side script and b) only runs if it is in a server container, such as Workspace or ServerScriptService."* A `Legacy` script under `ReplicatedStorage` does not run **at all**, whereas a `Shared` node in Spectra runs it on the server. The parity claim is worth making — a `Script` under `Workspace` behaves identically — but it must be stated with that qualifier.
+
+### 6.4 A realm change on a running script, at runtime
+
+Because R8 makes this the one inherited property that changes whether code runs, both directions are specified rather than left to the scheduler:
+
+- **Demotion** (the node leaves a VM's visibility) tears down that script's coroutines, its `O3` signal connections and its pending `task.delay` callbacks **in the losing VM**, and bumps its handles' generation so a retained handle errors with *"attempt to index a destroyed node"*. To that context it is indistinguishable from `Destroy`: `ChildRemoved`/`AncestryChanged` fire in that VM and nowhere else.
+- **Promotion** (the node enters a VM's visibility) **starts** the script in the gaining VM, as an authored-node create.
+- **Runtime realm writes are server-context only** and are flagged as structural replication events, like `AddBrush`/`RemoveBrush`.
+
+`State = Dormant` gets the *same* answer, deliberately (§9, Q2): a dormant script is torn down, not suspended.
+
+### 6.5 The editor must show the answer
+
+Put the resolved run location on every script node as a badge — **`runs: Server · inherited`** — or this becomes the design's most-reported confusion. Node realm is one word; "what does that mean for this script" is the question people actually have, and the editor is the only place to answer it without a doc lookup.
+
+---
+
+## 7. The Roblox replacement table
+
+Status is honest about the Spectra side. **planned** means designed and unbuilt.
+
+### 7.1 Containers whose whole job was audience
+
+| Roblox | Verified semantics | Spectra | Status |
+| --- | --- | --- | --- |
+| `Workspace` | *"contains all objects that make up a place's 3D world"*; clients render only this container; holds `Terrain` and `Camera` | **Deleted as a container.** `Scene.Root` *is* the world; Luau `workspace` aliases it so `workspace.Wall` ports character-for-character. **Rendering and carving are decided by `IsLive`, not by ancestry.** | root **exists**; alias planned (`O5`) |
+| `ServerStorage` | *"objects only meant for server use"*; never replicated; **scripts do not run there**; cloned into `Workspace` at runtime | `Realm = Server` **+** `State = Dormant`. Note this was *two* properties fused into one folder — which is why Roblox's docs must state the script rule separately: the folder cannot express it | **planned** |
+| `ServerScriptService` | *"Scripts…only meant for server use"*; never replicated | `Realm = Server` **+** `State = Active`. Identical audience to `ServerStorage`, different liveness — exactly the distinction the two folder names encode and never explain | **planned** |
+| `ReplicatedStorage` | *"available to both server and connected clients"*; client changes persist locally but do not replicate back | **Deleted.** `Shared` is the root default, so shared content needs no marking at all. The client-writes-stay-local rule survives as an **authority** rule (`networking.md` ruling 5), which is stronger than Roblox's "persists locally then gets overwritten" | **planned** |
+| `ReplicatedFirst` | *"replicate to a client when it joins…only once"*; `RemoveDefaultLoadingScreen()` | `JoinPriority = First` on the node (usually with `Realm = Client`), sent ahead of the `Bulk` world-sync channel `networking.md` §3.2 already defines. `game:IsLoaded()` → a `WorldReady` signal; `RemoveDefaultLoadingScreen()` → `DismissBootScreen()` | **planned** |
+| `ReplicatedScriptService` | **Removed from Roblox 2022-05-12 (v0.526.0)**; never had members; not creatable | **Nothing.** Its intent ("server and client scripts in one container") is the default here. Named only to close the question | n/a |
+
+### 7.2 Containers whose job was per-player templating
+
+Verified: *"the server copies the objects from the client containers in the edit data model to the corresponding location in the runtime data model inside the `Players` object."*
+
+| Roblox | Verified semantics | Spectra | Status |
+| --- | --- | --- | --- |
+| `StarterGui` | copied to `Player.PlayerGui` on join **and respawn**; per-object `LayerCollector.ResetOnSpawn = false` opts out | Spawn rule `{ Template, Phase = OnCharacterSpawn, Destination = PlayerGui }`. `ResetOnSpawn` disappears — use `Phase = OnJoin` for a persistent HUD | **planned** |
+| `StarterPack` | copied to `Player.Backpack` on join/spawn | Spawn rule → `PlayerInventory`. The *rule* ports; the destination does not exist (tools/inventory is its own unbuilt subsystem) | **planned; destination missing** |
+| `StarterPlayer` | **not a container** — a property bag of 23 properties (`CharacterWalkSpeed`, `CameraMode`, `LoadCharacterAppearance`…) that also *parents* two script containers | Split, because it is two things: properties → player-defaults settings; containers → spawn rules. **There is no `StarterPlayer` node** | **planned** |
+| `StarterPlayerScripts` | copied to `Player.PlayerScripts` **once per join** | Spawn rule, `Phase = OnJoin` | **planned** |
+| `StarterCharacterScripts` | copied into `Player.Character` **on every spawn** | Spawn rule, `Phase = OnCharacterSpawn`, `Destination = Character` | **planned** |
+| `StarterCharacter` (model) | a `Model` so named replaces the avatar | `PlayerDefaults.CharacterTemplate` — a prefab reference; interim, a `NodeRef` to a `Dormant` subtree | **planned** |
+
+```jsonc
+// game.spectraproj — the four Starter* containers, as data.
+"playerSpawnRules": [
+  { "template": "UI/Hud",          "phase": "OnJoin",           "destination": "PlayerGui" },
+  { "template": "UI/RespawnPanel", "phase": "OnCharacterSpawn", "destination": "PlayerGui" },
+  { "template": "Scripts/Client",  "phase": "OnJoin",           "destination": "PlayerScripts" },
+  { "template": "Character/Anim",  "phase": "OnCharacterSpawn", "destination": "Character" }
+]
+```
+
+**The `OnJoin` vs `OnCharacterSpawn` distinction is the single most valuable thing this replacement buys.** In Roblox it is unwritten in the tree: you must simply know that `StarterPlayerScripts` copies once and `StarterCharacterScripts` copies every death. Here it is a word on the rule.
+
+### 7.3 Services that were never containers
+
+| Roblox | Verified semantics | Spectra | Status |
+| --- | --- | --- | --- |
+| `Lighting` | global lighting properties **and** a container for `Sky`/`Atmosphere`/post-effects | **Three things, three homes.** Global properties → a typed `Scene.Environment` settings struct; sky/atmosphere → asset references on it; post-effects → an ordered chain owned by the render arc. **Lights are spatial `SceneNode`s with a `Light` payload.** This **overturns `roblox-to-spectra.md:33`** ("a `Scene.Lighting` node with attributes") — a node implies a transform, a parent, a realm and a subtree brush count, none of which mean anything for fog density | **planned; row needs correcting** |
+| `SoundService` | global audio properties **and** a container where a parented `Sound` plays non-spatially | Properties → `Scene.Audio` settings; `Audio.Play2D(clip)` for non-spatial; spatial sounds are `Sound` payloads on world nodes. A sound is never parented to a service | **planned** (audio is a stub today) |
+| `Players` | creates a `Player` per client; parents `PlayerGui`/`Backpack`/`PlayerScripts`/`Character` | A **service and index**, not a tree container — a player has no transform, no brush and no realm of its own. Its *contents* stay nodes: `player.Gui`, `player.Scripts`, `player.Character` are real `SceneNode`s in a per-player subtree, `Realm = Client` plus a per-client replication filter. This is the same split Roblox already makes (`Player` in `Players`, `Character` in `Workspace`), made explicit | **planned** |
+| `CollectionService` | tags | `O3`'s per-node tags + scene reverse index + `ObserveTag` — **with R10's mask parameter, non-negotiably** | **planned** |
+| `RunService` | frame phases | `O8`'s three pump points | **planned** |
+| `Teams` | `Team` objects; `TeamColor`; `GetTeams()` | **Nothing in v1 — deliberate difference.** `Teams` exists largely to drive `TeamColor` on the default leaderboard, which does not exist here, and `BrickColor` is already rejected. A team is a string attribute or a `NodeRef` to a team entity. Cheap to add later; expensive to ship an empty one | **deliberate difference** |
+| `Debris`, `Terrain`, `CoreGui`, `TestService`, `Chat` | — | Not provided. `Terrain` is a deliberate difference (brushes are the world); `Debris` is `task.delay` + `Destroy`; `CoreGui` has no analogue in an engine with no platform UI | **deliberate difference** |
+
+### 7.4 Where the replacement is genuinely harder
+
+Three places, stated rather than buried:
+
+1. **`StarterPack`'s destination does not exist.** Tools and inventory are an unbuilt subsystem. The spawn rule ports; there is nothing to spawn into.
+2. **A parked template is a `Dormant` subtree until `P10`, not a prefab.** That is a real ergonomic gap: a `Dormant` subtree is cloned and re-parented by hand, has no override mechanism, and its contents are written into the map rather than expanded from a shared definition. It is the honest answer for the next several milestones and prefabs are the eventual optimisation of it.
+3. **Porting an existing Roblox place is still mostly not about containers.** The container mapping is the easy third. The hard two thirds are that ported gameplay code references physics, `Humanoid`, `TweenService`, `DataStoreService` and per-part colour, none of which exist. A migration guide that leads with a slick container table and buries that is dishonest in exactly the way this repo's docs have so far refused to be.
+
+**Porting position: documented rewrite, plus type-level deprecation in the generated `spectra.d.luau`. Explicitly no runtime compat shim, and no automated codemod.**
+
+- **No runtime shim, and this one is refused on principle rather than on cost.** The moment `game.ServerStorage` resolves to a real node, the container model is back — *without its rules*, since nothing then stops a brush under it from carving. You would have both models simultaneously, which is worse than either, and every future Spectra tutorial would have two right answers.
+- **No codemod.** It cannot be made sound for Luau: `game[name]`, `FindFirstChild("ServerStorage")`, string-built paths and `require` chains defeat regex and a real parser alike without full type information. A codemod that fixes 80% and silently misses 20% is worse than none, because the misses fail in production rather than at the keyboard.
+- **Deliver the codemod's value as diagnostics.** Declare `game.ServerStorage`, `game.ReplicatedStorage`, `game.StarterGui` and friends as deprecated symbols in `spectra.d.luau` whose type-level message names the replacement. Under `--!strict` with `luau-analyze` in CI, the 20% a codemod would miss fails at the type checker instead.
+- **`game:GetService(name)` throws, naming the replacement — it does not return `nil`.** The universal idiom is `local RS = game:GetService("ReplicatedStorage")` on one line and `RS.Modules.Foo` on a later one, so a `nil` produces *"attempt to index nil value"* with a traceback pointing at the **wrong line** while the helpful log scrolls past. A thrown error lands on the right line with the right message.
+
+```lua
+-- Roblox
+local enemy = game.ServerStorage.Enemy:Clone()
+enemy.Parent = workspace
+
+-- Spectra today: a Dormant template, sitting next to the spawner that uses it
+local enemy = script.Parent.Templates.Enemy:Clone()   -- Templates.State == "Dormant"
+enemy.State  = "Active"
+enemy.Parent = workspace.Arena
+
+-- Spectra after P10
+local enemy = Assets.Prefab("Enemies/Grunt"):Instantiate(workspace.Arena)
+```
+
+### 7.5 What the editor must do — acceptance criteria, not polish
+
+Roblox's containers have three virtues a flag does not: they are **discoverable** (you open Explorer and learn the model by reading folder names), **zero-configuration** (dragging *is* the config), and **glanceable** (audience is visible in the tree without clicking anything). **An invisible flag is worse in practice than a visible folder.** If the first editor build ships without these, this design is worse than Roblox's regardless of being better in theory.
+
+1. **A Realm column in the Explorer, always visible.** Effective value on every row; inherited values dimmed, explicit declarations solid. This recovers glanceability *and* shows something Roblox's tree cannot — **where the exception was declared**.
+2. **A per-row gutter badge: glyph AND colour, never colour alone.** `Shared` neutral, `Server` one hue, `Client` another, `Dormant` hatched/desaturated, **`Inert` unmistakable** (it is always an accident or a work-in-progress).
+3. **`Dormant` subtrees render ghosted in the viewport.** A dormant brush that is not carving is otherwise indistinguishable from a CSG bug — and this repo has already shipped one symptom mistaken for a brush bug (the self-test jitter, commit `d4701d6`). Non-negotiable.
+4. **A `View as: Editor | Server | Client` lens** that feeds the **same** `RealmSet` mask to `BuildRenderView`, `Scene.Raycast` and the box-select query that the runtime uses — so it **cannot drift from what the runtime does**. This is strictly better than Roblox, which offers no such view, and it is nearly free because the byte is already cached.
+5. **Picking follows render visibility, always.** In any view context, a node that is not drawn is not pickable and not box-selectable, and switching to a narrower view **deselects** what the new view hides — the same auto-deselect `RemoveChild` already performs. Without this a gizmo can drag something the user cannot see, which is worse than having no lens.
+6. **Settable in one gesture from the tree** — right-click → Realm → …, with **illegal options disabled and the refusal text as the tooltip** (a brush subtree shows "Server" disabled carrying R15's message). Disabled-with-a-reason beats an exception dialog. If it needs a Properties-panel round trip, people stop marking things and the model rots.
+7. **New-node templates declare explicitly.** New Script → `Server`. New UI root → `Client`. New folder → `Inherit`. This is how the zero-configuration property is recovered.
+8. **Realm and state edits are `IEditorCommand`s.** `SetRealmCommand` is addressed by `SceneNode.Id`, records the absolute **before** and **after declared** value of every node it changed (never effective values — those are derived), and coalesces into one transaction per gesture, exactly like every other editor command.
+9. **The new-project template ships a pre-declared tree, and this is an acceptance criterion.** This is the discoverability property nobody else named: **Roblox's containers are discoverable because they exist in an empty project** — the model teaches itself on first open. A fresh Spectra project is a bare root that teaches nothing, and no badge on a node nobody created can fix that. Ship `World` (Shared), `ServerLogic` (Server), `ClientLogic` (Client) with the realms already declared and the badges already visible — which recovers zero-configuration and self-teaching, and demonstrates in the same gesture that **the names are yours to change**.
+
+### 7.6 The honest onboarding claim
+
+Do not claim "smaller". The honest count for this model is: realm as an inherited enum, the narrowing rule, what a reparent does, `Shared`-scripts-run-on-server, per-property realm and where it does *not* apply, brushes-must-be-`Shared`-and-why, modules instance per side, `Dormant`, spawn rules, `JoinPriority`. That is about ten rules, **three of which are exceptions** — and exceptions are precisely what made Roblox's model expensive. Meanwhile a Roblox developer does not *experience* containers as thirty facts; they experience them as "server stuff goes in ServerScriptService" and absorb the rest over years.
+
+**The defensible claim is orthogonality, not size: you can finally put the spawner next to the enemies it spawns.** Claim that, and stop there.
+
+---
+
+## 8. What is guaranteed, and what is not
+
+**Guaranteed.**
+
+- **Server-realm state never crosses the gameplay wire.** No NetId is allocated, no baseline is written, no delta is packed.
+- **Client-context code cannot reach a server-realm node in any topology** — including the shared-`Scene` local client on a listen host, which is the case `networking.md` §4.1 originally got wrong and corrected. R9 (separate VMs) makes cross-context handle transfer impossible rather than checked; R10 closes issue, resolve and count; R11 makes every denial look like absence, which is what a remote client already sees.
+- **`Dormant` and non-`Shared` content contributes nothing to the compiled world.** `CsgWorld.Build` is a pure function of the placement list, and a node that is never admitted contributes nothing to any carve, weld, BSP or mesh. R15 makes brush nodes permanently `Shared`, so the imprint channel is closed by construction rather than by a filter.
+- **The client and server packs contain bit-identical `CMSH`/`CBSP` sections**, and NetId numbering is identical across complementary strips.
+
+**Not guaranteed in v1 — say this plainly, and say it before anyone puts a secret in a server script.**
+
+- **Secrecy of server content ON DISK.** Server node records ship in the client pack, exactly as `networking.md` `N15` already accepts for server script source: *"Server script source ships in the client's pack in v1 (`SCPT`/`LUAS` are one section): nothing in a server script is secret, and that must be documented before anyone puts a secret in one."* The same is true of server node records, their names, their transforms and their attributes. **The tree does not hide them; it only stops your own client code from reading them.**
+- **Defence against a modified client on the player's own machine.** The accessor gate defends against a developer's own client code and against a remote player reading data that was never sent. It is not a defence against a patched binary. Only the cooker's client-target strip is, and only for content it removed.
+
+**The route to on-disk secrecy, if it is ever wanted**, is a cook-target strip: `--target client` drops every `Server`-realm node **whole** — its `NODE` record, `ENTT`/`ECON` records, `SCPT`/`LUAS`/`LUAB` blobs and attributes — which retires `formats-and-pipeline.md` §7's open question about stripping server script source (the source is not stripped; the node carrying it is absent). **And `STRT` must be REBUILT from the surviving records, never copied**, with a `scook verify --target client` pass asserting every string-table entry is referenced by a surviving record. Otherwise a stripped node's name — `SecretBossSpawner` — ships to every player in the string blob. Copying the string table is the shorter implementation and the leak nobody would check.
+
+A client self-reporting its strip mask (`sv_require_stripped_client`) is hygiene, never security.
+
+---
+
+## 9. Open questions
+
+Eight edges the adversarial pass could not close from source. A position is taken where one is defensible; where it is not, the question and the tradeoff are stated rather than dropped.
+
+**Q1 — What does a `Shared` runnable script do? → CLOSED. It runs on the server, once.** See §6.2 for the full argument. The alternative ("runs in every context") is unsafe without R9 and merely surprising with it, and the useful case it was reaching for is better served by a `Shared` **module**. This had to be answered before `O8` ships the `Script` payload, because it decides whether `ScriptKind` has two members or three. It has two.
+
+**Q2 — What happens to a running script when its node's realm or state changes at runtime? → POSITION: tear down on loss, start on gain, and `Dormant` gets the same answer as demotion.** §6.4 specifies handles; the script *instance* follows the same rule: coroutines stopped, `O3` connections disconnected, pending `task.delay` callbacks cancelled in the losing VM. **`Dormant` does not suspend — it tears down.** The alternative (suspend coroutines and timers, resume on reactivation) is more intuitive for "inert" and matches Roblox's storage behaviour, but a script that goes dormant mid-`task.wait` and resumes later with a stale `dt` is a subtle failure with no good diagnostic, and it forces `O8`'s scheduler to carry a second, suspended run queue. The cost of the position, stated: reactivating a template restarts its scripts from the top, so template scripts must be written to be re-entrant. That is the same contract `Clone` already implies.
+
+**Q3 — What does the map loader do with an illegal combination on disk? → POSITION: a per-node load defect, never a mid-load throw.** Setter-based refusal is right for authoring and **wrong for deserialization**. A `.smap` or `.scmap` carrying a brush on a non-`Shared` node, or a realm string the reader does not know, is reported as a loud, named, per-node load **defect** that skips or coerces the offending payload and leaves the rest of the map loadable. A mid-load exception leaves a half-built scene in the editor, which is the one failure mode a loader must not have. The loader therefore constructs nodes through an internal path that bypasses the setters and validates afterwards. `"realm"` and `"state"` are reserved keys and an unrecognised value is a reader error, never a silent fall-through to `Shared` (§2.5).
+
+**Q4 — Prefab instantiation into a narrower destination: refuse, or clamp? → POSITION: refuse, with the list of conflicting descendants.** The distinction that resolves the apparent contradiction with R5 is **reversibility**: a reparent is a gesture the user can undo, and clamping leaves every declaration intact so moving the subtree back restores it exactly. An instantiation **authors a new declaration set that bakes into the saved map**; there is no "move it back". So instantiation validates the prefab's internal declarations against the destination's effective realm and refuses, naming every conflicting descendant. It must never coerce them. *Related and still open:* `ROADMAP.md` §11.8's prefab-internal `targetname` scoping is the same shape of question, and answering them separately risks two different answers for one concept.
+
+**Q5 — How many `lua_State`s does the editor process actually hold? → PARTIAL POSITION; the cost is real and uncosted.** Count them honestly against what is already planned: `O6` gives the Command Bar an editor-owned state, `O9` gives Play a fresh state torn down on Stop, `O8` gives every script its own thread with `luaL_sandboxthread`, and R9 now requires one state per net context. **Position: the Command Bar uses the editor state rather than a fourth, and Play creates one server state and one client state** — so edit mode holds one, Play holds three, plus a thread per script. **What is not settled is the memory cost**, because each state carries an independent `require` cache and therefore an independent instance of every `Shared` module's state. Nobody has measured it. It is not a reason to weaken R9 — a shared VM makes the gate decorative — but it must be measured before the listen-host topology is called shippable.
+
+**Q6 — Does `Client` earn its place in v1? → POSITION: keep it.** The cut is genuinely attractive: `Client` costs a third lattice value, a server-side gate, a second cook strip target and a set of nonsense combinations that each need a bespoke refusal message. But the strongest argument for cutting it was that the `Server`-versus-`Client` conflict case is where the clamp bug lived — and **R3 fixes that by naming `Inert`**, so the argument no longer holds. Cutting `Client` would leave a hole in the replacement table exactly where Roblox developers live (`LocalScript`, `StarterPlayerScripts`, client HUD authored *in the map*), and the fallback — "create client-local content in the client VM with no declared realm" — has no answer for authored content. **The fallback if implementation cost bites:** reserve the value in the enum and in the `.smap` vocabulary, ship `Shared`/`Server` only, and add the client strip later. Reserving costs nothing; renaming after content exists costs everything.
+
+**Q7 — Per-property realm versus the signal surface. → POSITION: follows from R11 mechanically.** A server-only property is **absent from the client's binding table**, so in client context `GetPropertyChangedSignal("LootTable")` takes the same path as a misspelled name — the generated switch's existing `default`, *"LootTable is not a valid member of Chest"* — and the `Changed` signal **does not fire for it in that context at all**. Firing `Changed` with a name the client cannot resolve is an existence oracle; firing it with nothing is a silent hole in a documented API; **not firing it is neither**, because in a client context that property genuinely does not exist. `O3` ships both signals, so this must be settled in the same change.
+
+**Q8 — The naming lock. → NOT DECIDED HERE. This needs the user, not another agent.** `networking.md` already uses *scope* for interest management and *replication scope* in adjacent paragraphs; the original ask said "scope"; this document says **realm**, on Garry's Mod precedent (`sv_`/`cl_`/`sh_`), because it survives all four consumers (data existence, script run location, property replication, per-player filtering) and because *scope* is overloaded three ways already — interest management, milestone scope, and lexical scope in a document about scripting. The counter-argument is real: `realm` is a new word to learn, and `scope` is what was asked for. **It goes into every `.smap`, every `.scmap` payload-flag bit and every `.sentdef` record, so it cannot be changed after content exists.** Decide before the first map is saved.
+
+### Also carried forward, from the migration pass
+
+Smaller, but not dropped:
+
+- **Can a server-context script create a `Client` node at runtime**, meaning "create this on every client"? A coherent primitive with no Roblox analogue (Roblox forces a `RemoteEvent`), and also a way to accidentally spawn N copies. The v1 rule refuses it — a node's realm is fixed at creation and may only be created in a context that would hold it — but the generalisation needs a decision before the replication vocabulary is frozen.
+- **What is the relationship between `State = Dormant` and `P7`'s dynamic-part split?** Both express "this exists but is not world geometry". If a `Dormant` brush subtree goes `Active` during Play, does it join the carve (a structural edit, full recompile) or become a dynamic `MeshRenderer`? A spawner activating templates every few seconds would full-recompile the world on each one. This is the same hazard `P7` already names and must be answered together with it.
+- **Where do shared Luau modules live by convention** now that `ReplicatedStorage` is gone? The mechanism is answered (`Shared` is the default; `require` is by node id); the convention is not, and a missing convention is how every project invents a different one. The new-project template (§7.5 item 9) is the place to fix it.
+- **Do `StarterPlayer`'s 23 character properties become a settings struct or entity keyvalues on the character prefab?** Keyvalues are consistent with the entity arc and give the property panel for free; a settings struct is simpler and replicates through the built-in table. Small, but it blocks the character work.
+- **Does per-property realm need a `Client` value at all**, or only `Shared`/`Server`? A client-only keyvalue on a replicated entity is arguably a local cache wearing the realm word. Dropping it would free a bit and remove a combination nobody has asked for.
+
+---
+
+## 10. Test pins
+
+None of this is real until these exist.
+
+| # | Pin |
+| --- | --- |
+| 1 | A `Server`-realm node's `Guid` resolves through `Scene.TryFindById` and **fails** through the realm-aware resolver with a client mask. |
+| 2 | `GetChildren` in a client VM over a mixed parent returns exactly the `Shared` children, **in order**. |
+| 3 | All three R15 refusals throw, with the named messages. |
+| 4 | A 4×4 reparent matrix (`Shared`/`Server`/`Client`/`Inert` parent × the same declared child) asserting the effective byte on **every descendant**, including the same-scene reparent that R6's `SetOwner` trap covers. |
+| 5 | **Release-configuration** admission test: toggle `State` on one brush subtree while attaching a brush elsewhere in the same frame; assert the incrementally compiled world is element-identical to a from-scratch compile. This is R17, and it must not be a `DEBUG`-only assertion, because `VerifyTrustedDiff` already is. |
+| 6 | Compile-equivalence oracle: a map with N `Server`-realm non-brush nodes compiles to a `CsgWorld` element-identical to the same map with those nodes deleted. |
+| 7 | A `Dormant` brush subtree contributes **zero** placements and **zero** BVH leaves. |
+| 8 | A `client`-target and a `server`-target cook of one `.smap` produce **identical NetId numbering**, and bit-identical `CMSH`/`CBSP`. |
+| 9 | `scook verify --target client` asserts every `STRT` entry is referenced by a surviving record. |
+| 10 | A reflection-based public-surface test (the `EditingAssemblyBoundaryTests` precedent) asserting every public API returning or counting `SceneNode`s is either mask-taking or on an explicit allow-list — and that the generated Luau bindings never name a blind form. |
+| 11 | **The master pin:** `N14`'s three-context loopback rig asserts the **local** client's observation of a mixed tree is identical, member for member, to the **remote** client's. Everything else on this list is a shortcut to this one. |
