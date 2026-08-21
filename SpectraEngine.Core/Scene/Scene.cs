@@ -528,6 +528,14 @@ public sealed class Scene
     /// <summary>How many nodes in this scene carry a <see cref="BrushKind.Part"/> brush.</summary>
     public int PartBrushNodeCount => _partBrushNodes.Count;
 
+    /// <summary>
+    /// Every node in this scene carrying a <see cref="BrushKind.Part"/> brush,
+    /// maintained incrementally — this is the exact work list for anything that
+    /// must touch the parts each frame, and the reason such a pass does not have
+    /// to walk the graph. Order is unspecified. Render thread only.
+    /// </summary>
+    public IReadOnlyCollection<SceneNode> PartBrushNodes => _partBrushNodes;
+
     /// <summary>Destroys every GPU mesh the part-brush cache owns. Render thread, before renderer shutdown.</summary>
     public void ReleasePartBrushMeshes(Renderer renderer) => _partBrushMeshes.ReleaseGraphicsResources(renderer);
 

@@ -110,6 +110,11 @@ internal sealed class DemoEditorHost : ISceneEditor
     private readonly GizmoBinding[] _gizmoBindings;
     private readonly EditingSelfTest? _selfTest;
 
+    // Editor-only, and deliberately not in Core: a shipped game has no reason
+    // to outline its own parts, and this assembly is the one that never gets
+    // linked into one.
+    private readonly PartBrushOverlay _partOutlines = new();
+
     // Last frame's framebuffer latch, kept so Draw can size the marquee without
     // asking the renderer a second time.
     private Vector2 _viewportSize;
@@ -250,7 +255,14 @@ internal sealed class DemoEditorHost : ISceneEditor
     }
 
     /// <inheritdoc/>
-    public void Draw(DebugDraw output) => _viewport.Draw(output, _viewportSize);
+    public void Draw(DebugDraw output)
+    {
+        // Part outlines first, manipulators over them: a gizmo is what the user
+        // is aiming at, an outline is context, and both share the depth-off
+        // line pass so neither hides behind the geometry it describes.
+        _partOutlines.Draw(output, _scene);
+        _viewport.Draw(output, _viewportSize);
+    }
 
     // --- Navigation keyboard -------------------------------------------------
 
