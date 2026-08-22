@@ -37,7 +37,7 @@ namespace SpectraEngine.Core.Scene;
 /// snapshot.
 /// </para>
 /// </remarks>
-public sealed class Scene
+public sealed partial class Scene
 {
     public Scene(string name = "Scene")
     {

@@ -637,6 +637,95 @@ public sealed class CsgWorld
     /// and why this disagrees with <see cref="Scene.Scene.Raycast"/> in both
     /// directions.
     /// </remarks>
+    /// <summary>
+    /// The compiled surface a point lies on, matched by plane and containment.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this exists at all:</b> the per-cell BSP reports the splitter
+    /// PLANE a ray crossed, not the polygon lying on it, because a node keeps
+    /// its splitter and hands its coplanar faces to its children. So a raycast
+    /// knows exactly where and which way a surface faces, and nothing about what
+    /// that surface is made of. Gameplay needs the material for footstep sounds,
+    /// impact decals and surface properties, so it is resolved here instead.
+    /// </para>
+    /// <para>
+    /// <b>Resolved rather than stored, deliberately.</b> Making the BSP carry
+    /// its coplanar faces would change the compiled artifact that the
+    /// determinism and chunked-versus-monolithic oracles compare, for a lookup
+    /// that only gameplay rays perform. The scan is bounded by one 32-unit
+    /// cell's surface list, and it is exact: a hit point lies on exactly one
+    /// surface.
+    /// </para>
+    /// <para>
+    /// Returns false when the point is not on a surface of the chunk that
+    /// contains it, which is what a caller sees for a hit exactly on a cell
+    /// boundary. The default material is the right answer there, not a wrong
+    /// one from the neighbouring cell.
+    /// </para>
+    /// </remarks>
+    public bool TryResolveSurface(Vector3 point, Vector3 normal, out FaceSurface face)
+    {
+        face = default;
+
+        if (!Chunks.TryGet(ChunkCoord.FromPosition(point), out WorldChunk chunk))
+            return false;
+
+        IReadOnlyList<Polygon> surfaces = chunk.WeldedSurfaces.Count > 0
+            ? chunk.WeldedSurfaces
+            : chunk.Surfaces;
+
+        const float PlaneEpsilon = 1e-3f;
+        const float NormalAgreement = 0.9f;
+
+        for (int i = 0; i < surfaces.Count; i++)
+        {
+            Polygon polygon = surfaces[i];
+
+            // Normal first: it is one dot product and rejects the overwhelming
+            // majority, including the opposite face of the same thin brush.
+            if (Vector3.Dot(polygon.Surface.Normal, normal) < NormalAgreement)
+                continue;
+
+            if (MathF.Abs(Plane.DotCoordinate(polygon.Surface, point)) > PlaneEpsilon)
+                continue;
+
+            if (!ContainsProjected(polygon, point))
+                continue;
+
+            face = polygon.Face;
+            return true;
+        }
+
+        return false;
+    }
+
+    // Point-in-polygon on the polygon's own plane, by the sign of the cross
+    // product against every edge. Convex by construction (every surface is a
+    // clipped face), so one disagreeing edge is a rejection.
+    private static bool ContainsProjected(Polygon polygon, Vector3 point)
+    {
+        ReadOnlySpan<Vector3> vertices = polygon.VertexSpan;
+        if (vertices.Length < 3)
+            return false;
+
+        Vector3 normal = polygon.Surface.Normal;
+
+        // A small outward tolerance, because the hit point comes from a plane
+        // intersection and may land a hair outside an edge it is exactly on.
+        const float EdgeEpsilon = -1e-3f;
+
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            Vector3 a = vertices[i];
+            Vector3 b = vertices[(i + 1) % vertices.Length];
+            if (Vector3.Dot(Vector3.Cross(b - a, point - a), normal) < EdgeEpsilon)
+                return false;
+        }
+
+        return true;
+    }
+
     public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, out BspRaycastHit hit)
     {
         hit = default;

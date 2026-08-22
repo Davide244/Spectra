@@ -67,6 +67,31 @@ public readonly record struct SceneQueryFilter
     /// </summary>
     public bool IncludeSubtractiveBrushes { get; init; }
 
+    /// <summary>
+    /// Whether <see cref="BrushKind.World"/> brushes are skipped. Off by
+    /// default, so a default filter reports them exactly as before.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The gameplay raycast turns this ON, and that is the whole reason it
+    /// exists.</b> World brushes are answered by the compiled static world,
+    /// which knows what the carve removed; testing them here as well reports the
+    /// same geometry twice, and the authored-plane answer is the wrong one of
+    /// the two. It reports solid in the middle of a doorway a subtractive brush
+    /// opened, so a shot fired through a door stops in mid-air.
+    /// </para>
+    /// <para>
+    /// <b>Phrased as an exclusion rather than an inclusion on purpose.</b> The
+    /// sibling flags read <c>Include*</c> because their restrictive setting is
+    /// the default; this one's permissive setting is. A property initializer
+    /// would not have worked either way: this is a struct, so
+    /// <c>default(SceneQueryFilter)</c> never runs a constructor, and an
+    /// <c>Include</c> flag defaulting to true would silently become false for
+    /// every caller that passes a default filter.
+    /// </para>
+    /// </remarks>
+    public bool ExcludeStaticWorldBrushes { get; init; }
+
     /// <summary>The filter editor tooling uses: everything selectable, flags disregarded.</summary>
     public static SceneQueryFilter EditorPicking =>
         new() { IgnoreQueryFlags = true, IncludeSubtractiveBrushes = true };
@@ -113,6 +138,11 @@ public readonly record struct SceneQueryFilter
         {
             return false;
         }
+
+        // World brushes are the compiled static world's answer to give, and it
+        // is the correct one: it knows what the carve removed. See the property.
+        if (ExcludeStaticWorldBrushes && node.IsStaticWorldBrush)
+            return false;
 
         return true;
     }
