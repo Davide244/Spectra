@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
+using SpectraEngine.Physics.Box3D;
 using SpectraEngine.Physics.Box3D.Native;
 
 namespace SpectraEngine.Physics.Tests;
@@ -63,6 +64,12 @@ public sealed class Box3DAbiTests
     [InlineData(typeof(B3ShapeId), "b3ShapeId")]
     [InlineData(typeof(B3Capacity), "b3Capacity")]
     [InlineData(typeof(B3WorldDef), "b3WorldDef")]
+    [InlineData(typeof(B3MotionLocks), "b3MotionLocks")]
+    [InlineData(typeof(B3BodyDef), "b3BodyDef")]
+    [InlineData(typeof(B3Filter), "b3Filter")]
+    [InlineData(typeof(B3SurfaceMaterial), "b3SurfaceMaterial")]
+    [InlineData(typeof(B3ShapeDef), "b3ShapeDef")]
+    [InlineData(typeof(B3Aabb), "b3AABB")]
     public void A_managed_struct_matches_its_native_layout(Type managed, string nativeName)
     {
         AbiManifest m = Manifest.Value;
@@ -92,11 +99,37 @@ public sealed class Box3DAbiTests
                 $"{managed.Name}.{fields[i].Name} sits at offset {actualOffset}, " +
                 $"but native {nativeName}.{expected.Name} sits at {expected.Offset}");
 
-            Marshal.SizeOf(fields[i].FieldType).ShouldBe(
+            int actualSize = SizeOfField(fields[i].FieldType);
+            actualSize.ShouldBe(
                 expected.Size,
-                $"{managed.Name}.{fields[i].Name} is {Marshal.SizeOf(fields[i].FieldType)} bytes, " +
+                $"{managed.Name}.{fields[i].Name} is {actualSize} bytes, " +
                 $"but native {nativeName}.{expected.Name} is {expected.Size}");
         }
+    }
+
+    // Marshal.SizeOf refuses enum types outright, so ask about the underlying
+    // integer instead. The distinction matters: a C enum's storage is what the
+    // layout depends on, and a managed enum that changed its base type would
+    // shift every field after it — which is precisely what this test is for.
+    private static int SizeOfField(Type type) =>
+        type.IsEnum ? Marshal.SizeOf(Enum.GetUnderlyingType(type)) : Marshal.SizeOf(type);
+
+    [Fact]
+    public void The_managed_hull_limits_match_the_ones_the_library_enforces()
+    {
+        // The pre-check refuses a brush BEFORE calling the library, so its
+        // constants are a second copy of the library's. A copy that drifts is
+        // worse than no pre-check: it either refuses brushes the library would
+        // have accepted, or lets through ones that fail inside b3CreateHull
+        // with nothing but a log line to show for it.
+        AbiManifest m = Manifest.Value;
+
+        BrushHullBuilder.MaxVertices.ShouldBe(m.Limits["maxHullVertices"]);
+        BrushHullBuilder.MaxFaces.ShouldBe(m.Limits["maxHullFaces"]);
+        BrushHullBuilder.MaxEdges.ShouldBe(m.Limits["maxHullEdges"]);
+
+        // Euler for a convex polyhedron: V - E + F = 2, so E = V + F - 2.
+        BrushHullBuilder.MaxVerticesPlusFaces.ShouldBe(m.Limits["maxHullEdges"] + 2);
     }
 
     [Fact]
@@ -126,7 +159,8 @@ public sealed class Box3DAbiTests
     private sealed record NativeStruct(string Name, int Size, int Align, List<NativeField> Fields);
 
     private sealed record AbiManifest(
-        string Version, string Precision, int PointerSize, Dictionary<string, NativeStruct> Structs);
+        string Version, string Precision, int PointerSize,
+        Dictionary<string, NativeStruct> Structs, Dictionary<string, int> Limits);
 
     private static AbiManifest LoadManifest()
     {
@@ -134,6 +168,7 @@ public sealed class Box3DAbiTests
         string version = "", precision = "";
         int pointerSize = 0;
         var structs = new Dictionary<string, NativeStruct>(StringComparer.Ordinal);
+        var limits = new Dictionary<string, int>(StringComparer.Ordinal);
         NativeStruct? current = null;
 
         foreach (string raw in File.ReadLines(path))
@@ -158,6 +193,9 @@ public sealed class Box3DAbiTests
                     current = new NativeStruct(parts[1], ParseTagged(parts, "size="), ParseTagged(parts, "align="), []);
                     structs[current.Name] = current;
                     break;
+                case "limit":
+                    limits[parts[1]] = ParseTagged(parts, "value=");
+                    break;
                 case "field":
                     current.ShouldNotBeNull($"manifest has a field line before any struct line: '{line}'");
                     current!.Fields.Add(new NativeField(parts[1], ParseTagged(parts, "offset="), ParseTagged(parts, "size=")));
@@ -167,7 +205,7 @@ public sealed class Box3DAbiTests
             }
         }
 
-        return new AbiManifest(version, precision, pointerSize, structs);
+        return new AbiManifest(version, precision, pointerSize, structs, limits);
     }
 
     private static int ParseTagged(string[] parts, string tag)

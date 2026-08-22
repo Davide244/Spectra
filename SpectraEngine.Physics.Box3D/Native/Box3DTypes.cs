@@ -147,3 +147,11 @@ public struct B3ShapeId
     public ushort World0;
     public ushort Generation;
 }
+
+/// <summary>An axis-aligned bounding box in Box3D's layout.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct B3Aabb
+{
+    public B3Vec3 LowerBound;
+    public B3Vec3 UpperBound;
+}

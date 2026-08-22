@@ -51,6 +51,70 @@ struct b3WorldDef size=144 align=8
   field userDebugShapeContext offset=112 size=8
   field capacity offset=120 size=20
   field internalValue offset=140 size=4
+struct b3MotionLocks size=6 align=1
+  field linearX offset=0 size=1
+  field linearY offset=1 size=1
+  field linearZ offset=2 size=1
+  field angularX offset=3 size=1
+  field angularY offset=4 size=1
+  field angularZ offset=5 size=1
+struct b3BodyDef size=104 align=8
+  field type offset=0 size=4
+  field position offset=4 size=12
+  field rotation offset=16 size=16
+  field linearVelocity offset=32 size=12
+  field angularVelocity offset=44 size=12
+  field linearDamping offset=56 size=4
+  field angularDamping offset=60 size=4
+  field gravityScale offset=64 size=4
+  field sleepThreshold offset=68 size=4
+  field name offset=72 size=8
+  field userData offset=80 size=8
+  field motionLocks offset=88 size=6
+  field enableSleep offset=94 size=1
+  field isAwake offset=95 size=1
+  field isBullet offset=96 size=1
+  field isEnabled offset=97 size=1
+  field allowFastRotation offset=98 size=1
+  field enableContactRecycling offset=99 size=1
+  field internalValue offset=100 size=4
+struct b3Filter size=24 align=8
+  field categoryBits offset=0 size=8
+  field maskBits offset=8 size=8
+  field groupIndex offset=16 size=4
+struct b3SurfaceMaterial size=40 align=8
+  field friction offset=0 size=4
+  field restitution offset=4 size=4
+  field rollingResistance offset=8 size=4
+  field tangentVelocity offset=12 size=12
+  field userMaterialId offset=24 size=8
+  field customColor offset=32 size=4
+  field padding offset=36 size=4
+struct b3ShapeDef size=120 align=8
+  field name offset=0 size=8
+  field userData offset=8 size=8
+  field materials offset=16 size=8
+  field materialCount offset=24 size=4
+  field baseMaterial offset=32 size=40
+  field density offset=72 size=4
+  field explosionScale offset=76 size=4
+  field filter offset=80 size=24
+  field enableCustomFiltering offset=104 size=1
+  field isSensor offset=105 size=1
+  field enableSensorEvents offset=106 size=1
+  field enableContactEvents offset=107 size=1
+  field enableHitEvents offset=108 size=1
+  field enablePreSolveEvents offset=109 size=1
+  field invokeContactCreation offset=110 size=1
+  field updateBodyMass offset=111 size=1
+  field enableSpeculativeContact offset=112 size=1
+  field internalValue offset=116 size=4
+struct b3AABB size=24 align=4
+  field lowerBound offset=0 size=12
+  field upperBound offset=12 size=12
+limit maxHullVertices value=128
+limit maxHullFaces value=128
+limit maxHullEdges value=128
 struct b3WorldId size=4 align=2
   field index1 offset=0 size=2
   field generation offset=2 size=2

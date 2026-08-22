@@ -125,6 +125,88 @@ int main( void )
 	DUMP_FIELD( b3WorldDef, capacity );
 	DUMP_FIELD( b3WorldDef, internalValue );
 
+	// --- bodies and shapes ------------------------------------------------
+	// Upstream pins some of these with _Static_assert of its own
+	// (sizeof(b3ShapeDef)==120, sizeof(b3BodyDef)==104 in the float build,
+	// sizeof(b3SurfaceMaterial)==40). Measuring them here anyway is not
+	// redundant: an upstream assert proves the C struct is what upstream
+	// expects, and this proves the MANAGED mirror is what the C struct is.
+	DUMP_STRUCT( b3MotionLocks );
+	DUMP_FIELD( b3MotionLocks, linearX );
+	DUMP_FIELD( b3MotionLocks, linearY );
+	DUMP_FIELD( b3MotionLocks, linearZ );
+	DUMP_FIELD( b3MotionLocks, angularX );
+	DUMP_FIELD( b3MotionLocks, angularY );
+	DUMP_FIELD( b3MotionLocks, angularZ );
+
+	DUMP_STRUCT( b3BodyDef );
+	DUMP_FIELD( b3BodyDef, type );
+	DUMP_FIELD( b3BodyDef, position );
+	DUMP_FIELD( b3BodyDef, rotation );
+	DUMP_FIELD( b3BodyDef, linearVelocity );
+	DUMP_FIELD( b3BodyDef, angularVelocity );
+	DUMP_FIELD( b3BodyDef, linearDamping );
+	DUMP_FIELD( b3BodyDef, angularDamping );
+	DUMP_FIELD( b3BodyDef, gravityScale );
+	DUMP_FIELD( b3BodyDef, sleepThreshold );
+	DUMP_FIELD( b3BodyDef, name );
+	DUMP_FIELD( b3BodyDef, userData );
+	DUMP_FIELD( b3BodyDef, motionLocks );
+	DUMP_FIELD( b3BodyDef, enableSleep );
+	DUMP_FIELD( b3BodyDef, isAwake );
+	DUMP_FIELD( b3BodyDef, isBullet );
+	DUMP_FIELD( b3BodyDef, isEnabled );
+	DUMP_FIELD( b3BodyDef, allowFastRotation );
+	DUMP_FIELD( b3BodyDef, enableContactRecycling );
+	DUMP_FIELD( b3BodyDef, internalValue );
+
+	DUMP_STRUCT( b3Filter );
+	DUMP_FIELD( b3Filter, categoryBits );
+	DUMP_FIELD( b3Filter, maskBits );
+	DUMP_FIELD( b3Filter, groupIndex );
+
+	DUMP_STRUCT( b3SurfaceMaterial );
+	DUMP_FIELD( b3SurfaceMaterial, friction );
+	DUMP_FIELD( b3SurfaceMaterial, restitution );
+	DUMP_FIELD( b3SurfaceMaterial, rollingResistance );
+	DUMP_FIELD( b3SurfaceMaterial, tangentVelocity );
+	DUMP_FIELD( b3SurfaceMaterial, userMaterialId );
+	DUMP_FIELD( b3SurfaceMaterial, customColor );
+	DUMP_FIELD( b3SurfaceMaterial, padding );
+
+	DUMP_STRUCT( b3ShapeDef );
+	DUMP_FIELD( b3ShapeDef, name );
+	DUMP_FIELD( b3ShapeDef, userData );
+	DUMP_FIELD( b3ShapeDef, materials );
+	DUMP_FIELD( b3ShapeDef, materialCount );
+	DUMP_FIELD( b3ShapeDef, baseMaterial );
+	DUMP_FIELD( b3ShapeDef, density );
+	DUMP_FIELD( b3ShapeDef, explosionScale );
+	DUMP_FIELD( b3ShapeDef, filter );
+	DUMP_FIELD( b3ShapeDef, enableCustomFiltering );
+	DUMP_FIELD( b3ShapeDef, isSensor );
+	DUMP_FIELD( b3ShapeDef, enableSensorEvents );
+	DUMP_FIELD( b3ShapeDef, enableContactEvents );
+	DUMP_FIELD( b3ShapeDef, enableHitEvents );
+	DUMP_FIELD( b3ShapeDef, enablePreSolveEvents );
+	DUMP_FIELD( b3ShapeDef, invokeContactCreation );
+	DUMP_FIELD( b3ShapeDef, updateBodyMass );
+	DUMP_FIELD( b3ShapeDef, enableSpeculativeContact );
+	DUMP_FIELD( b3ShapeDef, internalValue );
+
+	DUMP_STRUCT( b3AABB );
+	DUMP_FIELD( b3AABB, lowerBound );
+	DUMP_FIELD( b3AABB, upperBound );
+
+	// The hull limits, emitted so the managed pre-check cannot drift from the
+	// values the library actually enforces. The EDGE limit is the one that
+	// really binds: for a convex polyhedron Euler gives E = V + F - 2, so
+	// V + F <= maxEdges + 2 — far tighter than the vertex and face caps taken
+	// separately, and not documented anywhere.
+	printf( "limit maxHullVertices value=%d\n", B3_MAX_HULL_VERTICES );
+	printf( "limit maxHullFaces value=%d\n", B3_MAX_HULL_FACES );
+	printf( "limit maxHullEdges value=%d\n", B3_MAX_HULL_EDGES );
+
 	// --- ids --------------------------------------------------------------
 	// Passed BY VALUE on nearly every call, so their layout is on the hot path
 	// of every mistake.

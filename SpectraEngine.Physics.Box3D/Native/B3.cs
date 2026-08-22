@@ -143,4 +143,156 @@ internal static partial class B3
     [LibraryImport(Lib, EntryPoint = "b3World_EnableSleeping")]
     internal static partial void World_EnableSleeping(
         B3WorldId worldId, [MarshalAs(UnmanagedType.U1)] bool flag);
+
+    /// <summary>
+    /// Rebuilds the static broadphase tree. Call once after a batch of chunk
+    /// bodies changes, never per shape.
+    /// </summary>
+    /// <remarks>
+    /// Upstream's header comment says only "This is for internal testing", but
+    /// it is the sole static-tree control the API exposes and the implementation
+    /// does a genuine full rebuild. Bound deliberately, with the caveat
+    /// recorded: if it disappears under a moved pin, the static tree simply
+    /// stays as the incremental inserts left it.
+    /// </remarks>
+    [LibraryImport(Lib, EntryPoint = "b3World_RebuildStaticTree")]
+    internal static partial void World_RebuildStaticTree(B3WorldId worldId);
+
+    // --- Tier 3: bodies -----------------------------------------------------
+
+    [LibraryImport(Lib, EntryPoint = "b3DefaultBodyDef")]
+    internal static partial B3BodyDef DefaultBodyDef();
+
+    [LibraryImport(Lib, EntryPoint = "b3CreateBody")]
+    internal static partial B3BodyId CreateBody(B3WorldId worldId, in B3BodyDef def);
+
+    [LibraryImport(Lib, EntryPoint = "b3DestroyBody")]
+    internal static partial void DestroyBody(B3BodyId bodyId);
+
+    [LibraryImport(Lib, EntryPoint = "b3Body_IsValid")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool Body_IsValid(B3BodyId id);
+
+    [LibraryImport(Lib, EntryPoint = "b3Body_GetType")]
+    internal static partial B3BodyType Body_GetType(B3BodyId bodyId);
+
+    [LibraryImport(Lib, EntryPoint = "b3Body_SetType")]
+    internal static partial void Body_SetType(B3BodyId bodyId, B3BodyType type);
+
+    [LibraryImport(Lib, EntryPoint = "b3Body_SetUserData")]
+    internal static partial void Body_SetUserData(B3BodyId bodyId, nint userData);
+
+    [LibraryImport(Lib, EntryPoint = "b3Body_GetUserData")]
+    internal static partial nint Body_GetUserData(B3BodyId bodyId);
+
+    [LibraryImport(Lib, EntryPoint = "b3Body_GetTransform")]
+    internal static partial B3WorldTransform Body_GetTransform(B3BodyId bodyId);
+
+    [LibraryImport(Lib, EntryPoint = "b3Body_SetTransform")]
+    internal static partial void Body_SetTransform(B3BodyId bodyId, B3Pos position, B3Quat rotation);
+
+    /// <summary>
+    /// Drives a kinematic body towards a pose over one step, velocity-based.
+    /// </summary>
+    /// <remarks>
+    /// Target, not teleport: the velocity it implies is what makes riders and
+    /// friction behave. The achieved pose is documented as close but not exact,
+    /// which is why move events for kinematic bodies are discarded rather than
+    /// echoed back — feeding solver drift into an authored value would fight
+    /// whatever is posing the body.
+    /// </remarks>
+    [LibraryImport(Lib, EntryPoint = "b3Body_SetTargetTransform")]
+    internal static partial void Body_SetTargetTransform(
+        B3BodyId bodyId, B3WorldTransform target, float timeStep,
+        [MarshalAs(UnmanagedType.U1)] bool wake);
+
+    [LibraryImport(Lib, EntryPoint = "b3Body_GetShapeCount")]
+    internal static partial int Body_GetShapeCount(B3BodyId bodyId);
+
+    [LibraryImport(Lib, EntryPoint = "b3Body_ApplyMassFromShapes")]
+    internal static partial void Body_ApplyMassFromShapes(B3BodyId bodyId);
+
+    [LibraryImport(Lib, EntryPoint = "b3Body_Enable")]
+    internal static partial void Body_Enable(B3BodyId bodyId);
+
+    [LibraryImport(Lib, EntryPoint = "b3Body_Disable")]
+    internal static partial void Body_Disable(B3BodyId bodyId);
+
+    [LibraryImport(Lib, EntryPoint = "b3Body_IsEnabled")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool Body_IsEnabled(B3BodyId bodyId);
+
+    // --- Tier 4: hulls and shapes -------------------------------------------
+
+    /// <summary>
+    /// Builds a convex hull from a POINT CLOUD. Returns null on failure, which
+    /// is a normal outcome — over a limit, or degenerate input.
+    /// </summary>
+    /// <remarks>
+    /// <b>Points, not planes.</b> There is no half-space or face-polygon hull
+    /// builder anywhere in the API, so a brush's planes are useless here and its
+    /// face-polygon vertices are the input.
+    /// <para>
+    /// The return is <c>nint</c> deliberately: the hull is a variable-length
+    /// struct with data hanging off the end, documented as not directly
+    /// copyable, so it must never become a C# value type in a signature.
+    /// </para>
+    /// </remarks>
+    [LibraryImport(Lib, EntryPoint = "b3CreateHull")]
+    internal static unsafe partial nint CreateHull(B3Vec3* points, int pointCount, int maxVertexCount);
+
+    /// <summary>
+    /// Frees a hull. <b>Null is not tolerated</b> — the implementation
+    /// dereferences its argument with no check, so a null here is an access
+    /// violation rather than a no-op.
+    /// </summary>
+    [LibraryImport(Lib, EntryPoint = "b3DestroyHull")]
+    internal static partial void DestroyHull(nint hull);
+
+    [LibraryImport(Lib, EntryPoint = "b3DefaultShapeDef")]
+    internal static partial B3ShapeDef DefaultShapeDef();
+
+    [LibraryImport(Lib, EntryPoint = "b3DefaultFilter")]
+    internal static partial B3Filter DefaultFilter();
+
+    [LibraryImport(Lib, EntryPoint = "b3DefaultSurfaceMaterial")]
+    internal static partial B3SurfaceMaterial DefaultSurfaceMaterial();
+
+    /// <summary>
+    /// Attaches a hull to a body. <b>The hull pointer is dereferenced before any
+    /// null check</b>, so passing null is an access violation — and
+    /// <see cref="CreateHull"/> returns null as a normal outcome, which makes
+    /// checking it mandatory rather than defensive.
+    /// </summary>
+    [LibraryImport(Lib, EntryPoint = "b3CreateHullShape")]
+    internal static partial B3ShapeId CreateHullShape(B3BodyId bodyId, in B3ShapeDef def, nint hull);
+
+    /// <summary>
+    /// Attaches a hull to a body under a transform and scale — how one brush's
+    /// brush-local hull is placed into its chunk body's cell-local frame.
+    /// </summary>
+    /// <inheritdoc cref="CreateHullShape"/>
+    [LibraryImport(Lib, EntryPoint = "b3CreateTransformedHullShape")]
+    internal static partial B3ShapeId CreateTransformedHullShape(
+        B3BodyId bodyId, in B3ShapeDef def, nint hull, B3Transform transform, B3Vec3 scale);
+
+    [LibraryImport(Lib, EntryPoint = "b3DestroyShape")]
+    internal static partial void DestroyShape(
+        B3ShapeId shapeId, [MarshalAs(UnmanagedType.U1)] bool updateBodyMass);
+
+    [LibraryImport(Lib, EntryPoint = "b3Shape_IsValid")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool Shape_IsValid(B3ShapeId id);
+
+    [LibraryImport(Lib, EntryPoint = "b3Shape_SetUserData")]
+    internal static partial void Shape_SetUserData(B3ShapeId shapeId, nint userData);
+
+    [LibraryImport(Lib, EntryPoint = "b3Shape_GetUserData")]
+    internal static partial nint Shape_GetUserData(B3ShapeId shapeId);
+
+    [LibraryImport(Lib, EntryPoint = "b3Shape_GetBody")]
+    internal static partial B3BodyId Shape_GetBody(B3ShapeId shapeId);
+
+    [LibraryImport(Lib, EntryPoint = "b3ComputeHullAABB")]
+    internal static partial B3Aabb ComputeHullAABB(nint hull, B3Transform transform);
 }
