@@ -219,6 +219,68 @@ public sealed class BrushHullTests
     }
 
     [Fact]
+    public void A_shape_outlives_the_hull_it_was_built_from()
+    {
+        // THE QUESTION THIS SETTLES: does attaching a hull COPY it into the
+        // world, or does the shape keep pointing at our allocation? The answer
+        // decides whether the static-world sync can free hulls at the end of a
+        // sync or must refcount them for the lifetime of every shape — a real
+        // memory cost across a large map.
+        //
+        // The experiment: destroy the hull BEFORE stepping, then drop a box on
+        // the shape. If the shape were still referencing freed memory this
+        // would fall through, land wrong, or crash.
+        RequireNative();
+        B3.SetLengthUnitsPerMeter(PhysicsDefaults.MetresPerUnit);
+
+        B3WorldDef worldDef = B3.DefaultWorldDef();
+        worldDef.Gravity = B3Vec3.From(PhysicsDefaults.Gravity);
+        B3WorldId world = B3.CreateWorld(in worldDef);
+
+        try
+        {
+            Brush floorBrush = Brush.CreateBox(new Vector3(-8f, -0.5f, -8f), new Vector3(8f, 0.5f, 8f));
+            BrushHullBuilder.TryCreate(floorBrush, out nint floorHull, out string detail)
+                .ShouldBe(HullRefusal.None, detail);
+
+            B3BodyDef floorDef = B3.DefaultBodyDef();
+            floorDef.Type = B3BodyType.Static;
+            floorDef.Position = new B3Pos(0f, -0.5f, 0f);
+            B3BodyId floorBody = B3.CreateBody(world, in floorDef);
+            B3ShapeDef floorShapeDef = B3.DefaultShapeDef();
+            B3ShapeId floorShape = B3.CreateHullShape(floorBody, in floorShapeDef, floorHull);
+            floorShape.Index1.ShouldNotBe(0);
+
+            // The whole point: released while the shape is still in use.
+            BrushHullBuilder.Destroy(floorHull);
+
+            Brush boxBrush = Brush.CreateBox(new Vector3(-0.5f, -0.5f, -0.5f), new Vector3(0.5f, 0.5f, 0.5f));
+            BrushHullBuilder.TryCreate(boxBrush, out nint boxHull, out string boxDetail)
+                .ShouldBe(HullRefusal.None, boxDetail);
+            B3BodyDef boxDef = B3.DefaultBodyDef();
+            boxDef.Type = B3BodyType.Dynamic;
+            boxDef.Position = new B3Pos(0f, 4f, 0f);
+            B3BodyId boxBody = B3.CreateBody(world, in boxDef);
+            B3ShapeDef boxShapeDef = B3.DefaultShapeDef();
+            B3.CreateHullShape(boxBody, in boxShapeDef, boxHull).Index1.ShouldNotBe(0);
+            B3.Body_ApplyMassFromShapes(boxBody);
+            BrushHullBuilder.Destroy(boxHull);
+
+            for (int tick = 0; tick < PhysicsDefaults.TicksPerSecond * 3; tick++)
+                B3.World_Step(world, PhysicsDefaults.FixedDeltaTime, 4);
+
+            B3.Body_GetTransform(boxBody).P.Y.ShouldBeInRange(
+                0.4f, 0.6f,
+                "the box fell through or landed wrong, so a shape does NOT copy its hull — " +
+                "the sync must keep hulls alive for the lifetime of every shape built from them");
+        }
+        finally
+        {
+            B3.DestroyWorld(world);
+        }
+    }
+
+    [Fact]
     public void A_dynamic_body_falls_and_comes_to_rest_on_a_brush_floor()
     {
         // The one that proves the whole chain does something physical: authored

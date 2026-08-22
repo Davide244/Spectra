@@ -651,6 +651,7 @@ public sealed class SceneManager
                     "scene: {NodesVisible} of {NodesTotal} mesh nodes, " +
                     "{PartsVisible} of {PartsTotal} part brush(es); " +
                     "recompiled {Count} times, last touched {DirtyCells} dirty cell(s); " +
+                    "physics: {PhysicsBackend}, {PhysicsBodies} body(ies) / {PhysicsShapes} shape(s); " +
                     "editing: {Selected} selected, {GizmoMode} gizmo, {Navigation} navigation, " +
                     "undo {UndoDepth} / redo {RedoDepth}",
                     assets?.TextureCount ?? 0, assets?.MaterialCount ?? 0,
@@ -660,6 +661,8 @@ public sealed class SceneManager
                     renderView.VisibleCount, renderView.TotalCount,
                     renderView.PartBrushesVisible, renderView.PartBrushesTotal,
                     scene.StaticWorldCompileCount, scene.LastCompileDirtyCells.Count,
+                    Physics.IsSimulating ? Physics.GetType().Name : "none",
+                    Physics.BodyCount, Physics.StaticShapeCount,
                     editor?.SelectionCount ?? 0, editor?.GizmoModeName ?? "none",
                     editor?.NavigationModeName ?? "none",
                     editor?.UndoDepth ?? 0, editor?.RedoDepth ?? 0);

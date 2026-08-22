@@ -8,4 +8,12 @@
     <ProjectReference Include="..\..\SpectraEngine.Physics.Box3D\SpectraEngine.Physics.Box3D.csproj" />
   </ItemGroup>
 
+  <!-- Linked, not copied: the headless renderer is the one piece of test
+       scaffolding both suites need, and two copies would drift the moment the
+       Renderer abstraction gains a member. -->
+  <ItemGroup>
+    <Compile Include="..\SpectraEngine.Bsp.Tests\FakeRenderer.cs" Link="FakeRenderer.cs" />
+    <Compile Include="..\SpectraEngine.Bsp.Tests\SpatialTestHelpers.cs" Link="SpatialTestHelpers.cs" />
+  </ItemGroup>
+
 </Project>

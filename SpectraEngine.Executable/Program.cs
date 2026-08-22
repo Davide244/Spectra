@@ -12,6 +12,7 @@ using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Executable;
 using SpectraEngine.Executable.Editing;
+using SpectraEngine.Physics.Box3D;
 using SpectraShade.Compiler;
 
 // Configure Serilog
@@ -85,6 +86,18 @@ try
     sceneManager.EditorFactory = scene => new DemoEditorHost(
         loggerFactory, scene, renderer, inputManager,
         options.SelfTestEnabled ? sceneManager.SelfTestNode : null);
+
+    // Physics, through the same seam shape and for a different reason: gizmos
+    // must never ship in a game binary, whereas physics must — what this
+    // factory buys is that Core never needs box3d.dll to resolve, so the
+    // compiler tests, the BSP tests and a shader-only tool build stay clean.
+    //
+    // A host that sets nothing gets NullScenePhysics, which is a supported
+    // configuration and exactly what Edit mode is. This one sets it, so the
+    // demo compiles its authored brushes into real collision every time the
+    // static world changes.
+    sceneManager.PhysicsFactory = _ =>
+        new Box3DScenePhysics(loggerFactory.CreateLogger<Box3DScenePhysics>());
 
     var engine = new Engine(
         loggerFactory.CreateLogger<Engine>(),

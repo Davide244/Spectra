@@ -16,6 +16,10 @@ using SpectraEngine.Core.Graphics;
 // whether a failed resize is recoverable or a lost device — internal, because
 // it is backend plumbing rather than engine API.
 [assembly: InternalsVisibleTo("SpectraEngine.Graphics.Tests")]
+// The physics suite compiles real static worlds to sync collision against, and
+// does it through the same headless renderer the scene suite uses — which
+// touches the internal GPU-resource bookkeeping every Renderer subclass does.
+[assembly: InternalsVisibleTo("SpectraEngine.Physics.Tests")]
 
 namespace SpectraEngine.Core.Scene;
 
