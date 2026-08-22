@@ -70,6 +70,14 @@ public sealed class FirstPersonController
     // replayed tick produces the same physics whatever the eye is doing.
     private float _eyeLag;
 
+    // The two poses render interpolation blends between: the feet before the
+    // last tick and the feet after it. Simulation runs at 60 Hz and frames do
+    // not, so without this the view advances in 60 Hz jerks however fast the
+    // renderer is going — every tick's motion arriving as one jump across a
+    // dozen identical frames.
+    private Vector3 _renderPrevious;
+    private Vector3 _renderPosition;
+
     // Camera pose borrowed on entry and handed back on exit, so toggling play
     // mode does not cost the viewpoint the user had navigated to.
     private Vector3 _restoreCameraPosition;
@@ -153,10 +161,12 @@ public sealed class FirstPersonController
         _yaw = SpawnYaw;
         _pitch = 0f;
         _eyeLag = 0f;
+        _renderPrevious = SpawnPosition;
+        _renderPosition = SpawnPosition;
         Active = true;
 
         _input.RequestCursorMode(Input.CursorMode.Locked);
-        UpdateView(0d);
+        UpdateView(0d, 1f);
 
         _logger.LogInformation(
             "Play mode ON: WASD walks, Shift sprints, Space jumps, mouse looks, Escape or the toggle key " +
@@ -244,6 +254,10 @@ public sealed class FirstPersonController
         if (!Active)
             return;
 
+        // Captured before the tick, so the pair always brackets exactly one
+        // step. Several ticks in one frame simply leave this at the last one.
+        _renderPrevious = _state.Position;
+
         CharacterMover.Tick(ref _state, in _command, _source, Tuning, deltaTime);
 
         // Carried, not assigned: a staircase can step twice inside one frame's
@@ -259,7 +273,15 @@ public sealed class FirstPersonController
     /// Puts the eye where the head is. Render-only, once per frame, after the
     /// last tick.
     /// </summary>
-    public void UpdateView(double deltaTime)
+    /// <param name="deltaTime">The frame's duration, for the step smoothing.</param>
+    /// <param name="alpha">
+    /// How far this frame sits between the last two ticks, in <c>[0, 1)</c> —
+    /// the engine's own <c>FixedTickAccumulator.Alpha</c>. It costs up to one
+    /// tick of view latency and buys a view that moves at the frame rate instead
+    /// of at the tick rate, which is the same trade the render poses already
+    /// make for every other body.
+    /// </param>
+    public void UpdateView(double deltaTime, float alpha)
     {
         if (!Active)
             return;
@@ -274,7 +296,9 @@ public sealed class FirstPersonController
                 _eyeLag = 0f;
         }
 
-        _camera.Position = _state.Position + new Vector3(0f, Tuning.EyeHeight - _eyeLag, 0f);
+        _renderPosition = Vector3.Lerp(_renderPrevious, _state.Position, Math.Clamp(alpha, 0f, 1f));
+
+        _camera.Position = _renderPosition + new Vector3(0f, Tuning.EyeHeight - _eyeLag, 0f);
         _camera.Yaw = _yaw;
         _camera.Pitch = _pitch;
     }
@@ -290,14 +314,17 @@ public sealed class FirstPersonController
         if (!Active)
             return;
 
-        CharacterCapsule capsule = CharacterMover.CapsuleAt(in _state, Tuning);
+        // Drawn at the INTERPOLATED pose, like the eye: an overlay that stutters
+        // against a world the camera is smooth against reads as the overlay being
+        // wrong rather than as the sample rate it actually is.
+        var capsule = CharacterCapsule.FromFeet(_renderPosition, Tuning.StandHeight, Tuning.Radius);
         Vector3 color = _state.Grounded ? new Vector3(0.2f, 1f, 0.4f) : new Vector3(1f, 0.7f, 0.2f);
 
         DrawCapsule(output, in capsule, color);
 
         if (_state.Grounded)
         {
-            output.Arrow(_state.Position, _state.Position + _state.GroundNormal * 0.75f,
+            output.Arrow(_renderPosition, _renderPosition + _state.GroundNormal * 0.75f,
                 new Vector3(0.3f, 0.6f, 1f));
         }
 
@@ -305,7 +332,7 @@ public sealed class FirstPersonController
         // merely stood against, which the capsule alone cannot.
         Vector3 velocity = _state.Velocity;
         if (velocity.LengthSquared() > 1e-4f)
-            output.Arrow(_state.Position, _state.Position + velocity * 0.2f, new Vector3(1f, 0.3f, 0.8f));
+            output.Arrow(_renderPosition, _renderPosition + velocity * 0.2f, new Vector3(1f, 0.3f, 0.8f));
     }
 
     private void Respawn()
@@ -317,6 +344,11 @@ public sealed class FirstPersonController
 
         _state = CharacterState.AtFeet(SpawnPosition);
         _eyeLag = 0f;
+
+        // Both ends of the blend, or the frame after a respawn renders the
+        // character sliding across the level from wherever it fell.
+        _renderPrevious = SpawnPosition;
+        _renderPosition = SpawnPosition;
     }
 
     // Two rings and four uprights, plus a pair of arcs per cap. Enough to read

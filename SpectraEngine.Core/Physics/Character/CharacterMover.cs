@@ -285,18 +285,37 @@ public static class CharacterMover
         // Using the clipped vector means stepping along the wall you just hit
         // instead of over it.
         //
-        // AND AT LEAST A RADIUS, which is the difference between a step probe
-        // that works and one that never accepts anything. One tick of walking is
-        // about 0.075 units; a capsule advanced only that far still has its axis
-        // short of the tread, so the down probe lands on the step's EDGE and the
-        // contact normal comes out around 0.58 — correctly not walkable, since
-        // you would topple back off it. The probe then rejects, the next tick
-        // starts from the same place, and the character is stuck against a step
-        // it could obviously climb. Probing far enough to get the axis over the
-        // tread is what real controllers do, and it costs one bounded forward
-        // hop per riser rather than per tick.
+        // AND FAR ENOUGH THAT THE DOWN PROBE LANDS ON SOMETHING WALKABLE — but
+        // no further, because whatever this advances is COMMITTED.
+        //
+        // One tick of walking is about 0.075 units, and a capsule advanced only
+        // that far lands on the step's EDGE with a normal around 0.58: correctly
+        // not walkable, so the probe rejects and the character is stuck against a
+        // step it could obviously climb. That much of the original reasoning was
+        // right. What was wrong was the conclusion — that the probe must carry
+        // the axis all the way over the tread, i.e. a full radius. A radius is
+        // five ticks of walking teleported forward in one, per riser, which
+        // climbs a 0.5-tread staircase at two and a half times walking speed in
+        // visible lurches.
+        //
+        // The real bound is geometric and much smaller. Resting against a riser,
+        // the axis is at most r + skin behind the ledge's top edge. After rising,
+        // the down sweep meets that edge with normal.Y = dy/r, which reaches the
+        // slope limit once the axis is within r·sin(limit) of it — so the advance
+        // actually needed is at most
+        //
+        //     (r + skin) − r·sin(limit) = r·(1 − sin(limit)) + skin
+        //
+        // 0.11 for the defaults, not 0.37. One and a half ticks, and then the
+        // character simply WALKS UP THE EDGE as if it were a slope, because a
+        // walkable edge contact is exactly what the ordinary ground path already
+        // handles. That is also what a capsule physically does, and it is what
+        // makes a staircase feel like a ramp instead of a row of hops.
         float desired = horizontal.Length();
-        float probeDistance = MathF.Max(desired, tuning.Radius + tuning.SkinWidth * 2f);
+        float sinSlopeLimit = MathF.Sqrt(
+            MathF.Max(0f, 1f - tuning.MinGroundNormalY * tuning.MinGroundNormalY));
+        float minimumProbe = tuning.Radius * (1f - sinSlopeLimit) + tuning.SkinWidth * 4f;
+        float probeDistance = MathF.Max(desired, minimumProbe);
         Vector3 probeForward = horizontal / desired * probeDistance;
 
         float forwardFraction = source.SweepCapsule(

@@ -482,7 +482,7 @@ public sealed class Engine
                 // the mover, so a replayed tick is unaffected by where the head
                 // happens to be.
                 if (playing)
-                    _character!.UpdateView(deltaTime);
+                    _character!.UpdateView(deltaTime, _physicsTicks.Alpha);
 
                 // F1–F5 toggle debug visualisations on/off.
                 if (_inputManager.WasKeyPressed(Key.F1)) _debugFlags ^= DebugVisualization.Wireframe;

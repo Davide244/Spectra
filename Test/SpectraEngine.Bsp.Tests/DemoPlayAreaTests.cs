@@ -109,6 +109,34 @@ public sealed class DemoPlayAreaTests
             $"the character should be stopped at the first riser, not past it at x={state.Position.X:0.000}");
     }
 
+    [Theory]
+    [InlineData(-8f, "gentle (0.25 rise)")]
+    [InlineData(0f, "at the limit (0.40 rise)")]
+    public void Climbing_a_staircase_does_not_teleport_the_character_forward(float z, string description)
+    {
+        var course = new Course();
+
+        // A flat control run beside the stairs, over the same number of ticks.
+        // Comparing against a measured baseline rather than a written-down speed
+        // is what keeps this test true when WalkSpeed or the tick rate changes.
+        (float flatTravel, float flatStep) = course.MeasureRun(new Vector3(133f, 0.05f, 14f), 90);
+        (float stairTravel, float stairStep) = course.MeasureRun(new Vector3(133f, 0.05f, z), 90);
+
+        // THE BUG THIS PINS: the step probe used to advance a full capsule radius
+        // in the tick it fired — five ticks of walking, teleported, once per
+        // riser. It climbed a 0.5-tread staircase at two and a half times walking
+        // speed in visible lurches. The probe only ever needed to advance far
+        // enough for the down sweep to land on a WALKABLE part of the ledge's
+        // edge, which is r(1 - sin(slopeLimit)) and about a fifth as far.
+        Assert.True(stairTravel < flatTravel * 1.25f,
+            $"climbing the {description} staircase covered {stairTravel:0.000} horizontally where flat " +
+            $"ground covered {flatTravel:0.000} — the step probe is carrying the character forward");
+
+        Assert.True(stairStep < flatStep * 3f,
+            $"one tick on the {description} staircase moved {stairStep:0.000} where a flat tick moves " +
+            $"{flatStep:0.000} — that is a visible lurch, not a step");
+    }
+
     // --- The doorway: the reason the source is a plane set --------------------
 
     [Fact]
@@ -395,6 +423,24 @@ public sealed class DemoPlayAreaTests
             for (int i = 0; i < ticks; i++)
                 state = Step(state, 0f);
             return state;
+        }
+
+        /// <summary>Walks east and reports total travel plus the biggest single-tick advance.</summary>
+        public (float Travel, float BiggestStep) MeasureRun(Vector3 feet, int ticks)
+        {
+            CharacterState state = Settle(CharacterState.AtFeet(feet), 10);
+            float startX = state.Position.X;
+            float previousX = startX;
+            float biggest = 0f;
+
+            for (int i = 0; i < ticks; i++)
+            {
+                state = Step(state, East, forward: 1f);
+                biggest = MathF.Max(biggest, state.Position.X - previousX);
+                previousX = state.Position.X;
+            }
+
+            return (state.Position.X - startX, biggest);
         }
 
         public CharacterState Walk(CharacterState state, float yaw, int ticks)
