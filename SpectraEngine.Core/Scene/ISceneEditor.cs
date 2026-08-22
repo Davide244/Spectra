@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Graphics;
+﻿using SpectraEngine.Core.Graphics;
 
 namespace SpectraEngine.Core.Scene;
 
@@ -43,6 +43,25 @@ public interface ISceneEditor
     /// engine.
     /// </returns>
     bool Update(double deltaTime);
+
+    /// <summary>
+    /// Abandons whatever gesture is in progress and gives up any input capture,
+    /// because the host is about to stop calling <see cref="Update"/>.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not the same as simply not being updated.</b> An editor that is mid
+    /// gesture holds real state a stalled frame loop cannot resolve: an open
+    /// undo transaction that will never be committed, a manipulator holding a
+    /// drag capture, and — worst — a cursor lock its camera requested and only
+    /// its own update would release. Play mode taking the frame away without
+    /// this leaves an edit half-applied in the history and, if the editor camera
+    /// was looking at the time, two subsystems asking the window for opposite
+    /// cursor modes on alternating frames.
+    /// <para>
+    /// Idempotent, and free when nothing is in progress.
+    /// </para>
+    /// </remarks>
+    void Suspend();
 
     /// <summary>
     /// Pushes the editor's overlay — manipulator handles, marquee — into this

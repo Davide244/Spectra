@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Serilog;
 using SpectraEngine.Core;
 using SpectraEngine.Core.Assets;
@@ -105,7 +105,12 @@ try
         sceneManager,
         assetManager,
         audioManager,
-        inputManager);
+        inputManager)
+    {
+        // F8 does this interactively; the switch is for a smoke run that wants
+        // the mover exercised without a human at the keyboard.
+        StartInPlayMode = options.StartInPlayMode,
+    };
 
     // The fullscreen-cycle harness, when asked for: a driver thread that hits
     // the window-mode latch on a timer so an unattended run performs the exact

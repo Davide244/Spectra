@@ -307,13 +307,33 @@ public static class CharacterMover
         var down = new Vector3(0f, -(tuning.StepHeight * upFraction + tuning.SkinWidth * 2f), 0f);
         float downFraction = source.SweepCapsule(
             CapsuleAt(in state, tuning), down, in filter,
-            out CharacterContactPlane landing, out _);
+            out CharacterContactPlane landing, out CharacterContactSource landingSource);
 
         bool landed = downFraction < 1f;
         bool walkable = landed && landing.Plane.Normal.Y >= tuning.MinGroundNormalY;
         bool progressed = forwardFraction > 1e-3f;
 
-        if (!landed || !walkable || !progressed)
+        // THE LEDGE'S OWN HEIGHT, not the capsule's — and without this,
+        // StepHeight is not the number it claims to be.
+        //
+        // The capsule's bottom is a hemisphere, so after rising StepHeight it can
+        // still creep forward and come to rest against the top EDGE of a taller
+        // riser. That contact's normal points up and away from the corner, and
+        // for any riser under about StepHeight + r(1 - cos slopeLimit) it lands
+        // inside the slope limit — so the probe accepts, the character is perched
+        // on the corner at exactly StepHeight, and next tick it walks the
+        // remainder as if the edge were a ramp. Measured effect with the
+        // defaults: a documented 0.45 step height climbing 0.50 risers all day,
+        // which is not a rounding error, it is a fifth again.
+        //
+        // Bounding the CONTACT POINT is what makes the constant mean what it
+        // says: "the highest ledge the step probe will climb". The skin width is
+        // there because savedPosition is already a skin above the surface being
+        // left.
+        bool withinStep = landed
+            && landingSource.Point.Y <= savedPosition.Y + tuning.StepHeight + tuning.SkinWidth;
+
+        if (!landed || !walkable || !progressed || !withinStep)
         {
             // Discarding the whole probe on failure is what makes it safe to be
             // wrong: a rejected step leaves the character exactly where the

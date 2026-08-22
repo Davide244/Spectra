@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Silk.NET.Input;
 using Silk.NET.Windowing;
 using SpectraEngine.Core.Assets;
@@ -6,6 +6,7 @@ using SpectraEngine.Core.Audio;
 using SpectraEngine.Core.Diagnostics;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Physics;
+using SpectraEngine.Core.Physics.Character;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Core.Windowing;
@@ -34,7 +35,14 @@ public sealed class Engine
 
     private IWindow? _window;
     private FlyCameraController? _cameraController;
+    private FirstPersonController? _character;
     private DebugVisualization _debugFlags = DebugVisualization.None;
+
+    // The capsule overlay is its own toggle rather than a DebugVisualization
+    // bit: everything in that enum draws from the scene, and the character is
+    // not in the scene graph. Off by default because in first person the capsule
+    // is drawn around your own head, which is a face full of lines.
+    private bool _drawCharacter;
 
     // The engine-owned per-frame draw list: rebuilt (in place, capacity
     // retained) once per frame by the render thread and handed to the
@@ -102,6 +110,25 @@ public sealed class Engine
     /// latch that every backend already reconciles against.
     /// </remarks>
     public IWindowModeLatch WindowMode => _windowModeLatch;
+
+    /// <summary>
+    /// Whether play mode is entered as soon as the scene is loaded, rather than
+    /// waiting for <see cref="PlayModeKey"/>.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, and for the same reason the editing self-test is: the
+    /// resting state of this host is an editor, and a run that silently seizes
+    /// the cursor and drops a camera to eye height is a surprising thing for a
+    /// build to do on its own. A smoke run that wants a character walking asks
+    /// for one.
+    /// </remarks>
+    public bool StartInPlayMode { get; set; }
+
+    /// <summary>The key that enters and leaves play mode.</summary>
+    public const Key PlayModeKey = Key.F8;
+
+    /// <summary>The key that toggles the character capsule overlay.</summary>
+    public const Key CharacterOverlayKey = Key.F9;
 
     /// <summary>
     /// Creates the window, runs the render thread, and pumps OS events until
@@ -238,6 +265,41 @@ public sealed class Engine
         return !_renderThreadFaulted;
     }
 
+    // --- Play mode -----------------------------------------------------------
+    // Entering is not just "start ticking the mover": it is a transfer of two
+    // exclusive resources — the camera and the cursor — away from an editor that
+    // may be holding both, mid-gesture. Doing that in one place is what keeps
+    // the two of them from ever being owned twice.
+
+    private void TogglePlayMode()
+    {
+        if (_character is not { } character)
+            return;
+
+        if (character.Active) ExitPlayMode();
+        else EnterPlayMode();
+    }
+
+    private void EnterPlayMode()
+    {
+        if (_character is not { } character || character.Active)
+            return;
+
+        // Before the character asks for the cursor, never after. A suspended
+        // editor has rolled back any half-finished drag and released its own
+        // cursor lock, so the two requests cannot alternate.
+        _sceneManager.Editor?.Suspend();
+        character.Enter();
+    }
+
+    private void ExitPlayMode()
+    {
+        if (_character is not { Active: true } character)
+            return;
+
+        character.Exit();
+    }
+
     // Runs on the dedicated render thread: owns the GL context, drives update
     // and render, and presents each frame. Exceptions must not escape: the
     // thread is non-background, so an unhandled throw would kill the process
@@ -259,7 +321,29 @@ public sealed class Engine
             _sceneManager.LoadDemoScene(_renderer, _assetManager);
 
             if (_sceneManager.ActiveScene is { } activeScene)
+            {
                 _cameraController = new FlyCameraController(activeScene.Camera, _inputManager);
+
+                // The character is built here rather than by the scene manager
+                // because it needs live input, which the scene manager has no
+                // access to. It is handed BACK to the scene manager only so the
+                // periodic stats line can report it — see SceneManager.Character.
+                _character = new FirstPersonController(_logger, activeScene, _inputManager)
+                {
+                    SpawnPosition = _sceneManager.PlayerSpawn,
+                    SpawnYaw = _sceneManager.PlayerSpawnYaw,
+                    FallOutHeight = _sceneManager.PlayerFallOutHeight,
+                };
+                _sceneManager.Character = _character;
+
+                _logger.LogInformation(
+                    "{Key} enters play mode (walk the world as a {Height:0.0} sunit character); " +
+                    "{OverlayKey} toggles the capsule overlay",
+                    PlayModeKey, _character.Tuning.StandHeight, CharacterOverlayKey);
+
+                if (StartInPlayMode)
+                    EnterPlayMode();
+            }
 
             _logger.LogInformation("All subsystems initialized");
 
@@ -281,16 +365,47 @@ public sealed class Engine
 
                 _inputManager.Update(deltaTime);
 
+                // Mode first, so the rest of the frame is unambiguous about who
+                // owns the camera and the cursor. Escape leaves as well as the
+                // toggle key: play mode captures the cursor, and the one key
+                // every user tries when a window will not give the mouse back is
+                // Escape.
+                if (_inputManager.WasKeyPressed(PlayModeKey))
+                    TogglePlayMode();
+                else if (_character is { Active: true } && _inputManager.WasKeyPressed(Key.Escape))
+                    ExitPlayMode();
+
+                if (_inputManager.WasKeyPressed(CharacterOverlayKey))
+                    _drawCharacter = !_drawCharacter;
+
+                bool playing = _character is { Active: true };
+
+                // ONE command per frame, replayed by every tick below. Sampling
+                // per tick would multiply mouse look by the frame's tick count,
+                // so the mouse would get faster as the machine got slower.
+                if (playing)
+                    _character!.BeginFrame(deltaTime);
+
                 // The editor, when the host installed one, gets the frame
                 // first: it owns selection, manipulation and — on the frames it
                 // says so — navigation. It runs before the scene update so the
                 // camera and any gizmo edit are final by the time the draw list
                 // is built from them. A host without an editor (a shipped game)
                 // simply keeps the fly camera.
+                //
+                // While the character is walking, neither it nor the fly camera
+                // runs at all: three subsystems writing one camera would be a
+                // fight, and the editor's own freelook would be asking the
+                // window for a cursor mode on alternate frames. The editor was
+                // suspended when play mode began, so nothing of its is left open.
                 ISceneEditor? editor = _sceneManager.Editor;
-                bool editorNavigated = editor is not null && editor.Update(deltaTime);
-                if (!editorNavigated)
-                    _cameraController?.Update(deltaTime);
+                bool editorNavigated = false;
+                if (!playing)
+                {
+                    editorNavigated = editor is not null && editor.Update(deltaTime);
+                    if (!editorNavigated)
+                        _cameraController?.Update(deltaTime);
+                }
 
                 // The demo update animates and logs; it gets last frame's
                 // render view for its culling stats alongside time.
@@ -324,6 +439,13 @@ public sealed class Engine
                     physics.PushKinematicTargets(_physicsTicks.FixedDeltaTime);
                     physics.Step(_physicsTicks.FixedDeltaTime);
                     physics.DrainEvents();
+
+                    // After the step, so a character resolves against the pose
+                    // the kinematic bodies have this tick rather than last
+                    // tick's — which is the difference between riding a moving
+                    // platform and being left behind by it.
+                    if (playing)
+                        _character!.Tick(_physicsTicks.FixedDeltaTime);
                 }
                 // ─── end tick loop ─────────────────────────────────────
 
@@ -354,6 +476,13 @@ public sealed class Engine
                 // most recent ticks. A render-only overlay — it must never
                 // write back through a node's transform setters.
                 physics.PublishRenderPoses(_physicsTicks.Alpha);
+
+                // The eye follows the last tick, once, before the draw list is
+                // built from the camera. Render-only: it never writes back into
+                // the mover, so a replayed tick is unaffected by where the head
+                // happens to be.
+                if (playing)
+                    _character!.UpdateView(deltaTime);
 
                 // F1–F5 toggle debug visualisations on/off.
                 if (_inputManager.WasKeyPressed(Key.F1)) _debugFlags ^= DebugVisualization.Wireframe;
@@ -388,6 +517,9 @@ public sealed class Engine
                     // the handles are drawn on top of everything, so what you
                     // can see is exactly what you can pick.
                     editor?.Draw(_renderer.DebugDraw);
+
+                    if (_drawCharacter)
+                        _character?.Draw(_renderer.DebugDraw);
 
                     if (_debugFlags != DebugVisualization.None)
                         DebugVisualizations.Draw(_renderer.DebugDraw, scene, _debugFlags);

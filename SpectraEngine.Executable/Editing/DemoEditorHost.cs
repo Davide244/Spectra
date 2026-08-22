@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Silk.NET.Input;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Input;
@@ -264,6 +264,18 @@ internal sealed class DemoEditorHost : ISceneEditor
         _viewport.Update(in frame, _input.WasKeyPressed(Key.Escape));
 
         return _editorNavigation;
+    }
+
+    /// <inheritdoc/>
+    public void Suspend()
+    {
+        // Both halves are needed. Reset abandons the gesture and rolls back
+        // whatever it had moved, so no half-drag lands in the history; suspending
+        // the camera releases the cursor lock it may be holding, which is what
+        // would otherwise fight the character controller's lock request for as
+        // long as play mode lasted.
+        _viewport.Reset();
+        _camera.SuspendNavigation();
     }
 
     /// <inheritdoc/>

@@ -54,12 +54,41 @@ public sealed class BrushPlaneCollisionSource : ICharacterCollisionSource
 
     private const int MaxSweepIterations = 12;
 
+    /// <summary>How far beyond the tick volume the world lane is built.</summary>
+    /// <remarks>
+    /// <para>
+    /// The lane is a REGION, not the world, and the margin is what makes that
+    /// affordable rather than thrashing. Building every placement would be
+    /// O(world) work on every compile — and in a scene where anything animates,
+    /// a compile lands nearly every frame, so a character standing still in one
+    /// corner would rebuild the whole level continuously to walk three
+    /// spectraunits.
+    /// </para>
+    /// <para>
+    /// 24 units is roughly five seconds of sprinting, so ordinary movement
+    /// rebuilds a few times a minute rather than a few hundred times a second,
+    /// and a teleport costs exactly one rebuild.
+    /// </para>
+    /// </remarks>
+    public const float RegionMargin = 24f;
+
     private readonly Scene.Scene _scene;
     private readonly CharacterTuning _tuning;
 
-    // The world lane, rebuilt only when a compile lands.
+    // The world lane, rebuilt when a compile lands OR when the character leaves
+    // the region it was built for.
     private readonly List<ConvexPiece> _worldPieces = [];
     private int _builtCompileCount = -1;
+    private Aabb _builtRegion;
+    private bool _hasRegion;
+
+    // What the current lane was built FROM. Compared against a fresh selection
+    // whenever a compile lands, so a recompile somewhere else in the world costs
+    // a bounds scan instead of a rebuild — see RebuildWorldLaneIfStale.
+    private readonly List<BrushPlacement> _builtAdditives = [];
+    private readonly List<BrushPlacement> _builtNegatives = [];
+    private readonly List<BrushPlacement> _scratchAdditives = [];
+    private readonly List<BrushPlacement> _scratchNegatives = [];
 
     // The part lane plus this tick's candidates, both rebuilt per tick.
     private readonly List<ConvexPiece> _partPieces = [];
@@ -97,6 +126,14 @@ public sealed class BrushPlaneCollisionSource : ICharacterCollisionSource
     /// <summary>Pieces the last <see cref="BeginTick"/> selected as candidates.</summary>
     public int CandidateCount => _candidates.Count;
 
+    /// <summary>Times the world lane has been rebuilt — a compile landing, or the character leaving its region.</summary>
+    /// <remarks>
+    /// Worth watching: a count that climbs with the frame counter means the
+    /// region is not holding, and every tick is paying an O(region) rebuild it
+    /// should be amortising over thousands.
+    /// </remarks>
+    public int WorldLaneRebuilds { get; private set; }
+
     /// <summary>
     /// Selects the pieces a tick can possibly touch, once, so every sweep and
     /// gather in that tick shares one broad phase.
@@ -108,7 +145,7 @@ public sealed class BrushPlaneCollisionSource : ICharacterCollisionSource
     /// </remarks>
     public void BeginTick(in Aabb volume, in CharacterQueryFilter filter)
     {
-        RebuildWorldLaneIfStale();
+        RebuildWorldLaneIfStale(in volume);
         RebuildPartLane(in volume, in filter);
 
         _candidates.Clear();
@@ -213,6 +250,40 @@ public sealed class BrushPlaneCollisionSource : ICharacterCollisionSource
                 Point = point,
             };
 
+            // ONE PHYSICAL SURFACE, ONE PLANE — however many brushes model it.
+            //
+            // In a CSG world overlapping solids are the normal case, not the
+            // exception: a staircase is a stack of boxes each sunk into the
+            // floor, a ramp is a wedge buried in the same slab, and a platform
+            // sits on it flush. Every one of those puts two or three pieces'
+            // faces on the identical plane at the identical separation, and
+            // without this the contact budget is spent on copies of the floor
+            // while a wall gets dropped. Measured on the demo course before this:
+            // a hundred dropped planes in ten seconds of ordinary walking.
+            //
+            // The deeper of a duplicate pair wins, which matters when they are
+            // near-identical rather than exactly equal.
+            int duplicate = -1;
+            for (int j = 0; j < count; j++)
+            {
+                if (Vector3.Dot(planes[j].Plane.Normal, normal) > DuplicateContactDot &&
+                    MathF.Abs(planes[j].Plane.D - distance) < DuplicateContactOffset)
+                {
+                    duplicate = j;
+                    break;
+                }
+            }
+
+            if (duplicate >= 0)
+            {
+                if (distance < planes[duplicate].Plane.D)
+                {
+                    planes[duplicate] = candidatePlane;
+                    sources[duplicate] = candidateSource;
+                }
+                continue;
+            }
+
             if (count < planes.Length)
             {
                 planes[count] = candidatePlane;
@@ -277,6 +348,12 @@ public sealed class BrushPlaneCollisionSource : ICharacterCollisionSource
     /// <summary>How far inside a sibling a contact must be before it is judged internal.</summary>
     private const float InternalContactSlack = 1e-3f;
 
+    /// <summary>Two contact normals closer than this are the same surface.</summary>
+    private const float DuplicateContactDot = 0.999f;
+
+    /// <summary>...and only if their separations agree to this, so a step above a floor stays two planes.</summary>
+    private const float DuplicateContactOffset = 1e-3f;
+
     // The self test needs BOTH sides to be a real node. A world piece has no
     // node, and so does a filter that excludes nothing — so a bare reference
     // compare makes every piece of world geometry look like the character
@@ -293,40 +370,112 @@ public sealed class BrushPlaneCollisionSource : ICharacterCollisionSource
         return MathF.Min(d1, d2) - capsule.Radius;
     }
 
-    private void RebuildWorldLaneIfStale()
+    private void RebuildWorldLaneIfStale(in Aabb volume)
     {
         int compileCount = _scene.StaticWorldCompileCount;
-        if (compileCount == _builtCompileCount)
+        bool covered = _hasRegion && Contains(in _builtRegion, in volume);
+        if (compileCount == _builtCompileCount && covered)
             return;
 
+        // Keep the existing region when the character is still inside it, so a
+        // recompile does not silently re-centre the lane and make the region
+        // cache useless the moment anything animates.
+        Aabb region = covered ? _builtRegion : volume.Expanded(RegionMargin);
+
+        SelectPlacements(in region, _scratchAdditives, _scratchNegatives);
+
+        // A COMPILE LANDING IS NOT A REASON TO REBUILD — only a compile that
+        // changed something this lane is built from is.
+        //
+        // In any scene where something animates, a compile lands nearly every
+        // frame: the demo alone recompiles about seven hundred times a second
+        // because one pillar bobs. Invalidating on the compile counter meant the
+        // character rebuilt its entire neighbourhood sixty times a second to
+        // stand still next to geometry that had not moved since it spawned.
+        //
+        // Comparing the SELECTION rather than the counter costs one bounds scan
+        // over the placement list — the same scan the rebuild would do anyway —
+        // and answers the real question. Brushes compare by reference and
+        // transforms by value, which is exactly what every other change detector
+        // in the engine does: a brush is immutable, so a new reference IS the
+        // edit.
+        if (covered &&
+            SameSelection(_builtAdditives, _scratchAdditives) &&
+            SameSelection(_builtNegatives, _scratchNegatives))
+        {
+            _builtCompileCount = compileCount;
+            return;
+        }
+
         _builtCompileCount = compileCount;
+        _builtRegion = region;
+        _hasRegion = true;
+        WorldLaneRebuilds++;
         Revision++;
         _worldPieces.Clear();
         UncoveredCutBrushes = 0;
+
+        _builtAdditives.Clear();
+        _builtAdditives.AddRange(_scratchAdditives);
+        _builtNegatives.Clear();
+        _builtNegatives.AddRange(_scratchNegatives);
+
+        for (int i = 0; i < _builtAdditives.Count; i++)
+            AddCoveredPieces(_builtAdditives[i], _builtNegatives);
+    }
+
+    // The additive brushes inside the region, and EVERY negative in the world.
+    //
+    // The asymmetry is deliberate. An additive brush outside the region is
+    // skipped because nothing will ever query it; a negative outside it may
+    // still cut a brush that straddles the boundary, and dropping that negative
+    // would restore the solid it removed — a doorway that seals itself as you
+    // walk away from it. Negatives are a handful of placement references, so
+    // keeping all of them costs a pointer each.
+    private void SelectPlacements(in Aabb region, List<BrushPlacement> additives, List<BrushPlacement> negatives)
+    {
+        additives.Clear();
+        negatives.Clear();
 
         if (_scene.StaticWorld is not { } world)
             return;
 
         IReadOnlyList<BrushPlacement> placements = world.Placements;
-
-        // Negatives first, so the cover pass can find them by bounds. Only the
-        // WORLD lane's negatives exist here at all — admission guarantees it.
-        var negatives = new List<BrushPlacement>();
-        for (int i = 0; i < placements.Count; i++)
-        {
-            if (placements[i].Brush.Operation == BrushOperation.Subtractive)
-                negatives.Add(placements[i]);
-        }
-
         for (int i = 0; i < placements.Count; i++)
         {
             BrushPlacement placement = placements[i];
-            if (placement.Brush.Operation != BrushOperation.Additive)
+            if (placement.Brush.Operation == BrushOperation.Subtractive)
+            {
+                negatives.Add(placement);
                 continue;
+            }
 
-            AddCoveredPieces(placement, negatives);
+            if (placement.WorldBounds.Intersects(region))
+                additives.Add(placement);
         }
     }
+
+    private static bool SameSelection(List<BrushPlacement> built, List<BrushPlacement> fresh)
+    {
+        if (built.Count != fresh.Count)
+            return false;
+
+        for (int i = 0; i < built.Count; i++)
+        {
+            if (!ReferenceEquals(built[i].Brush, fresh[i].Brush) ||
+                built[i].Transform != fresh[i].Transform)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool Contains(in Aabb outer, in Aabb inner) =>
+        inner.Min.X >= outer.Min.X && inner.Max.X <= outer.Max.X &&
+        inner.Min.Y >= outer.Min.Y && inner.Max.Y <= outer.Max.Y &&
+        inner.Min.Z >= outer.Min.Z && inner.Max.Z <= outer.Max.Z;
 
     private void AddCoveredPieces(in BrushPlacement placement, List<BrushPlacement> negatives)
     {

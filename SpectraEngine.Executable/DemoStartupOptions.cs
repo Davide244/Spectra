@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Graphics;
+﻿using SpectraEngine.Core.Graphics;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -52,7 +52,8 @@ internal sealed record DemoStartupOptions(
     GraphicsBackend Backend,
     bool SelfTestEnabled,
     SelfTestSource SelfTestSource,
-    TimeSpan? FullscreenCycleInterval = null)
+    TimeSpan? FullscreenCycleInterval = null,
+    bool StartInPlayMode = false)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -63,7 +64,7 @@ internal sealed record DemoStartupOptions(
     /// <summary>One line of usage, appended to every argument error.</summary>
     private const string Usage =
         "Usage: SpectraEngine.Executable [opengl|d3d11|d3d12] [--selftest[=true|false]] " +
-        "[--fullscreen-cycle[=seconds]].";
+        "[--fullscreen-cycle[=seconds]] [--play[=true|false]].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -87,6 +88,7 @@ internal sealed record DemoStartupOptions(
 
         GraphicsBackend? backend = null;
         bool? selfTest = null;
+        bool play = false;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -118,6 +120,14 @@ internal sealed record DemoStartupOptions(
                 case "fullscreen-cycle" or "fullscreencycle":
                     fullscreenCycle = ParseInterval(value, token);
                     continue;
+
+                // Enters play mode as the scene finishes loading rather than
+                // waiting for F8. Off by default for the same reason the
+                // self-test is: the resting state of this host is an editor, and
+                // a build that seizes the cursor on its own is a surprise.
+                case "play":
+                    play = ParseBoolean(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -131,18 +141,20 @@ internal sealed record DemoStartupOptions(
 
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
-                backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine, fullscreenCycle);
+                backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
+                fullscreenCycle, play);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
             bool fromEnvironment = ParseBoolean(
                 selfTestEnvironmentValue.Trim(), SelfTestEnvironmentVariable);
             return new DemoStartupOptions(
-                backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment, fullscreenCycle);
+                backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
+                fullscreenCycle, play);
         }
 
         return new DemoStartupOptions(
-            backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default, fullscreenCycle);
+            backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default, fullscreenCycle, play);
     }
 
     // Aliases mirror the SpectraShade compiler CLI for consistency.

@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Silk.NET.Maths;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
@@ -177,6 +177,35 @@ public sealed class SceneManager
     /// this node's cell" is a statement about the drag and nothing else.
     /// </remarks>
     public SceneNode? SelfTestNode { get; private set; }
+
+    /// <summary>Where a first-person character starts, once the demo scene is loaded.</summary>
+    /// <remarks>
+    /// Content, not engine policy: it is authored by
+    /// <see cref="DemoPlayArea"/> and read by whoever installs a character. A
+    /// scene format will eventually carry this; until then it lives beside the
+    /// self-test node, which is here for the same reason.
+    /// </remarks>
+    public Vector3 PlayerSpawn { get; private set; }
+
+    /// <summary>The yaw a spawned character faces, in radians.</summary>
+    public float PlayerSpawnYaw { get; private set; }
+
+    /// <summary>Below this height a character has left the authored world and should be respawned.</summary>
+    public float PlayerFallOutHeight { get; private set; } = float.NegativeInfinity;
+
+    /// <summary>
+    /// The first-person character the engine installed, or null when nothing
+    /// walks. Reported in the periodic stats line.
+    /// </summary>
+    /// <remarks>
+    /// Set by the engine rather than built here, unlike
+    /// <see cref="EditorFactory"/> and <see cref="PhysicsFactory"/>: a character
+    /// needs live input, which the scene manager has no access to and no reason
+    /// to acquire. What it is wanted for here is the stats line — which
+    /// character state a headless run can see is the difference between "the
+    /// mover is running" and "the mover was never switched on".
+    /// </remarks>
+    public Physics.Character.FirstPersonController? Character { get; set; }
 
     public void Initialize()
     {
@@ -429,6 +458,15 @@ public sealed class SceneManager
             .WithFaceMaterial(BoxFacePlusZ, accentMaterial);
         SelfTestNode = pillarB;
 
+        // The human-scale course, authored BESIDE the room above rather than
+        // replacing it. Everything up to this point is 6x6 with a 1.2-unit
+        // doorway: correct as a CSG fixture, unusable by a 1.8-unit character,
+        // and not to be resized for that reason. See DemoPlayArea.
+        int playAreaBrushes = DemoPlayArea.Build(scene, floorMaterial, wallMaterial, accentMaterial);
+        PlayerSpawn = DemoPlayArea.Spawn;
+        PlayerSpawnYaw = DemoPlayArea.SpawnYaw;
+        PlayerFallOutHeight = DemoPlayArea.FallOutHeight;
+
         // One PART brush, floating clear of everything else so the difference
         // is legible rather than a z-fight. It proves the other half of the
         // brush story renders at all: it is not in the placement list, carves
@@ -474,17 +512,58 @@ public sealed class SceneManager
         bool doorwayOpen = !world.ContainsPoint(new Vector3(0f, -0.45f, -3.1f));
         bool lintelSolid = world.ContainsPoint(new Vector3(0f, 0.75f, -3.1f));
 
+        // The same two questions asked of the play area's door, at the size a
+        // person walks through. Worth asking twice: the room's door is 1.2 units
+        // tall and its cut is flush in z, this one is 2.2 and flush in x, and a
+        // carve bug that respects one axis and not the other would pass the
+        // first probe and strand the character behind a sealed wall.
+        bool playDoorOpen = !world.ContainsPoint(new Vector3(143.5f, 3.0f, 0f));
+        bool playDoorJamb = world.ContainsPoint(new Vector3(143.5f, 3.0f, 2f));
+        bool playFloorSolid = world.ContainsPoint(new Vector3(133f, -0.5f, 0f));
+        bool playChasmOpen = !world.ContainsPoint(new Vector3(153.5f, -2.5f, 10f));
+
         _logger.LogInformation(
-            "Static world: {Brushes} brush nodes ({Parts} scattered parts) -> {Surfaces} carved surfaces " +
+            "Static world: {Brushes} brush nodes ({Parts} scattered parts, {Play} play area) -> " +
+            "{Surfaces} carved surfaces " +
             "in {Chunks} chunks wearing {Materials} distinct face material(s), compiled in {Ms:0.0} ms; " +
             "floor-solid={Floor}, pillar-solid={Pillar}, air-empty={Air}, ray-hit={Hit} at y={Y:0.000}, " +
-            "doorway-open={Doorway}, lintel-solid={Lintel}",
-            world.Brushes.Count, partCount, world.Surfaces.Count, world.Chunks.Count,
+            "doorway-open={Doorway}, lintel-solid={Lintel}; " +
+            "play area: floor-solid={PlayFloor}, door-open={PlayDoor}, jamb-solid={PlayJamb}, " +
+            "chasm-open={PlayChasm}",
+            world.Brushes.Count, partCount, playAreaBrushes, world.Surfaces.Count, world.Chunks.Count,
             CountFaceMaterials(scene), stopwatch.Elapsed.TotalMilliseconds,
             floorSolid, pillarSolid, airEmpty, rayHitsFloor, hit.Point.Y,
-            doorwayOpen, lintelSolid);
+            doorwayOpen, lintelSolid,
+            playFloorSolid, playDoorOpen, playDoorJamb, playChasmOpen);
 
         return stopwatch.Elapsed.TotalMilliseconds;
+    }
+
+    // One allocating string per five seconds, and only while the character is
+    // walking — the rest of the stats line is allocation-free and this stays out
+    // of its way by returning an interned literal when nothing is running.
+    //
+    // It reports the two disclosed counters as well as the pose, because both
+    // are silent failures otherwise: uncovered cut brushes mean the character is
+    // colliding with geometry that is not drawn, and dropped planes mean a wall
+    // stopped existing for a tick because the contact budget was full.
+    private string DescribeCharacter()
+    {
+        if (Character is not { Active: true } character)
+            return Character is null ? "not installed" : "idle";
+
+        Physics.Character.CharacterState state = character.State;
+        return string.Format(
+            System.Globalization.CultureInfo.InvariantCulture,
+            "at ({0:0.0}, {1:0.0}, {2:0.0}), {3:0.0} sunit/s, {4}, {5} respawn(s), " +
+            "{6} lane rebuild(s), {7} uncovered cut brush(es), {8} dropped plane(s)",
+            state.Position.X, state.Position.Y, state.Position.Z,
+            character.HorizontalSpeed,
+            state.Grounded ? "grounded" : "airborne",
+            character.Respawns,
+            character.Collision.WorldLaneRebuilds,
+            character.Collision.UncoveredCutBrushes,
+            character.Collision.DroppedPlanes);
     }
 
     // How many distinct material ids the uploaded chunks actually carry — the
@@ -653,7 +732,8 @@ public sealed class SceneManager
                     "recompiled {Count} times, last touched {DirtyCells} dirty cell(s); " +
                     "physics: {PhysicsBackend}, {PhysicsBodies} body(ies) / {PhysicsShapes} shape(s); " +
                     "editing: {Selected} selected, {GizmoMode} gizmo, {Navigation} navigation, " +
-                    "undo {UndoDepth} / redo {RedoDepth}",
+                    "undo {UndoDepth} / redo {RedoDepth}; " +
+                    "character: {CharacterMode}",
                     assets?.TextureCount ?? 0, assets?.MaterialCount ?? 0,
                     _modelsRequested, _modelsPlaced,
                     renderView.WorldChunksVisible, renderView.WorldChunksTotal,
@@ -665,7 +745,8 @@ public sealed class SceneManager
                     Physics.BodyCount, Physics.StaticShapeCount,
                     editor?.SelectionCount ?? 0, editor?.GizmoModeName ?? "none",
                     editor?.NavigationModeName ?? "none",
-                    editor?.UndoDepth ?? 0, editor?.RedoDepth ?? 0);
+                    editor?.UndoDepth ?? 0, editor?.RedoDepth ?? 0,
+                    DescribeCharacter());
             }
 
             if (_elapsed >= _nextScreenProbeTime)
