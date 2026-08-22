@@ -207,7 +207,6 @@ public sealed unsafe class D3D12Renderer : Renderer
         // Debug overlays draw always-on-top (depth off), matching the OpenGL
         // backend's depth-disabled flush; must be set before the first draw
         // builds a PSO.
-        ((D3D12ShaderProgram)_debugShader).DepthTestEnabled = false;
         _lineBatch = new D3D12LineBatch(this, (D3D12ShaderProgram)_debugShader);
 
         // 1×1 white fallback so unset texture slots in a descriptor table are

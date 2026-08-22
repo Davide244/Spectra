@@ -46,7 +46,14 @@ internal sealed unsafe class D3D12LineBatch : IDisposable
         }
 
         // Debug lines always rasterize solid, regardless of the active pipeline.
-        var pso = _shader.GetPso(LineLayout, FillMode.Solid, PrimitiveTopologyType.Line);
+        // DepthMode.None is what makes editor overlays draw on top of the
+        // geometry they describe, which is the only way what you can see stays
+        // what you can pick. It used to be a flag set once on the shader; it is
+        // now stated at the draw, where it is true.
+        var target = D3D12TargetState.BackBuffer;
+        var pso = _shader.GetPso(
+            LineLayout, FillMode.Solid, PrimitiveTopologyType.Line,
+            DepthMode.None, BlendMode.Opaque, in target);
         list->SetPipelineState(pso);
         list->IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
 

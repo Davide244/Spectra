@@ -47,7 +47,7 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
     private int _srvTableParam = -1;
     private int _samplerTableParam = -1;
 
-    private readonly Dictionary<PsoKey, ComPtr<ID3D12PipelineState>> _psoCache = new();
+    private readonly Dictionary<D3D12PsoKey, ComPtr<ID3D12PipelineState>> _psoCache = new();
     private bool _disposed;
 
     /// <summary>
@@ -57,7 +57,6 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
     /// draw and never toggled afterwards (the flag is a per-program constant, so
     /// it deliberately does not participate in the PSO cache key).
     /// </summary>
-    internal bool DepthTestEnabled { get; set; } = true;
 
     /// <summary>
     /// Descriptors one draw with this program consumes from each shader-visible
@@ -343,52 +342,37 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
     // ─── PSO cache ───────────────────────────────────────────
 
     /// <summary>
-    /// PSO identity: vertex layout, fill mode, and topology class. The layout
-    /// is compared structurally (element sequence + stride) — keying on the
-    /// layout's hash alone would let a collision silently return a PSO built
-    /// for a different vertex layout.
-    /// </summary>
-    internal readonly struct PsoKey : IEquatable<PsoKey>
-    {
-        public readonly D3D12VertexLayout Layout;
-        public readonly FillMode Fill;
-        public readonly PrimitiveTopologyType Topology;
-
-        public PsoKey(D3D12VertexLayout layout, FillMode fill, PrimitiveTopologyType topology)
-        {
-            Layout = layout;
-            Fill = fill;
-            Topology = topology;
-        }
-
-        public bool Equals(PsoKey other) =>
-            Fill == other.Fill
-            && Topology == other.Topology
-            && Layout.StrideBytes == other.Layout.StrideBytes
-            && Layout.Elements.AsSpan().SequenceEqual(other.Layout.Elements);
-
-        public override bool Equals(object? obj) => obj is PsoKey other && Equals(other);
-
-        // The derived hash only picks the bucket; Equals above is the identity.
-        public override int GetHashCode() => HashCode.Combine(Layout.Key, Fill, Topology);
-    }
-
-    /// <summary>
     /// Returns (creating on first use) the pipeline state for this program with
-    /// the given vertex layout, fill mode, and topology class.
+    /// the given draw configuration. See <see cref="D3D12PsoKey"/> for why every
+    /// one of these arguments has to be part of the cache identity.
     /// </summary>
-    internal ID3D12PipelineState* GetPso(D3D12VertexLayout layout, FillMode fill, PrimitiveTopologyType topology)
+    internal ID3D12PipelineState* GetPso(
+        D3D12VertexLayout layout,
+        FillMode fill,
+        PrimitiveTopologyType topology,
+        DepthMode depth,
+        BlendMode blend,
+        in D3D12TargetState target)
     {
-        var key = new PsoKey(layout, fill, topology);
+        var key = new D3D12PsoKey(layout, fill, topology, depth, blend, in target);
         if (_psoCache.TryGetValue(key, out var cached))
             return (ID3D12PipelineState*)cached.Handle;
 
-        var pso = CreatePso(layout, fill, topology);
+        var pso = CreatePso(layout, fill, topology, depth, blend, in target);
         _psoCache[key] = pso;
         return (ID3D12PipelineState*)pso.Handle;
     }
 
-    private ComPtr<ID3D12PipelineState> CreatePso(D3D12VertexLayout layout, FillMode fill, PrimitiveTopologyType topology)
+    /// <summary>Distinct pipeline states compiled for this program. Test and diagnostic use.</summary>
+    internal int PipelineStateCount => _psoCache.Count;
+
+    private ComPtr<ID3D12PipelineState> CreatePso(
+        D3D12VertexLayout layout,
+        FillMode fill,
+        PrimitiveTopologyType topology,
+        DepthMode depth,
+        BlendMode blend,
+        in D3D12TargetState target)
     {
         Span<InputElementDesc> elements = stackalloc InputElementDesc[layout.Elements.Length];
         ReadOnlySpan<byte> sem = "TEXCOORD\0"u8;
@@ -414,27 +398,30 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
                 PRootSignature = (ID3D12RootSignature*)_rootSignature.Handle,
                 SampleMask = uint.MaxValue,
                 PrimitiveTopologyType = topology,
-                NumRenderTargets = 1,
-                DSVFormat = D3D12Renderer.DepthFormat,
-                SampleDesc = new SampleDesc(1, 0),
+                NumRenderTargets = target.RenderTargetCount,
+                DSVFormat = target.DepthFormat,
+                SampleDesc = new SampleDesc(target.SampleCount, 0),
             };
             fixed (byte* vs = _vsBytecode)
             fixed (byte* ps = _psBytecode)
             {
                 desc.VS = new ShaderBytecode { PShaderBytecode = vs, BytecodeLength = (nuint)_vsBytecode.Length };
                 desc.PS = new ShaderBytecode { PShaderBytecode = ps, BytecodeLength = (nuint)_psBytecode.Length };
-                desc.RTVFormats[0] = D3D12Renderer.BackBufferFormat;
+                // Zero colour targets is legal: that is a depth-only pass.
+                if (target.RenderTargetCount > 0)
+                    desc.RTVFormats[0] = target.ColorFormat;
 
+                bool alphaBlend = blend == BlendMode.AlphaBlend;
                 desc.BlendState = new BlendDesc { AlphaToCoverageEnable = 0, IndependentBlendEnable = 0 };
                 desc.BlendState.RenderTarget[0] = new RenderTargetBlendDesc
                 {
-                    BlendEnable = 0,
+                    BlendEnable = alphaBlend,
                     LogicOpEnable = 0,
-                    SrcBlend = Blend.One,
-                    DestBlend = Blend.Zero,
+                    SrcBlend = alphaBlend ? Blend.SrcAlpha : Blend.One,
+                    DestBlend = alphaBlend ? Blend.InvSrcAlpha : Blend.Zero,
                     BlendOp = BlendOp.Add,
                     SrcBlendAlpha = Blend.One,
-                    DestBlendAlpha = Blend.Zero,
+                    DestBlendAlpha = alphaBlend ? Blend.InvSrcAlpha : Blend.Zero,
                     BlendOpAlpha = BlendOp.Add,
                     LogicOp = LogicOp.Noop,
                     RenderTargetWriteMask = (byte)ColorWriteEnable.All,
@@ -467,8 +454,8 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
                 };
                 desc.DepthStencilState = new DepthStencilDesc
                 {
-                    DepthEnable = DepthTestEnabled,
-                    DepthWriteMask = DepthTestEnabled ? DepthWriteMask.All : DepthWriteMask.Zero,
+                    DepthEnable = depth != DepthMode.None,
+                    DepthWriteMask = depth == DepthMode.TestWrite ? DepthWriteMask.All : DepthWriteMask.Zero,
                     DepthFunc = ComparisonFunc.Less,
                     StencilEnable = 0,
                     StencilReadMask = 0xFF,
@@ -629,7 +616,7 @@ internal sealed class D3D12VertexLayout
     public Element[] Elements { get; }
     public uint StrideBytes { get; }
 
-    /// <summary>Hash of the element data. Bucketing only — PSO identity compares the elements themselves (see <c>PsoKey</c>).</summary>
+    /// <summary>Hash of the element data. Bucketing only — PSO identity compares the elements themselves (see <c>D3D12PsoKey</c>).</summary>
     public int Key { get; }
 
     public D3D12VertexLayout(Element[] elements, uint strideBytes)
