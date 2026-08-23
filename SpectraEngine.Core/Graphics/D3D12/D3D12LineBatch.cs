@@ -50,7 +50,10 @@ internal sealed unsafe class D3D12LineBatch : IDisposable
         // geometry they describe, which is the only way what you can see stays
         // what you can pick. It used to be a flag set once on the shader; it is
         // now stated at the draw, where it is true.
-        var target = D3D12TargetState.BackBuffer;
+        // The pass decides the target configuration, not this draw: a PSO
+        // compiled for the back buffer is invalid for an offscreen target with
+        // a different format, and D3D12 validates the pair at draw time.
+        var target = _renderer.CurrentTargetState;
         var pso = _shader.GetPso(
             LineLayout, FillMode.Solid, PrimitiveTopologyType.Line,
             DepthMode.None, BlendMode.Opaque, in target);

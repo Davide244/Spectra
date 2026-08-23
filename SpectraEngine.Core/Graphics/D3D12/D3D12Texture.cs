@@ -24,6 +24,112 @@ internal sealed unsafe class D3D12Texture : Texture
     internal CpuDescriptorHandle SrvCpu { get; private set; }
     internal CpuDescriptorHandle SamplerCpu { get; private set; }
 
+    /// <summary>The underlying resource, for an RTV over it or a barrier on it.</summary>
+    internal ID3D12Resource* Resource => (ID3D12Resource*)_texture.Handle;
+
+    /// <summary>The DXGI format actually in use: what an RTV and a PSO must match.</summary>
+    internal Silk.NET.DXGI.Format DxgiFormat { get; private set; }
+
+    // Only set for render-target textures, whose storage can be replaced.
+    private TextureFilter _filter;
+    private TextureWrap _wrap;
+
+    private D3D12Texture(D3D12Renderer renderer, int width, int height,
+        TextureFormat format, TextureColorSpace colorSpace, Silk.NET.DXGI.Format dxgiFormat,
+        TextureFilter filter, TextureWrap wrap)
+    {
+        Width = width;
+        Height = height;
+        Format = format;
+        ColorSpace = colorSpace;
+        DxgiFormat = dxgiFormat;
+        _filter = filter;
+        _wrap = wrap;
+
+        _srvHeap = renderer.CreateDescriptorHeap(DescriptorHeapType.CbvSrvUav, 1, shaderVisible: false);
+        _samplerHeap = renderer.CreateDescriptorHeap(DescriptorHeapType.Sampler, 1, shaderVisible: false);
+        SrvCpu = ((ID3D12DescriptorHeap*)_srvHeap.Handle)->GetCPUDescriptorHandleForHeapStart();
+        SamplerCpu = ((ID3D12DescriptorHeap*)_samplerHeap.Handle)->GetCPUDescriptorHandleForHeapStart();
+
+        CreateSampler(renderer, filter, wrap);
+    }
+
+    /// <summary>
+    /// Creates an empty texture usable as both a render target and a shader
+    /// resource: the colour attachment of a <see cref="D3D12RenderTarget"/>.
+    /// </summary>
+    /// <remarks>
+    /// It starts in <see cref="ResourceStates.PixelShaderResource"/>, which is
+    /// what the target's state tracking assumes and what makes a texture that is
+    /// created and then sampled without ever being drawn into legal rather than
+    /// undefined.
+    /// </remarks>
+    internal static D3D12Texture CreateRenderTargetTexture(
+        D3D12Renderer renderer, int width, int height, TextureFormat format,
+        TextureColorSpace colorSpace, TextureFilter filter, TextureWrap wrap)
+    {
+        TextureColorSpace resolved = TextureFormatInfo.Resolve(format, colorSpace);
+        Silk.NET.DXGI.Format dxgiFormat = resolved == TextureColorSpace.Srgb
+            ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
+            : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm;
+
+        var texture = new D3D12Texture(renderer, width, height, format, resolved, dxgiFormat, filter, wrap);
+        texture.AllocateRenderTargetStorage(renderer, width, height);
+        return texture;
+    }
+
+    /// <summary>
+    /// Replaces the resource at a new size, <b>keeping the same wrapper and the
+    /// same SRV heap slot</b>, so materials and copied descriptor tables survive
+    /// a render-target resize.
+    /// </summary>
+    internal void ReplaceStorage(D3D12Renderer renderer, int width, int height)
+    {
+        ComOwnership.Release(ref _texture);
+        AllocateRenderTargetStorage(renderer, width, height);
+        Width = width;
+        Height = height;
+    }
+
+    private void AllocateRenderTargetStorage(D3D12Renderer renderer, int width, int height)
+    {
+        _texture = renderer.CreateRenderTargetResource((uint)width, (uint)height, DxgiFormat);
+
+        var srvDesc = new ShaderResourceViewDesc
+        {
+            Format = DxgiFormat,
+            ViewDimension = SrvDimension.Texture2D,
+            Shader4ComponentMapping = D3D12Renderer.DefaultComponentMapping,
+        };
+        srvDesc.Anonymous.Texture2D = new Tex2DSrv
+        {
+            MostDetailedMip = 0,
+            MipLevels = 1,
+            PlaneSlice = 0,
+            ResourceMinLODClamp = 0f,
+        };
+        renderer.DevicePtr->CreateShaderResourceView(Resource, &srvDesc, SrvCpu);
+    }
+
+    private void CreateSampler(D3D12Renderer renderer, TextureFilter filter, TextureWrap wrap)
+    {
+        Filter samplerFilter = filter == TextureFilter.Nearest ? Filter.MinMagMipPoint : Filter.MinMagMipLinear;
+        var addr = wrap == TextureWrap.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp;
+        var samplerDesc = new SamplerDesc
+        {
+            Filter = samplerFilter,
+            AddressU = addr,
+            AddressV = addr,
+            AddressW = addr,
+            MipLODBias = 0f,
+            MaxAnisotropy = 1,
+            ComparisonFunc = ComparisonFunc.None,
+            MinLOD = 0f,
+            MaxLOD = float.MaxValue,
+        };
+        renderer.DevicePtr->CreateSampler(&samplerDesc, SamplerCpu);
+    }
+
     internal D3D12Texture(
         D3D12Renderer renderer,
         ReadOnlySpan<byte> pixels,
@@ -76,6 +182,7 @@ internal sealed unsafe class D3D12Texture : Texture
         bool wantsMips = filter == TextureFilter.LinearMipmap;
         var mips = BuildMipChain(level0, width, height, bpp, wantsMips, srgb);
 
+        DxgiFormat = dxgiFormat;
         _texture = renderer.CreateTexture2D((uint)width, (uint)height, (ushort)mips.Count, dxgiFormat);
         renderer.UploadTexture(_texture, mips, (uint)width, (uint)height, bpp, dxgiFormat);
 
@@ -231,8 +338,8 @@ internal sealed unsafe class D3D12Texture : Texture
     {
         if (_disposed) return;
         _disposed = true;
-        _samplerHeap.Dispose();
-        _srvHeap.Dispose();
-        _texture.Dispose();
+        ComOwnership.Release(ref _samplerHeap);
+        ComOwnership.Release(ref _srvHeap);
+        ComOwnership.Release(ref _texture);
     }
 }

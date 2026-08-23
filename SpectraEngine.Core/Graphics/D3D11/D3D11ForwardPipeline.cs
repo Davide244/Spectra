@@ -26,7 +26,7 @@ public sealed unsafe class D3D11ForwardPipeline : ID3D11RenderPipeline
     {
         // Same linear sky as the other two backends, from one shared constant,
         // so swapping backends looks identical when the geometry is unchanged.
-        context.Renderer.BeginPass(PassClear.To(ClearColors.Sky));
+        context.Renderer.BeginPass(context.Renderer.FrameTarget, PassClear.To(ClearColors.Sky));
         try
         {
             if (context.Scene is null) return;

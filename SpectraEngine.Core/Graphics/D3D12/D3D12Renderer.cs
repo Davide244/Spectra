@@ -135,6 +135,7 @@ public sealed unsafe class D3D12Renderer : Renderer
     private readonly List<Texture> _textures = [];
     private readonly List<ShaderProgram> _shaders = [];
     private readonly List<ID3D12RenderPipeline> _pipelines = [];
+    private readonly List<RenderTarget> _renderTargets = [];
     private int _pipelineIndex;
 
     // Size the swap chain currently has. Render() compares it against the
@@ -548,6 +549,13 @@ public sealed unsafe class D3D12Renderer : Renderer
             View = view,
             DeltaTime = deltaTime,
         };
+        if (ProbeTarget is { } probe)
+        {
+            FrameTarget = probe;
+            _pipelines[_pipelineIndex].Execute(context);
+        }
+
+        FrameTarget = null;
         _pipelines[_pipelineIndex].Execute(context);
 
         Transition(list, (ID3D12Resource*)_backBuffers[_frameIndex].Handle,
@@ -718,7 +726,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         }
     }
 
-    private static void Transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
+    internal static void Transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
         ResourceStates before, ResourceStates after)
     {
         var barrier = new ResourceBarrier
@@ -750,7 +758,7 @@ public sealed unsafe class D3D12Renderer : Renderer
     private CpuDescriptorHandle DepthStencilView =>
         ((ID3D12DescriptorHeap*)_dsvHeap.Handle)->GetCPUDescriptorHandleForHeapStart();
 
-    protected override void BeginPassCore(in PassClear clear)
+    protected override void BeginPassCore(RenderTarget? target, in PassClear clear)
     {
         var list = CurrentList;
         if (list is null) return;
@@ -758,25 +766,109 @@ public sealed unsafe class D3D12Renderer : Renderer
         Vector2D<int> size = PassSize;
         SetViewportAndScissor(size.X, size.Y);
 
-        CpuDescriptorHandle rtv = CurrentBackBufferRtv;
-        CpuDescriptorHandle dsv = DepthStencilView;
+        CpuDescriptorHandle rtv;
+        CpuDescriptorHandle dsv;
+        bool hasDepth;
+
+        if (target is D3D12RenderTarget offscreen)
+        {
+            // The barrier that makes this legal. Without it the attachment is
+            // still PixelShaderResource from whoever sampled it, and writing to
+            // it is undefined: the debug layer reports it, a shipping build does
+            // not, and the picture is wrong on some hardware and fine on others.
+            offscreen.TransitionColor(list, ResourceStates.RenderTarget);
+            _currentTargetState = new D3D12TargetState(
+                offscreen.ColorFormat, 1, offscreen.HasDepth ? DepthFormat : Format.FormatUnknown, 1);
+
+            rtv = offscreen.Rtv;
+            dsv = offscreen.Dsv;
+            hasDepth = offscreen.HasDepth;
+        }
+        else
+        {
+            _currentTargetState = D3D12TargetState.BackBuffer;
+            rtv = CurrentBackBufferRtv;
+            dsv = DepthStencilView;
+            hasDepth = true;
+        }
 
         if (clear.Color is { } color)
         {
             float* value = stackalloc float[4] { color.X, color.Y, color.Z, color.W };
             list->ClearRenderTargetView(rtv, value, 0, null);
         }
-        if (clear.Depth is { } depth)
+        if (clear.Depth is { } depth && hasDepth)
             list->ClearDepthStencilView(dsv, ClearFlags.Depth | ClearFlags.Stencil, depth, 0, 0, null);
 
-        list->OMSetRenderTargets(1, &rtv, 0, &dsv);
+        if (hasDepth)
+            list->OMSetRenderTargets(1, &rtv, 0, &dsv);
+        else
+            list->OMSetRenderTargets(1, &rtv, 0, null);
     }
 
-    // Nothing for the back buffer: Render already brackets the whole frame with
-    // the Present/RenderTarget transitions. An offscreen target will transition
-    // itself to PixelShaderResource here.
-    protected override void EndPassCore()
+    protected override void EndPassCore(RenderTarget? target)
     {
+        _currentTargetState = D3D12TargetState.BackBuffer;
+
+        var list = CurrentList;
+        if (list is null || target is not D3D12RenderTarget offscreen) return;
+
+        // Back to readable, here rather than lazily at the first sample: the
+        // command list is open now, and the alternative is a barrier emitted
+        // from inside a draw call, which is both harder to reason about and
+        // easy to forget on one of the paths that binds a texture.
+        offscreen.TransitionColor(list, ResourceStates.PixelShaderResource);
+    }
+
+    /// <summary>
+    /// The target configuration the open pass is drawing into, which every PSO
+    /// built during it must be compiled against. See <see cref="D3D12PsoKey"/>.
+    /// </summary>
+    internal D3D12TargetState CurrentTargetState => _currentTargetState;
+
+    private D3D12TargetState _currentTargetState = D3D12TargetState.BackBuffer;
+
+    public override RenderTarget CreateRenderTarget(in RenderTargetDesc desc)
+    {
+        var target = new D3D12RenderTarget(this, desc);
+        target.Unregister = () => _renderTargets.Remove(target);
+        _renderTargets.Add(target);
+        return target;
+    }
+
+    /// <summary>A default-heap texture that can be both drawn into and sampled.</summary>
+    internal ComPtr<ID3D12Resource> CreateRenderTargetResource(uint width, uint height, Format format)
+    {
+        var heapProps = new HeapProperties { Type = HeapType.Default };
+        var desc = new ResourceDesc
+        {
+            Dimension = ResourceDimension.Texture2D,
+            Alignment = 0,
+            Width = width,
+            Height = height,
+            DepthOrArraySize = 1,
+            MipLevels = 1,
+            Format = format,
+            SampleDesc = new SampleDesc(1, 0),
+            Layout = TextureLayout.LayoutUnknown,
+            Flags = ResourceFlags.AllowRenderTarget,
+        };
+
+        // An optimised clear value matching what the pass will actually clear to
+        // is what keeps the driver's fast clear path available; a mismatch is a
+        // debug-layer warning and a slower clear.
+        var clearValue = new ClearValue { Format = format };
+        clearValue.Anonymous.Color[0] = ClearColors.Sky.X;
+        clearValue.Anonymous.Color[1] = ClearColors.Sky.Y;
+        clearValue.Anonymous.Color[2] = ClearColors.Sky.Z;
+        clearValue.Anonymous.Color[3] = ClearColors.Sky.W;
+
+        ID3D12Resource* res = null;
+        Guid guid = ID3D12Resource.Guid;
+        SilkMarshal.ThrowHResult(DevicePtr->CreateCommittedResource(
+            &heapProps, HeapFlags.None, &desc, ResourceStates.PixelShaderResource, &clearValue,
+            &guid, (void**)&res));
+        return ComOwnership.Own(res);
     }
 
     internal void SetViewportAndScissor(int width, int height)
@@ -1268,6 +1360,10 @@ public sealed unsafe class D3D12Renderer : Renderer
 
         foreach (var mesh in _meshes) mesh.Dispose();
         _meshes.Clear();
+
+        foreach (var target in _renderTargets)
+            target.Dispose();
+        _renderTargets.Clear();
         foreach (var tex in _textures) tex.Dispose();
         _textures.Clear();
         foreach (var sh in _shaders) sh.Dispose();
@@ -1317,9 +1413,13 @@ public sealed unsafe class D3D12Renderer : Renderer
         // DXGI validates on its own queue, separate from the device's: every
         // swap-chain rejection (ResizeBuffers, Present) is explained there and
         // nowhere else, so it is drained in the same slot.
-        _dxgiMessages?.Drain(_logger, "D3D12");
+        int errors = _dxgiMessages?.Drain(_logger, "D3D12") ?? 0;
 
-        if (_infoQueue.Handle is null) return;
+        if (_infoQueue.Handle is null)
+        {
+            NoteDebugLayerErrors(errors);
+            return;
+        }
 
         var queue = (ID3D12InfoQueue*)_infoQueue.Handle;
         ulong count = queue->GetNumStoredMessages();
@@ -1341,6 +1441,7 @@ public sealed unsafe class D3D12Renderer : Renderer
                 {
                     case MessageSeverity.Corruption:
                     case MessageSeverity.Error:
+                        errors++;
                         _logger.LogError("D3D12 debug layer: {Message}", text);
                         break;
                     case MessageSeverity.Warning:
@@ -1354,6 +1455,8 @@ public sealed unsafe class D3D12Renderer : Renderer
         }
         if (count > 0)
             queue->ClearStoredMessages();
+
+        NoteDebugLayerErrors(errors);
     }
 
     private static class Kernel32

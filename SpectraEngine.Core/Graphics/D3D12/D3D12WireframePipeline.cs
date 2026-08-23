@@ -27,7 +27,7 @@ public sealed unsafe class D3D12WireframePipeline : ID3D12RenderPipeline
         var renderer = _renderer!;
 
         // Clear to black for contrast against the wireframe lines.
-        renderer.BeginPass(PassClear.To(ClearColors.Wireframe));
+        renderer.BeginPass(renderer.FrameTarget, PassClear.To(ClearColors.Wireframe));
         try
         {
             if (context.Scene is null) return;

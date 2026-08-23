@@ -53,7 +53,8 @@ internal sealed record DemoStartupOptions(
     bool SelfTestEnabled,
     SelfTestSource SelfTestSource,
     TimeSpan? FullscreenCycleInterval = null,
-    bool StartInPlayMode = false)
+    bool StartInPlayMode = false,
+    bool OffscreenProbe = false)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -64,7 +65,7 @@ internal sealed record DemoStartupOptions(
     /// <summary>One line of usage, appended to every argument error.</summary>
     private const string Usage =
         "Usage: SpectraEngine.Executable [opengl|d3d11|d3d12] [--selftest[=true|false]] " +
-        "[--fullscreen-cycle[=seconds]] [--play[=true|false]].";
+        "[--fullscreen-cycle[=seconds]] [--play[=true|false]] [--offscreen-probe[=true|false]].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -89,6 +90,7 @@ internal sealed record DemoStartupOptions(
         GraphicsBackend? backend = null;
         bool? selfTest = null;
         bool play = false;
+        bool offscreenProbe = false;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -128,6 +130,16 @@ internal sealed record DemoStartupOptions(
                 case "play":
                     play = ParseBoolean(value, token);
                     continue;
+
+                // Renders each of a handful of startup frames into an offscreen
+                // target as well as the window, which is the only coverage the
+                // D3D render-target paths get: those two backends have no
+                // headless device fixture, and their failure modes are debug
+                // layer messages rather than wrong pixels. Off by default
+                // because it draws the scene twice while it runs.
+                case "offscreen-probe" or "offscreenprobe":
+                    offscreenProbe = ParseBoolean(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -142,7 +154,7 @@ internal sealed record DemoStartupOptions(
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
-                fullscreenCycle, play);
+                fullscreenCycle, play, offscreenProbe);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -150,11 +162,12 @@ internal sealed record DemoStartupOptions(
                 selfTestEnvironmentValue.Trim(), SelfTestEnvironmentVariable);
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
-                fullscreenCycle, play);
+                fullscreenCycle, play, offscreenProbe);
         }
 
         return new DemoStartupOptions(
-            backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default, fullscreenCycle, play);
+            backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
+            fullscreenCycle, play, offscreenProbe);
     }
 
     // Aliases mirror the SpectraShade compiler CLI for consistency.

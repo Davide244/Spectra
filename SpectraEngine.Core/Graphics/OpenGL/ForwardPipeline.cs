@@ -27,7 +27,7 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
     public void Execute(in OpenGLRenderContext context)
     {
         // The clear colour is linear because the target encodes; see ClearColors.
-        context.Renderer.BeginPass(PassClear.To(ClearColors.Sky));
+        context.Renderer.BeginPass(context.Renderer.FrameTarget, PassClear.To(ClearColors.Sky));
         try
         {
             if (context.Scene is null)

@@ -150,6 +150,7 @@ public abstract class Renderer
 
     private Vector2D<int> _passSize;
     private bool _inPass;
+    private RenderTarget? _currentTarget;
 
     /// <summary>
     /// The size of the target the current pass is drawing into.
@@ -191,14 +192,29 @@ public abstract class Renderer
     /// another.
     /// </para>
     /// </remarks>
-    public void BeginPass(in PassClear clear)
+    public void BeginPass(in PassClear clear) => BeginPass(null, clear);
+
+    /// <summary>
+    /// Points rendering at <paramref name="target"/> (or the back buffer when it
+    /// is null), sets the viewport to it, and applies <paramref name="clear"/>.
+    /// Must be matched by <see cref="EndPass"/>. Render thread only.
+    /// </summary>
+    public void BeginPass(RenderTarget? target, in PassClear clear)
     {
         if (_inPass)
             throw new InvalidOperationException("BeginPass was called inside a pass; passes do not nest.");
 
-        _passSize = FramebufferSize;
+        // The size comes from the target, and only falls back to the window
+        // when there is no target. Everything downstream (viewport, aspect
+        // ratio, and therefore the projection matrix and the frustum built from
+        // it) reads PassSize, so getting this wrong renders a stretched picture
+        // that nothing reports as an error.
+        _passSize = target is null
+            ? FramebufferSize
+            : new Vector2D<int>(target.Width, target.Height);
+        _currentTarget = target;
         _inPass = true;
-        BeginPassCore(clear);
+        BeginPassCore(target, clear);
     }
 
     /// <summary>Finishes the pass opened by <see cref="BeginPass"/>. Render thread only.</summary>
@@ -208,18 +224,109 @@ public abstract class Renderer
             throw new InvalidOperationException("EndPass was called without a matching BeginPass.");
 
         _inPass = false;
-        EndPassCore();
+        RenderTarget? target = _currentTarget;
+        _currentTarget = null;
+        EndPassCore(target);
     }
 
+    /// <summary>
+    /// Where the pipeline should render this frame: null for the window, which
+    /// is every frame today.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Pipelines read this and pass it to <see cref="BeginPass(RenderTarget?, in PassClear)"/>,
+    /// which is the whole of what it takes for a pipeline to work offscreen: an
+    /// editor viewport, a material preview and a post-processing chain all just
+    /// set it.
+    /// </para>
+    /// <para>
+    /// Set by the renderer around <see cref="Render"/>, never by a pipeline.
+    /// </para>
+    /// </remarks>
+    public RenderTarget? FrameTarget { get; protected set; }
+
+    /// <summary>
+    /// When set, every frame is rendered into this target <i>as well as</i> into
+    /// the window, in the same command list.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is the offscreen gate, and it exists because two of three
+    /// backends cannot be tested any other way.</b> OpenGL's render targets are
+    /// verified by reading pixels back in <c>GlRenderTargetTests</c>; D3D11 and
+    /// D3D12 have no headless device fixture, and the failures that matter there
+    /// are precisely the ones that still produce a picture: a missed D3D12
+    /// barrier is undefined data the debug layer reports, and a pipeline state
+    /// compiled for the wrong render-target format is a validation error rather
+    /// than a wrong pixel. Both debug layers are drained every frame, so driving
+    /// a real offscreen pass through a real device turns them into the test.
+    /// </para>
+    /// <para>
+    /// <b>Same command list, not a second frame.</b> Rendering twice by calling
+    /// <see cref="Render"/> again would reset D3D12's command allocator while
+    /// the GPU might still be reading the list it recorded, which is a use-after-free
+    /// with no diagnostic at all. Doing both passes inside one frame is also the
+    /// shape post-processing needs, so this is a rehearsal rather than a
+    /// detour.
+    /// </para>
+    /// </remarks>
+    public RenderTarget? ProbeTarget { get; set; }
+
+    /// <summary>
+    /// How many error or corruption messages a graphics debug layer has
+    /// reported over this renderer's life. Always zero on backends and builds
+    /// that have no debug layer.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is what turns the debug layer from a log into a gate.</b> The
+    /// messages that matter most on D3D are the ones that do not stop the frame:
+    /// a missing barrier, a pipeline state bound to a target it was not compiled
+    /// for. Both render a picture, and both are reported here and nowhere else.
+    /// Counting them lets a diagnostic run fail on its own instead of waiting
+    /// for somebody to read the log.
+    /// </remarks>
+    public int DebugLayerErrorCount { get; private set; }
+
+    /// <summary>Recorded by a backend's debug-layer drain. Render thread only.</summary>
+    private protected void NoteDebugLayerErrors(int count) => DebugLayerErrorCount += count;
+
     /// <summary>Binds the target, sets the viewport, and clears. See <see cref="BeginPass"/>.</summary>
-    protected abstract void BeginPassCore(in PassClear clear);
+    protected abstract void BeginPassCore(RenderTarget? target, in PassClear clear);
 
     /// <summary>
     /// Whatever the target needs on the way out: nothing for a back buffer that
-    /// the frame's own barriers already cover, a resolve or a state transition
-    /// for anything else.
+    /// the frame's own barriers already cover, a state transition back to
+    /// readable for an offscreen one.
     /// </summary>
-    protected abstract void EndPassCore();
+    protected abstract void EndPassCore(RenderTarget? target);
+
+    /// <summary>
+    /// Creates an offscreen render target. Render thread only, like every other
+    /// GPU resource.
+    /// </summary>
+    /// <remarks>
+    /// The returned target is owned by this renderer: release it through
+    /// <see cref="DestroyRenderTarget"/>, never by disposing it directly, or it
+    /// stays in the tracking list until shutdown.
+    /// </remarks>
+    public abstract RenderTarget CreateRenderTarget(in RenderTargetDesc desc);
+
+    /// <summary>
+    /// Disposes a target created by <see cref="CreateRenderTarget"/> and drops
+    /// it from the creating renderer's tracking list. Same contract as
+    /// <see cref="DestroyMesh"/>: render thread only.
+    /// </summary>
+    public void DestroyRenderTarget(RenderTarget target)
+    {
+        if (ReferenceEquals(target, _currentTarget))
+            throw new InvalidOperationException(
+                "A render target cannot be destroyed while a pass is drawing into it.");
+
+        target.Unregister?.Invoke();
+        target.Unregister = null;
+        target.Dispose();
+    }
 
     /// <summary>
     /// Renders one frame: <paramref name="view"/> is the engine-built,

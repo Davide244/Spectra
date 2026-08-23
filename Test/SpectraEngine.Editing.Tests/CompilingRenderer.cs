@@ -55,13 +55,16 @@ internal sealed class CompilingRenderer : Renderer
     // stubs stand in for a renderer during scene and editor tests, which drive
     // no pipeline and so open no passes, but a future one that does should not
     // fail for the wrong reason.
-    protected override void BeginPassCore(in PassClear clear)
+    protected override void BeginPassCore(RenderTarget? target, in PassClear clear)
     {
     }
 
-    protected override void EndPassCore()
+    protected override void EndPassCore(RenderTarget? target)
     {
     }
+
+    public override RenderTarget CreateRenderTarget(in RenderTargetDesc desc)
+        => throw new NotSupportedException($"{GetType().Name} creates no GPU resources.");
 
     public override ShaderProgram CreateShader(string vertexSource, string fragmentSource)
         => throw new NotSupportedException("CompilingRenderer creates no shaders.");

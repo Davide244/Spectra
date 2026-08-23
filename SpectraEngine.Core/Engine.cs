@@ -25,6 +25,7 @@ public sealed class Engine
     private const double MaxDeltaTime = 0.1;
 
     private readonly ILogger<Engine> _logger;
+    private OffscreenProbe? _offscreenProbe;
     private readonly FpsCounter _fpsCounter = new();
     private readonly Renderer _renderer;
     private readonly SceneManager _sceneManager;
@@ -123,6 +124,17 @@ public sealed class Engine
     /// for one.
     /// </remarks>
     public bool StartInPlayMode { get; set; }
+
+    /// <summary>
+    /// Whether to run the offscreen render-target probe once at startup.
+    /// </summary>
+    /// <remarks>
+    /// Off by default: it renders the scene twice per probing frame. See
+    /// <see cref="OffscreenProbe"/> for why it exists at all, which comes down
+    /// to D3D11 and D3D12 having no headless device fixture to test render
+    /// targets against.
+    /// </remarks>
+    public bool RunOffscreenProbe { get; set; }
 
     /// <summary>The key that enters and leaves play mode.</summary>
     public const Key PlayModeKey = Key.F8;
@@ -319,6 +331,13 @@ public sealed class Engine
             _assetManager.AttachRenderer(_renderer);
 
             _sceneManager.LoadDemoScene(_renderer, _assetManager);
+
+            // After the scene, so the probe's frames draw real geometry through
+            // real pipeline states rather than an empty clear. The PSO built for
+            // an offscreen target's format is the D3D12 half of what this is
+            // for, and an empty frame would never build one.
+            if (RunOffscreenProbe)
+                _offscreenProbe = new OffscreenProbe(_logger);
 
             if (_sceneManager.ActiveScene is { } activeScene)
             {
@@ -542,6 +561,12 @@ public sealed class Engine
                 {
                     _renderView.Clear();
                 }
+
+                // Before Render, because the probe decides whether this frame
+                // also goes into an offscreen target.
+                _offscreenProbe?.Update(_renderer);
+                if (_offscreenProbe is { Running: false })
+                    _offscreenProbe = null;
 
                 _renderer.Render(_sceneManager.ActiveScene, _renderView, deltaTime);
 

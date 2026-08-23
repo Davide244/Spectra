@@ -56,7 +56,7 @@ public sealed unsafe class D3D11WireframePipeline : ID3D11RenderPipeline
         var ctx = (ID3D11DeviceContext*)context.Context.Handle;
 
         // Clear to black for contrast against the wireframe lines.
-        context.Renderer.BeginPass(PassClear.To(ClearColors.Wireframe));
+        context.Renderer.BeginPass(context.Renderer.FrameTarget, PassClear.To(ClearColors.Wireframe));
         try
         {
             if (context.Scene is null) return;

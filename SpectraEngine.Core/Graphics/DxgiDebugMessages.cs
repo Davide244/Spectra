@@ -61,9 +61,12 @@ internal sealed unsafe class DxgiDebugMessages : IDisposable
     /// <paramref name="backend"/>. Render thread, once per frame — same slot as
     /// the device info queue it accompanies.
     /// </summary>
-    internal void Drain(ILogger logger, string backend)
+    /// <returns>How many messages were error or corruption severity.</returns>
+    internal int Drain(ILogger logger, string backend)
     {
-        if (_queue.Handle is null) return;
+        if (_queue.Handle is null) return 0;
+
+        int errors = 0;
 
         var queue = (IDXGIInfoQueue*)_queue.Handle;
         ulong count = queue->GetNumStoredMessages(DebugAll);
@@ -91,6 +94,7 @@ internal sealed unsafe class DxgiDebugMessages : IDisposable
                 {
                     case InfoQueueMessageSeverity.InfoQueueMessageSeverityCorruption:
                     case InfoQueueMessageSeverity.InfoQueueMessageSeverityError:
+                        errors++;
                         logger.LogError("{Backend} DXGI debug layer: {Message}", backend, text);
                         break;
                     case InfoQueueMessageSeverity.InfoQueueMessageSeverityWarning:
@@ -105,6 +109,8 @@ internal sealed unsafe class DxgiDebugMessages : IDisposable
 
         if (count > 0)
             queue->ClearStoredMessages(DebugAll);
+
+        return errors;
     }
 
     /// <inheritdoc/>

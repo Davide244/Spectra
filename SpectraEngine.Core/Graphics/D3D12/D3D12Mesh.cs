@@ -150,7 +150,10 @@ internal sealed unsafe class D3D12Mesh : Mesh
         var program = _renderer.CurrentProgram;
         if (list is null || program is null) return;
 
-        var target = D3D12TargetState.BackBuffer;
+        // From the open pass, not hardcoded: a PSO is compiled against the
+        // render-target formats it will be bound with, so drawing the same mesh
+        // into an offscreen target needs its own pipeline state.
+        var target = _renderer.CurrentTargetState;
         var pso = program.GetPso(
             Layout, _renderer.CurrentFillMode, PrimitiveTopologyType.Triangle,
             DepthMode.TestWrite, BlendMode.Opaque, in target);

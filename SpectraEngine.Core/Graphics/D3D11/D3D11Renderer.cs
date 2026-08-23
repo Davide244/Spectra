@@ -49,6 +49,7 @@ public sealed unsafe class D3D11Renderer : Renderer
     private readonly List<Texture> _textures = [];
     private readonly List<ShaderProgram> _shaders = [];
     private readonly List<ID3D11RenderPipeline> _pipelines = [];
+    private readonly List<RenderTarget> _renderTargets = [];
     private int _pipelineIndex;
 
     // Size the swap chain currently has. Render() compares it against the
@@ -131,9 +132,13 @@ public sealed unsafe class D3D11Renderer : Renderer
         // DXGI validates on its own queue, separate from the device's: every
         // swap-chain rejection (ResizeBuffers, Present) is explained there and
         // nowhere else, so it is drained in the same slot.
-        _dxgiMessages?.Drain(_logger, "D3D11");
+        int errors = _dxgiMessages?.Drain(_logger, "D3D11") ?? 0;
 
-        if (_infoQueue.Handle is null) return;
+        if (_infoQueue.Handle is null)
+        {
+            NoteDebugLayerErrors(errors);
+            return;
+        }
 
         var queue = (ID3D11InfoQueue*)_infoQueue.Handle;
         ulong count = queue->GetNumStoredMessages();
@@ -155,6 +160,7 @@ public sealed unsafe class D3D11Renderer : Renderer
                 {
                     case MessageSeverity.Corruption:
                     case MessageSeverity.Error:
+                        errors++;
                         _logger.LogError("D3D11 debug layer: {Message}", text);
                         break;
                     case MessageSeverity.Warning:
@@ -168,6 +174,8 @@ public sealed unsafe class D3D11Renderer : Renderer
         }
         if (count > 0)
             queue->ClearStoredMessages();
+
+        NoteDebugLayerErrors(errors);
     }
 
     internal ComPtr<ID3D11Device> Device => _device;
@@ -241,21 +249,44 @@ public sealed unsafe class D3D11Renderer : Renderer
             View = view,
             DeltaTime = deltaTime,
         };
+        if (ProbeTarget is { } probe)
+        {
+            FrameTarget = probe;
+            _pipelines[_pipelineIndex].Execute(ctx);
+        }
+
+        FrameTarget = null;
         _pipelines[_pipelineIndex].Execute(ctx);
     }
 
-    protected override void BeginPassCore(in PassClear clear)
+    protected override void BeginPassCore(RenderTarget? target, in PassClear clear)
     {
         var ctx = (ID3D11DeviceContext*)_context.Handle;
-        var rtv = (ID3D11RenderTargetView*)_backBufferRtv.Handle;
-        var dsv = (ID3D11DepthStencilView*)_depthView.Handle;
+
+        ID3D11RenderTargetView* rtv;
+        ID3D11DepthStencilView* dsv;
+        if (target is D3D11RenderTarget offscreen)
+        {
+            // The attachment may still be bound as a shader resource from a
+            // previous frame that sampled it. D3D11 would unbind it silently and
+            // log a warning; doing it here makes the intent explicit and keeps
+            // the debug layer quiet enough that a real message is visible.
+            UnbindPixelShaderResources();
+            rtv = offscreen.Rtv;
+            dsv = offscreen.Dsv;
+        }
+        else
+        {
+            rtv = (ID3D11RenderTargetView*)_backBufferRtv.Handle;
+            dsv = (ID3D11DepthStencilView*)_depthView.Handle;
+        }
 
         // A resize that failed rebuilds the views at the old size, but a device
         // loss between release and rebuild can leave them null for one frame.
         // Drawing through a null RTV is the guaranteed crash next frame that
         // DrainPendingResize exists to avoid, so a pass with no target is a
         // no-op instead.
-        if (rtv is null || dsv is null) return;
+        if (rtv is null) return;
 
         Vector2D<int> size = PassSize;
         var viewport = new Viewport
@@ -272,17 +303,42 @@ public sealed unsafe class D3D11Renderer : Renderer
             fixed (float* pColor = value)
                 ctx->ClearRenderTargetView(rtv, pColor);
         }
-        if (clear.Depth is { } depth)
+        // A depth-less target is legal; clearing a null DSV is not.
+        if (clear.Depth is { } depth && dsv is not null)
             ctx->ClearDepthStencilView(dsv, (uint)(ClearFlag.Depth | ClearFlag.Stencil), depth, 0);
 
         ctx->OMSetRenderTargets(1, &rtv, dsv);
     }
 
-    // Nothing to do for the back buffer: the swap chain owns its state and
-    // Present is what ends the frame. Offscreen targets will unbind their SRV
-    // slots here.
-    protected override void EndPassCore()
+    protected override void EndPassCore(RenderTarget? target)
     {
+        if (target is null) return;
+
+        // Unbind, so the next pass cannot draw into a texture it did not ask
+        // for, and so the attachment is free to be sampled.
+        var ctx = (ID3D11DeviceContext*)_context.Handle;
+        ID3D11RenderTargetView* none = null;
+        ctx->OMSetRenderTargets(1, &none, (ID3D11DepthStencilView*)null);
+    }
+
+    // Clears every pixel-shader texture slot the engine can bind. Cheap, and it
+    // removes the read-write hazard by construction rather than by relying on
+    // the runtime to notice it.
+    private void UnbindPixelShaderResources()
+    {
+        const int Slots = 8;
+        var ctx = (ID3D11DeviceContext*)_context.Handle;
+        ID3D11ShaderResourceView** none = stackalloc ID3D11ShaderResourceView*[Slots];
+        for (int i = 0; i < Slots; i++) none[i] = null;
+        ctx->PSSetShaderResources(0, Slots, none);
+    }
+
+    public override RenderTarget CreateRenderTarget(in RenderTargetDesc desc)
+    {
+        var target = new D3D11RenderTarget(_device, desc);
+        target.Unregister = () => _renderTargets.Remove(target);
+        _renderTargets.Add(target);
+        return target;
     }
 
     /// <summary>
@@ -359,6 +415,10 @@ public sealed unsafe class D3D11Renderer : Renderer
 
         foreach (var mesh in _meshes) mesh.Dispose();
         _meshes.Clear();
+
+        foreach (var target in _renderTargets)
+            target.Dispose();
+        _renderTargets.Clear();
         foreach (var tex in _textures) tex.Dispose();
         _textures.Clear();
         foreach (var sh in _shaders) sh.Dispose();

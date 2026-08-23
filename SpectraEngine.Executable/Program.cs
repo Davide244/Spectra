@@ -110,6 +110,7 @@ try
         // F8 does this interactively; the switch is for a smoke run that wants
         // the mover exercised without a human at the keyboard.
         StartInPlayMode = options.StartInPlayMode,
+        RunOffscreenProbe = options.OffscreenProbe,
     };
 
     // The fullscreen-cycle harness, when asked for: a driver thread that hits

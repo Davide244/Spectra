@@ -27,7 +27,7 @@ public sealed class WireframePipeline : IOpenGLRenderPipeline
     public void Execute(in OpenGLRenderContext context)
     {
         var gl = context.Gl;
-        context.Renderer.BeginPass(PassClear.To(ClearColors.Wireframe));
+        context.Renderer.BeginPass(context.Renderer.FrameTarget, PassClear.To(ClearColors.Wireframe));
         try
         {
             if (context.Scene is null)

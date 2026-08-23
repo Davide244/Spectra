@@ -23,6 +23,7 @@ public class OpenGLRenderer : Renderer
     private readonly List<ShaderProgram> _shaders = [];
     private readonly List<Texture> _textures = [];
     private readonly List<IOpenGLRenderPipeline> _pipelines = [];
+    private readonly List<RenderTarget> _renderTargets = [];
     private int _pipelineIndex;
     private OpenGLLineBatch? _lineBatch;
     private ShaderProgram? _debugShader;
@@ -186,6 +187,15 @@ public class OpenGLRenderer : Renderer
             DeltaTime = deltaTime,
         };
 
+        // The probe pass first, so the window still gets the last word and a
+        // probe can never change what the user sees.
+        if (ProbeTarget is { } probe)
+        {
+            FrameTarget = probe;
+            _pipelines[_pipelineIndex].Execute(context);
+        }
+
+        FrameTarget = null;
         _pipelines[_pipelineIndex].Execute(context);
     }
 
@@ -195,16 +205,24 @@ public class OpenGLRenderer : Renderer
     // whichever framebuffer is actually carrying the frame.
     private bool _passUsedSrgbTarget;
 
-    protected override void BeginPassCore(in PassClear clear)
+    protected override void BeginPassCore(RenderTarget? target, in PassClear clear)
     {
         GL gl = _gl!;
         Vector2D<int> size = PassSize;
 
-        _passUsedSrgbTarget = _srgbTarget is not null && _srgbTarget.Begin(gl, size.X, size.Y);
-        if (_srgbTarget is { Usable: false })
-            AbandonSrgbTarget();
-        if (!_passUsedSrgbTarget)
-            gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        if (target is OpenGLRenderTarget offscreen)
+        {
+            gl.BindFramebuffer(FramebufferTarget.Framebuffer, offscreen.Framebuffer);
+            _passUsedSrgbTarget = false;
+        }
+        else
+        {
+            _passUsedSrgbTarget = _srgbTarget is not null && _srgbTarget.Begin(gl, size.X, size.Y);
+            if (_srgbTarget is { Usable: false })
+                AbandonSrgbTarget();
+            if (!_passUsedSrgbTarget)
+                gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        }
 
         gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
 
@@ -223,12 +241,28 @@ public class OpenGLRenderer : Renderer
             gl.Clear(mask);
     }
 
-    protected override void EndPassCore()
+    protected override void EndPassCore(RenderTarget? target)
     {
+        if (target is not null)
+        {
+            // Back to the window, so a pass that forgets to bind cannot silently
+            // keep drawing into a texture nobody is looking at.
+            _gl!.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+            return;
+        }
+
         if (!_passUsedSrgbTarget) return;
 
         _srgbTarget!.Present(_gl!, PassSize.X, PassSize.Y);
         _passUsedSrgbTarget = false;
+    }
+
+    public override RenderTarget CreateRenderTarget(in RenderTargetDesc desc)
+    {
+        var target = new OpenGLRenderTarget(_gl!, desc);
+        target.Unregister = () => _renderTargets.Remove(target);
+        _renderTargets.Add(target);
+        return target;
     }
 
     /// <summary>
@@ -282,6 +316,14 @@ public class OpenGLRenderer : Renderer
         foreach (var mesh in _meshes)
             mesh.Dispose();
         _meshes.Clear();
+
+        // Before the textures: a target owns its colour attachment, and the
+        // attachment is not in _textures, so the order only matters for
+        // readability. Targets go first because they hold framebuffers that
+        // name those textures.
+        foreach (var target in _renderTargets)
+            target.Dispose();
+        _renderTargets.Clear();
 
         foreach (var texture in _textures)
             texture.Dispose();

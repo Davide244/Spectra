@@ -8,7 +8,7 @@ namespace SpectraEngine.Core.Graphics.D3D11;
 
 internal sealed unsafe class D3D11Texture : Texture
 {
-    private readonly ComPtr<ID3D11Texture2D> _texture;
+    private ComPtr<ID3D11Texture2D> _texture;
     private ComPtr<ID3D11ShaderResourceView> _srv;
     private ComPtr<ID3D11SamplerState> _sampler;
     private bool _disposed;
@@ -16,11 +16,18 @@ internal sealed unsafe class D3D11Texture : Texture
     public ComPtr<ID3D11ShaderResourceView> Srv => _srv;
     public ComPtr<ID3D11SamplerState> Sampler => _sampler;
 
+    /// <summary>The underlying resource, for a render-target view over it.</summary>
+    internal ID3D11Resource* Resource => (ID3D11Resource*)_texture.Handle;
+
+    /// <summary>The DXGI format actually in use, which an RTV over this texture must match.</summary>
+    internal Silk.NET.DXGI.Format DxgiFormat { get; private set; }
+
     private D3D11Texture(
         ComPtr<ID3D11Texture2D> texture,
         ComPtr<ID3D11ShaderResourceView> srv,
         ComPtr<ID3D11SamplerState> sampler,
-        int width, int height, TextureFormat format, TextureColorSpace colorSpace)
+        int width, int height, TextureFormat format, TextureColorSpace colorSpace,
+        Silk.NET.DXGI.Format dxgiFormat)
     {
         _texture = texture;
         _srv = srv;
@@ -29,6 +36,7 @@ internal sealed unsafe class D3D11Texture : Texture
         Height = height;
         Format = format;
         ColorSpace = colorSpace;
+        DxgiFormat = dxgiFormat;
     }
 
     internal static D3D11Texture Create(
@@ -153,12 +161,110 @@ internal sealed unsafe class D3D11Texture : Texture
             ctxPtr->Release();
         }
 
-        // Sampler state.
+        ID3D11SamplerState* samplerPtr = CreateSampler(dev, filter, wrap);
+
+        return new D3D11Texture(
+            ComOwnership.Own(texPtr),
+            ComOwnership.Own(srvPtr),
+            ComOwnership.Own(samplerPtr),
+            width, height, format, resolved, dxgiFormat);
+    }
+
+    /// <summary>
+    /// Creates an empty texture usable as both a render target and a shader
+    /// resource: the colour attachment of a <see cref="D3D11RenderTarget"/>.
+    /// </summary>
+    internal static D3D11Texture CreateRenderTargetTexture(
+        ComPtr<ID3D11Device> device,
+        int width,
+        int height,
+        TextureFormat format,
+        TextureColorSpace colorSpace,
+        TextureFilter filter,
+        TextureWrap wrap)
+    {
+        TextureColorSpace resolved = TextureFormatInfo.Resolve(format, colorSpace);
+        Silk.NET.DXGI.Format dxgiFormat = resolved == TextureColorSpace.Srgb
+            ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
+            : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm;
+
+        var dev = (ID3D11Device*)device.Handle;
+        ID3D11Texture2D* texPtr = CreateRenderTargetResource(dev, width, height, dxgiFormat);
+        ID3D11ShaderResourceView* srvPtr = CreateSrv(dev, texPtr, dxgiFormat, mipLevels: 1);
+        ID3D11SamplerState* samplerPtr = CreateSampler(dev, filter, wrap);
+
+        return new D3D11Texture(
+            ComOwnership.Own(texPtr),
+            ComOwnership.Own(srvPtr),
+            ComOwnership.Own(samplerPtr),
+            width, height, format, resolved, dxgiFormat);
+    }
+
+    /// <summary>
+    /// Replaces this texture's resource and view at a new size, <b>keeping the
+    /// same wrapper object</b>. What a render-target resize needs; the sampler
+    /// is unaffected and is deliberately kept.
+    /// </summary>
+    internal void ReplaceStorage(ComPtr<ID3D11Device> device, int width, int height)
+    {
+        var dev = (ID3D11Device*)device.Handle;
+        ID3D11Texture2D* texPtr = CreateRenderTargetResource(dev, width, height, DxgiFormat);
+        ID3D11ShaderResourceView* srvPtr = CreateSrv(dev, texPtr, DxgiFormat, mipLevels: 1);
+
+        // Old first: nothing can be sampling this between the two lines, because
+        // resource creation and rendering share the render thread.
+        ComOwnership.Release(ref _srv);
+        ComOwnership.Release(ref _texture);
+
+        _texture = ComOwnership.Own(texPtr);
+        _srv = ComOwnership.Own(srvPtr);
+        Width = width;
+        Height = height;
+    }
+
+    private static ID3D11Texture2D* CreateRenderTargetResource(
+        ID3D11Device* dev, int width, int height, Silk.NET.DXGI.Format dxgiFormat)
+    {
+        var desc = new Texture2DDesc
+        {
+            Width = (uint)width,
+            Height = (uint)height,
+            // One level: there is nothing to build a chain from, and the
+            // contents change every frame, so a chain would be stale anyway.
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = dxgiFormat,
+            SampleDesc = new SampleDesc(1, 0),
+            Usage = Usage.Default,
+            BindFlags = (uint)(BindFlag.ShaderResource | BindFlag.RenderTarget),
+        };
+
+        ID3D11Texture2D* texPtr = null;
+        SilkMarshal.ThrowHResult(dev->CreateTexture2D(&desc, null, &texPtr));
+        return texPtr;
+    }
+
+    private static ID3D11ShaderResourceView* CreateSrv(
+        ID3D11Device* dev, ID3D11Texture2D* texture, Silk.NET.DXGI.Format dxgiFormat, uint mipLevels)
+    {
+        var srvDesc = new ShaderResourceViewDesc
+        {
+            Format = dxgiFormat,
+            ViewDimension = Silk.NET.Core.Native.D3DSrvDimension.D3DSrvDimensionTexture2D,
+        };
+        srvDesc.Anonymous.Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = mipLevels };
+
+        ID3D11ShaderResourceView* srvPtr = null;
+        SilkMarshal.ThrowHResult(dev->CreateShaderResourceView((ID3D11Resource*)texture, &srvDesc, &srvPtr));
+        return srvPtr;
+    }
+
+    private static ID3D11SamplerState* CreateSampler(
+        ID3D11Device* dev, TextureFilter filter, TextureWrap wrap)
+    {
         Silk.NET.Direct3D11.Filter samplerFilter = filter switch
         {
             TextureFilter.Nearest => Silk.NET.Direct3D11.Filter.MinMagMipPoint,
-            TextureFilter.Linear => Silk.NET.Direct3D11.Filter.MinMagMipLinear,
-            TextureFilter.LinearMipmap => Silk.NET.Direct3D11.Filter.MinMagMipLinear,
             _ => Silk.NET.Direct3D11.Filter.MinMagMipLinear,
         };
         var addrMode = wrap == TextureWrap.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp;
@@ -175,14 +281,10 @@ internal sealed unsafe class D3D11Texture : Texture
             MinLOD = 0f,
             MaxLOD = float.MaxValue,
         };
+
         ID3D11SamplerState* samplerPtr = null;
         SilkMarshal.ThrowHResult(dev->CreateSamplerState(&samplerDesc, &samplerPtr));
-
-        return new D3D11Texture(
-            ComOwnership.Own(texPtr),
-            ComOwnership.Own(srvPtr),
-            ComOwnership.Own(samplerPtr),
-            width, height, format, resolved);
+        return samplerPtr;
     }
 
     private static byte[] ExpandRgbToRgba(ReadOnlySpan<byte> rgb, int width, int height)
@@ -203,8 +305,8 @@ internal sealed unsafe class D3D11Texture : Texture
     {
         if (_disposed) return;
         _disposed = true;
-        _sampler.Dispose();
-        _srv.Dispose();
-        _texture.Dispose();
+        ComOwnership.Release(ref _sampler);
+        ComOwnership.Release(ref _srv);
+        ComOwnership.Release(ref _texture);
     }
 }

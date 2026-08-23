@@ -58,18 +58,35 @@ internal sealed class FakeRenderer : Renderer
     /// a failure: an unbalanced pair, a viewport sized from the window instead
     /// of the target, a clear that quietly stopped happening.
     /// </remarks>
-    public List<(PassClear Clear, Vector2D<int> Size)> Passes { get; } = [];
+    public List<(PassClear Clear, Vector2D<int> Size, RenderTarget? Target)> Passes { get; } = [];
 
     /// <summary>Passes begun and not yet ended. Zero at the end of a well-formed frame.</summary>
     public int OpenPasses { get; private set; }
 
-    protected override void BeginPassCore(in PassClear clear)
+    /// <summary>Every render target ever created, in creation order.</summary>
+    public List<FakeRenderTarget> CreatedRenderTargets { get; } = [];
+
+    /// <summary>Targets still registered, mirroring the real backends' tracking lists.</summary>
+    public List<FakeRenderTarget> LiveRenderTargets { get; } = [];
+
+    protected override void BeginPassCore(RenderTarget? target, in PassClear clear)
     {
-        Passes.Add((clear, PassSize));
+        Passes.Add((clear, PassSize, target));
         OpenPasses++;
     }
 
-    protected override void EndPassCore() => OpenPasses--;
+    protected override void EndPassCore(RenderTarget? target) => OpenPasses--;
+
+    public override RenderTarget CreateRenderTarget(in RenderTargetDesc desc)
+    {
+        desc.Validate();
+
+        var target = new FakeRenderTarget(desc);
+        target.Unregister = () => LiveRenderTargets.Remove(target);
+        CreatedRenderTargets.Add(target);
+        LiveRenderTargets.Add(target);
+        return target;
+    }
 
     public FakeRenderer()
         : base(NullLogger<Renderer>.Instance, new ThrowingShaderCompiler())
@@ -236,6 +253,44 @@ internal sealed class FakeMesh : Mesh
 /// records disposal so asset-ownership bugs (a texture leaked past unload, or
 /// one destroyed while a handle still points at it) are observable.
 /// </summary>
+/// <summary>
+/// A GPU-free <see cref="RenderTarget"/>. Its colour attachment keeps its
+/// identity across a resize, exactly as the real ones must, so a test can assert
+/// on the property whose absence would strand every material sampling it.
+/// </summary>
+internal sealed class FakeRenderTarget : RenderTarget
+{
+    private readonly FakeTexture _color;
+
+    public FakeRenderTarget(in RenderTargetDesc desc)
+    {
+        Desc = desc;
+        Width = desc.Width;
+        Height = desc.Height;
+        _color = new FakeTexture(
+            [], desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap);
+    }
+
+    public bool Disposed { get; private set; }
+
+    /// <summary>Sizes this target has been through, so a test can see a resize actually happened.</summary>
+    public List<(int Width, int Height)> Resizes { get; } = [];
+
+    public override Texture ColorTexture => _color;
+
+    public override void Resize(int width, int height)
+    {
+        if (width == Width && height == Height) return;
+
+        Width = width;
+        Height = height;
+        _color.ResizeInPlace(width, height);
+        Resizes.Add((width, height));
+    }
+
+    public override void Dispose() => Disposed = true;
+}
+
 internal sealed class FakeTexture : Texture
 {
     public byte[] Pixels { get; }
@@ -256,6 +311,13 @@ internal sealed class FakeTexture : Texture
         ColorSpace = TextureFormatInfo.Resolve(format, colorSpace);
         Filter = filter;
         Wrap = wrap;
+    }
+
+    /// <summary>Mirrors a real attachment's in-place resize: same object, new size.</summary>
+    public void ResizeInPlace(int width, int height)
+    {
+        Width = width;
+        Height = height;
     }
 
     public override void Dispose() => Disposed = true;
