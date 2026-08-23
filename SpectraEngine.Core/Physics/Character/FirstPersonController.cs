@@ -56,10 +56,9 @@ public sealed class FirstPersonController
 
     private readonly Camera _camera;
     private readonly InputManager _input;
-    private readonly ICharacterCollisionSource _source;
+    private readonly CharacterSimulation _simulation;
     private readonly ILogger _logger;
 
-    private CharacterState _state;
     private CharacterCommand _command;
 
     private float _yaw;
@@ -84,8 +83,6 @@ public sealed class FirstPersonController
     private float _restoreCameraYaw;
     private float _restoreCameraPitch;
 
-    private int _respawns;
-
     /// <summary>
     /// Builds a controller over a scene's camera. Nothing happens until
     /// <see cref="Enter"/>.
@@ -103,48 +100,53 @@ public sealed class FirstPersonController
         _logger = logger;
         _camera = scene.Camera;
         _input = input;
-        Tuning = tuning ?? new CharacterTuning();
-
-        // The plane-set source, not a hull source: this is what makes a doorway
-        // cut by a subtractive brush walkable, because it evaluates
-        // ⋃additive \ ⋃subtractive per query rather than approximating each
-        // brush by its uncut convex hull.
-        var brushSource = new BrushPlaneCollisionSource(scene, Tuning);
-        _source = brushSource;
-        Collision = brushSource;
-
-        _state = CharacterState.AtFeet(Vector3.Zero);
+        _simulation = new CharacterSimulation(scene, tuning);
     }
 
-    /// <summary>Every movement constant, live — editing one takes effect next tick.</summary>
-    public CharacterTuning Tuning { get; }
+    /// <summary>
+    /// The simulated half: state, tuning, collision and the tick. Owns no camera
+    /// and no input, so a headless host can drive one directly and skip this
+    /// class entirely.
+    /// </summary>
+    public CharacterSimulation Simulation => _simulation;
+
+    /// <summary>Every movement constant, live. Editing one takes effect next tick.</summary>
+    public CharacterTuning Tuning => _simulation.Tuning;
 
     /// <summary>The brush-plane source, for the counters it discloses.</summary>
-    public BrushPlaneCollisionSource Collision { get; }
+    public BrushPlaneCollisionSource Collision => _simulation.Collision;
 
     /// <summary>Whether the character is being simulated and owns the camera.</summary>
     public bool Active { get; private set; }
 
-    /// <summary>Feet position, velocity and ground state — the whole of what is simulated.</summary>
-    public CharacterState State => _state;
+    /// <summary>Feet position, velocity and ground state, the whole of what is simulated.</summary>
+    public CharacterState State => _simulation.State;
 
     /// <summary>Where <see cref="Enter"/> and the fall-out guard put the character.</summary>
-    public Vector3 SpawnPosition { get; set; }
+    public Vector3 SpawnPosition
+    {
+        get => _simulation.SpawnPosition;
+        set => _simulation.SpawnPosition = value;
+    }
 
     /// <summary>The yaw <see cref="Enter"/> starts with, in radians.</summary>
     public float SpawnYaw { get; set; }
 
     /// <summary>Below this height the character is respawned rather than left falling.</summary>
-    public float FallOutHeight { get; set; } = -1000f;
+    public float FallOutHeight
+    {
+        get => _simulation.FallOutHeight;
+        set => _simulation.FallOutHeight = value;
+    }
 
     /// <summary>Radians of look per pixel of mouse motion.</summary>
     public float LookSensitivity { get; set; } = 0.0022f;
 
     /// <summary>Times the fall-out guard has fired since the process started.</summary>
-    public int Respawns => _respawns;
+    public int Respawns => _simulation.Respawns;
 
-    /// <summary>Horizontal speed in spectraunits per second — what a speedometer would read.</summary>
-    public float HorizontalSpeed => new Vector2(_state.Velocity.X, _state.Velocity.Z).Length();
+    /// <summary>Horizontal speed in spectraunits per second, what a speedometer would read.</summary>
+    public float HorizontalSpeed => _simulation.HorizontalSpeed;
 
     /// <summary>Takes the camera, locks the cursor, and puts the character at its spawn.</summary>
     public void Enter()
@@ -156,7 +158,7 @@ public sealed class FirstPersonController
         _restoreCameraYaw = _camera.Yaw;
         _restoreCameraPitch = _camera.Pitch;
 
-        _state = CharacterState.AtFeet(SpawnPosition);
+        _simulation.Spawn();
         _command = default;
         _yaw = SpawnYaw;
         _pitch = 0f;
@@ -256,17 +258,28 @@ public sealed class FirstPersonController
 
         // Captured before the tick, so the pair always brackets exactly one
         // step. Several ticks in one frame simply leave this at the last one.
-        _renderPrevious = _state.Position;
+        _renderPrevious = _simulation.State.Position;
 
-        CharacterMover.Tick(ref _state, in _command, _source, Tuning, deltaTime);
+        bool respawned = _simulation.Tick(in _command, deltaTime);
 
         // Carried, not assigned: a staircase can step twice inside one frame's
         // tick budget, and taking only the last one would let the eye jump the
-        // riser it skipped.
-        _eyeLag += _state.SteppedUpBy;
+        // riser it skipped. Render-only, which is why it lives here and not in
+        // the simulation: a replayed tick must not depend on it.
+        _eyeLag += _simulation.State.SteppedUpBy;
 
-        if (_state.Position.Y < FallOutHeight)
-            Respawn();
+        if (respawned)
+        {
+            _logger.LogWarning(
+                "Character fell below y={Limit:0.0} and was respawned (respawn {Count})",
+                FallOutHeight, Respawns);
+
+            // Both ends of the blend, or the frame after a respawn renders the
+            // character sliding across the level from wherever it fell.
+            _eyeLag = 0f;
+            _renderPrevious = SpawnPosition;
+            _renderPosition = SpawnPosition;
+        }
     }
 
     /// <summary>
@@ -296,7 +309,7 @@ public sealed class FirstPersonController
                 _eyeLag = 0f;
         }
 
-        _renderPosition = Vector3.Lerp(_renderPrevious, _state.Position, Math.Clamp(alpha, 0f, 1f));
+        _renderPosition = Vector3.Lerp(_renderPrevious, _simulation.State.Position, Math.Clamp(alpha, 0f, 1f));
 
         _camera.Position = _renderPosition + new Vector3(0f, Tuning.EyeHeight - _eyeLag, 0f);
         _camera.Yaw = _yaw;
@@ -318,37 +331,21 @@ public sealed class FirstPersonController
         // against a world the camera is smooth against reads as the overlay being
         // wrong rather than as the sample rate it actually is.
         var capsule = CharacterCapsule.FromFeet(_renderPosition, Tuning.StandHeight, Tuning.Radius);
-        Vector3 color = _state.Grounded ? new Vector3(0.2f, 1f, 0.4f) : new Vector3(1f, 0.7f, 0.2f);
+        Vector3 color = _simulation.State.Grounded ? new Vector3(0.2f, 1f, 0.4f) : new Vector3(1f, 0.7f, 0.2f);
 
         DrawCapsule(output, in capsule, color);
 
-        if (_state.Grounded)
+        if (_simulation.State.Grounded)
         {
-            output.Arrow(_renderPosition, _renderPosition + _state.GroundNormal * 0.75f,
+            output.Arrow(_renderPosition, _renderPosition + _simulation.State.GroundNormal * 0.75f,
                 new Vector3(0.3f, 0.6f, 1f));
         }
 
         // The velocity is what tells you whether a wall is being slid along or
         // merely stood against, which the capsule alone cannot.
-        Vector3 velocity = _state.Velocity;
+        Vector3 velocity = _simulation.State.Velocity;
         if (velocity.LengthSquared() > 1e-4f)
             output.Arrow(_renderPosition, _renderPosition + velocity * 0.2f, new Vector3(1f, 0.3f, 0.8f));
-    }
-
-    private void Respawn()
-    {
-        _respawns++;
-        _logger.LogWarning(
-            "Character fell below y={Limit:0.0} and was respawned (respawn {Count})",
-            FallOutHeight, _respawns);
-
-        _state = CharacterState.AtFeet(SpawnPosition);
-        _eyeLag = 0f;
-
-        // Both ends of the blend, or the frame after a respawn renders the
-        // character sliding across the level from wherever it fell.
-        _renderPrevious = SpawnPosition;
-        _renderPosition = SpawnPosition;
     }
 
     // Two rings and four uprights, plus a pair of arcs per cap. Enough to read
