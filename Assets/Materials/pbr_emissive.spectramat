@@ -1,0 +1,22 @@
+// pbr_emissive.spectramat -- a surface that is a light source in the picture.
+//
+// Emissive is added after shading and is never lit, so this sphere looks the
+// same from every angle and in every light. It does NOT illuminate anything
+// around it: that needs the emissive surface to become a light, which is a
+// separate feature.
+//
+// vec3 rather than color, deliberately, and the format's rule is exactly this:
+// color is authored in display space and converted, vec3 is numbers that pass
+// through untouched. Radiance above 1 is the point of an HDR pipeline and there
+// is no display value that means 3.
+//
+// The base colour is black because an emitter should not also be a bright
+// diffuse surface; if it were, half its brightness would come from the lights.
+
+shader = lit
+
+texture uDiffuse   = Textures/white.png, linear, clamp
+color   uBaseColor = #000000
+float   uMetallic  = 0.0
+float   uRoughness = 0.50
+vec3    uEmissive  = 0.20 1.60 3.00

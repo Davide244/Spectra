@@ -1,0 +1,12 @@
+// pbr_plastic_red.spectramat -- smooth dielectric.
+//
+// Metallic 0, so the surface keeps its diffuse response AND takes a 4%
+// specular reflection that is WHITE rather than red. A red highlight here means
+// the F0 lerp is being applied to the wrong end of the metallic range.
+
+shader = lit
+
+texture uDiffuse   = Textures/white.png, linear, clamp
+color   uBaseColor = #C8322D
+float   uMetallic  = 0.0
+float   uRoughness = 0.20

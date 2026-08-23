@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 
@@ -165,7 +165,36 @@ public sealed class Material
     public void Apply()
     {
         if (Shader is not { } shader) return;
+        ApplyTo(shader);
+    }
 
+    /// <summary>
+    /// Uploads this material's parameters to <paramref name="shader"/> instead
+    /// of to its own, for a pass that decides the program rather than letting
+    /// the material choose it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is what lets one <c>.spectramat</c> file feed both the forward
+    /// and the deferred path.</b> A deferred geometry pass draws everything with
+    /// one G-buffer-writing program, so the material's own
+    /// <see cref="Shader"/> is not the one being filled, but its parameters
+    /// still are, and they are stored as a name-to-value map precisely so a
+    /// second program can take the subset it declares.
+    /// </para>
+    /// <para>
+    /// Unknown names are ignored on all three backends, so a material carrying
+    /// parameters for both programs writes each of them exactly where it is
+    /// understood and nowhere else. The corollary is that this can only ADD
+    /// values: a parameter the target program declares and this material never
+    /// set keeps whatever the previous draw left in it, which is the same
+    /// hazard <see cref="Apply"/> has and the reason
+    /// <see cref="Assets.AssetManager"/> seeds every material with the built-in
+    /// parameter set.
+    /// </para>
+    /// </remarks>
+    public void ApplyTo(ShaderProgram shader)
+    {
         foreach (var (name, value) in _floats) shader.SetUniform(name, value);
         foreach (var (name, value) in _vec2) shader.SetUniform(name, value);
         foreach (var (name, value) in _vec3) shader.SetUniform(name, value);

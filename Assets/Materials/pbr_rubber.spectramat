@@ -1,0 +1,12 @@
+// pbr_rubber.spectramat -- the rough end of the dielectric axis.
+//
+// Nearly all diffuse. Its job in the row is to be the surface with almost no
+// highlight, so anything that starts glinting here is energy the BRDF is
+// inventing.
+
+shader = lit
+
+texture uDiffuse   = Textures/white.png, linear, clamp
+color   uBaseColor = #2B2B2E
+float   uMetallic  = 0.0
+float   uRoughness = 0.92

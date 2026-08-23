@@ -50,6 +50,19 @@ public sealed class SceneManager
     private const string PillarMaterialPath = "Materials/checker_orange.spectramat";
     private const string AccentMaterialPath = "Materials/checker_gray.spectramat";
     private const string OrbiterTexturePath = "Textures/gradient_mask.png";
+
+    // The PBR reference row. Ordered smooth-metal, rough-metal, smooth-
+    // dielectric, rough-dielectric, emissive, so the two axes of the metallic-
+    // roughness workflow read left to right and the emitter sits at the end
+    // where it cannot be mistaken for a lit surface.
+    private static readonly string[] PbrMaterialPaths =
+    [
+        "Materials/pbr_gold.spectramat",
+        "Materials/pbr_copper_brushed.spectramat",
+        "Materials/pbr_plastic_red.spectramat",
+        "Materials/pbr_rubber.spectramat",
+        "Materials/pbr_emissive.spectramat",
+    ];
     private const string CrateModelPath = "Models/crate.obj";
     private const string SignpostModelPath = "Models/signpost.gltf";
 
@@ -316,6 +329,11 @@ public sealed class SceneManager
         // re-validation instead (measured: 38 ms rather than 14 ms).
         if (crate is not null)
             PlaceProp(scene, crate, "Crate", CratePosition);
+
+        // The PBR reference row, in front of the room where the startup camera
+        // already looks. Mesh nodes rather than brushes, so it goes in here with
+        // the other content rather than into the static-world build below.
+        AddPbrSpheres(scene, renderer, assets);
 
         double worldMs = BuildStaticWorld(scene, renderer, worldMaterial);
 
@@ -663,9 +681,13 @@ public sealed class SceneManager
     private static void AddDemoLights(Scene scene)
     {
         // The sun. A directional light takes its direction from the node's
-        // forward axis, so it is placed by rotation rather than position.
+        // forward axis, so it is placed by rotation rather than position, and
+        // the rotation is DERIVED from the direction rather than typed as euler
+        // angles, because this light spent its whole existence shining upward
+        // from below when it was authored as a yaw and a pitch. Down and away
+        // from the startup camera, which sits at +z looking at the origin.
         SceneNode sun = scene.Root.CreateChild("Sun");
-        sun.LocalRotation = Quaternion.CreateFromYawPitchRoll(0.6f, -0.9f, 0f);
+        sun.LocalRotation = Light.RotationForDirection(new Vector3(-0.35f, -0.85f, -0.4f));
         sun.Light = new Light
         {
             Kind = LightKind.Directional,
@@ -697,6 +719,57 @@ public sealed class SceneManager
             Intensity = intensity,
             Range = range,
         };
+    }
+
+    /// <summary>
+    /// The PBR reference row: one sphere per test material, floating above the
+    /// demo room where the startup camera already looks.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Spheres, because a flat face cannot show whether a BRDF is right.</b>
+    /// One normal per face makes a highlight all-or-nothing and roughness read
+    /// as a brightness change; on a curve it becomes a shape that grows and
+    /// softens, which is the thing a regression would alter.
+    /// </para>
+    /// <para>
+    /// <b>They are mesh nodes, not brushes, and that is deliberate.</b> A brush
+    /// would be carved into the static world, welded to its neighbours and split
+    /// per face material, none of which a lighting reference wants, and a
+    /// sphere is the worst possible CSG input. These draw straight from a shared
+    /// mesh under their own world matrix.
+    /// </para>
+    /// <para>
+    /// Visible in every pipeline, and meaningful in exactly one so far: the
+    /// forward shader reads neither roughness nor metallic, so the row is five
+    /// diffuse balls there and five distinct surfaces under deferred. That
+    /// difference is the fastest way to see which pipeline is running.
+    /// </para>
+    /// </remarks>
+    private static void AddPbrSpheres(Scene scene, Renderer renderer, AssetManager assets)
+    {
+        var (vertices, indices) = Primitives.Sphere();
+        Mesh mesh = renderer.CreateMesh(vertices, indices, VertexAttribute.StandardLayout);
+
+        var row = scene.Root.CreateChild("PbrReference");
+
+        // Above the room's walls (their tops are y = 0.9) so nothing occludes
+        // the row, and centred on x so the startup camera at +z frames it.
+        float spacing = 1.15f;
+        float firstX = -0.5f * spacing * (PbrMaterialPaths.Length - 1);
+
+        for (int i = 0; i < PbrMaterialPaths.Length; i++)
+        {
+            Material material = assets.LoadMaterial(PbrMaterialPaths[i]);
+            var node = row.CreateChild($"PbrSphere{i}");
+            node.LocalTransform = new Transform
+            {
+                Position = new Vector3(firstX + i * spacing, 1.7f, -1f),
+                Rotation = Quaternion.Identity,
+                Scale = new Vector3(0.9f),
+            };
+            node.MeshRenderer = new MeshRenderer(mesh, material);
+        }
     }
 
     private static SceneNode AddBrushNode(

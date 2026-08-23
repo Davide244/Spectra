@@ -1,0 +1,13 @@
+// pbr_copper_brushed.spectramat -- the rough end of the metal axis.
+//
+// Same metallic 1 as the gold, an order of magnitude rougher. What should
+// change is the SHAPE of the highlight, not its presence: a broad dim smear
+// instead of a small bright spot, carrying the same total energy. If roughness
+// only dims it, the normalisation term is wrong.
+
+shader = lit
+
+texture uDiffuse   = Textures/white.png, linear, clamp
+color   uBaseColor = #FAD1C2
+float   uMetallic  = 1.0
+float   uRoughness = 0.65

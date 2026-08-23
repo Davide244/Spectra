@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Microsoft.Extensions.Logging.Abstractions;
 using Silk.NET.Maths;
 using Silk.NET.OpenGL;
@@ -78,6 +78,14 @@ public sealed class GlRendererFixture : IDisposable
 
         // After Initialize, so the context exists and is current on this thread.
         Gl = _window.CreateOpenGL();
+
+        // The engine publishes this from the main thread before the render
+        // thread starts, so a renderer that has never been told its framebuffer
+        // size is not a state the engine can be in. Seeding it here matters:
+        // anything that sizes an intermediate target to the window (the HDR
+        // target, the deferred G-buffer) reads this latch and treats zero as
+        // "minimised, nothing to draw".
+        Renderer.SetFramebufferSize(options.Size);
     }
 
     public void Dispose()

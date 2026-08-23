@@ -103,17 +103,25 @@ flowchart LR
 
 ### The dependencies that are not linear
 
-Three real constraints cut across the spine, and they are the reason the arcs
+Four real constraints cut across the spine, and they are the reason the arcs
 exist at all:
 
 - **`R3` offscreen render targets was the rendering keystone, and it has
   landed.** Shadows, post processing, anti-aliasing, material previews and the
-  Uno viewport were all waiting on it, and `R4` has since put the
-  linear-to-display conversion in exactly one place on top of it. Shadows
-  (`R6`) are next in that chain.
-- **GPU skinning waits on `R5` array uniforms.** The animation arc has
-  skeletons, clips and pose blending, all on the CPU. No backend can set an
-  array of bone matrices yet, so nothing can draw them.
+  Uno viewport were all waiting on it; `R4` has since put the linear-to-display
+  conversion in exactly one place on top of it, and the deferred G-buffer and
+  its Cook-Torrance light pass on top of that. Shadows (`R6`) are next in that
+  chain, and they need the same render-target machinery pointed at a light.
+- **Uncapped lights wait on blend state, which no backend has.** Deferred
+  removes the reason for a light cap, but the version that actually removes it
+  draws a bounding volume per light and adds the results, and today D3D11 never
+  calls `OMSetBlendState`, OpenGL never enables `GL_BLEND`, and D3D12 hardcodes
+  `BlendEnable = 0`. Until then the light pass carries the forward path's
+  eight-light array.
+- **GPU skinning waits on `R5` array uniforms, which have landed.** The
+  animation arc has skeletons, clips and pose blending, all on the CPU;
+  `vec4[N]` and `mat4[N]` are settable on all three backends now, so an array of
+  bone matrices is no longer the blocker.
 - **A dedicated server waits on headless world compilation.**
   `Scene.RebuildStaticWorld` still needs a `Renderer`, which is the next
   coupling to break before anything can simulate a world without a GPU.
@@ -125,7 +133,7 @@ exist at all:
 | **F** Foundations | [ROADMAP](ROADMAP.md) | F1, F2 | F3 ViewDrawer, F4 diagnostics contract |
 | **E** Editor | [ROADMAP](ROADMAP.md) | E1 to E5 | E7 face texturing, E6 structural edits |
 | **P** Persistence, entities | [ROADMAP](ROADMAP.md), [data-model](docs/data-model.md) | P7a, P7b | P2 map format, P11a play/stop |
-| **R** Rendering | [ROADMAP](ROADMAP.md) | R1 PSO key, R2 sRGB, R3 render targets, R4 tone mapping | R5 array uniforms, R6 shadows |
+| **R** Rendering | [ROADMAP](ROADMAP.md) | R1 PSO key, R2 sRGB, R3 render targets, R4 tone mapping, R5 array uniforms, R8 lights, deferred + PBR | R6 shadows, blend state, IBL |
 | **S** Shader authoring | [ROADMAP](ROADMAP.md) | the language itself, GLSL, HLSL, LSP | S2 parameter scopes, S5 type checker |
 | **Y** Physics | [physics](docs/physics.md) | Y0 to Y5 | Y6 dynamic bodies, Y7 kinematic parts |
 | **A** Animation | this README, for now | pose primitives | import, then R5, then skinning |

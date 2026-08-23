@@ -136,6 +136,17 @@ public sealed class Engine
     /// </remarks>
     public bool RunOffscreenProbe { get; set; }
 
+    /// <summary>
+    /// Name of the rendering pipeline to start on, or null for the backend's
+    /// default (the first one it registered).
+    /// </summary>
+    /// <remarks>
+    /// A name the backend does not offer is a logged warning and the default,
+    /// not a failure: the set differs per backend, and refusing to start over a
+    /// pipeline choice would turn a diagnostic switch into a way to break a run.
+    /// </remarks>
+    public string? StartupPipeline { get; set; }
+
     /// <summary>The key that enters and leaves play mode.</summary>
     public const Key PlayModeKey = Key.F8;
 
@@ -324,6 +335,16 @@ public sealed class Engine
             _renderer.AcquireContext(window);
 
             _renderer.Initialize(window);
+
+            // After Initialize, because that is where a backend registers its
+            // pipelines and there is nothing to select before it.
+            if (StartupPipeline is { Length: > 0 } pipelineName &&
+                !_renderer.TrySelectPipeline(pipelineName))
+            {
+                _logger.LogWarning(
+                    "No rendering pipeline named '{Requested}'; staying on {Pipeline}",
+                    pipelineName, _renderer.CurrentPipelineName);
+            }
 
             // GPU-side asset start-up belongs here, not in the main-thread
             // Initialize above: the placeholder texture is a GPU resource, so

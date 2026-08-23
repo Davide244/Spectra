@@ -57,6 +57,18 @@ public sealed partial class AssetManager : IDisposable
     private const string DiffuseSlotName = "uDiffuse";
     private const string BaseColorParameter = "uBaseColor";
 
+    // The surface set the deferred geometry pass writes into the G-buffer. Not
+    // read by the forward lit shader, which ignores them by name like any other
+    // unknown uniform; seeded on every material anyway so an existing
+    // .spectramat that predates PBR renders as a plausible surface in both
+    // paths instead of a fully metallic mirror, which is what a zeroed
+    // roughness and a metallic left over from the previous draw would give.
+    private const string RoughnessParameter = "uRoughness";
+    private const string MetallicParameter = "uMetallic";
+    private const string AmbientOcclusionParameter = "uAmbientOcclusion";
+    private const string EmissiveParameter = "uEmissive";
+    private const string ShadingModelParameter = "uShadingModel";
+
     private readonly ILogger _logger;
 
     // Guards _textures (and the TextureAsset.LoadFailed / PendingDecodes flags)
@@ -805,6 +817,17 @@ public sealed partial class AssetManager : IDisposable
         // White: the diffuse texture (or the magenta placeholder) shows through
         // unmodulated, which is what makes a fallback surface unmistakable.
         material.SetVector3(BaseColorParameter, Vector3.One);
+
+        // A plain dielectric. These are what a material file overrides to be
+        // anything else, and leaving them unset is not an option: the deferred
+        // geometry pass draws every surface with one program, so an omitted
+        // parameter inherits the previous draw's value rather than a default,
+        // and a wall would wear whatever the last metal it followed was wearing.
+        material.SetFloat(RoughnessParameter, 0.65f);
+        material.SetFloat(MetallicParameter, 0f);
+        material.SetFloat(AmbientOcclusionParameter, 1f);
+        material.SetVector3(EmissiveParameter, Vector3.Zero);
+        material.SetFloat(ShadingModelParameter, 0f);
     }
 
     // Parses the file and turns the definition into a live material. Content

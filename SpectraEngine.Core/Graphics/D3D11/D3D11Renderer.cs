@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D.Compilers;
 using Silk.NET.Direct3D11;
@@ -94,6 +94,18 @@ public sealed unsafe class D3D11Renderer : Renderer
         0f, 1f,    0f,   0f,
         0f, 0f,   0.5f, 0f,
         0f, 0f,   0.5f, 1f);
+
+
+    /// <inheritdoc/>
+    /// <remarks>The 0..1 clip-Z remap above, exposed to backend-neutral code.</remarks>
+    public override Matrix4x4 ClipZCorrection => GlToD3dClipZ;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Identity, because <see cref="GlToD3dClipZ"/> already put clip z in the
+    /// 0..1 range a depth buffer stores. OpenGL needs the other answer.
+    /// </remarks>
+    public override Vector2 DepthToNdcZ => new(1f, 0f);
 
     public override GraphicsBackend Backend => GraphicsBackend.D3D11;
 
@@ -212,6 +224,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         _lineBatch = new D3D11LineBatch(_device, _context, (D3D11ShaderProgram)_debugShader!);
 
         RegisterPipeline(new D3D11ForwardPipeline());
+        RegisterPipeline(new D3D11DeferredPipeline());
         RegisterPipeline(new D3D11WireframePipeline());
 
         DrainDebugMessages();
@@ -222,6 +235,21 @@ public sealed unsafe class D3D11Renderer : Renderer
     {
         pipeline.Initialize(this);
         _pipelines.Add(pipeline);
+    }
+
+    public override bool TrySelectPipeline(string name)
+    {
+        for (int i = 0; i < _pipelines.Count; i++)
+        {
+            if (!string.Equals(_pipelines[i].Name, name, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            _pipelineIndex = i;
+            _logger.LogInformation("Pipeline selected: {Pipeline}", CurrentPipelineName);
+            return true;
+        }
+
+        return false;
     }
 
     public override string NextPipeline()
@@ -480,7 +508,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         foreach (var mesh in _meshes) mesh.Dispose();
         _meshes.Clear();
 
-        ReleaseResolveResources();
+        ReleaseFrameResources();
 
         foreach (var target in _renderTargets)
             target.Dispose();

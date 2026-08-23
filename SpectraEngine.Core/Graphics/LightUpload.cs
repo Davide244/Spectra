@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Numerics;
 
 namespace SpectraEngine.Core.Graphics;
@@ -48,6 +48,40 @@ public static class LightUpload
     /// </remarks>
     public static void Apply(ShaderProgram shader, RenderView view, float ambient)
     {
+        (Vector4[] positions, Vector4[] colors, int count) = Fill(view);
+
+        shader.SetUniform("uLightPositions", positions);
+        shader.SetUniform("uLightColors", colors);
+        shader.SetUniform("uLightCount", count);
+        shader.SetUniform("uAmbient", ambient);
+    }
+
+    /// <summary>
+    /// The same upload, staged into a full-screen pass rather than written to a
+    /// program: the deferred light pass shades every surface in the frame at
+    /// once, so it uploads the lights once instead of once per draw.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="PostPass"/> copies what it is given, which matters here: the
+    /// arrays below are shared scratch that the next call overwrites.
+    /// </remarks>
+    public static void Apply(PostPass pass, RenderView view, float ambient)
+    {
+        (Vector4[] positions, Vector4[] colors, int count) = Fill(view);
+
+        pass.SetUniform("uLightPositions", positions.AsSpan());
+        pass.SetUniform("uLightColors", colors.AsSpan());
+        pass.SetUniform("uLightCount", count);
+        pass.SetUniform("uAmbient", ambient);
+    }
+
+    // Packs the view's lights into the full-length scratch arrays both entry
+    // points upload. Slots past the count are zeroed rather than left stale: an
+    // array uniform must be written whole, and a leftover light from a previous
+    // frame would be inside the array but outside the count, which is invisible
+    // until something reads past the count.
+    private static (Vector4[] Positions, Vector4[] Colors, int Count) Fill(RenderView view)
+    {
         Vector4[] positions = _positions ??= new Vector4[RenderView.MaxLights];
         Vector4[] colors = _colors ??= new Vector4[RenderView.MaxLights];
 
@@ -58,9 +92,6 @@ public static class LightUpload
             colors[i] = i < lights.Length ? lights[i].ColorIntensity : default;
         }
 
-        shader.SetUniform("uLightPositions", positions);
-        shader.SetUniform("uLightColors", colors);
-        shader.SetUniform("uLightCount", lights.Length);
-        shader.SetUniform("uAmbient", ambient);
+        return (positions, colors, lights.Length);
     }
 }

@@ -1,0 +1,21 @@
+// pbr_gold.spectramat -- polished gold, the reference metal.
+//
+// THE FOUR PBR MATERIALS BRACKET THE PARAMETER SPACE RATHER THAN SAMPLING IT:
+// smooth metal, rough metal, smooth dielectric, rough dielectric. Everything a
+// real material does lies between them, so a BRDF regression that changes any
+// one term shows up in at least one of the four.
+//
+// uBaseColor means something different on a metal: it is the reflectance at
+// normal incidence, a measured constant, not a pigment. Gold is the one
+// everybody knows by sight, which is exactly what makes it a good test.
+//
+// The texture is a flat white so the authored colour is what reaches the
+// G-buffer unmodulated. A downloaded PBR set replaces it with a real albedo
+// map and changes nothing else here.
+
+shader = lit
+
+texture uDiffuse   = Textures/white.png, linear, clamp
+color   uBaseColor = #FFE39C
+float   uMetallic  = 1.0
+float   uRoughness = 0.20

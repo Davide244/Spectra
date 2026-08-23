@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Silk.NET.Maths;
 using Silk.NET.OpenGL;
 using Silk.NET.Windowing;
@@ -69,6 +69,7 @@ public class OpenGLRenderer : Renderer
         _lineBatch = new OpenGLLineBatch(_gl);
 
         RegisterPipeline(new ForwardPipeline());
+        RegisterPipeline(new DeferredPipeline());
         RegisterPipeline(new WireframePipeline());
 
         _logger.LogInformation("Renderer initialized (OpenGL, pipeline={Pipeline})", CurrentPipelineName);
@@ -158,6 +159,21 @@ public class OpenGLRenderer : Renderer
     {
         pipeline.Initialize(this);
         _pipelines.Add(pipeline);
+    }
+
+    public override bool TrySelectPipeline(string name)
+    {
+        for (int i = 0; i < _pipelines.Count; i++)
+        {
+            if (!string.Equals(_pipelines[i].Name, name, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            _pipelineIndex = i;
+            _logger.LogInformation("Pipeline selected: {Pipeline}", CurrentPipelineName);
+            return true;
+        }
+
+        return false;
     }
 
     public override string NextPipeline()
@@ -354,7 +370,7 @@ public class OpenGLRenderer : Renderer
         // Before the mesh/texture sweeps below: the triangle and the HDR target
         // are tracked in those lists and this only drops this renderer's
         // references to them.
-        ReleaseResolveResources();
+        ReleaseFrameResources();
 
         foreach (var mesh in _meshes)
             mesh.Dispose();

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Numerics;
 
 namespace SpectraEngine.Core.Scene;
@@ -79,4 +79,56 @@ public sealed class Light
 
     /// <summary>Whether this light contributes at all. A disabled light is collected by nothing.</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// The node rotation that makes a directional light travel along
+    /// <paramref name="travelDirection"/>. A sun wants a direction with a
+    /// negative Y, because that is the way sunlight goes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This exists because euler angles get the sign wrong silently.</b> A
+    /// directional light takes its direction from the node's forward axis, so
+    /// authoring one means picking a yaw and a pitch whose composed +Z axis
+    /// happens to point where the light should go, and the pitch that reads
+    /// like "tilted down" produces a forward axis tilted UP, because the axis
+    /// is the third row of the rotation and rotating +Z about +X by a negative
+    /// angle raises it. The demo's own sun shone upward from below for exactly
+    /// this reason: nothing errors, nothing warns, and the scene is merely
+    /// darker than it should be with the lit side facing away from every camera
+    /// anyone points at it.
+    /// </para>
+    /// <para>
+    /// Stating the direction removes the arithmetic. The roll is unconstrained
+    /// and arbitrary: a directional light is rotationally symmetric about its
+    /// own axis, so any rotation carrying +Z to the direction is as good as any
+    /// other.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException">The direction has no length.</exception>
+    public static Quaternion RotationForDirection(Vector3 travelDirection)
+    {
+        if (travelDirection.LengthSquared() < 1e-12f)
+            throw new ArgumentException("A light direction needs a length.", nameof(travelDirection));
+
+        Vector3 forward = Vector3.Normalize(travelDirection);
+
+        // Any reference that is not parallel to the direction will do; world up
+        // fails exactly for a light pointing straight down, which is the most
+        // likely direction anybody asks for.
+        Vector3 reference = MathF.Abs(forward.Y) > 0.99f ? Vector3.UnitX : Vector3.UnitY;
+        Vector3 right = Vector3.Normalize(Vector3.Cross(reference, forward));
+        Vector3 up = Vector3.Cross(forward, right);
+
+        // Rows, because the engine's convention is row vectors: v * M. The third
+        // row is what a node's world matrix reports as its forward axis, and is
+        // what Scene.CollectLights reads.
+        var basis = new Matrix4x4(
+            right.X, right.Y, right.Z, 0f,
+            up.X, up.Y, up.Z, 0f,
+            forward.X, forward.Y, forward.Z, 0f,
+            0f, 0f, 0f, 1f);
+
+        return Quaternion.CreateFromRotationMatrix(basis);
+    }
 }

@@ -54,7 +54,8 @@ internal sealed record DemoStartupOptions(
     SelfTestSource SelfTestSource,
     TimeSpan? FullscreenCycleInterval = null,
     bool StartInPlayMode = false,
-    bool OffscreenProbe = false)
+    bool OffscreenProbe = false,
+    string? Pipeline = null)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -65,7 +66,8 @@ internal sealed record DemoStartupOptions(
     /// <summary>One line of usage, appended to every argument error.</summary>
     private const string Usage =
         "Usage: SpectraEngine.Executable [opengl|d3d11|d3d12] [--selftest[=true|false]] " +
-        "[--fullscreen-cycle[=seconds]] [--play[=true|false]] [--offscreen-probe[=true|false]].";
+        "[--fullscreen-cycle[=seconds]] [--play[=true|false]] [--offscreen-probe[=true|false]] " +
+        "[--pipeline=<name>].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -91,6 +93,7 @@ internal sealed record DemoStartupOptions(
         bool? selfTest = null;
         bool play = false;
         bool offscreenProbe = false;
+        string? pipeline = null;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -140,6 +143,16 @@ internal sealed record DemoStartupOptions(
                 case "offscreen-probe" or "offscreenprobe":
                     offscreenProbe = ParseBoolean(value, token);
                     continue;
+
+                // Which rendering strategy the run starts on, by name. The
+                // rotation key is fine for a person and useless to an
+                // unattended run, so a pipeline that is never selected is a
+                // pipeline nothing ever gates. Names are not validated here:
+                // the set is the renderer's, it differs per backend, and this
+                // type deliberately knows nothing about either.
+                case "pipeline":
+                    pipeline = ParseName(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -154,7 +167,7 @@ internal sealed record DemoStartupOptions(
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
-                fullscreenCycle, play, offscreenProbe);
+                fullscreenCycle, play, offscreenProbe, pipeline);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -162,12 +175,23 @@ internal sealed record DemoStartupOptions(
                 selfTestEnvironmentValue.Trim(), SelfTestEnvironmentVariable);
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
-                fullscreenCycle, play, offscreenProbe);
+                fullscreenCycle, play, offscreenProbe, pipeline);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
-            fullscreenCycle, play, offscreenProbe);
+            fullscreenCycle, play, offscreenProbe, pipeline);
+    }
+
+    // A switch that takes a name needs one: a bare --pipeline says nothing
+    // about which, and silently meaning "leave it alone" would make a typo in
+    // the name look like a working run of the default pipeline.
+    private static string ParseName(string? value, string origin)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"'{origin}' needs a value, e.g. --pipeline=deferred. {Usage}");
+
+        return value.Trim();
     }
 
     // Aliases mirror the SpectraShade compiler CLI for consistency.

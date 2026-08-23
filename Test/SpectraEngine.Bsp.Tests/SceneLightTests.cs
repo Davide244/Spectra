@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Numerics;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Scene;
@@ -18,6 +18,59 @@ namespace SpectraEngine.Bsp.Tests;
 /// </remarks>
 public sealed class SceneLightTests
 {
+    [Theory]
+    [InlineData(0f, -1f, 0f)]
+    [InlineData(-0.35f, -0.85f, -0.4f)]
+    [InlineData(1f, 0f, 0f)]
+    [InlineData(0.3f, 0.9f, -0.2f)]
+    public void A_directional_light_travels_the_way_it_was_pointed(float x, float y, float z)
+    {
+        // The whole point of the helper: the light goes where the caller said,
+        // with no euler-angle arithmetic in between. This is pinned because the
+        // failure is silent: a sun aimed at the sky lights the underside of
+        // everything and merely looks dim, which is how the demo shipped with
+        // one for as long as it had lights at all.
+        var wanted = Vector3.Normalize(new Vector3(x, y, z));
+
+        var scene = new Scene("directional");
+        SceneNode node = scene.Root.CreateChild("Sun");
+        node.LocalRotation = Light.RotationForDirection(wanted);
+        node.Light = new Light { Kind = LightKind.Directional, Intensity = 1f };
+
+        var view = new RenderView();
+        scene.BuildRenderView(scene.Camera, view);
+
+        view.LightCount.ShouldBe(1);
+        RenderLight light = view.Lights[0];
+        light.IsDirectional.ShouldBeTrue();
+
+        var actual = new Vector3(light.PositionRange.X, light.PositionRange.Y, light.PositionRange.Z);
+        Vector3.Dot(actual, wanted).ShouldBe(1f, 1e-4f,
+            "the collected direction should be the one the caller asked for, not its mirror");
+    }
+
+    [Fact]
+    public void A_light_pointed_straight_down_is_not_a_degenerate_rotation()
+    {
+        // Straight down is both the most likely direction anybody asks a sun
+        // for and the one where the obvious up-reference is parallel to it, so
+        // a cross product against world up collapses to zero and the basis
+        // becomes NaN. It has its own case in the helper; this is the test that
+        // says so.
+        var rotation = Light.RotationForDirection(-Vector3.UnitY);
+
+        float.IsNaN(rotation.X + rotation.Y + rotation.Z + rotation.W).ShouldBeFalse();
+        rotation.Length().ShouldBe(1f, 1e-4f);
+    }
+
+    [Fact]
+    public void A_direction_with_no_length_is_refused()
+    {
+        // Rather than silently producing an arbitrary rotation, which would put
+        // a light somewhere nobody chose.
+        Should.Throw<ArgumentException>(() => Light.RotationForDirection(Vector3.Zero));
+    }
+
     private static SceneNode AddLight(
         Scene scene, string name, Vector3 position, LightKind kind = LightKind.Point, float range = 100f)
     {

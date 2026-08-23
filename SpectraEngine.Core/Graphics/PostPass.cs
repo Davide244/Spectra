@@ -1,4 +1,6 @@
+﻿using System;
 using System.Collections.Generic;
+using System.Numerics;
 
 namespace SpectraEngine.Core.Graphics;
 
@@ -21,10 +23,21 @@ namespace SpectraEngine.Core.Graphics;
 /// descriptor table whose source slot has fallen back to the white placeholder,
 /// and the pass samples white.
 /// </para>
+/// <para>
+/// <b>A pass is meant to be built once and refilled every frame.</b> The staging
+/// maps keep their entries and their array buffers between uses, so the deferred
+/// light pass (which restages a matrix, a handful of scalars and two
+/// eight-element light arrays per frame) allocates nothing after the first one.
+/// </para>
 /// </remarks>
 public sealed class PostPass
 {
     private readonly Dictionary<string, float> _floats = [];
+    private readonly Dictionary<string, int> _ints = [];
+    private readonly Dictionary<string, Vector2> _vec2 = [];
+    private readonly Dictionary<string, Vector3> _vec3 = [];
+    private readonly Dictionary<string, Matrix4x4> _matrices = [];
+    private readonly Dictionary<string, Vector4[]> _vec4Arrays = [];
     private readonly Dictionary<string, (int Unit, Texture Texture)> _textures = [];
 
     public PostPass(ShaderProgram shader)
@@ -39,6 +52,53 @@ public sealed class PostPass
     public PostPass SetUniform(string name, float value)
     {
         _floats[name] = value;
+        return this;
+    }
+
+    /// <summary>Stages an integer uniform.</summary>
+    public PostPass SetUniform(string name, int value)
+    {
+        _ints[name] = value;
+        return this;
+    }
+
+    /// <summary>Stages a 2-vector uniform.</summary>
+    public PostPass SetUniform(string name, Vector2 value)
+    {
+        _vec2[name] = value;
+        return this;
+    }
+
+    /// <summary>Stages a 3-vector uniform.</summary>
+    public PostPass SetUniform(string name, Vector3 value)
+    {
+        _vec3[name] = value;
+        return this;
+    }
+
+    /// <summary>Stages a matrix uniform.</summary>
+    public PostPass SetUniform(string name, Matrix4x4 value)
+    {
+        _matrices[name] = value;
+        return this;
+    }
+
+    /// <summary>
+    /// Stages a <c>vec4</c> array uniform, copying the values into a buffer this
+    /// pass owns.
+    /// </summary>
+    /// <remarks>
+    /// The copy is what makes staging safe: the caller's span is usually a
+    /// scratch buffer that is refilled before this pass ever runs. The buffer is
+    /// reused whenever the length is unchanged, which for a light array is
+    /// always.
+    /// </remarks>
+    public PostPass SetUniform(string name, ReadOnlySpan<Vector4> values)
+    {
+        if (!_vec4Arrays.TryGetValue(name, out Vector4[]? buffer) || buffer.Length != values.Length)
+            _vec4Arrays[name] = buffer = new Vector4[values.Length];
+
+        values.CopyTo(buffer);
         return this;
     }
 
@@ -57,6 +117,16 @@ public sealed class PostPass
     {
         foreach ((string name, float value) in _floats)
             shader.SetUniform(name, value);
+        foreach ((string name, int value) in _ints)
+            shader.SetUniform(name, value);
+        foreach ((string name, Vector2 value) in _vec2)
+            shader.SetUniform(name, value);
+        foreach ((string name, Vector3 value) in _vec3)
+            shader.SetUniform(name, value);
+        foreach ((string name, Matrix4x4 value) in _matrices)
+            shader.SetUniform(name, value);
+        foreach ((string name, Vector4[] values) in _vec4Arrays)
+            shader.SetUniform(name, values);
         foreach ((string name, (int unit, Texture texture)) in _textures)
             shader.SetTexture(name, unit, texture);
     }

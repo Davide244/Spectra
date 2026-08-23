@@ -111,6 +111,7 @@ try
         // the mover exercised without a human at the keyboard.
         StartInPlayMode = options.StartInPlayMode,
         RunOffscreenProbe = options.OffscreenProbe,
+        StartupPipeline = options.Pipeline,
     };
 
     // The fullscreen-cycle harness, when asked for: a driver thread that hits

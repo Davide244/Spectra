@@ -1,9 +1,10 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
 using SpectraEngine.Core.Graphics.Shaders;
 using System;
 using System.IO;
+using System.Numerics;
 
 namespace SpectraEngine.Core.Graphics;
 
@@ -486,17 +487,180 @@ public abstract class Renderer
     /// <summary>The shared clip-space triangle, for tests that drive their own shader over it.</summary>
     internal Mesh EnsureFullscreenTriangleForTest() => EnsureFullscreenTriangle();
 
-    /// <summary>Frees the HDR target and the resolve's own resources. Render thread.</summary>
-    protected void ReleaseResolveResources()
+    /// <summary>
+    /// Frees the intermediate targets and the shared full-screen machinery: the
+    /// HDR target, the G-buffer, and the resolve's and light pass's own
+    /// resources. Render thread, before the device goes away.
+    /// </summary>
+    protected void ReleaseFrameResources()
     {
         if (_sceneTarget is not null)
         {
             DestroyRenderTarget(_sceneTarget);
             _sceneTarget = null;
         }
+
+        _gbuffer?.Dispose();
+        _gbuffer = null;
+
         _fullscreenTriangle = null;
         _resolveShader = null;
         _resolvePass = null;
+        _gbufferShader = null;
+        _lightShader = null;
+        _lightPass = null;
+    }
+
+    // ---- The deferred path -------------------------------------------------
+
+    private GBuffer? _gbuffer;
+    private ShaderProgram? _gbufferShader;
+    private ShaderProgram? _lightShader;
+    private PostPass? _lightPass;
+
+    /// <summary>
+    /// Multiplied into a GL-convention projection matrix to produce this
+    /// backend's clip Z. Identity on OpenGL, the 0..1 remap on both D3D
+    /// backends.
+    /// </summary>
+    public virtual Matrix4x4 ClipZCorrection => Matrix4x4.Identity;
+
+    /// <summary>
+    /// Scale and bias turning a depth texel back into this backend's NDC z.
+    /// </summary>
+    /// <remarks>
+    /// <b>The same fact as <see cref="ClipZCorrection"/>, stated for the way
+    /// back.</b> A depth buffer always stores 0..1 on every API; what differs is
+    /// what the projection put there. Where clip z runs -1..1 the texel must be
+    /// scaled back out, and where it already runs 0..1 it is used as it stands.
+    /// Getting this wrong reconstructs a world position on the right ray at the
+    /// wrong distance, so the picture stays plausible and only the lighting is
+    /// wrong, which is the reason it is a named property with a test rather than
+    /// two magic numbers inside a pipeline.
+    /// </remarks>
+    public virtual Vector2 DepthToNdcZ => new(2f, -1f);
+
+    /// <summary>The deferred G-buffer, once one has been created.</summary>
+    public GBuffer? GBuffer => _gbuffer;
+
+    /// <summary>
+    /// Creates or resizes the G-buffer, or returns null when there is nothing
+    /// to render into.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Sized to the window, NOT to <see cref="FrameTarget"/>, and that is a
+    /// correctness rule rather than a simplification.</b> A frame can render its
+    /// pipeline more than once into differently sized targets (the offscreen
+    /// probe does exactly that), and following the target would resize the
+    /// G-buffer partway through recording a command list. On D3D12 a resize
+    /// releases the old resource, and releasing one the open list already
+    /// references is a use-after-free that the debug layer reports as
+    /// "deleted prior to closing the command list".
+    /// </para>
+    /// <para>
+    /// The cost is that a pass rendering into a differently sized target samples
+    /// a window-sized G-buffer through 0..1 coordinates, so the picture is
+    /// rescaled rather than re-rendered. That is only ever a probe, which is
+    /// asserting that nothing went wrong rather than looking at the image.
+    /// </para>
+    /// </remarks>
+    internal GBuffer? EnsureGBuffer()
+    {
+        Vector2D<int> size = FramebufferSize;
+        int width = size.X;
+        int height = size.Y;
+
+        // Minimised, or mid-resize. Nothing is creatable and the frame has
+        // nothing to show anyway.
+        if (width <= 0 || height <= 0) return null;
+
+        if (_gbuffer is null)
+            _gbuffer = new GBuffer(this, width, height);
+        else
+            _gbuffer.Resize(width, height);
+
+        return _gbuffer;
+    }
+
+    /// <summary>
+    /// The program every surface is drawn with during a deferred geometry pass.
+    /// </summary>
+    /// <remarks>
+    /// <b>The geometry pass overrides the material's own shader.</b> A material
+    /// names a program that shades and returns a colour, which is exactly what a
+    /// G-buffer pass must not do; what it needs from the material is the
+    /// parameter set, which <see cref="Material.ApplyTo"/> hands over. The cost
+    /// is that a material cannot yet customise its own G-buffer write, and the
+    /// benefit is that every <c>.spectramat</c> written before deferred existed
+    /// renders in both paths with no migration.
+    /// </remarks>
+    internal ShaderProgram EnsureGBufferShader() =>
+        _gbufferShader ??= BaseShaders.GBufferFillPath is { } path
+            ? CreateShaderFromFile(path)
+            : CreateShaderFromSource(BaseShaders.GBufferFill);
+
+    /// <summary>
+    /// Shades the whole G-buffer into <see cref="FrameTarget"/> in one
+    /// full-screen pass, and puts the sky back where no geometry was drawn.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Shared by all three backends rather than written once per pipeline: the
+    /// only thing that differs is when a program may be bound, and
+    /// <see cref="DrawFullscreen"/> already owns that difference.
+    /// </para>
+    /// <para>
+    /// One pass over the screen for up to <see cref="RenderView.MaxLights"/>
+    /// lights. That cap is the forward path's cap carried over, not a property
+    /// of deferred: the version that removes it draws a bounding volume per
+    /// light with additive blending, which needs blend state no backend has yet.
+    /// </para>
+    /// </remarks>
+    internal void DrawDeferredLightPass(GBuffer gbuffer, RenderView view, Scene.Camera camera, float ambient)
+    {
+        _lightShader ??= BaseShaders.DeferredLightPath is { } path
+            ? CreateShaderFromFile(path)
+            : CreateShaderFromSource(BaseShaders.DeferredLight);
+        _lightPass ??= new PostPass(_lightShader);
+
+        // The transform the geometry pass actually used, inverted. Built from
+        // the same two matrices and the same correction the geometry pass
+        // uploads, so a change to either cannot leave the reconstruction
+        // pointing at a different frustum than the one that was rasterised.
+        Matrix4x4 worldToClip = camera.View * camera.Projection * ClipZCorrection;
+        if (!Matrix4x4.Invert(worldToClip, out Matrix4x4 clipToWorld))
+        {
+            // A singular view-projection means a degenerate camera, which is a
+            // frame with nothing to shade rather than something to throw over.
+            _logger.LogWarning("Deferred light pass skipped: the view-projection matrix is not invertible.");
+            return;
+        }
+
+        _lightPass
+            .SetUniform("uInverseViewProjection", clipToWorld)
+            .SetUniform("uCameraPosition", camera.Position)
+            .SetUniform("uSkyColor", new Vector3(ClearColors.Sky.X, ClearColors.Sky.Y, ClearColors.Sky.Z))
+            .SetUniform("uDepthToNdc", DepthToNdcZ)
+            .SetTexture("uAlbedoAo", 0, gbuffer.Albedo)
+            .SetTexture("uNormalRoughness", 1, gbuffer.NormalRoughness)
+            .SetTexture("uMaterialData", 2, gbuffer.MaterialData)
+            .SetTexture("uEmissive", 3, gbuffer.Emissive)
+            .SetTexture("uDepth", 4, gbuffer.Depth);
+
+        LightUpload.Apply(_lightPass, view, ambient);
+
+        // Keep, not clear: the triangle covers every pixel and writes the sky
+        // itself where the depth buffer says nothing was drawn.
+        BeginPass(FrameTarget, PassClear.Keep);
+        try
+        {
+            DrawFullscreen(_lightPass);
+        }
+        finally
+        {
+            EndPass();
+        }
     }
 
     /// <summary>
@@ -605,6 +769,20 @@ public abstract class Renderer
 
     /// <summary>Cycles to the next registered rendering pipeline. Returns the new pipeline's name.</summary>
     public abstract string NextPipeline();
+
+    /// <summary>
+    /// Switches to the pipeline whose <c>Name</c> matches
+    /// <paramref name="name"/>, case-insensitively. Returns false and changes
+    /// nothing when no pipeline has that name.
+    /// </summary>
+    /// <remarks>
+    /// <b>Selecting by name is what lets an unattended run gate a pipeline.</b>
+    /// The rotation key is fine for a person at a keyboard and useless to a
+    /// smoke run or an offscreen probe, which is a real gap on D3D: the failures
+    /// that matter there are debug-layer messages during a frame nobody
+    /// watches, and a pipeline that is never selected is never checked.
+    /// </remarks>
+    public abstract bool TrySelectPipeline(string name);
 
     public abstract Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes);
 

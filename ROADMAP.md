@@ -435,7 +435,7 @@ The scene renders into a half-float target and one full-screen pass turns linear
 
 **Expect the picture to change.** The flat 0.2 ambient and the material base colours were tuned against a clamped pipeline and will want a retune. That is not a bug.
 
-### R5 — Multi-pass plumbing: array uniforms + per-frustum views
+### R5. Multi-pass plumbing: array uniforms ✅ **landed**
 `ShaderProgram` has **no array-uniform overload on any backend today**, so cascade matrices and light arrays are simply not settable — even though SpectraShade already supports array uniforms in the language. Add `ReadOnlySpan<Matrix4x4>` / `ReadOnlySpan<Vector4>` setters, and generalise `Scene.BuildRenderView(Camera, view)` to `BuildView(in Frustum, view)` with the camera overload delegating, plus an engine-owned pool of `RenderView`s (one per pass) — which is also exactly what multi-viewport later needs.
 - **Restrict the first version to `Matrix4x4[]` and `Vector4[]`** and document the `float[]` hazard: HLSL pads every array element to 16 bytes, so a naive span copy of a float array scrambles it. **Depends on** — `F3`. **Size** — **S–M.** **Risk** — LOW–MEDIUM.
 
@@ -447,12 +447,32 @@ Depth-only target from a light-space ortho **fitted to a near slice of the camer
 ### R7 — Cascaded shadow maps
 N=3–4 with per-slice ortho fitting, texel-snap stabilisation (mandatory — the camera is always moving in an open world), and split-boundary blending. Clamp the far cascade to a **shadow distance**, never the camera far plane, or the ortho box grows unboundedly. Atlas first (no array-slice RTV concept yet). **Depends on** — `R6`. **Size** — **M.**
 
-### R8 — Multiple lights
-A `Light` component on `SceneNode` parallel to `MeshRenderer`, collected during `BuildView` into a fixed-capacity, deterministically-ordered `RenderView.Lights` (nearest-N, ties broken by the existing spatial emission order so determinism survives).
-- **State the ceiling honestly:** a global nearest-N list is wrong the moment more than N lights are on screen, and lights will pop as the camera moves. The correct answer is clustered/tiled forward shading, which needs storage buffers that **SpectraShade does not have** — blocked at the language level. Ship global-N; do not pretend it scales. **Depends on** — `R5`. **Size** — **M.**
+### R8. Multiple lights ✅ **landed**, and the arc pivoted to DEFERRED
+A `Light` component on `SceneNode` beside `MeshRenderer`, collected during
+`BuildRenderView` into a fixed-capacity, deterministically-ordered
+`RenderView.Lights` (nearest-N, ties broken by the existing spatial emission
+order so determinism survives).
 
-### R9 — Metallic-roughness PBR with tangents
-`StandardLayout` goes 8 → 12 floats (tangent4 with bitangent sign), and **the CSG mesh builder emits exact, seam-free tangents for the entire static world for free, because `F1`'s Hammer-style per-face u/v axes *are* the tangent frame.** That is strictly better than any derived approximation and matters precisely because tiled brush surfaces dominate the screen. Shading becomes Cook-Torrance GGX + normal mapping — **no language change needed**, every builtin required is already in the table. Screen-space derivative tangents are not an option: `Math.Ddx/Ddy` do not exist in SpectraShade.
+**The plan above said the ceiling was unfixable without storage buffers.
+That was wrong, and the reason is the pivot.** Clustered FORWARD shading needs
+storage buffers that SpectraShade does not have. Deferred does not: the answer
+is a bounding volume drawn per light with additive blending, over a G-buffer
+that was rasterised once. So the engine now has a third pipeline on all three
+backends, and the eight-light array is a stepping stone rather than a ceiling.
+
+What actually landed: a five-attachment G-buffer (`GBuffer`), a geometry pass
+that writes surface properties and knows nothing about lights, and a full-screen
+Cook-Torrance light pass with GGX, height-correlated Smith and Schlick Fresnel.
+Forward stays in the rotation for what deferred structurally cannot do, and
+`--pipeline=<name>` selects either so an unattended run can gate both.
+
+**What still caps lights is BLEND STATE, not the language.** D3D11 never calls
+`OMSetBlendState`, OpenGL never enables `GL_BLEND`, D3D12 hardcodes
+`BlendEnable = 0`. That is `R10`'s work, and it now unblocks two things instead
+of one. **Size** — **M.**
+
+### R9 — Normal mapping and tangents *(the shading half is done)*
+**The BRDF itself shipped with the deferred pipeline**, so what is left here is the vertex format and normal mapping, which is where the risk always was. `StandardLayout` goes 8 → 12 floats (tangent4 with bitangent sign), and **the CSG mesh builder emits exact, seam-free tangents for the entire static world for free, because `F1`'s Hammer-style per-face u/v axes *are* the tangent frame.** That is strictly better than any derived approximation and matters precisely because tiled brush surfaces dominate the screen. Shading becomes Cook-Torrance GGX + normal mapping — **no language change needed**, every builtin required is already in the table. Screen-space derivative tangents are not an option: `Math.Ddx/Ddy` do not exist in SpectraShade.
 - **Depends on** — `F1`, `R2`, `R8`.
 - **Risk** — **MEDIUM–HIGH, and the risk is the vertex format, not the shading.** Changing `StandardLayout` changes every vertex array the CSG pipeline produces, so every equivalence and determinism oracle compares different data; they are structural so they should survive, but any snapshotted vertex data needs deliberate regeneration. **D3D11 bakes input layouts from the default lit shader's VS bytecode at mesh creation**, so the layout change and the shader change must land in the same commit or every D3D11 mesh fails validation. Tangent handedness is the classic silent-wrongness bug — pin the convention in a comment and test it on an asymmetric normal map. **Size** — **L.**
 

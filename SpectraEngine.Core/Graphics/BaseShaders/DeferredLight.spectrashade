@@ -7,14 +7,15 @@
 // lighting was albedo times N dot L, with no specular term of any kind.
 //
 // World position is RECONSTRUCTED from depth rather than read from a G-buffer
-// channel. The pixel's UV gives clip-space xy, the depth buffer gives z, and one
-// inverse view-projection multiply gives the world point. That saves a whole
-// RGBA16F attachment for something already written.
+// channel. The pixel's clip-space xy comes down from the vertex shader, the
+// depth buffer gives z, and one inverse view-projection multiply gives the
+// world point. That saves a whole RGBA16F attachment for something already
+// written.
 //
 // Radiance accumulates over a uniform array of lights, which caps them. That is
 // a stepping stone: the deferred answer is a bounding volume drawn per light
 // with additive blending, which removes the cap entirely and needs no storage
-// buffers. It needs BlendMode.Additive, which does not exist yet.
+// buffers. It needs blend state, which no backend implements yet.
 
 struct VertexInput {
     [Location(0)] vec3 position;
@@ -25,10 +26,21 @@ struct VertexInput {
 struct VertexOutput {
     [Position] vec4 position;
     vec2 uv;
+
+    // Clip-space xy, carried down rather than derived from uv in the fragment
+    // shader. THE TWO ARE NOT THE SAME MAPPING ON BOTH BACKENDS: the
+    // full-screen triangle bakes a V flip into its vertex data on D3D, because
+    // a render target's origin is top-left there and bottom-left on GL. So uv
+    // is correct for SAMPLING the G-buffer on both, and reconstructing clip y
+    // from it would be upside down on exactly one of them, with nothing
+    // reporting an error. Interpolating the clip position itself is the same
+    // number on both by construction.
+    vec2 ndc;
 }
 
 struct FragmentInput {
     vec2 uv;
+    vec2 ndc;
 }
 
 shader DeferredLight {
@@ -36,7 +48,20 @@ shader DeferredLight {
         mat4 uInverseViewProjection;
         vec3 uCameraPosition;
         float uAmbient;
+
+        // What the sky is, for the pixels no geometry wrote. A full-screen
+        // triangle covers every pixel, so the light pass cannot leave the
+        // background alone the way a forward pass does: it has to put the
+        // clear colour back deliberately.
+        vec3 uSkyColor;
         int uLightCount;
+
+        // Turns a sampled depth texel into this backend's NDC z: (2, -1) where
+        // clip z runs -1..1 and (1, 0) where it runs 0..1. A depth BUFFER
+        // always stores 0..1, so on OpenGL the two disagree, and taking the
+        // texel as NDC directly puts every reconstructed position in the wrong
+        // half of the frustum.
+        vec2 uDepthToNdc;
     }
 
     [Binding(1)] cbuffer Lights {
@@ -55,11 +80,20 @@ shader DeferredLight {
         var output = new VertexOutput();
         output.position = vec4(input.position, 1.0);
         output.uv = input.uv;
+        output.ndc = input.position.xy;
         return output;
     }
 
     [Fragment] [Target(0)]
     vec4 FragmentMain(FragmentInput input) {
+        float depth = uDepth.Sample(input.uv).r;
+
+        // Nothing was drawn here. Shading it would read a zeroed normal against
+        // a zeroed albedo, which is black rather than sky.
+        if (depth >= 1.0) {
+            return vec4(uSkyColor, 1.0);
+        }
+
         vec4 albedoAo = uAlbedoAo.Sample(input.uv);
         vec4 normalRoughness = uNormalRoughness.Sample(input.uv);
         vec4 materialData = uMaterialData.Sample(input.uv);
@@ -74,7 +108,7 @@ shader DeferredLight {
         float roughness = Math.Max(normalRoughness.a, 0.04);
         float metallic = materialData.r;
 
-        vec3 worldPosition = ReconstructWorldPosition(input.uv, uDepth.Sample(input.uv).r);
+        vec3 worldPosition = ReconstructWorldPosition(input.ndc, depth);
         vec3 v = Math.Normalize(uCameraPosition - worldPosition);
 
         // Dielectrics reflect about 4% at normal incidence; metals have no
@@ -113,10 +147,10 @@ shader DeferredLight {
         return vec4(total + uEmissive.Sample(input.uv).rgb, 1.0);
     }
 
-    // Clip space back to world space. uv is 0..1 across the screen; clip xy is
-    // -1..1, and depth is already the clip z the projection produced.
-    vec3 ReconstructWorldPosition(vec2 uv, float depth) {
-        vec4 clip = vec4(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, depth, 1.0);
+    // Clip space back to world space. ndc is already -1..1 across the screen;
+    // depth is 0..1 out of the buffer and needs this backend's remap.
+    vec3 ReconstructWorldPosition(vec2 ndc, float depth) {
+        vec4 clip = vec4(ndc.x, ndc.y, depth * uDepthToNdc.x + uDepthToNdc.y, 1.0);
         vec4 world = uInverseViewProjection * clip;
         return world.xyz / world.w;
     }
@@ -144,13 +178,19 @@ shader DeferredLight {
         float denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
         float d = a2 / Math.Max(3.14159265 * denom * denom, 0.0000001);
 
-        // Smith visibility, height-correlated, already divided by the BRDF's
-        // 4 (N.L)(N.V) denominator. Folding them together is both cheaper and
-        // better conditioned than computing G and dividing afterwards.
-        float k = a * 0.5;
-        float visV = ndotv * (1.0 - k) + k;
-        float visL = ndotl * (1.0 - k) + k;
-        float vis = 0.25 / Math.Max(visV * visL, 0.0000001);
+        // Smith visibility, HEIGHT-CORRELATED (Heitz 2014), already divided by
+        // the BRDF's 4 (N.L)(N.V) denominator. Folding the two together is both
+        // cheaper and better conditioned than computing G and dividing after.
+        //
+        // The two sqrts are what separates this from Schlick's k approximation,
+        // which is the version most tutorials carry. They buy the correlation
+        // between the shadowing and masking terms, and the difference shows
+        // exactly where a smooth surface turns away from the viewer: the
+        // uncorrelated form overestimates there and rings the silhouette with a
+        // bright rim that is easy to mistake for a working Fresnel.
+        float lambdaV = ndotl * Math.Sqrt(ndotv * ndotv * (1.0 - a2) + a2);
+        float lambdaL = ndotv * Math.Sqrt(ndotl * ndotl * (1.0 - a2) + a2);
+        float vis = 0.5 / Math.Max(lambdaV + lambdaL, 0.0000001);
 
         // Schlick's Fresnel.
         float fresnelWeight = Math.Pow(1.0 - vdoth, 5.0);

@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging.Abstractions;
+﻿using Microsoft.Extensions.Logging.Abstractions;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.Shaders;
 using System;
@@ -33,6 +33,10 @@ internal sealed class CompilingRenderer : Renderer
     public override string CurrentPipelineName => "Compiling";
 
     public override string NextPipeline() => "Compiling";
+
+    // One pipeline, and it is the one already running.
+    public override bool TrySelectPipeline(string name) =>
+        string.Equals(name, "Compiling", StringComparison.OrdinalIgnoreCase);
 
     public override Mesh CreateMesh(
         ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)

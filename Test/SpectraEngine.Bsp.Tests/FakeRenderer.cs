@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Silk.NET.Maths;
 using Microsoft.Extensions.Logging.Abstractions;
 using SpectraEngine.Core.Bsp;
@@ -125,6 +125,10 @@ internal sealed class FakeRenderer : Renderer
     public override string CurrentPipelineName => "Fake";
 
     public override string NextPipeline() => "Fake";
+
+    // One pipeline, and it is the one already running.
+    public override bool TrySelectPipeline(string name) =>
+        string.Equals(name, "Fake", StringComparison.OrdinalIgnoreCase);
 
     public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
     {

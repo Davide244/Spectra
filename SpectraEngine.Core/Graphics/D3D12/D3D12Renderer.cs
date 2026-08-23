@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D.Compilers;
 using Silk.NET.Direct3D12;
@@ -171,6 +171,18 @@ public sealed unsafe class D3D12Renderer : Renderer
         0f, 0f, 0.5f, 0f,
         0f, 0f, 0.5f, 1f);
 
+
+    /// <inheritdoc/>
+    /// <remarks>The 0..1 clip-Z remap above, exposed to backend-neutral code.</remarks>
+    public override Matrix4x4 ClipZCorrection => GlToD3dClipZ;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Identity, because <see cref="GlToD3dClipZ"/> already put clip z in the
+    /// 0..1 range a depth buffer stores. OpenGL needs the other answer.
+    /// </remarks>
+    public override Vector2 DepthToNdcZ => new(1f, 0f);
+
     public override GraphicsBackend Backend => GraphicsBackend.D3D12;
 
     /// <summary>D3D12 creates its own device, so the window must not bring up an OpenGL context.</summary>
@@ -245,6 +257,7 @@ public sealed unsafe class D3D12Renderer : Renderer
             TextureFilter.Nearest, TextureWrap.Repeat);
 
         RegisterPipeline(new D3D12ForwardPipeline());
+        RegisterPipeline(new D3D12DeferredPipeline());
         RegisterPipeline(new D3D12WireframePipeline());
 
         DrainDebugMessages();
@@ -486,6 +499,21 @@ public sealed unsafe class D3D12Renderer : Renderer
     {
         pipeline.Initialize(this);
         _pipelines.Add(pipeline);
+    }
+
+    public override bool TrySelectPipeline(string name)
+    {
+        for (int i = 0; i < _pipelines.Count; i++)
+        {
+            if (!string.Equals(_pipelines[i].Name, name, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            _pipelineIndex = i;
+            _logger.LogInformation("Pipeline selected: {Pipeline}", CurrentPipelineName);
+            return true;
+        }
+
+        return false;
     }
 
     public override string NextPipeline()
@@ -784,6 +812,12 @@ public sealed unsafe class D3D12Renderer : Renderer
             // it is undefined: the debug layer reports it, a shipping build does
             // not, and the picture is wrong on some hardware and fine on others.
             offscreen.TransitionColor(list, ResourceStates.RenderTarget);
+            // And the same for depth, which the deferred light pass samples
+            // between geometry passes. Symmetric with EndPassCore, so a target
+            // is always left readable and always made writable again; the
+            // alternative is a barrier emitted from inside whatever binds the
+            // texture, which is one path out of several and easy to miss.
+            offscreen.TransitionDepth(list, ResourceStates.DepthWrite);
             _currentTargetState = new D3D12TargetState(
                 offscreen.ColorFormat, 1, offscreen.DepthViewFormat, 1);
 
@@ -873,6 +907,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         // from inside a draw call, which is both harder to reason about and
         // easy to forget on one of the paths that binds a texture.
         offscreen.TransitionColor(list, ResourceStates.PixelShaderResource);
+        offscreen.TransitionDepth(list, ResourceStates.PixelShaderResource);
     }
 
     /// <summary>
@@ -1479,7 +1514,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         foreach (var mesh in _meshes) mesh.Dispose();
         _meshes.Clear();
 
-        ReleaseResolveResources();
+        ReleaseFrameResources();
 
         foreach (var target in _renderTargets)
             target.Dispose();
