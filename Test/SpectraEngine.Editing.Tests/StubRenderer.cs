@@ -55,6 +55,9 @@ internal sealed class StubRenderer : Renderer
     {
     }
 
+    protected override void DrawFullscreen(PostPass pass)
+        => throw new NotSupportedException($"{GetType().Name} draws nothing.");
+
     public override RenderTarget CreateRenderTarget(in RenderTargetDesc desc)
         => throw new NotSupportedException($"{GetType().Name} creates no GPU resources.");
 

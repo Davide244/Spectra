@@ -1,0 +1,67 @@
+// PostResolve.spectrashade — the one place linear light becomes a display image.
+//
+// The scene renders into a half-float target carrying linear radiance with no
+// upper bound. This pass reads that, applies exposure, runs a tone curve that
+// maps [0, inf) into [0, 1], and writes the result to a target whose FORMAT
+// does the sRGB encode in hardware. There is deliberately no pow() here: the
+// encode belongs to the render target, exactly as the texture decode belongs to
+// the sampler, and doing it here as well would encode twice and wash the whole
+// picture out.
+//
+// The vertex input declares all three standard attributes even though only two
+// are used. D3D11 builds every mesh's input layout from the lit shader's vertex
+// bytecode, so a lean layout is rejected at mesh creation, nowhere near here.
+//
+// Note for R11 (FXAA): SpectraShade has no texture-size query, so a filter that
+// needs neighbouring texels will have to take a vec2 texel size through the
+// cbuffer below and the host will have to update it on every resize.
+
+struct VertexInput {
+    [Location(0)] vec3 position;
+    [Location(1)] vec3 normal;
+    [Location(2)] vec2 uv;
+}
+
+struct VertexOutput {
+    [Position] vec4 position;
+    vec2 uv;
+}
+
+struct FragmentInput {
+    vec2 uv;
+}
+
+shader PostResolve {
+    [Binding(0)] cbuffer Resolve {
+        float uExposure;
+    }
+
+    [Binding(0)] sampler2D uSource;
+
+    [Vertex]
+    VertexOutput VertexMain(VertexInput input) {
+        var output = new VertexOutput();
+        // Already in clip space: the triangle is authored there, so there is no
+        // model, view or projection, and no GL-to-D3D depth remap either.
+        output.position = vec4(input.position, 1.0);
+        output.uv = input.uv;
+        return output;
+    }
+
+    [Fragment] [Target(0)]
+    vec4 FragmentMain(FragmentInput input) {
+        vec3 color = uSource.Sample(input.uv).rgb * uExposure;
+
+        // Narkowicz's ACES fit. Multiply, add and divide only: no pow, so it
+        // costs the same on every backend and cannot trip over a missing
+        // builtin. Max against zero first because a linear buffer can hold
+        // small negatives after filtering, and the rational curve turns those
+        // into bright artefacts rather than black.
+        color = Math.Max(color, vec3(0.0, 0.0, 0.0));
+        vec3 numerator = color * (2.51 * color + 0.03);
+        vec3 denominator = color * (2.43 * color + 0.59) + 0.14;
+        vec3 mapped = numerator / denominator;
+
+        return vec4(Math.Clamp(mapped, vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0)), 1.0);
+    }
+}

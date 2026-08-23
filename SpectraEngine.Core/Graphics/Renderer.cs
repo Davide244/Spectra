@@ -291,6 +291,139 @@ public abstract class Renderer
     /// <summary>Recorded by a backend's debug-layer drain. Render thread only.</summary>
     private protected void NoteDebugLayerErrors(int count) => DebugLayerErrorCount += count;
 
+    // ---- HDR and the resolve -----------------------------------------------
+
+    private RenderTarget? _sceneTarget;
+    private Mesh? _fullscreenTriangle;
+    private ShaderProgram? _resolveShader;
+    private PostPass? _resolvePass;
+
+    /// <summary>
+    /// Whether the scene renders into a half-float target and is tone-mapped on
+    /// the way to the window, rather than being written to the window directly.
+    /// </summary>
+    /// <remarks>
+    /// On by default: with it off the engine is back to clamping every value
+    /// above 1 at the moment it is shaded, which is the thing exposure and a
+    /// tone curve exist to avoid. The switch exists so a backend or a driver
+    /// that cannot do it has somewhere to fall back to, and so a bug here can
+    /// be bisected without a rebuild.
+    /// </remarks>
+    public bool HdrEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Linear multiplier applied to scene radiance before the tone curve. 1 is
+    /// neutral; higher opens the exposure.
+    /// </summary>
+    public float Exposure { get; set; } = 1f;
+
+    /// <summary>The scene's HDR target, once one has been created. Null while <see cref="HdrEnabled"/> is off.</summary>
+    public RenderTarget? SceneTarget => _sceneTarget;
+
+    /// <summary>
+    /// Creates or resizes the HDR target the scene renders into, or returns null
+    /// when there is nothing sensible to render into.
+    /// </summary>
+    /// <remarks>
+    /// Sized to the window, deliberately. <c>Engine</c> seeds the camera's
+    /// aspect ratio from the framebuffer before building the culling frustum,
+    /// and the pipeline sets it again from the pass; a scene target of a
+    /// different shape would make those two disagree and the frustum would stop
+    /// matching what is drawn.
+    /// </remarks>
+    protected RenderTarget? EnsureSceneTarget()
+    {
+        Vector2D<int> size = FramebufferSize;
+        // Minimised, or mid-resize. A zero-sized target is not creatable and the
+        // frame has nothing to show anyway; the caller renders straight to the
+        // window instead of resolving.
+        if (size.X <= 0 || size.Y <= 0) return null;
+
+        if (_sceneTarget is null)
+        {
+            _sceneTarget = CreateRenderTarget(new RenderTargetDesc(
+                size.X, size.Y, TextureFormat.Rgba16Float, TextureColorSpace.Linear));
+        }
+        else
+        {
+            _sceneTarget.Resize(size.X, size.Y);
+        }
+        return _sceneTarget;
+    }
+
+    /// <summary>The shared clip-space triangle every full-screen pass draws.</summary>
+    protected Mesh EnsureFullscreenTriangle() =>
+        _fullscreenTriangle ??= CreateMesh(
+            FullscreenTriangle.BuildVertices(Backend),
+            FullscreenTriangle.Indices,
+            VertexAttribute.StandardLayout);
+
+    /// <summary>
+    /// Draws <paramref name="source"/> to <paramref name="output"/> through the
+    /// tone-mapping resolve. <paramref name="output"/> null means the window.
+    /// </summary>
+    protected void ResolveTo(Texture source, RenderTarget? output, Scene.Scene? scene)
+    {
+        _resolveShader ??= BaseShaders.PostResolvePath is { } path
+            ? CreateShaderFromFile(path)
+            : CreateShaderFromSource(BaseShaders.PostResolve);
+        _resolvePass ??= new PostPass(_resolveShader);
+
+        _resolvePass
+            .SetUniform("uExposure", Exposure)
+            .SetTexture("uSource", 0, source);
+
+        // Keep, not clear: the triangle covers every pixel, so clearing would be
+        // work with no observable effect.
+        BeginPass(output, PassClear.Keep);
+        try
+        {
+            DrawFullscreen(_resolvePass);
+
+            // The overlay rides along in the same pass, on top of the resolved
+            // image and outside the tone curve. See DrawOverlay for why it must
+            // not go through the scene's pass.
+            if (scene is not null && DebugDraw.VertexCount > 0)
+                FlushDebugDrawCore(scene.Camera);
+        }
+        finally
+        {
+            EndPass();
+        }
+    }
+
+    /// <summary>
+    /// Draws the full-screen triangle with <paramref name="pass"/>'s program and
+    /// values, with depth testing off and solid fill.
+    /// </summary>
+    /// <remarks>
+    /// Abstract rather than shared because the order of <c>Use()</c> and the
+    /// uniform writes differs per backend, and because each has its own ambient
+    /// raster state to neutralise. See <see cref="PostPass"/>.
+    /// </remarks>
+    protected abstract void DrawFullscreen(PostPass pass);
+
+    /// <summary>
+    /// Runs one resolve, for tests. Internal because nothing in a game drives a
+    /// resolve directly, and because the orientation of a full-screen pass is
+    /// not observable any other way: it produces no error when it is wrong, only
+    /// an upside-down picture.
+    /// </summary>
+    internal void ResolveForTest(Texture source, RenderTarget? output) => ResolveTo(source, output, null);
+
+    /// <summary>Frees the HDR target and the resolve's own resources. Render thread.</summary>
+    protected void ReleaseResolveResources()
+    {
+        if (_sceneTarget is not null)
+        {
+            DestroyRenderTarget(_sceneTarget);
+            _sceneTarget = null;
+        }
+        _fullscreenTriangle = null;
+        _resolveShader = null;
+        _resolvePass = null;
+    }
+
     /// <summary>
     /// Draws the frame's accumulated <see cref="DebugDraw"/> lines with depth
     /// testing off. Called inside an already-open pass.

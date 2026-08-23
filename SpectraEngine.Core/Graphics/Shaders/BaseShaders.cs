@@ -14,12 +14,16 @@ public static class BaseShaders
 {
     private const string LitFileName = "Lit.spectrashade";
     private const string DebugLineFileName = "DebugLine.spectrashade";
+    private const string PostResolveFileName = "PostResolve.spectrashade";
 
     /// <summary>The built-in lit shader — diffuse + ambient from one directional light, modulated by a diffuse texture.</summary>
     public static string Lit => ReadEmbedded(LitFileName);
 
     /// <summary>The unlit per-vertex-coloured shader used by the debug-draw renderer.</summary>
     public static string DebugLine => ReadEmbedded(DebugLineFileName);
+
+    /// <summary>The tone-mapping resolve: the one place linear light becomes a display image.</summary>
+    public static string PostResolve => ReadEmbedded(PostResolveFileName);
 
     /// <summary>
     /// Resolves the absolute path of <paramref name="fileName"/> on disk if the
@@ -39,6 +43,9 @@ public static class BaseShaders
 
     /// <summary>Source-file path for <see cref="DebugLine"/>, if locatable on disk.</summary>
     public static string? DebugLinePath => TryResolveSourcePath(DebugLineFileName);
+
+    /// <summary>Source-file path for <see cref="PostResolve"/>, if locatable on disk.</summary>
+    public static string? PostResolvePath => TryResolveSourcePath(PostResolveFileName);
 
     private static string ReadEmbedded(string fileName)
     {

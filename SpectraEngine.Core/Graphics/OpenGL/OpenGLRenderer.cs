@@ -195,10 +195,38 @@ public class OpenGLRenderer : Renderer
             _pipelines[_pipelineIndex].Execute(context);
         }
 
-        FrameTarget = null;
+        RenderTarget? sceneTarget = HdrEnabled ? EnsureSceneTarget() : null;
+        FrameTarget = sceneTarget;
         _pipelines[_pipelineIndex].Execute(context);
 
-        DrawOverlay(scene);
+        if (sceneTarget is null)
+        {
+            // No HDR: the pipeline already drew straight to the window, so the
+            // overlay just needs its own pass on top.
+            DrawOverlay(scene);
+            return;
+        }
+
+        ResolveTo(sceneTarget.ColorTexture, null, scene);
+    }
+
+    protected override void DrawFullscreen(PostPass pass)
+    {
+        GL gl = _gl!;
+        Mesh triangle = EnsureFullscreenTriangle();
+
+        // Both are ambient state somebody else set: WireframePipeline leaves
+        // polygon mode on Line, and depth testing is on for the scene.
+        gl.Disable(EnableCap.DepthTest);
+        gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Fill);
+
+        // Use FIRST on this backend: glUniform writes into the active program,
+        // so staging before it would write into whatever was bound last.
+        pass.Shader.Use();
+        pass.ApplyTo(pass.Shader);
+        triangle.Draw();
+
+        gl.Enable(EnableCap.DepthTest);
     }
 
     // The sRGB fallback is what "the back buffer" means on this backend when
@@ -314,6 +342,11 @@ public class OpenGLRenderer : Renderer
 
         if (_gl is not null) _srgbTarget?.Dispose(_gl);
         _srgbTarget = null;
+
+        // Before the mesh/texture sweeps below: the triangle and the HDR target
+        // are tracked in those lists and this only drops this renderer's
+        // references to them.
+        ReleaseResolveResources();
 
         foreach (var mesh in _meshes)
             mesh.Dispose();

@@ -555,10 +555,14 @@ public sealed unsafe class D3D12Renderer : Renderer
             _pipelines[_pipelineIndex].Execute(context);
         }
 
-        FrameTarget = null;
+        RenderTarget? sceneTarget = HdrEnabled ? EnsureSceneTarget() : null;
+        FrameTarget = sceneTarget;
         _pipelines[_pipelineIndex].Execute(context);
 
-        DrawOverlay(scene);
+        if (sceneTarget is null)
+            DrawOverlay(scene);
+        else
+            ResolveTo(sceneTarget.ColorTexture, null, scene);
 
         Transition(list, (ID3D12Resource*)_backBuffers[_frameIndex].Handle,
             ResourceStates.RenderTarget, ResourceStates.Present);
@@ -872,6 +876,37 @@ public sealed unsafe class D3D12Renderer : Renderer
             &guid, (void**)&res));
         return ComOwnership.Own(res);
     }
+
+    protected override void DrawFullscreen(PostPass pass)
+    {
+        Mesh triangle = EnsureFullscreenTriangle();
+
+        // Fill and depth are ambient here too, but on this backend they are
+        // baked into the pipeline state rather than set on the context, so a
+        // stale value cannot return a wrongly-cached PSO -- only a correctly
+        // compiled one for the wrong state. Both are keys of D3D12PsoKey.
+        FillMode previousFill = CurrentFillMode;
+        DepthMode previousDepth = CurrentDepthMode;
+        CurrentFillMode = FillMode.Solid;
+        CurrentDepthMode = DepthMode.None;
+
+        // Use LAST, as on D3D11: uniforms go into constant shadows that Use
+        // uploads. Calling Use first would also clear the pending texture table,
+        // and the pass would then sample the white fallback.
+        pass.ApplyTo(pass.Shader);
+        pass.Shader.Use();
+        triangle.Draw();
+
+        CurrentFillMode = previousFill;
+        CurrentDepthMode = previousDepth;
+    }
+
+    /// <summary>
+    /// Depth state for the next mesh draw. Ambient, like <see cref="CurrentFillMode"/>,
+    /// and safe for the same reason: it is part of the pipeline-state key, so a
+    /// stale value cannot hand back a pipeline compiled for different state.
+    /// </summary>
+    internal DepthMode CurrentDepthMode { get; set; } = DepthMode.TestWrite;
 
     internal void SetViewportAndScissor(int width, int height)
     {
@@ -1362,6 +1397,8 @@ public sealed unsafe class D3D12Renderer : Renderer
 
         foreach (var mesh in _meshes) mesh.Dispose();
         _meshes.Clear();
+
+        ReleaseResolveResources();
 
         foreach (var target in _renderTargets)
             target.Dispose();

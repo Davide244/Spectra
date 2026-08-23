@@ -255,10 +255,38 @@ public sealed unsafe class D3D11Renderer : Renderer
             _pipelines[_pipelineIndex].Execute(ctx);
         }
 
-        FrameTarget = null;
+        RenderTarget? sceneTarget = HdrEnabled ? EnsureSceneTarget() : null;
+        FrameTarget = sceneTarget;
         _pipelines[_pipelineIndex].Execute(ctx);
 
-        DrawOverlay(scene);
+        if (sceneTarget is null)
+        {
+            DrawOverlay(scene);
+            return;
+        }
+
+        ResolveTo(sceneTarget.ColorTexture, null, scene);
+    }
+
+    protected override void DrawFullscreen(PostPass pass)
+    {
+        var context = (ID3D11DeviceContext*)_context.Handle;
+        Mesh triangle = EnsureFullscreenTriangle();
+
+        // Depth off, and solid fill: D3D11WireframePipeline restores its OWN
+        // solid rasterizer object rather than the renderer's, so the state here
+        // is whatever the last pipeline left.
+        context->OMSetDepthStencilState((ID3D11DepthStencilState*)_overlayDepth.Handle, 0);
+        context->RSSetState((ID3D11RasterizerState*)_solidRasterizer.Handle);
+
+        // Use LAST on this backend: SetUniform writes CPU-side constant shadows
+        // and Use is what uploads them. The opposite of OpenGL, which is why
+        // this method is per-backend at all.
+        pass.ApplyTo(pass.Shader);
+        pass.Shader.Use();
+        triangle.Draw();
+
+        context->OMSetDepthStencilState((ID3D11DepthStencilState*)_defaultDepth.Handle, 0);
     }
 
     protected override void BeginPassCore(RenderTarget? target, in PassClear clear)
@@ -417,6 +445,8 @@ public sealed unsafe class D3D11Renderer : Renderer
 
         foreach (var mesh in _meshes) mesh.Dispose();
         _meshes.Clear();
+
+        ReleaseResolveResources();
 
         foreach (var target in _renderTargets)
             target.Dispose();

@@ -80,6 +80,11 @@ internal sealed class FakeRenderer : Renderer
 
     protected override void FlushDebugDrawCore(SpectraEngine.Core.Scene.Camera camera) => OverlayFlushes++;
 
+    /// <summary>Full-screen passes this renderer was asked to draw.</summary>
+    public int FullscreenDraws { get; private set; }
+
+    protected override void DrawFullscreen(PostPass pass) => FullscreenDraws++;
+
     protected override void EndPassCore(RenderTarget? target) => OpenPasses--;
 
     public override RenderTarget CreateRenderTarget(in RenderTargetDesc desc)
