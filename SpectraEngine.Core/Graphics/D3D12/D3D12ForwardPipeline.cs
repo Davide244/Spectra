@@ -26,35 +26,29 @@ public sealed unsafe class D3D12ForwardPipeline : ID3D12RenderPipeline
     public void Execute(in D3D12RenderContext context)
     {
         var renderer = _renderer!;
-        var list = renderer.CurrentList;
         renderer.CurrentFillMode = FillMode.Solid;
 
-        // Latched on the main thread by the engine — GLFW forbids querying the
-        // window's framebuffer size from this (render) thread.
-        Vector2D<int> size = context.Renderer.FramebufferSize;
-        renderer.SetViewportAndScissor(size.X, size.Y);
+        // Same linear sky as the other two backends, from one shared constant,
+        // so swapping backends looks identical when the geometry is unchanged.
+        renderer.BeginPass(PassClear.To(ClearColors.Sky));
+        try
+        {
+            if (context.Scene is null) return;
 
-        // Same colour as OpenGL's CornflowerBlue so swapping backends looks
-        // visually identical when the geometry is unchanged.
-        var rtv = context.BackBufferRtv;
-        var dsv = context.DepthView;
-        // Linear: the back-buffer RTV is an _SRGB view, and
-        // ClearRenderTargetView encodes through it exactly as a shader write would.
-        float* clearColor = stackalloc float[4]
-            { ClearColors.Sky.X, ClearColors.Sky.Y, ClearColors.Sky.Z, ClearColors.Sky.W };
-        list->ClearRenderTargetView(rtv, clearColor, 0, null);
-        list->ClearDepthStencilView(dsv, ClearFlags.Depth | ClearFlags.Stencil, 1.0f, 0, 0, null);
-        list->OMSetRenderTargets(1, &rtv, 0, &dsv);
+            var camera = context.Scene.Camera;
+            // From the PASS, not the window: the two are the same only while
+            // every pass goes to the back buffer.
+            if (renderer.PassAspectRatio is { } aspect)
+                camera.AspectRatio = aspect;
 
-        if (context.Scene is null) return;
+            DrawView(context.View, camera);
 
-        var camera = context.Scene.Camera;
-        if (size.Y > 0)
-            camera.AspectRatio = (float)size.X / size.Y;
-
-        DrawView(context.View, camera);
-
-        renderer.FlushDebugDraw(camera);
+            renderer.FlushDebugDraw(camera);
+        }
+        finally
+        {
+            renderer.EndPass();
+        }
     }
 
     // Draws the engine-built view: the flat, frustum-culled item list replaces

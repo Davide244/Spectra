@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Silk.NET.Maths;
 using Microsoft.Extensions.Logging.Abstractions;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
@@ -46,6 +47,29 @@ internal sealed class FakeRenderer : Renderer
     /// multi-chunk batch and observe the rollback.
     /// </summary>
     public int CreateMeshBudget { get; set; } = int.MaxValue;
+
+    /// <summary>
+    /// One entry per <see cref="Renderer.BeginPass"/>, recording what the pass
+    /// asked to clear and how big its target was when it opened.
+    /// </summary>
+    /// <remarks>
+    /// The pass seam is otherwise only observable on a real device, and the
+    /// mistakes it can make are exactly the ones a GPU test would not report as
+    /// a failure: an unbalanced pair, a viewport sized from the window instead
+    /// of the target, a clear that quietly stopped happening.
+    /// </remarks>
+    public List<(PassClear Clear, Vector2D<int> Size)> Passes { get; } = [];
+
+    /// <summary>Passes begun and not yet ended. Zero at the end of a well-formed frame.</summary>
+    public int OpenPasses { get; private set; }
+
+    protected override void BeginPassCore(in PassClear clear)
+    {
+        Passes.Add((clear, PassSize));
+        OpenPasses++;
+    }
+
+    protected override void EndPassCore() => OpenPasses--;
 
     public FakeRenderer()
         : base(NullLogger<Renderer>.Instance, new ThrowingShaderCompiler())

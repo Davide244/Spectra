@@ -51,6 +51,18 @@ internal sealed class CompilingRenderer : Renderer
         TextureWrap wrap = TextureWrap.Repeat)
         => throw new NotSupportedException("CompilingRenderer creates no textures.");
 
+    // No target of any kind, so a pass is a no-op rather than a throw: these
+    // stubs stand in for a renderer during scene and editor tests, which drive
+    // no pipeline and so open no passes, but a future one that does should not
+    // fail for the wrong reason.
+    protected override void BeginPassCore(in PassClear clear)
+    {
+    }
+
+    protected override void EndPassCore()
+    {
+    }
+
     public override ShaderProgram CreateShader(string vertexSource, string fragmentSource)
         => throw new NotSupportedException("CompilingRenderer creates no shaders.");
 

@@ -26,26 +26,27 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
 
     public void Execute(in OpenGLRenderContext context)
     {
-        var gl = context.Gl;
-        // Latched on the main thread by the engine — GLFW forbids querying the
-        // window's framebuffer size from this (render) thread.
-        var size = context.Renderer.FramebufferSize;
-        gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
+        // The clear colour is linear because the target encodes; see ClearColors.
+        context.Renderer.BeginPass(PassClear.To(ClearColors.Sky));
+        try
+        {
+            if (context.Scene is null)
+                return;
 
-        // Linear, because GL_FRAMEBUFFER_SRGB encodes the clear too.
-        gl.ClearColor(ClearColors.Sky.X, ClearColors.Sky.Y, ClearColors.Sky.Z, ClearColors.Sky.W);
-        gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
+            var camera = context.Scene.Camera;
+            // From the PASS, not the window: the two are the same only while
+            // every pass goes to the back buffer.
+            if (context.Renderer.PassAspectRatio is { } aspect)
+                camera.AspectRatio = aspect;
 
-        if (context.Scene is null)
-            return;
+            DrawView(context.View, camera);
 
-        var camera = context.Scene.Camera;
-        if (size.Y > 0)
-            camera.AspectRatio = size.X / (float)size.Y;
-
-        DrawView(context.View, camera);
-
-        _renderer!.FlushDebugDraw(camera);
+            _renderer!.FlushDebugDraw(camera);
+        }
+        finally
+        {
+            context.Renderer.EndPass();
+        }
     }
 
     // Draws the engine-built view: the flat, frustum-culled item list replaces

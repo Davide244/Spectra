@@ -27,34 +27,36 @@ public sealed class WireframePipeline : IOpenGLRenderPipeline
     public void Execute(in OpenGLRenderContext context)
     {
         var gl = context.Gl;
-        // Latched on the main thread by the engine — GLFW forbids querying the
-        // window's framebuffer size from this (render) thread.
-        var size = context.Renderer.FramebufferSize;
-        gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
+        context.Renderer.BeginPass(PassClear.To(ClearColors.Wireframe));
+        try
+        {
+            if (context.Scene is null)
+                return;
 
-        gl.ClearColor(ClearColors.Wireframe.X, ClearColors.Wireframe.Y, ClearColors.Wireframe.Z, ClearColors.Wireframe.W);
-        gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
+            var camera = context.Scene.Camera;
+            // From the PASS, not the window: the two are the same only while
+            // every pass goes to the back buffer.
+            if (context.Renderer.PassAspectRatio is { } aspect)
+                camera.AspectRatio = aspect;
 
-        if (context.Scene is null)
-            return;
+            // Polygon mode is per-rasterizer state — flip into line mode for the
+            // scene pass, restore so the debug overlay rasterizes normally (its
+            // primitive is GL_LINES already, so polygon mode would otherwise be
+            // irrelevant, but cull-face still applies to triangles).
+            gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Line);
+            gl.Disable(EnableCap.CullFace);
 
-        var camera = context.Scene.Camera;
-        if (size.Y > 0)
-            camera.AspectRatio = size.X / (float)size.Y;
+            DrawView(context.View, camera);
 
-        // Polygon mode is per-rasterizer state — flip into line mode for the
-        // scene pass, restore so the debug overlay rasterizes normally (its
-        // primitive is GL_LINES already, so polygon mode would otherwise be
-        // irrelevant, but cull-face still applies to triangles).
-        gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Line);
-        gl.Disable(EnableCap.CullFace);
+            gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Fill);
+            gl.Enable(EnableCap.CullFace);
 
-        DrawView(context.View, camera);
-
-        gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Fill);
-        gl.Enable(EnableCap.CullFace);
-
-        _renderer!.FlushDebugDraw(camera);
+            _renderer!.FlushDebugDraw(camera);
+        }
+        finally
+        {
+            context.Renderer.EndPass();
+        }
     }
 
     // Draws the engine-built view: the flat, frustum-culled item list replaces

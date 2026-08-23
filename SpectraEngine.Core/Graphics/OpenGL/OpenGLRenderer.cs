@@ -186,19 +186,49 @@ public class OpenGLRenderer : Renderer
             DeltaTime = deltaTime,
         };
 
-        // The pipelines know nothing about any of this: they set a viewport,
-        // clear, and draw, which is the same work whichever framebuffer is
-        // bound. Wrapping them here is what keeps the fallback from leaking
-        // into every pipeline that will ever exist.
-        Vector2D<int> size = FramebufferSize;
-        bool offscreen = _srgbTarget is not null && _srgbTarget.Begin(_gl, size.X, size.Y);
+        _pipelines[_pipelineIndex].Execute(context);
+    }
+
+    // The sRGB fallback is what "the back buffer" means on this backend when
+    // the window's own framebuffer is linear, so it belongs here rather than
+    // around the pipeline: a pipeline asks for the back buffer and gets
+    // whichever framebuffer is actually carrying the frame.
+    private bool _passUsedSrgbTarget;
+
+    protected override void BeginPassCore(in PassClear clear)
+    {
+        GL gl = _gl!;
+        Vector2D<int> size = PassSize;
+
+        _passUsedSrgbTarget = _srgbTarget is not null && _srgbTarget.Begin(gl, size.X, size.Y);
         if (_srgbTarget is { Usable: false })
             AbandonSrgbTarget();
+        if (!_passUsedSrgbTarget)
+            gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 
-        _pipelines[_pipelineIndex].Execute(context);
+        gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
 
-        if (offscreen)
-            _srgbTarget!.Present(_gl, size.X, size.Y);
+        uint mask = 0;
+        if (clear.Color is { } color)
+        {
+            gl.ClearColor(color.X, color.Y, color.Z, color.W);
+            mask |= (uint)ClearBufferMask.ColorBufferBit;
+        }
+        if (clear.Depth is { } depth)
+        {
+            gl.ClearDepth(depth);
+            mask |= (uint)(ClearBufferMask.DepthBufferBit | ClearBufferMask.StencilBufferBit);
+        }
+        if (mask != 0)
+            gl.Clear(mask);
+    }
+
+    protected override void EndPassCore()
+    {
+        if (!_passUsedSrgbTarget) return;
+
+        _srgbTarget!.Present(_gl!, PassSize.X, PassSize.Y);
+        _passUsedSrgbTarget = false;
     }
 
     /// <summary>

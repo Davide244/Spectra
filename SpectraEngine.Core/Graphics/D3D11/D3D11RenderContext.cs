@@ -8,16 +8,16 @@ namespace SpectraEngine.Core.Graphics.D3D11;
 /// renderer owns the device and context; the pipeline borrows them for the
 /// duration of <see cref="ID3D11RenderPipeline.Execute"/>. Deliberately
 /// excludes the window: GLFW window queries are main-thread-only, so pipelines
-/// read sizes from the renderer's <see cref="Graphics.Renderer.FramebufferSize"/>
-/// latch instead.
+/// read sizes from the renderer's <see cref="Graphics.Renderer.PassSize"/>
+/// instead. It also no longer carries the back-buffer views: where a pipeline's
+/// output goes is <see cref="Graphics.Renderer.BeginPass"/>'s business, not a
+/// per-frame input.
 /// </summary>
 public readonly unsafe struct D3D11RenderContext
 {
     public required D3D11Renderer Renderer { get; init; }
     public required ComPtr<ID3D11Device> Device { get; init; }
     public required ComPtr<ID3D11DeviceContext> Context { get; init; }
-    public required ComPtr<ID3D11RenderTargetView> BackBufferRtv { get; init; }
-    public required ComPtr<ID3D11DepthStencilView> DepthView { get; init; }
     public required Scene.Scene? Scene { get; init; }
 
     /// <summary>

@@ -146,6 +146,81 @@ public abstract class Renderer
         _logger.LogInformation("Renderer initialized");
     }
 
+    // ---- render passes ---------------------------------------------------
+
+    private Vector2D<int> _passSize;
+    private bool _inPass;
+
+    /// <summary>
+    /// The size of the target the current pass is drawing into.
+    /// </summary>
+    /// <remarks>
+    /// <b>Pipelines must read this and not <see cref="FramebufferSize"/>.</b>
+    /// They are the same number only while every pass goes to the window, which
+    /// is the arrangement this seam exists to end. Anything computing a
+    /// viewport or an aspect ratio from the window size renders a stretched
+    /// picture the first time it draws somewhere else, and that failure is
+    /// invisible until an offscreen target exists to trip over it.
+    /// </remarks>
+    public Vector2D<int> PassSize => _passSize;
+
+    /// <summary>
+    /// Aspect ratio of the current pass's target, or null when it has no
+    /// height (a minimised window, mid-resize) and the ratio is undefined.
+    /// </summary>
+    public float? PassAspectRatio => _passSize.Y > 0 ? _passSize.X / (float)_passSize.Y : null;
+
+    /// <summary>
+    /// Points rendering at the window's back buffer, sets the viewport to it,
+    /// and applies <paramref name="clear"/>. Must be matched by
+    /// <see cref="EndPass"/>. Render thread only.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the whole of what a pipeline needs to know about where its
+    /// output goes. Before it existed, all six pipelines reached into a
+    /// backend-specific context for a render-target view, built their own
+    /// viewport out of the window size, and issued their own clear, which meant
+    /// six copies of the same decision and six places to change for every new
+    /// kind of target.
+    /// </para>
+    /// <para>
+    /// Passes do not nest. A mismatched pair throws rather than leaving the
+    /// wrong target bound for the rest of the frame, because a silently wrong
+    /// binding is a corrupt picture on one backend and a debug-layer message on
+    /// another.
+    /// </para>
+    /// </remarks>
+    public void BeginPass(in PassClear clear)
+    {
+        if (_inPass)
+            throw new InvalidOperationException("BeginPass was called inside a pass; passes do not nest.");
+
+        _passSize = FramebufferSize;
+        _inPass = true;
+        BeginPassCore(clear);
+    }
+
+    /// <summary>Finishes the pass opened by <see cref="BeginPass"/>. Render thread only.</summary>
+    public void EndPass()
+    {
+        if (!_inPass)
+            throw new InvalidOperationException("EndPass was called without a matching BeginPass.");
+
+        _inPass = false;
+        EndPassCore();
+    }
+
+    /// <summary>Binds the target, sets the viewport, and clears. See <see cref="BeginPass"/>.</summary>
+    protected abstract void BeginPassCore(in PassClear clear);
+
+    /// <summary>
+    /// Whatever the target needs on the way out: nothing for a back buffer that
+    /// the frame's own barriers already cover, a resolve or a state transition
+    /// for anything else.
+    /// </summary>
+    protected abstract void EndPassCore();
+
     /// <summary>
     /// Renders one frame: <paramref name="view"/> is the engine-built,
     /// frustum-culled draw list for this frame (see

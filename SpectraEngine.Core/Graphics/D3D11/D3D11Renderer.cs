@@ -237,13 +237,52 @@ public sealed unsafe class D3D11Renderer : Renderer
             Renderer = this,
             Device = _device,
             Context = _context,
-            BackBufferRtv = _backBufferRtv,
-            DepthView = _depthView,
             Scene = scene,
             View = view,
             DeltaTime = deltaTime,
         };
         _pipelines[_pipelineIndex].Execute(ctx);
+    }
+
+    protected override void BeginPassCore(in PassClear clear)
+    {
+        var ctx = (ID3D11DeviceContext*)_context.Handle;
+        var rtv = (ID3D11RenderTargetView*)_backBufferRtv.Handle;
+        var dsv = (ID3D11DepthStencilView*)_depthView.Handle;
+
+        // A resize that failed rebuilds the views at the old size, but a device
+        // loss between release and rebuild can leave them null for one frame.
+        // Drawing through a null RTV is the guaranteed crash next frame that
+        // DrainPendingResize exists to avoid, so a pass with no target is a
+        // no-op instead.
+        if (rtv is null || dsv is null) return;
+
+        Vector2D<int> size = PassSize;
+        var viewport = new Viewport
+        {
+            TopLeftX = 0, TopLeftY = 0,
+            Width = size.X, Height = size.Y,
+            MinDepth = 0f, MaxDepth = 1f,
+        };
+        ctx->RSSetViewports(1, &viewport);
+
+        if (clear.Color is { } color)
+        {
+            Span<float> value = stackalloc float[4] { color.X, color.Y, color.Z, color.W };
+            fixed (float* pColor = value)
+                ctx->ClearRenderTargetView(rtv, pColor);
+        }
+        if (clear.Depth is { } depth)
+            ctx->ClearDepthStencilView(dsv, (uint)(ClearFlag.Depth | ClearFlag.Stencil), depth, 0);
+
+        ctx->OMSetRenderTargets(1, &rtv, dsv);
+    }
+
+    // Nothing to do for the back buffer: the swap chain owns its state and
+    // Present is what ends the frame. Offscreen targets will unbind their SRV
+    // slots here.
+    protected override void EndPassCore()
+    {
     }
 
     /// <summary>

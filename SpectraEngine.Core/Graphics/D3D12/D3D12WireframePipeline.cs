@@ -25,32 +25,29 @@ public sealed unsafe class D3D12WireframePipeline : ID3D12RenderPipeline
     public void Execute(in D3D12RenderContext context)
     {
         var renderer = _renderer!;
-        var list = renderer.CurrentList;
-
-        // Latched on the main thread by the engine — GLFW forbids querying the
-        // window's framebuffer size from this (render) thread.
-        Vector2D<int> size = context.Renderer.FramebufferSize;
-        renderer.SetViewportAndScissor(size.X, size.Y);
 
         // Clear to black for contrast against the wireframe lines.
-        var rtv = context.BackBufferRtv;
-        var dsv = context.DepthView;
-        float* clearColor = stackalloc float[4] { 0f, 0f, 0f, 1f };
-        list->ClearRenderTargetView(rtv, clearColor, 0, null);
-        list->ClearDepthStencilView(dsv, ClearFlags.Depth | ClearFlags.Stencil, 1.0f, 0, 0, null);
-        list->OMSetRenderTargets(1, &rtv, 0, &dsv);
+        renderer.BeginPass(PassClear.To(ClearColors.Wireframe));
+        try
+        {
+            if (context.Scene is null) return;
 
-        if (context.Scene is null) return;
+            var camera = context.Scene.Camera;
+            // From the PASS, not the window: the two are the same only while
+            // every pass goes to the back buffer.
+            if (renderer.PassAspectRatio is { } aspect)
+                camera.AspectRatio = aspect;
 
-        var camera = context.Scene.Camera;
-        if (size.Y > 0)
-            camera.AspectRatio = (float)size.X / size.Y;
+            renderer.CurrentFillMode = FillMode.Wireframe;
+            DrawView(context.View, camera);
+            renderer.CurrentFillMode = FillMode.Solid;
 
-        renderer.CurrentFillMode = FillMode.Wireframe;
-        DrawView(context.View, camera);
-        renderer.CurrentFillMode = FillMode.Solid;
-
-        renderer.FlushDebugDraw(camera);
+            renderer.FlushDebugDraw(camera);
+        }
+        finally
+        {
+            renderer.EndPass();
+        }
     }
 
     // Draws the engine-built view: the flat, frustum-culled item list replaces

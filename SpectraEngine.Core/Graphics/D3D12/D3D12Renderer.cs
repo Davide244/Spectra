@@ -541,12 +541,9 @@ public sealed unsafe class D3D12Renderer : Renderer
         Transition(list, (ID3D12Resource*)_backBuffers[_frameIndex].Handle,
             ResourceStates.Present, ResourceStates.RenderTarget);
 
-        var rtvStart = ((ID3D12DescriptorHeap*)_rtvHeap.Handle)->GetCPUDescriptorHandleForHeapStart();
         var context = new D3D12RenderContext
         {
             Renderer = this,
-            BackBufferRtv = new CpuDescriptorHandle { Ptr = rtvStart.Ptr + _frameIndex * _rtvStride },
-            DepthView = ((ID3D12DescriptorHeap*)_dsvHeap.Handle)->GetCPUDescriptorHandleForHeapStart(),
             Scene = scene,
             View = view,
             DeltaTime = deltaTime,
@@ -737,6 +734,49 @@ public sealed unsafe class D3D12Renderer : Renderer
             StateAfter = after,
         };
         list->ResourceBarrier(1, &barrier);
+    }
+
+    // The back buffer's views, resolved per frame because the flip-model chain
+    // rotates which buffer is current.
+    private CpuDescriptorHandle CurrentBackBufferRtv
+    {
+        get
+        {
+            var start = ((ID3D12DescriptorHeap*)_rtvHeap.Handle)->GetCPUDescriptorHandleForHeapStart();
+            return new CpuDescriptorHandle { Ptr = start.Ptr + _frameIndex * _rtvStride };
+        }
+    }
+
+    private CpuDescriptorHandle DepthStencilView =>
+        ((ID3D12DescriptorHeap*)_dsvHeap.Handle)->GetCPUDescriptorHandleForHeapStart();
+
+    protected override void BeginPassCore(in PassClear clear)
+    {
+        var list = CurrentList;
+        if (list is null) return;
+
+        Vector2D<int> size = PassSize;
+        SetViewportAndScissor(size.X, size.Y);
+
+        CpuDescriptorHandle rtv = CurrentBackBufferRtv;
+        CpuDescriptorHandle dsv = DepthStencilView;
+
+        if (clear.Color is { } color)
+        {
+            float* value = stackalloc float[4] { color.X, color.Y, color.Z, color.W };
+            list->ClearRenderTargetView(rtv, value, 0, null);
+        }
+        if (clear.Depth is { } depth)
+            list->ClearDepthStencilView(dsv, ClearFlags.Depth | ClearFlags.Stencil, depth, 0, 0, null);
+
+        list->OMSetRenderTargets(1, &rtv, 0, &dsv);
+    }
+
+    // Nothing for the back buffer: Render already brackets the whole frame with
+    // the Present/RenderTarget transitions. An offscreen target will transition
+    // itself to PixelShaderResource here.
+    protected override void EndPassCore()
+    {
     }
 
     internal void SetViewportAndScissor(int width, int height)

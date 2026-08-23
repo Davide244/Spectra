@@ -18,14 +18,14 @@ public interface ID3D12RenderPipeline : IDisposable
 /// <summary>
 /// Everything a D3D12 pipeline needs for one frame. Deliberately excludes the
 /// window: GLFW window queries are main-thread-only, so pipelines read sizes
-/// from the renderer's <see cref="Graphics.Renderer.FramebufferSize"/> latch
-/// instead.
+/// from the renderer's <see cref="Graphics.Renderer.PassSize"/> instead. It also
+/// no longer carries the back-buffer descriptors: where a pipeline's output goes
+/// is <see cref="Graphics.Renderer.BeginPass"/>'s business, not a per-frame
+/// input.
 /// </summary>
 public readonly struct D3D12RenderContext
 {
     public required D3D12Renderer Renderer { get; init; }
-    public required CpuDescriptorHandle BackBufferRtv { get; init; }
-    public required CpuDescriptorHandle DepthView { get; init; }
     public required Scene.Scene? Scene { get; init; }
 
     /// <summary>

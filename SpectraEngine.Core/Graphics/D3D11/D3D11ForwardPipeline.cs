@@ -24,44 +24,27 @@ public sealed unsafe class D3D11ForwardPipeline : ID3D11RenderPipeline
 
     public void Execute(in D3D11RenderContext context)
     {
-        var ctx = (ID3D11DeviceContext*)context.Context.Handle;
-        var rtvPtr = (ID3D11RenderTargetView*)context.BackBufferRtv.Handle;
-        var dsvPtr = (ID3D11DepthStencilView*)context.DepthView.Handle;
-
-        // Latched on the main thread by the engine — GLFW forbids querying the
-        // window's framebuffer size from this (render) thread.
-        Vector2D<int> size = context.Renderer.FramebufferSize;
-        var viewport = new Viewport
+        // Same linear sky as the other two backends, from one shared constant,
+        // so swapping backends looks identical when the geometry is unchanged.
+        context.Renderer.BeginPass(PassClear.To(ClearColors.Sky));
+        try
         {
-            TopLeftX = 0, TopLeftY = 0,
-            Width = size.X, Height = size.Y,
-            MinDepth = 0f, MaxDepth = 1f,
-        };
-        ctx->RSSetViewports(1, &viewport);
+            if (context.Scene is null) return;
 
-        // Same colour as OpenGL's CornflowerBlue so swapping backends looks
-        // visually identical when the geometry is unchanged.
-        // Linear: the back buffer is an _SRGB format, and ClearRenderTargetView
-        // encodes through it exactly as a shader write would.
-        Span<float> clearColor = stackalloc float[4]
-            { ClearColors.Sky.X, ClearColors.Sky.Y, ClearColors.Sky.Z, ClearColors.Sky.W };
-        fixed (float* pColor = clearColor)
-        {
-            ctx->ClearRenderTargetView(rtvPtr, pColor);
+            var camera = context.Scene.Camera;
+            // From the PASS, not the window: the two are the same only while
+            // every pass goes to the back buffer.
+            if (context.Renderer.PassAspectRatio is { } aspect)
+                camera.AspectRatio = aspect;
+
+            DrawView(context.View, camera);
+
+            _renderer!.FlushDebugDraw(camera);
         }
-        ctx->ClearDepthStencilView(dsvPtr, (uint)(ClearFlag.Depth | ClearFlag.Stencil), 1.0f, 0);
-
-        ctx->OMSetRenderTargets(1, &rtvPtr, dsvPtr);
-
-        if (context.Scene is null) return;
-
-        var camera = context.Scene.Camera;
-        if (size.Y > 0)
-            camera.AspectRatio = (float)size.X / size.Y;
-
-        DrawView(context.View, camera);
-
-        _renderer!.FlushDebugDraw(camera);
+        finally
+        {
+            context.Renderer.EndPass();
+        }
     }
 
     // Draws the engine-built view: the flat, frustum-culled item list replaces

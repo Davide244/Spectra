@@ -54,41 +54,29 @@ public sealed unsafe class D3D11WireframePipeline : ID3D11RenderPipeline
     public void Execute(in D3D11RenderContext context)
     {
         var ctx = (ID3D11DeviceContext*)context.Context.Handle;
-        var rtvPtr = (ID3D11RenderTargetView*)context.BackBufferRtv.Handle;
-        var dsvPtr = (ID3D11DepthStencilView*)context.DepthView.Handle;
-
-        // Latched on the main thread by the engine — GLFW forbids querying the
-        // window's framebuffer size from this (render) thread.
-        Vector2D<int> size = context.Renderer.FramebufferSize;
-        var viewport = new Viewport
-        {
-            TopLeftX = 0, TopLeftY = 0,
-            Width = size.X, Height = size.Y,
-            MinDepth = 0f, MaxDepth = 1f,
-        };
-        ctx->RSSetViewports(1, &viewport);
 
         // Clear to black for contrast against the wireframe lines.
-        Span<float> clearColor = stackalloc float[4] { 0f, 0f, 0f, 1f };
-        fixed (float* pColor = clearColor)
+        context.Renderer.BeginPass(PassClear.To(ClearColors.Wireframe));
+        try
         {
-            ctx->ClearRenderTargetView(rtvPtr, pColor);
+            if (context.Scene is null) return;
+
+            var camera = context.Scene.Camera;
+            // From the PASS, not the window: the two are the same only while
+            // every pass goes to the back buffer.
+            if (context.Renderer.PassAspectRatio is { } aspect)
+                camera.AspectRatio = aspect;
+
+            ctx->RSSetState((ID3D11RasterizerState*)_wireframeState.Handle);
+            DrawView(context.View, camera);
+            ctx->RSSetState((ID3D11RasterizerState*)_solidState.Handle);
+
+            _renderer!.FlushDebugDraw(camera);
         }
-        ctx->ClearDepthStencilView(dsvPtr, (uint)(ClearFlag.Depth | ClearFlag.Stencil), 1.0f, 0);
-
-        ctx->OMSetRenderTargets(1, &rtvPtr, dsvPtr);
-
-        if (context.Scene is null) return;
-
-        var camera = context.Scene.Camera;
-        if (size.Y > 0)
-            camera.AspectRatio = (float)size.X / size.Y;
-
-        ctx->RSSetState((ID3D11RasterizerState*)_wireframeState.Handle);
-        DrawView(context.View, camera);
-        ctx->RSSetState((ID3D11RasterizerState*)_solidState.Handle);
-
-        _renderer!.FlushDebugDraw(camera);
+        finally
+        {
+            context.Renderer.EndPass();
+        }
     }
 
     // Draws the engine-built view: the flat, frustum-culled item list replaces
