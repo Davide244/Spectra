@@ -1,4 +1,4 @@
-using SpectraShade.Compiler.Syntax;
+﻿using SpectraShade.Compiler.Syntax;
 
 namespace SpectraShade.Compiler.Analysis;
 
@@ -53,13 +53,12 @@ public sealed class SemanticAnalyzer
                     "[Vertex] function must return a struct (the fragment input), not void", func.Span));
         }
 
-        // Validate fragment function return type
-        foreach (var func in stageFunctions.Where(f => f.HasAttribute("Fragment")))
-        {
-            if (func.ReturnType.Name == "void")
-                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
-                    "[Fragment] function must return a value (the render target output)", func.Span));
-        }
+        // A [Fragment] function may return void, and that is not a loophole: a
+        // depth-only pass (a shadow map) binds no render target at all, so a
+        // fragment stage that returns a colour is asking the hardware to
+        // discard a value it computed. Worse, both D3D debug layers report the
+        // mismatch, and D3D11 reports it once per DRAW, which floods the same
+        // info queue the engine reads to detect real errors.
 
         // Validate geometry function
         foreach (var func in stageFunctions.Where(f => f.HasAttribute("Geometry")))

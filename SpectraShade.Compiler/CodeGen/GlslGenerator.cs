@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.Shaders;
@@ -322,7 +322,8 @@ public sealed class GlslGenerator : ICodeGenerator
             foreach (var field in inputStruct.Fields)
                 if (!HasAttribute(field.Attributes, "Position"))
                     _stageOwnedNames.Add($"{_fragmentVaryingPrefix}{field.Name}");
-        if (returnStruct is null)
+        // A void fragment stage owns no output name: it writes depth only.
+        if (returnStruct is null && func.ReturnType.Name != "void")
             _stageOwnedNames.Add("fragColor");
 
         EmitStructs(sb, structs);
@@ -385,7 +386,7 @@ public sealed class GlslGenerator : ICodeGenerator
                 sb.AppendLine($"{layout}out {GlslType(field.Type.Name)} {EscapeId(field.Name)};");
             }
         }
-        else
+        else if (func.ReturnType.Name != "void")
         {
             // Simple return type: out vec4
             sb.AppendLine($"out {GlslType(func.ReturnType.Name)} fragColor;");

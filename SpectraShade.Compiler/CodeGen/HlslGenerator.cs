@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.Shaders;
@@ -160,8 +160,10 @@ public sealed class HlslGenerator : ICodeGenerator
         if (func.HasAttribute("EarlyDepthStencil"))
             sb.AppendLine("[earlydepthstencil]");
 
+        // No semantic on a void fragment stage: it has no render-target output
+        // to name, which is exactly what a depth-only pass wants.
         string? entrySem = null;
-        if (outputStruct is null)
+        if (outputStruct is null && func.ReturnType.Name != "void")
             entrySem = $": SV_Target{GetIntArg(func.Attributes, "Target", 0)}";
         EmitEntryPoint(sb, func, entrySem, paramTypeOverride: inputStruct?.Name);
         return sb.ToString();

@@ -38,7 +38,14 @@ public sealed class DeferredPipeline : IOpenGLRenderPipeline
     public string Name => "Deferred";
 
     /// <summary>Ambient light level, added to every surface regardless of the lights.</summary>
-    public float Ambient { get; set; } = 0.05f;
+    /// <remarks>
+    /// Higher than the forward path's, on purpose. It is the only stand-in the
+    /// engine has for sky light and bounce, and with a real shadow term a
+    /// surface the sun cannot see now has nothing else at all: too low a value
+    /// makes every shadow a black hole rather than a shadow. It goes away when
+    /// image-based lighting arrives and gives the sky an actual colour.
+    /// </remarks>
+    public float Ambient { get; set; } = 0.18f;
 
     public void Initialize(OpenGLRenderer renderer) => _renderer = renderer;
 
@@ -52,6 +59,11 @@ public sealed class DeferredPipeline : IOpenGLRenderPipeline
 
         ShaderProgram surfaceShader = renderer.EnsureGBufferShader();
         Camera camera = context.Scene.Camera;
+
+        // Shadows FIRST, so the light pass reads a map from this frame rather
+        // than the last one. It is also its own pass into its own target, so it
+        // has to happen outside the geometry pass either way.
+        int shadowLight = renderer.RenderShadowMap(context.Scene, context.View);
 
         // DEPTH ONLY, and the colour attachments are deliberately not cleared.
         // The depth buffer is the coverage mask: the light pass returns the sky
@@ -76,7 +88,7 @@ public sealed class DeferredPipeline : IOpenGLRenderPipeline
             renderer.EndPass();
         }
 
-        renderer.DrawDeferredLightPass(gbuffer, context.View, camera, Ambient);
+        renderer.DrawDeferredLightPass(gbuffer, context.View, camera, Ambient, shadowLight);
     }
 
     private static void DrawView(RenderView view, Camera camera, ShaderProgram shader)

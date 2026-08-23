@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace SpectraEngine.Core.Graphics;
 
@@ -84,23 +84,28 @@ public sealed class GBuffer : IDisposable
     /// <summary>Current height, shared by every attachment.</summary>
     public int Height { get; private set; }
 
+    // Every attachment is created with colour above, so the null-forgiving
+    // operator on each accessor below is a statement about this constructor
+    // rather than a hope: a depth-only G-buffer attachment would be a surface
+    // the geometry shader writes and nothing can read.
+
     /// <summary>The attachments, in binding order. Pass this to <c>BeginPass</c>.</summary>
     public ReadOnlySpan<RenderTarget> Targets => _targets;
 
     /// <summary>Albedo in rgb, ambient occlusion in a.</summary>
-    public Texture Albedo => _targets[0].ColorTexture;
+    public Texture Albedo => _targets[0].ColorTexture!;
 
     /// <summary>World normal in rgb, roughness in a.</summary>
-    public Texture NormalRoughness => _targets[1].ColorTexture;
+    public Texture NormalRoughness => _targets[1].ColorTexture!;
 
     /// <summary>Metallic in r, shading-model id in g.</summary>
-    public Texture MaterialData => _targets[2].ColorTexture;
+    public Texture MaterialData => _targets[2].ColorTexture!;
 
     /// <summary>Emissive radiance in rgb.</summary>
-    public Texture Emissive => _targets[3].ColorTexture;
+    public Texture Emissive => _targets[3].ColorTexture!;
 
     /// <summary>Whatever the shading model in <see cref="MaterialData"/> says this means.</summary>
-    public Texture Custom => _targets[4].ColorTexture;
+    public Texture Custom => _targets[4].ColorTexture!;
 
     /// <summary>Depth, for reconstructing world position. Never null: attachment 0 always has it.</summary>
     public Texture Depth => _targets[0].DepthTexture!;

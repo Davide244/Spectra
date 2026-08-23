@@ -223,8 +223,9 @@ public sealed unsafe class D3D11Renderer : Renderer
             : CreateShaderFromSource(BaseShaders.DebugLine);
         _lineBatch = new D3D11LineBatch(_device, _context, (D3D11ShaderProgram)_debugShader!);
 
-        RegisterPipeline(new D3D11ForwardPipeline());
+        // Deferred first: see OpenGLRenderer for why it is the default.
         RegisterPipeline(new D3D11DeferredPipeline());
+        RegisterPipeline(new D3D11ForwardPipeline());
         RegisterPipeline(new D3D11WireframePipeline());
 
         DrainDebugMessages();
@@ -293,7 +294,7 @@ public sealed unsafe class D3D11Renderer : Renderer
             return;
         }
 
-        ResolveTo(sceneTarget.ColorTexture, null, scene);
+        ResolveTo(sceneTarget.ColorTexture!, null, scene);
     }
 
     protected override void DrawFullscreen(PostPass pass)
@@ -340,12 +341,14 @@ public sealed unsafe class D3D11Renderer : Renderer
             dsv = (ID3D11DepthStencilView*)_depthView.Handle;
         }
 
-        // A resize that failed rebuilds the views at the old size, but a device
-        // loss between release and rebuild can leave them null for one frame.
-        // Drawing through a null RTV is the guaranteed crash next frame that
-        // DrainPendingResize exists to avoid, so a pass with no target is a
-        // no-op instead.
-        if (rtv is null) return;
+        // A depth-only target has no RTV BY DESIGN, which is the one case a null
+        // RTV is not a failure. Everything else with a null one is: a resize that
+        // failed rebuilds the views at the old size, and a device loss between
+        // release and rebuild can leave them null for a frame. Drawing through
+        // that is the guaranteed crash next frame DrainPendingResize exists to
+        // avoid, so those passes are a no-op instead.
+        bool depthOnly = target is D3D11RenderTarget { Desc.Color: false };
+        if (rtv is null && !depthOnly) return;
 
         Vector2D<int> size = PassSize;
         var viewport = new Viewport
@@ -356,7 +359,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         };
         ctx->RSSetViewports(1, &viewport);
 
-        if (clear.Color is { } color)
+        if (clear.Color is { } color && rtv is not null)
         {
             Span<float> value = stackalloc float[4] { color.X, color.Y, color.Z, color.W };
             fixed (float* pColor = value)
@@ -399,7 +402,13 @@ public sealed unsafe class D3D11Renderer : Renderer
             return;
         }
 
-        ctx->OMSetRenderTargets(1, &rtv, dsv);
+        // Zero views for a depth-only pass, which is what makes it depth-only:
+        // binding a target the pixel shader then writes into is the whole cost
+        // this avoids.
+        if (rtv is null)
+            ctx->OMSetRenderTargets(0, null, dsv);
+        else
+            ctx->OMSetRenderTargets(1, &rtv, dsv);
     }
 
     protected override void EndPassCore(RenderTarget? target, ReadOnlySpan<RenderTarget> targets)

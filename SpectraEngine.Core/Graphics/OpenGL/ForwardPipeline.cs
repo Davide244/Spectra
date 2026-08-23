@@ -25,7 +25,7 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
     /// the scene brighter with each light added even where none of them
     /// reach.
     /// </remarks>
-    public float Ambient { get; set; } = 0.05f;
+    public float Ambient { get; set; } = 0.18f;
 
     public void Initialize(OpenGLRenderer renderer)
     {

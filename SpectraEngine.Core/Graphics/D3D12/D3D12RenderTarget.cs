@@ -1,4 +1,4 @@
-using Silk.NET.Core.Native;
+﻿using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 using System;
@@ -29,7 +29,7 @@ namespace SpectraEngine.Core.Graphics.D3D12;
 internal sealed unsafe class D3D12RenderTarget : RenderTarget
 {
     private readonly D3D12Renderer _renderer;
-    private readonly D3D12Texture _color;
+    private readonly D3D12Texture? _color;
     private readonly D3D12Texture? _depth;
     private ComPtr<ID3D12DescriptorHeap> _rtvHeap;
     private ComPtr<ID3D12DescriptorHeap> _dsvHeap;
@@ -52,14 +52,20 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
         _renderer = renderer;
         Desc = desc;
 
-        _color = D3D12Texture.CreateRenderTargetTexture(
-            renderer, desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap);
+        if (desc.Color)
+        {
+            _color = D3D12Texture.CreateRenderTargetTexture(
+                renderer, desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap);
+        }
 
         if (desc.Depth)
             _depth = D3D12Texture.CreateDepthTexture(renderer, desc.Width, desc.Height);
 
-        _rtvHeap = renderer.CreateDescriptorHeap(DescriptorHeapType.Rtv, 1, shaderVisible: false);
-        Rtv = ((ID3D12DescriptorHeap*)_rtvHeap.Handle)->GetCPUDescriptorHandleForHeapStart();
+        if (desc.Color)
+        {
+            _rtvHeap = renderer.CreateDescriptorHeap(DescriptorHeapType.Rtv, 1, shaderVisible: false);
+            Rtv = ((ID3D12DescriptorHeap*)_rtvHeap.Handle)->GetCPUDescriptorHandleForHeapStart();
+        }
 
         if (desc.Depth)
         {
@@ -70,7 +76,7 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
         Allocate(desc.Width, desc.Height);
     }
 
-    public override Texture ColorTexture => _color;
+    public override Texture? ColorTexture => _color;
 
     public override Texture? DepthTexture => _depth;
 
@@ -81,7 +87,10 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
     internal ResourceStates DepthState { get; private set; } = ResourceStates.DepthWrite;
 
     /// <summary>The DXGI format of the colour attachment: what a PSO drawing here must be built against.</summary>
-    internal Format ColorFormat => _color.DxgiFormat;
+    internal Format ColorFormat => _color?.DxgiFormat ?? Format.FormatUnknown;
+
+    /// <summary>Whether this target has a colour attachment at all. False for a shadow map.</summary>
+    internal bool HasColor => _color is not null;
 
     /// <summary>
     /// The format of the depth-stencil VIEW, which is what a pipeline state must
@@ -109,7 +118,7 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
         // requirement rather than a coincidence.
         _renderer.WaitForGpu();
 
-        _color.ReplaceStorage(_renderer, width, height);
+        _color?.ReplaceStorage(_renderer, width, height);
         _depth?.ReplaceDepthStorage(_renderer, width, height);
         ColorState = ResourceStates.PixelShaderResource;
         DepthState = ResourceStates.DepthWrite;
@@ -118,13 +127,16 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
 
     private void Allocate(int width, int height)
     {
-        var rtvDesc = new RenderTargetViewDesc
+        if (_color is not null)
         {
-            Format = _color.DxgiFormat,
-            ViewDimension = RtvDimension.Texture2D,
-        };
-        rtvDesc.Anonymous.Texture2D = new Tex2DRtv { MipSlice = 0, PlaneSlice = 0 };
-        _renderer.DevicePtr->CreateRenderTargetView(_color.Resource, &rtvDesc, Rtv);
+            var rtvDesc = new RenderTargetViewDesc
+            {
+                Format = _color.DxgiFormat,
+                ViewDimension = RtvDimension.Texture2D,
+            };
+            rtvDesc.Anonymous.Texture2D = new Tex2DRtv { MipSlice = 0, PlaneSlice = 0 };
+            _renderer.DevicePtr->CreateRenderTargetView(_color.Resource, &rtvDesc, Rtv);
+        }
 
         if (_depth is not null)
         {
@@ -150,7 +162,7 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
     /// </summary>
     internal void TransitionColor(ID3D12GraphicsCommandList* list, ResourceStates state)
     {
-        if (ColorState == state) return;
+        if (_color is null || ColorState == state) return;
 
         D3D12Renderer.Transition(list, _color.Resource, ColorState, state);
         ColorState = state;
@@ -180,7 +192,7 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
 
         ComOwnership.Release(ref _dsvHeap);
         ComOwnership.Release(ref _rtvHeap);
-        _color.Dispose();
+        _color?.Dispose();
         _depth?.Dispose();
     }
 }

@@ -68,8 +68,11 @@ public class OpenGLRenderer : Renderer
             : CreateShaderFromSource(BaseShaders.DebugLine);
         _lineBatch = new OpenGLLineBatch(_gl);
 
-        RegisterPipeline(new ForwardPipeline());
+        // Deferred FIRST, so it is the default: it is the only path with a
+        // real BRDF and the only one with shadows. Forward stays in the
+        // rotation for what deferred structurally cannot do.
         RegisterPipeline(new DeferredPipeline());
+        RegisterPipeline(new ForwardPipeline());
         RegisterPipeline(new WireframePipeline());
 
         _logger.LogInformation("Renderer initialized (OpenGL, pipeline={Pipeline})", CurrentPipelineName);
@@ -176,6 +179,14 @@ public class OpenGLRenderer : Renderer
         return false;
     }
 
+    /// <inheritdoc/>
+    /// <remarks>True: glUniform writes into whichever program is active.</remarks>
+    protected override bool BindsProgramBeforeUniforms => true;
+
+    /// <inheritdoc/>
+    /// <remarks>False: an OpenGL framebuffer's origin is bottom-left.</remarks>
+    public override bool TargetOriginIsTopLeft => false;
+
     public override string NextPipeline()
     {
         if (_pipelines.Count == 0)
@@ -223,7 +234,7 @@ public class OpenGLRenderer : Renderer
             return;
         }
 
-        ResolveTo(sceneTarget.ColorTexture, null, scene);
+        ResolveTo(sceneTarget.ColorTexture!, null, scene);
     }
 
     protected override void DrawFullscreen(PostPass pass)

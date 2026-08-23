@@ -104,6 +104,111 @@ public sealed class DeferredGlTests
             "the metallic channel is not reaching the BRDF");
     }
 
+    [Fact]
+    public void A_caster_darkens_the_ground_beneath_it_and_nothing_else()
+    {
+        // Two renders of one scene, shadows on and off, compared at two pixels:
+        // one the caster covers and one it does not. That shape is what makes
+        // this a SHADOW test rather than a brightness test. A shadow map that is
+        // mis-oriented, mis-scaled or simply always-in-shadow would darken both
+        // pixels; one that never resolves would darken neither.
+        OpenGLRenderer renderer = _fixture.Renderer;
+        bool restoreShadows = renderer.ShadowsEnabled;
+
+        try
+        {
+            renderer.ShadowsEnabled = true;
+            (int litR, int litG, int litB) = RenderDeferred(BuildShadowScene(), ProbeSize / 2, ProbeSize / 2);
+            (int farR, int farG, int farB) = RenderDeferred(BuildShadowScene(), ProbeSize / 2, 3);
+
+            renderer.ShadowsEnabled = false;
+            (int noneR, int noneG, int noneB) = RenderDeferred(BuildShadowScene(), ProbeSize / 2, ProbeSize / 2);
+            (int noneFarR, int noneFarG, int noneFarB) = RenderDeferred(BuildShadowScene(), ProbeSize / 2, 3);
+
+            int shadowed = litR + litG + litB;
+            int unshadowed = noneR + noneG + noneB;
+            shadowed.ShouldBeLessThan(unshadowed - 30,
+                $"the ground under the caster read {shadowed} with shadows on and {unshadowed} with them " +
+                "off; a caster directly overhead has to darken it");
+
+            // The near ground is outside the caster's footprint, so turning
+            // shadows on must leave it alone. Without this the test would pass
+            // just as happily on a shadow map that shadows everything.
+            int nearOn = farR + farG + farB;
+            int nearOff = noneFarR + noneFarG + noneFarB;
+            Math.Abs(nearOn - nearOff).ShouldBeLessThan(12,
+                $"ground outside the caster's footprint read {nearOn} with shadows on and {nearOff} with " +
+                "them off; the shadow is not localised to the caster");
+        }
+        finally
+        {
+            renderer.ShadowsEnabled = restoreShadows;
+        }
+    }
+
+    // A ground plane with a plate hanging over the middle of it, lit from
+    // straight above. The camera looks along the ground rather than down at it,
+    // so the plate is above the line of sight and never occludes the pixel whose
+    // shadow it casts.
+    private Scene BuildShadowScene()
+    {
+        OpenGLRenderer renderer = _fixture.Renderer;
+
+        var scene = new Scene("shadowed");
+        scene.Camera.Position = new Vector3(0f, 1f, 8f);
+        scene.Camera.LookAt(new Vector3(0f, 0.2f, 0f));
+
+        var (vertices, indices) = Primitives.Cube();
+        Mesh cube = renderer.CreateMesh(vertices, indices, VertexAttribute.StandardLayout);
+
+        Texture white = renderer.CreateTexture(
+            [255, 255, 255, 255], 1, 1, TextureFormat.Rgba8, TextureColorSpace.Linear,
+            TextureFilter.Nearest, TextureWrap.Clamp);
+
+        Material Surface()
+        {
+            var material = new Material(renderer.DefaultShader);
+            material
+                .SetVector3("uBaseColor", new Vector3(0.8f, 0.8f, 0.8f))
+                .SetFloat("uRoughness", 0.9f)
+                .SetFloat("uMetallic", 0f)
+                .SetFloat("uAmbientOcclusion", 1f)
+                .SetVector3("uEmissive", Vector3.Zero)
+                .SetFloat("uShadingModel", 0f)
+                .SetTexture("uDiffuse", 0, white);
+            return material;
+        }
+
+        var ground = scene.Root.CreateChild("Ground");
+        ground.LocalTransform = new Transform
+        {
+            Position = new Vector3(0f, -0.5f, 0f),
+            Rotation = Quaternion.Identity,
+            Scale = new Vector3(40f, 1f, 40f),
+        };
+        ground.MeshRenderer = new MeshRenderer(cube, Surface());
+
+        var plate = scene.Root.CreateChild("Plate");
+        plate.LocalTransform = new Transform
+        {
+            Position = new Vector3(0f, 3f, 0f),
+            Rotation = Quaternion.Identity,
+            Scale = new Vector3(6f, 0.4f, 6f),
+        };
+        plate.MeshRenderer = new MeshRenderer(cube, Surface());
+
+        var sun = scene.Root.CreateChild("Sun");
+        sun.LocalRotation = Light.RotationForDirection(-Vector3.UnitY);
+        sun.Light = new Light
+        {
+            Kind = LightKind.Directional,
+            Color = new Vector3(1f, 1f, 1f),
+            Intensity = 3f,
+        };
+
+        return scene;
+    }
+
     // A flat surface square-on to the camera, one point light in front of it.
     // Square-on so N, L and V all agree and the shading is a number that is easy
     // to reason about rather than a gradient.
@@ -161,7 +266,10 @@ public sealed class DeferredGlTests
 
     // Renders one real frame of the deferred pipeline into a readable target
     // and returns the centre pixel.
-    private (int R, int G, int B) RenderDeferred(Scene scene)
+    private (int R, int G, int B) RenderDeferred(Scene scene) =>
+        RenderDeferred(scene, ProbeSize / 2, ProbeSize / 2);
+
+    private (int R, int G, int B) RenderDeferred(Scene scene, int x, int y)
     {
         OpenGLRenderer renderer = _fixture.Renderer;
 
@@ -177,7 +285,7 @@ public sealed class DeferredGlTests
             scene.BuildRenderView(scene.Camera, view);
             renderer.Render(scene, view, 1.0 / 60.0);
 
-            return ReadPixel(probe, ProbeSize / 2, ProbeSize / 2);
+            return ReadPixel(probe, x, y);
         }
         finally
         {

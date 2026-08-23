@@ -20,7 +20,7 @@ public sealed unsafe class D3D12ForwardPipeline : ID3D12RenderPipeline
     public string Name => "Forward";
 
     /// <summary>Ambient light level, added to every surface regardless of the lights.</summary>
-    public float Ambient { get; set; } = 0.05f;
+    public float Ambient { get; set; } = 0.18f;
 
     public void Initialize(D3D12Renderer renderer) => _renderer = renderer;
 

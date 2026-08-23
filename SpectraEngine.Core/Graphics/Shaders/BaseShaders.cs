@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 
@@ -17,6 +17,7 @@ public static class BaseShaders
     private const string PostResolveFileName = "PostResolve.spectrashade";
     private const string GBufferFillFileName = "GBufferFill.spectrashade";
     private const string DeferredLightFileName = "DeferredLight.spectrashade";
+    private const string ShadowDepthFileName = "ShadowDepth.spectrashade";
 
     /// <summary>The built-in lit shader — diffuse + ambient from one directional light, modulated by a diffuse texture.</summary>
     public static string Lit => ReadEmbedded(LitFileName);
@@ -32,6 +33,9 @@ public static class BaseShaders
 
     /// <summary>The deferred light pass: a Cook-Torrance BRDF over the G-buffer.</summary>
     public static string DeferredLight => ReadEmbedded(DeferredLightFileName);
+
+    /// <summary>The shadow map's depth pass: writes depth from the light, and nothing else.</summary>
+    public static string ShadowDepth => ReadEmbedded(ShadowDepthFileName);
 
     /// <summary>
     /// Resolves the absolute path of <paramref name="fileName"/> on disk if the
@@ -60,6 +64,9 @@ public static class BaseShaders
 
     /// <summary>Source-file path for <see cref="DeferredLight"/>, if locatable on disk.</summary>
     public static string? DeferredLightPath => TryResolveSourcePath(DeferredLightFileName);
+
+    /// <summary>Source-file path for <see cref="ShadowDepth"/>, if locatable on disk.</summary>
+    public static string? ShadowDepthPath => TryResolveSourcePath(ShadowDepthFileName);
 
     private static string ReadEmbedded(string fileName)
     {

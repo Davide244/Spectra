@@ -503,6 +503,10 @@ public abstract class Renderer
         _gbuffer?.Dispose();
         _gbuffer = null;
 
+        _shadowMap?.Dispose();
+        _shadowMap = null;
+        _shadowShader = null;
+
         _fullscreenTriangle = null;
         _resolveShader = null;
         _resolvePass = null;
@@ -539,6 +543,149 @@ public abstract class Renderer
     /// two magic numbers inside a pipeline.
     /// </remarks>
     public virtual Vector2 DepthToNdcZ => new(2f, -1f);
+
+    /// <summary>
+    /// Whether row zero of a render target is its TOP row, as it is on D3D and
+    /// is not on OpenGL.
+    /// </summary>
+    /// <remarks>
+    /// The same fact <see cref="FullscreenTriangle"/> bakes into its vertex data,
+    /// stated once for everything else that has to sample a rasterised target by
+    /// a coordinate it computed itself. A shadow lookup is the other case: get
+    /// this wrong and the shadow is vertically mirrored on exactly one backend,
+    /// which no debug layer reports because nothing about it is invalid.
+    /// </remarks>
+    public virtual bool TargetOriginIsTopLeft => true;
+
+    // ---- shadows -----------------------------------------------------------
+
+    private ShadowMap? _shadowMap;
+    private ShaderProgram? _shadowShader;
+    private readonly RenderView _shadowView = new();
+
+    /// <summary>
+    /// Whether the frame's first directional light casts a shadow. On by
+    /// default; off costs nothing and is the fastest way to tell a shadow bug
+    /// from a lighting one.
+    /// </summary>
+    public bool ShadowsEnabled { get; set; } = true;
+
+    /// <summary>How dark a shadowed surface goes: 0 no shadow at all, 1 fully unlit by the caster.</summary>
+    /// <remarks>
+    /// Slightly under 1 by default. Nothing in the engine bounces light yet, so
+    /// a fully dark shadow is darker than any real one, and the flat ambient
+    /// term is too crude to make up the difference on its own.
+    /// </remarks>
+    public float ShadowStrength { get; set; } = 0.85f;
+
+    /// <summary>The directional shadow map, once one has been created.</summary>
+    public ShadowMap? ShadowMap => _shadowMap;
+
+    /// <summary>How many casters the last shadow pass drew. Reported by the periodic stats line.</summary>
+    public int ShadowCasterCount { get; private set; }
+
+    /// <summary>
+    /// Renders the frame's shadow map, and returns the index of the light it was
+    /// rendered for, or -1 when nothing cast.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Directional lights only, and only the first one.</b> A point light
+    /// needs a cube map, which <see cref="CreateTexture"/> has no path for at
+    /// all; a spot light needs a cone frustum and a second map. Both are real
+    /// work rather than a loop bound, so this says one and means it.
+    /// </para>
+    /// <para>
+    /// The pass runs BEFORE the geometry pass, so the light pass that follows
+    /// reads a map from this frame rather than the last one. On D3D12 that
+    /// ordering is also what keeps the barriers simple: the map goes to
+    /// readable at <c>EndPass</c> and stays there.
+    /// </para>
+    /// </remarks>
+    internal int RenderShadowMap(Scene.Scene scene, RenderView view)
+    {
+        ShadowCasterCount = 0;
+        if (!ShadowsEnabled) return -1;
+
+        int index = FindShadowCaster(view);
+        if (index < 0) return -1;
+
+        ShadowMap map = _shadowMap ??= new ShadowMap(this);
+        var direction = new Vector3(
+            view.Lights[index].PositionRange.X,
+            view.Lights[index].PositionRange.Y,
+            view.Lights[index].PositionRange.Z);
+
+        if (!map.Fit(scene.Camera, direction)) return -1;
+
+        _shadowShader ??= BaseShaders.ShadowDepthPath is { } path
+            ? CreateShaderFromFile(path)
+            : CreateShaderFromSource(BaseShaders.ShadowDepth);
+
+        // Culled against the LIGHT, not the camera. See Scene.BuildShadowView
+        // for why reusing the camera's list makes shadows flicker as you turn.
+        scene.BuildShadowView(map.LightViewProjection, _shadowView);
+
+        Matrix4x4 lightClip = map.LightViewProjection * ClipZCorrection;
+
+        BeginPass(map.Target, PassClear.DepthOnly);
+        try
+        {
+            DrawShadowCasters(_shadowView.Items, lightClip);
+            DrawShadowCasters(_shadowView.WorldItems, lightClip);
+        }
+        finally
+        {
+            EndPass();
+        }
+
+        return index;
+    }
+
+    // The first directional light in the view, which CollectLights has already
+    // sorted to the front. Point lights are skipped rather than fitted badly.
+    private static int FindShadowCaster(RenderView view)
+    {
+        ReadOnlySpan<RenderLight> lights = view.Lights;
+        for (int i = 0; i < lights.Length; i++)
+        {
+            if (lights[i].IsDirectional)
+                return i;
+        }
+        return -1;
+    }
+
+    private void DrawShadowCasters(System.Collections.Generic.IReadOnlyList<RenderItem> items, in Matrix4x4 lightClip)
+    {
+        ShaderProgram shader = _shadowShader!;
+        for (int i = 0; i < items.Count; i++)
+        {
+            RenderItem item = items[i];
+
+            // The material is not consulted at all: a shadow map records where a
+            // surface is, not what it looks like. That is also why alpha-tested
+            // foliage will need a second shader here and does not have one.
+            if (BindsProgramBeforeUniforms) shader.Use();
+            shader.SetUniform("uModel", item.World);
+            shader.SetUniform("uLightViewProjection", lightClip);
+            if (!BindsProgramBeforeUniforms) shader.Use();
+
+            item.Mesh.Draw();
+            ShadowCasterCount++;
+        }
+    }
+
+    /// <summary>
+    /// Whether a program must be bound before its uniforms are written.
+    /// </summary>
+    /// <remarks>
+    /// True on OpenGL, where <c>glUniform</c> writes into the active program;
+    /// false on both D3D backends, which stage into a constant shadow that
+    /// <c>Use</c> flushes. The same split <see cref="PostPass"/> exists for,
+    /// named here so a shared draw loop can honour it instead of every pipeline
+    /// carrying its own copy of the order.
+    /// </remarks>
+    protected virtual bool BindsProgramBeforeUniforms => false;
 
     /// <summary>The deferred G-buffer, once one has been created.</summary>
     public GBuffer? GBuffer => _gbuffer;
@@ -617,7 +764,8 @@ public abstract class Renderer
     /// light with additive blending, which needs blend state no backend has yet.
     /// </para>
     /// </remarks>
-    internal void DrawDeferredLightPass(GBuffer gbuffer, RenderView view, Scene.Camera camera, float ambient)
+    internal void DrawDeferredLightPass(
+        GBuffer gbuffer, RenderView view, Scene.Camera camera, float ambient, int shadowLightIndex)
     {
         _lightShader ??= BaseShaders.DeferredLightPath is { } path
             ? CreateShaderFromFile(path)
@@ -647,6 +795,26 @@ public abstract class Renderer
             .SetTexture("uMaterialData", 2, gbuffer.MaterialData)
             .SetTexture("uEmissive", 3, gbuffer.Emissive)
             .SetTexture("uDepth", 4, gbuffer.Depth);
+
+        // The shadow map, or the G-buffer's own depth standing in for it. A
+        // sampler slot must be bound with SOMETHING on every backend, and a
+        // strength of zero is what actually turns the lookup off; leaving the
+        // slot unbound instead means each backend improvises differently, which
+        // is a per-backend picture rather than a per-backend no-op.
+        bool casting = shadowLightIndex >= 0 && _shadowMap is not null;
+        ShadowMap? map = casting ? _shadowMap : null;
+
+        _lightPass
+            .SetUniform("uWorldToShadow", map?.WorldToShadow ?? Matrix4x4.Identity)
+            .SetUniform("uShadowLightIndex", casting ? shadowLightIndex : -1)
+            .SetUniform("uShadowStrength", casting ? ShadowStrength : 0f)
+            .SetUniform("uShadowTexel", map?.TexelSize ?? 0f)
+            // In world units, derived from the texel's own world size: the offset
+            // that stops acne is a property of how coarse the map is here, not a
+            // constant somebody tuned once against one scene's scale.
+            .SetUniform("uShadowNormalBias", (map?.WorldTexelSize ?? 0f) * (map?.NormalBias ?? 0f))
+            .SetUniform("uShadowDepthBias", map?.DepthBias ?? 0f)
+            .SetTexture("uShadowMap", 5, map?.Depth ?? gbuffer.Depth);
 
         LightUpload.Apply(_lightPass, view, ambient);
 

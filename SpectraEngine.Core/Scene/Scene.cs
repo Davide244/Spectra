@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
@@ -507,7 +507,40 @@ public sealed partial class Scene
 
         Frustum frustum = camera.GetFrustum();
         CollectLights(camera.Position, view);
+        CollectVisible(in frustum, view);
+    }
 
+    /// <summary>
+    /// Builds the draw list for a shadow map: everything inside
+    /// <paramref name="lightViewProjection"/>'s volume, with no lights.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A second cull, against the LIGHT, and it cannot be skipped.</b> Reusing
+    /// the camera's draw list would mean only what the camera can see casts a
+    /// shadow, so a wall just off the left of the screen would stop shading the
+    /// floor in front of you the moment you turned. The symptom is shadows that
+    /// appear and vanish as the camera moves, which reads as a flickering bug
+    /// rather than as a missing cull.
+    /// </para>
+    /// <para>
+    /// Lights are deliberately not collected: a shadow pass has no lighting, and
+    /// collecting them would overwrite the nearest-N selection the camera's view
+    /// already made with one ordered by a light's own position.
+    /// </para>
+    /// </remarks>
+    public void BuildShadowView(in Matrix4x4 lightViewProjection, RenderView view)
+    {
+        view.Clear();
+
+        Frustum frustum = Frustum.FromViewProjection(lightViewProjection);
+        CollectVisible(in frustum, view);
+    }
+
+    // The shared walk: everything drawable inside a frustum, whether that
+    // frustum belongs to a camera or to a light.
+    private void CollectVisible(in Frustum frustum, RenderView view)
+    {
         _renderViewScratch.Clear();
         Bvh.QueryFrustum(in frustum, _renderViewScratch);
 

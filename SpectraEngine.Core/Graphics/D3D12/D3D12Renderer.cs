@@ -256,8 +256,9 @@ public sealed unsafe class D3D12Renderer : Renderer
             this, white, 1, 1, TextureFormat.Rgba8, TextureColorSpace.Srgb,
             TextureFilter.Nearest, TextureWrap.Repeat);
 
-        RegisterPipeline(new D3D12ForwardPipeline());
+        // Deferred first: see OpenGLRenderer for why it is the default.
         RegisterPipeline(new D3D12DeferredPipeline());
+        RegisterPipeline(new D3D12ForwardPipeline());
         RegisterPipeline(new D3D12WireframePipeline());
 
         DrainDebugMessages();
@@ -590,7 +591,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         if (sceneTarget is null)
             DrawOverlay(scene);
         else
-            ResolveTo(sceneTarget.ColorTexture, null, scene);
+            ResolveTo(sceneTarget.ColorTexture!, null, scene);
 
         Transition(list, (ID3D12Resource*)_backBuffers[_frameIndex].Handle,
             ResourceStates.RenderTarget, ResourceStates.Present);
@@ -804,6 +805,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         CpuDescriptorHandle rtv;
         CpuDescriptorHandle dsv;
         bool hasDepth;
+        bool hasColor = true;
 
         if (target is D3D12RenderTarget offscreen)
         {
@@ -818,12 +820,18 @@ public sealed unsafe class D3D12Renderer : Renderer
             // alternative is a barrier emitted from inside whatever binds the
             // texture, which is one path out of several and easy to miss.
             offscreen.TransitionDepth(list, ResourceStates.DepthWrite);
-            _currentTargetState = new D3D12TargetState(
-                offscreen.ColorFormat, 1, offscreen.DepthViewFormat, 1);
+
+            // A depth-only target contributes NO render-target formats, and the
+            // pipeline state has to agree: a PSO built for one RTV and bound
+            // with none is a validation failure, not a wrong pixel.
+            _currentTargetState = offscreen.HasColor
+                ? new D3D12TargetState(offscreen.ColorFormat, 1, offscreen.DepthViewFormat, 1)
+                : new D3D12TargetState(Format.FormatUnknown, 0, offscreen.DepthViewFormat, 1);
 
             rtv = offscreen.Rtv;
             dsv = offscreen.Dsv;
             hasDepth = offscreen.HasDepth;
+            hasColor = offscreen.HasColor;
         }
         else
         {
@@ -833,7 +841,7 @@ public sealed unsafe class D3D12Renderer : Renderer
             hasDepth = true;
         }
 
-        if (clear.Color is { } color)
+        if (clear.Color is { } color && hasColor)
         {
             float* value = stackalloc float[4] { color.X, color.Y, color.Z, color.W };
             list->ClearRenderTargetView(rtv, value, 0, null);
@@ -883,10 +891,20 @@ public sealed unsafe class D3D12Renderer : Renderer
             return;
         }
 
-        if (hasDepth)
+        if (!hasColor)
+        {
+            // Zero render targets: the depth-only bind that makes a shadow pass
+            // cheap, and that the pipeline state above was built to match.
+            list->OMSetRenderTargets(0, null, 0, &dsv);
+        }
+        else if (hasDepth)
+        {
             list->OMSetRenderTargets(1, &rtv, 0, &dsv);
+        }
         else
+        {
             list->OMSetRenderTargets(1, &rtv, 0, null);
+        }
     }
 
     protected override void EndPassCore(RenderTarget? target, ReadOnlySpan<RenderTarget> targets)

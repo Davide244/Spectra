@@ -1,24 +1,29 @@
-using Silk.NET.OpenGL;
+﻿using Silk.NET.OpenGL;
 using System;
 
 namespace SpectraEngine.Core.Graphics.OpenGL;
 
 /// <summary>
-/// An FBO with a texture colour attachment and an optional depth renderbuffer.
+/// An FBO with an optional texture colour attachment and an optional sampleable
+/// depth texture.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Colour is a <b>texture</b> and depth is a <b>renderbuffer</b>, and the
-/// asymmetry is the point: colour is what something else samples, depth is only
-/// ever written here. A renderbuffer is the cheaper resource for the second
-/// case, and making depth sampleable needs work in the shader language that
-/// does not exist yet (see <see cref="RenderTargetDesc"/>).
+/// Both attachments are <b>textures</b>, because both are sampled: colour by
+/// whatever reads the result, depth by the deferred light pass reconstructing
+/// world position and by the shadow pass comparing against it.
+/// </para>
+/// <para>
+/// <b>A depth-only FBO must say so twice.</b> Leaving colour attachment 0
+/// unattached is not enough: the draw and read buffers still name it, and GL
+/// reports the framebuffer incomplete. Both are set to <c>GL_NONE</c> below,
+/// which is the whole of what makes a shadow map work on this backend.
 /// </para>
 /// </remarks>
 internal sealed class OpenGLRenderTarget : RenderTarget
 {
     private readonly GL _gl;
-    private readonly OpenGLTexture _color;
+    private readonly OpenGLTexture? _color;
     private readonly OpenGLTexture? _depth;
     private uint _fbo;
     private bool _disposed;
@@ -35,8 +40,11 @@ internal sealed class OpenGLRenderTarget : RenderTarget
         // Created through the ordinary texture path with no pixels, so the
         // attachment IS a texture in every sense that matters downstream: same
         // sampler state, same colour-space handling, same type a material binds.
-        _color = OpenGLTexture.CreateEmpty(
-            gl, desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap);
+        if (desc.Color)
+        {
+            _color = OpenGLTexture.CreateEmpty(
+                gl, desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap);
+        }
 
         if (desc.Depth)
         {
@@ -50,7 +58,7 @@ internal sealed class OpenGLRenderTarget : RenderTarget
         Allocate(desc.Width, desc.Height);
     }
 
-    public override Texture ColorTexture => _color;
+    public override Texture? ColorTexture => _color;
 
     public override Texture? DepthTexture => _depth;
 
@@ -63,7 +71,7 @@ internal sealed class OpenGLRenderTarget : RenderTarget
 
         // Reallocates the texture's storage behind the same wrapper and the same
         // GL name, so every material already sampling it stays valid.
-        _color.ReallocateStorage(width, height);
+        _color?.ReallocateStorage(width, height);
         _depth?.ReallocateStorage(width, height);
         Allocate(width, height);
     }
@@ -74,9 +82,22 @@ internal sealed class OpenGLRenderTarget : RenderTarget
             _fbo = _gl.GenFramebuffer();
 
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
-        _gl.FramebufferTexture2D(
-            FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
-            TextureTarget.Texture2D, _color.Handle, 0);
+
+        if (_color is not null)
+        {
+            _gl.FramebufferTexture2D(
+                FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+                TextureTarget.Texture2D, _color.Handle, 0);
+        }
+        else
+        {
+            // Both, not just the draw buffer. A framebuffer with no colour
+            // attachment whose read buffer still names attachment 0 is
+            // INCOMPLETE_READ_BUFFER, which is a completeness failure at
+            // creation rather than an error at the first read.
+            _gl.DrawBuffer(DrawBufferMode.None);
+            _gl.ReadBuffer(ReadBufferMode.None);
+        }
 
         if (_depth is not null)
         {
@@ -125,7 +146,7 @@ internal sealed class OpenGLRenderTarget : RenderTarget
             var attachment = (FramebufferAttachment)(GLEnum.ColorAttachment0 + i);
             gl.FramebufferTexture2D(
                 FramebufferTarget.Framebuffer, attachment,
-                TextureTarget.Texture2D, ((OpenGLTexture)extra.ColorTexture).Handle, 0);
+                TextureTarget.Texture2D, ((OpenGLTexture)extra.ColorTexture!).Handle, 0);
             buffers[i] = GLEnum.ColorAttachment0 + i;
         }
 
@@ -169,6 +190,6 @@ internal sealed class OpenGLRenderTarget : RenderTarget
 
         // The attachment is this target's to free: it was never handed to the
         // asset manager and nothing else can be holding it as an owner.
-        _color.Dispose();
+        _color?.Dispose();
     }
 }

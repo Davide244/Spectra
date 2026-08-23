@@ -88,8 +88,12 @@ shader Lit {
                 attenuation = falloff * falloff / (1.0 + distance * distance);
             }
 
+            // Divided by pi, like the deferred path's Lambert term, because the
+            // two share one light rig: without it a light bright enough to look
+            // right here is three times too bright there, and the numbers in
+            // the scene can only be tuned for one of them.
             float ndotl = Math.Max(Math.Dot(n, Math.Normalize(toLight)), 0.0);
-            total = total + albedo * radiance * ndotl * attenuation;
+            total = total + albedo / 3.14159265 * radiance * ndotl * attenuation;
         }
 
         return vec4(total, 1.0);

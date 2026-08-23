@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace SpectraEngine.Core.Graphics;
 
@@ -40,6 +40,10 @@ namespace SpectraEngine.Core.Graphics;
 /// <param name="Depth">Whether to attach a depth buffer. Anything drawing 3D geometry wants one.</param>
 /// <param name="Filter">How the colour attachment samples. Mipmaps are not generated for targets.</param>
 /// <param name="Wrap">Wrap mode of the colour attachment.</param>
+/// <param name="Color">
+/// Whether to attach colour at all. False makes a depth-only target, which is
+/// what a shadow map is; see <see cref="DepthOnly"/>.
+/// </param>
 public readonly record struct RenderTargetDesc(
     int Width,
     int Height,
@@ -47,8 +51,36 @@ public readonly record struct RenderTargetDesc(
     TextureColorSpace ColorSpace = TextureColorSpace.Linear,
     bool Depth = true,
     TextureFilter Filter = TextureFilter.Linear,
-    TextureWrap Wrap = TextureWrap.Clamp)
+    TextureWrap Wrap = TextureWrap.Clamp,
+    bool Color = true)
 {
+    /// <summary>
+    /// A target with depth and nothing else: a shadow map.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Not an optimisation, a correctness choice, and a large one.</b> A
+    /// 2048-square colour attachment nobody reads is 16 MB per cascade, and
+    /// binding no render target at all is what lets the hardware take its
+    /// double-speed depth-only path, which is the difference between a shadow
+    /// pass costing half a geometry pass and costing a whole one.
+    /// </para>
+    /// <para>
+    /// The depth attachment samples <b>nearest</b>, which every backend already
+    /// forces, and that is correct rather than a limitation: linear filtering of
+    /// DEPTH averages two distances and returns one that lies on neither
+    /// surface. A PCF kernel filters the comparison RESULTS instead, by taking
+    /// several point taps and averaging the booleans, which is what the light
+    /// pass does.
+    /// </para>
+    /// </remarks>
+    public static RenderTargetDesc DepthOnly(int size) => DepthOnly(size, size);
+
+    /// <inheritdoc cref="DepthOnly(int)"/>
+    public static RenderTargetDesc DepthOnly(int width, int height) => new(
+        width, height, TextureFormat.Rgba8, TextureColorSpace.Linear,
+        Depth: true, TextureFilter.Linear, TextureWrap.Clamp, Color: false);
+
     /// <summary>Throws if this description cannot be built. Called by every backend before allocating.</summary>
     public void Validate()
     {
@@ -56,13 +88,20 @@ public readonly record struct RenderTargetDesc(
             throw new ArgumentOutOfRangeException(
                 nameof(Width), $"A render target needs a positive size; got {Width}x{Height}.");
 
+        // A target with neither attachment is a pass that can write nothing,
+        // which is a caller mistake rather than a configuration.
+        if (!Color && !Depth)
+            throw new ArgumentException(
+                "A render target needs at least one attachment; both Color and Depth are false.",
+                nameof(Color));
+
         // The attachment is created as a render target, and no backend can make
         // one out of a three-channel format: D3D has no 24-bit format at all.
         // R8 is excluded for a different reason: nothing needs a one-channel
-        // target until R6 wants a shadow map, and that milestone brings the
-        // typeless-depth work with it. Rejecting here beats a backend-specific
-        // failure three layers down.
-        if (ColorFormat is not (TextureFormat.Rgba8 or TextureFormat.Rgba16Float))
+        // colour target, and the shadow maps that might have wanted one carry no
+        // colour at all. Rejecting here beats a backend-specific failure three
+        // layers down.
+        if (Color && ColorFormat is not (TextureFormat.Rgba8 or TextureFormat.Rgba16Float))
             throw new ArgumentOutOfRangeException(
                 nameof(ColorFormat),
                 $"Render targets support {nameof(TextureFormat.Rgba8)} and " +
@@ -107,10 +146,10 @@ public abstract class RenderTarget : IDisposable
     public RenderTargetDesc Desc { get; protected set; }
 
     /// <summary>
-    /// The colour attachment, bindable into any material. Its identity is
-    /// stable across <see cref="Resize"/>.
+    /// The colour attachment, bindable into any material, or null on a
+    /// depth-only target. Its identity is stable across <see cref="Resize"/>.
     /// </summary>
-    public abstract Texture ColorTexture { get; }
+    public abstract Texture? ColorTexture { get; }
 
     /// <summary>
     /// The depth attachment as a sampleable texture, or null when this target

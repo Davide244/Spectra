@@ -692,19 +692,26 @@ public sealed class SceneManager
         {
             Kind = LightKind.Directional,
             Color = ColorSpace.SrgbToLinear(new Vector3(1f, 0.96f, 0.88f)),
-            Intensity = 1.6f,
+
+            // RETUNED FOR PBR, and the factor is not a matter of taste. The old
+            // forward shader was albedo * N.L * radiance with no normalisation;
+            // a real Lambert term divides by pi, so every one of these numbers
+            // was suddenly worth a third of what it had been. The scene did not
+            // read as a lighting bug, it read as a dark room, which is exactly
+            // why it survived the pipeline change.
+            Intensity = 11f,
         };
 
         AddPointLight(scene, "LampWarm", new Vector3(-3f, 2.2f, 2.5f),
-            new Vector3(1f, 0.55f, 0.2f), intensity: 12f, range: 9f);
+            new Vector3(1f, 0.55f, 0.2f), intensity: 45f, range: 9f);
         AddPointLight(scene, "LampCool", new Vector3(3.2f, 1.8f, -2.2f),
-            new Vector3(0.3f, 0.6f, 1f), intensity: 10f, range: 8f);
+            new Vector3(0.3f, 0.6f, 1f), intensity: 38f, range: 8f);
 
         // Over the play area, so walking there in play mode is lit by something
         // other than the sun and the point-light path is exercised where a
         // person actually looks at it.
         AddPointLight(scene, "PlayAreaLamp", DemoPlayArea.Center + new Vector3(-8f, 4f, 0f),
-            new Vector3(0.9f, 0.9f, 1f), intensity: 30f, range: 18f);
+            new Vector3(0.9f, 0.9f, 1f), intensity: 110f, range: 18f);
     }
 
     private static void AddPointLight(
@@ -770,6 +777,20 @@ public sealed class SceneManager
             };
             node.MeshRenderer = new MeshRenderer(mesh, material);
         }
+    }
+
+    // One phrase for the shadow state, because "shadows are on" and "shadows
+    // drew something" are different claims and a smoke log needs the second.
+    // A caster count of zero with shadows enabled means the map was fitted and
+    // nothing was in it, which is the shape of a cull bug.
+    private static string DescribeShadows(Renderer? renderer)
+    {
+        if (renderer is null) return "no renderer";
+        if (!renderer.ShadowsEnabled) return "shadows off";
+        if (renderer.ShadowMap is not { } map) return "shadows on, no caster yet";
+
+        return $"shadows on ({renderer.ShadowCasterCount} caster(s), " +
+               $"{map.Resolution}px map, {map.WorldTexelSize:0.000} sunit texel)";
     }
 
     private static SceneNode AddBrushNode(
@@ -859,6 +880,7 @@ public sealed class SceneManager
                     "physics: {PhysicsBackend}, {PhysicsBodies} body(ies) / {PhysicsShapes} shape(s); " +
                     "editing: {Selected} selected, {GizmoMode} gizmo, {Navigation} navigation, " +
                     "undo {UndoDepth} / redo {RedoDepth}; " +
+                    "rendering: {Pipeline} pipeline, {Shadows}; " +
                     "character: {CharacterMode}",
                     assets?.TextureCount ?? 0, assets?.MaterialCount ?? 0,
                     _modelsRequested, _modelsPlaced,
@@ -872,6 +894,7 @@ public sealed class SceneManager
                     editor?.SelectionCount ?? 0, editor?.GizmoModeName ?? "none",
                     editor?.NavigationModeName ?? "none",
                     editor?.UndoDepth ?? 0, editor?.RedoDepth ?? 0,
+                    _renderer?.CurrentPipelineName ?? "none", DescribeShadows(_renderer),
                     DescribeCharacter());
             }
 

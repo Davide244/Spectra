@@ -439,13 +439,30 @@ The scene renders into a half-float target and one full-screen pass turns linear
 `ShaderProgram` has **no array-uniform overload on any backend today**, so cascade matrices and light arrays are simply not settable — even though SpectraShade already supports array uniforms in the language. Add `ReadOnlySpan<Matrix4x4>` / `ReadOnlySpan<Vector4>` setters, and generalise `Scene.BuildRenderView(Camera, view)` to `BuildView(in Frustum, view)` with the camera overload delegating, plus an engine-owned pool of `RenderView`s (one per pass) — which is also exactly what multi-viewport later needs.
 - **Restrict the first version to `Matrix4x4[]` and `Vector4[]`** and document the `float[]` hazard: HLSL pads every array element to 16 bytes, so a naive span copy of a float array scrambles it. **Depends on** — `F3`. **Size** — **S–M.** **Risk** — LOW–MEDIUM.
 
-### R6 — Shadow map v1: one directional light, one cascade, PCF
-Depth-only target from a light-space ortho **fitted to a near slice of the camera frustum** — the world-fitted single map that a sealed-BSP engine could use is unavailable at any resolution here, because the world is unbounded. **Written from day one as an N-cascade shader with N=1**, so `R7` is a constant change plus a per-cascade pass rather than a rewrite. Needs: typeless depth textures on both D3D backends, comparison sampling on all three (this is what the `ComparisonFunc.None` comment in `D3D12Texture` becomes), and **`sampler2DShadow` added to SpectraShade** — a new type in the language plus `SamplerComparisonState` emission and a `SampleCompare` member rewrite in both generators.
-- **Depends on** — `R3`, `R5`, `R1`.
-- **Risk** — **HIGH**, the most cross-cutting item: the first feature needing a new render-target kind, a new sampler kind on three backends, a new language type, and a second cull pass simultaneously. Depth-bias constants are **not portable** across the GL/D3D clip-Z difference. Split shipping into "depth pass renders and can be shown as a debug quad" then "forward pass samples it". **Size** — **L.**
+### R6. Shadow map v1: one directional light, one cascade, PCF ✅ **landed**
+A depth-only target rendered from a light-space ortho box fitted to a near slice
+of the camera frustum, sampled with a 3x3 PCF kernel in the deferred light pass.
 
-### R7 — Cascaded shadow maps
-N=3–4 with per-slice ortho fitting, texel-snap stabilisation (mandatory — the camera is always moving in an open world), and split-boundary blending. Clamp the far cascade to a **shadow distance**, never the camera far plane, or the ortho box grows unboundedly. Atlas first (no array-slice RTV concept yet). **Depends on** — `R6`. **Size** — **M.**
+**It needed no `sampler2DShadow` and no new language type**, which is the risk
+the plan above rated HIGH. Comparison sampling buys a free bilinear filter of
+the comparison result; doing the compare in the shader and averaging nine point
+taps costs nine instructions and needs nothing from the language. What it DID
+need was a fragment stage that returns void, so a depth-only pass binds no
+render target without D3D11 logging a warning per draw.
+
+Depth bias is a **normal offset in world units**, so the non-portability the
+plan warned about never arose: there is no clip-Z constant to get wrong.
+
+Honest state: one cascade over 28 units puts a texel at about 3.6 cm, which is
+soft at close range and is what `R7` fixes. Point and spot lights do not cast at
+all. **Size**: **M**, and the risk was in the fit, not the plumbing.
+
+### R7 — Cascaded shadow maps *(the next rendering item)*
+N=3–4 with per-slice ortho fitting, texel-snap stabilisation (already built and
+tested in `R6`, and reusable as-is: `ShadowMap.TryFitLightMatrix` is a pure
+function of a near/far pair), and split-boundary blending. The remaining work is
+an atlas or N targets, a per-cascade viewport, and the split selection in the
+light pass. Clamp the far cascade to a **shadow distance**, never the camera far plane, or the ortho box grows unboundedly. Atlas first (no array-slice RTV concept yet). **Depends on** — `R6`. **Size** — **M.**
 
 ### R8. Multiple lights ✅ **landed**, and the arc pivoted to DEFERRED
 A `Light` component on `SceneNode` beside `MeshRenderer`, collected during

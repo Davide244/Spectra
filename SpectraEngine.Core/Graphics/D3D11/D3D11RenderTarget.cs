@@ -1,4 +1,4 @@
-using Silk.NET.Core.Native;
+﻿using Silk.NET.Core.Native;
 using Silk.NET.Direct3D11;
 using Silk.NET.DXGI;
 using System;
@@ -24,7 +24,7 @@ namespace SpectraEngine.Core.Graphics.D3D11;
 internal sealed unsafe class D3D11RenderTarget : RenderTarget
 {
     private readonly ComPtr<ID3D11Device> _device;
-    private readonly D3D11Texture _color;
+    private readonly D3D11Texture? _color;
     private readonly D3D11Texture? _depth;
     private ComPtr<ID3D11RenderTargetView> _rtv;
     private ComPtr<ID3D11DepthStencilView> _dsv;
@@ -40,8 +40,11 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
         _device = device;
         Desc = desc;
 
-        _color = D3D11Texture.CreateRenderTargetTexture(
-            device, desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap);
+        if (desc.Color)
+        {
+            _color = D3D11Texture.CreateRenderTargetTexture(
+                device, desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap);
+        }
 
         if (desc.Depth)
             _depth = D3D11Texture.CreateDepthTexture(device, desc.Width, desc.Height);
@@ -49,7 +52,7 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
         Allocate(desc.Width, desc.Height);
     }
 
-    public override Texture ColorTexture => _color;
+    public override Texture? ColorTexture => _color;
 
     public override Texture? DepthTexture => _depth;
 
@@ -63,7 +66,7 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
         ReleaseViews();
         // Swaps the resource and the SRV inside the existing wrapper, so every
         // material sampling this target survives the resize.
-        _color.ReplaceStorage(_device, width, height);
+        _color?.ReplaceStorage(_device, width, height);
         _depth?.ReplaceDepthStorage(_device, width, height);
         Allocate(width, height);
     }
@@ -72,15 +75,18 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
     {
         var dev = (ID3D11Device*)_device.Handle;
 
-        ID3D11RenderTargetView* rtv = null;
-        var rtvDesc = new RenderTargetViewDesc
+        if (_color is not null)
         {
-            Format = _color.DxgiFormat,
-            ViewDimension = RtvDimension.Texture2D,
-        };
-        rtvDesc.Anonymous.Texture2D = new Tex2DRtv { MipSlice = 0 };
-        SilkMarshal.ThrowHResult(dev->CreateRenderTargetView(_color.Resource, &rtvDesc, &rtv));
-        _rtv = ComOwnership.Own(rtv);
+            ID3D11RenderTargetView* rtv = null;
+            var rtvDesc = new RenderTargetViewDesc
+            {
+                Format = _color.DxgiFormat,
+                ViewDimension = RtvDimension.Texture2D,
+            };
+            rtvDesc.Anonymous.Texture2D = new Tex2DRtv { MipSlice = 0 };
+            SilkMarshal.ThrowHResult(dev->CreateRenderTargetView(_color.Resource, &rtvDesc, &rtv));
+            _rtv = ComOwnership.Own(rtv);
+        }
 
         if (_depth is not null)
         {
@@ -118,7 +124,7 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
         _disposed = true;
 
         ReleaseViews();
-        _color.Dispose();
+        _color?.Dispose();
         _depth?.Dispose();
     }
 }
