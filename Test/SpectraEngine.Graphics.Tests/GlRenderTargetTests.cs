@@ -384,6 +384,95 @@ public sealed class GlRenderTargetTests
         }
     }
 
+    [Fact]
+    public void Depth_is_a_sampleable_texture_carrying_what_was_written()
+    {
+        // Deferred reconstructs world position from depth rather than storing
+        // it, which is worth a whole RGB of G-buffer. That only works if depth
+        // is readable, so this asserts the value rather than the existence of
+        // the object.
+        OpenGLRenderer renderer = _fixture.Renderer;
+        RenderTarget target = renderer.CreateRenderTarget(new RenderTargetDesc(8, 8));
+
+        try
+        {
+            target.DepthTexture.ShouldNotBeNull();
+            target.DepthTexture!.Format.ShouldBe(TextureFormat.Depth32Float);
+
+            // Clear to a depth that is neither of the defaults, so reading back
+            // the right number cannot be a coincidence.
+            renderer.BeginPass(target, new PassClear(null, 0.25f));
+            renderer.EndPass();
+
+            ReadDepth(target).ShouldBe(0.25f, 0.001f);
+        }
+        finally
+        {
+            renderer.DestroyRenderTarget(target);
+        }
+    }
+
+    [Fact]
+    public void A_depthless_target_has_no_depth_texture()
+    {
+        OpenGLRenderer renderer = _fixture.Renderer;
+        RenderTarget target = renderer.CreateRenderTarget(new RenderTargetDesc(8, 8, Depth: false));
+
+        try
+        {
+            target.DepthTexture.ShouldBeNull();
+        }
+        finally
+        {
+            renderer.DestroyRenderTarget(target);
+        }
+    }
+
+    [Fact]
+    public void A_resize_keeps_the_depth_texture_identity_too()
+    {
+        // Same reason as the colour attachment: anything sampling depth holds
+        // this object, and replacing it on resize strands them.
+        OpenGLRenderer renderer = _fixture.Renderer;
+        RenderTarget target = renderer.CreateRenderTarget(new RenderTargetDesc(8, 8));
+
+        try
+        {
+            Texture before = target.DepthTexture!;
+            target.Resize(32, 16);
+
+            target.DepthTexture.ShouldBeSameAs(before);
+            before.Width.ShouldBe(32);
+            before.Height.ShouldBe(16);
+
+            // And it still works as a depth attachment afterwards.
+            renderer.BeginPass(target, new PassClear(null, 0.75f));
+            renderer.EndPass();
+            ReadDepth(target).ShouldBe(0.75f, 0.001f);
+        }
+        finally
+        {
+            renderer.DestroyRenderTarget(target);
+        }
+    }
+
+    private unsafe float ReadDepth(RenderTarget target)
+    {
+        GL gl = _fixture.Gl;
+        uint fbo = gl.GenFramebuffer();
+        gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, fbo);
+        gl.FramebufferTexture2D(
+            FramebufferTarget.ReadFramebuffer, FramebufferAttachment.DepthAttachment,
+            TextureTarget.Texture2D, ((OpenGLTexture)target.DepthTexture!).Handle, 0);
+
+        float value = 0f;
+        gl.ReadPixels(0, 0, 1, 1, PixelFormat.DepthComponent, PixelType.Float, &value);
+
+        gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, 0);
+        gl.DeleteFramebuffer(fbo);
+        return value;
+    }
+
     // Reads texel (0,0) of an HDR target, as floats. The byte reader below
     // cannot see what makes an HDR target HDR: it clamps to [0,1] on the way
     // out and quantises what survives.

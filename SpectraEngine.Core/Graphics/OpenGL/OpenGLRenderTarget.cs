@@ -19,8 +19,8 @@ internal sealed class OpenGLRenderTarget : RenderTarget
 {
     private readonly GL _gl;
     private readonly OpenGLTexture _color;
+    private readonly OpenGLTexture? _depth;
     private uint _fbo;
-    private uint _depth;
     private bool _disposed;
 
     internal uint Framebuffer => _fbo;
@@ -38,10 +38,21 @@ internal sealed class OpenGLRenderTarget : RenderTarget
         _color = OpenGLTexture.CreateEmpty(
             gl, desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap);
 
+        if (desc.Depth)
+        {
+            // Nearest and clamp: depth is read as data, and interpolating
+            // between two depths produces a value that is at neither surface.
+            _depth = OpenGLTexture.CreateEmpty(
+                gl, desc.Width, desc.Height, TextureFormat.Depth32Float, TextureColorSpace.Linear,
+                TextureFilter.Nearest, TextureWrap.Clamp);
+        }
+
         Allocate(desc.Width, desc.Height);
     }
 
     public override Texture ColorTexture => _color;
+
+    public override Texture? DepthTexture => _depth;
 
     public override void Resize(int width, int height)
     {
@@ -53,6 +64,7 @@ internal sealed class OpenGLRenderTarget : RenderTarget
         // Reallocates the texture's storage behind the same wrapper and the same
         // GL name, so every material already sampling it stays valid.
         _color.ReallocateStorage(width, height);
+        _depth?.ReallocateStorage(width, height);
         Allocate(width, height);
     }
 
@@ -66,16 +78,14 @@ internal sealed class OpenGLRenderTarget : RenderTarget
             FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
             TextureTarget.Texture2D, _color.Handle, 0);
 
-        if (Desc.Depth)
+        if (_depth is not null)
         {
-            if (_depth == 0) _depth = _gl.GenRenderbuffer();
-            _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _depth);
-            _gl.RenderbufferStorage(
-                RenderbufferTarget.Renderbuffer, InternalFormat.Depth24Stencil8, (uint)width, (uint)height);
-            _gl.FramebufferRenderbuffer(
-                FramebufferTarget.Framebuffer, FramebufferAttachment.DepthStencilAttachment,
-                RenderbufferTarget.Renderbuffer, _depth);
-            _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, 0);
+            // DepthAttachment, not DepthStencilAttachment: the format carries no
+            // stencil, and attaching a depth-only texture to the combined point
+            // leaves the framebuffer incomplete.
+            _gl.FramebufferTexture2D(
+                FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment,
+                TextureTarget.Texture2D, _depth.Handle, 0);
         }
 
         GLEnum status = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
@@ -154,8 +164,8 @@ internal sealed class OpenGLRenderTarget : RenderTarget
         _disposed = true;
 
         if (_fbo != 0) _gl.DeleteFramebuffer(_fbo);
-        if (_depth != 0) _gl.DeleteRenderbuffer(_depth);
-        _fbo = _depth = 0;
+        _fbo = 0;
+        _depth?.Dispose();
 
         // The attachment is this target's to free: it was never handed to the
         // asset manager and nothing else can be holding it as an owner.

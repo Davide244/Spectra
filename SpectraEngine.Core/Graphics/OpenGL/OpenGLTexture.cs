@@ -169,6 +169,11 @@ internal sealed class OpenGLTexture : Texture
             // validates the (format, type) pair against the internal format, and
             // UnsignedByte against RGBA16F is rejected on some drivers.
             TextureFormat.Rgba16Float => (InternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float),
+            // Sampled with an ordinary sampler2D, which returns the depth in .r.
+            // GL_TEXTURE_COMPARE_MODE stays at its GL_NONE default, so this is a
+            // plain texture read and not a shadow comparison.
+            TextureFormat.Depth32Float =>
+                (InternalFormat.DepthComponent32f, PixelFormat.DepthComponent, PixelType.Float),
             _ => throw new ArgumentOutOfRangeException(nameof(format)),
         };
     }

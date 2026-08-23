@@ -25,8 +25,8 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
 {
     private readonly ComPtr<ID3D11Device> _device;
     private readonly D3D11Texture _color;
+    private readonly D3D11Texture? _depth;
     private ComPtr<ID3D11RenderTargetView> _rtv;
-    private ComPtr<ID3D11Texture2D> _depthTexture;
     private ComPtr<ID3D11DepthStencilView> _dsv;
     private bool _disposed;
 
@@ -43,10 +43,15 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
         _color = D3D11Texture.CreateRenderTargetTexture(
             device, desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap);
 
+        if (desc.Depth)
+            _depth = D3D11Texture.CreateDepthTexture(device, desc.Width, desc.Height);
+
         Allocate(desc.Width, desc.Height);
     }
 
     public override Texture ColorTexture => _color;
+
+    public override Texture? DepthTexture => _depth;
 
     public override void Resize(int width, int height)
     {
@@ -59,6 +64,7 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
         // Swaps the resource and the SRV inside the existing wrapper, so every
         // material sampling this target survives the resize.
         _color.ReplaceStorage(_device, width, height);
+        _depth?.ReplaceDepthStorage(_device, width, height);
         Allocate(width, height);
     }
 
@@ -76,25 +82,20 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
         SilkMarshal.ThrowHResult(dev->CreateRenderTargetView(_color.Resource, &rtvDesc, &rtv));
         _rtv = ComOwnership.Own(rtv);
 
-        if (Desc.Depth)
+        if (_depth is not null)
         {
-            var depthDesc = new Texture2DDesc
+            // An explicit desc, because the resource is typeless: a null desc
+            // means "the resource's own format", and R32_TYPELESS is not a
+            // depth format the runtime will accept for a DSV.
+            var dsvDesc = new DepthStencilViewDesc
             {
-                Width = (uint)width,
-                Height = (uint)height,
-                MipLevels = 1,
-                ArraySize = 1,
-                Format = Silk.NET.DXGI.Format.FormatD24UnormS8Uint,
-                SampleDesc = new SampleDesc(1, 0),
-                Usage = Usage.Default,
-                BindFlags = (uint)BindFlag.DepthStencil,
+                Format = Silk.NET.DXGI.Format.FormatD32Float,
+                ViewDimension = DsvDimension.Texture2D,
             };
-            ID3D11Texture2D* depth = null;
-            SilkMarshal.ThrowHResult(dev->CreateTexture2D(&depthDesc, null, &depth));
-            _depthTexture = ComOwnership.Own(depth);
+            dsvDesc.Anonymous.Texture2D = new Tex2DDsv { MipSlice = 0 };
 
             ID3D11DepthStencilView* dsv = null;
-            SilkMarshal.ThrowHResult(dev->CreateDepthStencilView((ID3D11Resource*)depth, null, &dsv));
+            SilkMarshal.ThrowHResult(dev->CreateDepthStencilView(_depth.Resource, &dsvDesc, &dsv));
             _dsv = ComOwnership.Own(dsv);
         }
 
@@ -108,7 +109,6 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
         // release is an over-release rather than something a leak absorbs. See
         // ComOwnership for the whole rule.
         ComOwnership.Release(ref _dsv);
-        ComOwnership.Release(ref _depthTexture);
         ComOwnership.Release(ref _rtv);
     }
 
@@ -119,5 +119,6 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
 
         ReleaseViews();
         _color.Dispose();
+        _depth?.Dispose();
     }
 }

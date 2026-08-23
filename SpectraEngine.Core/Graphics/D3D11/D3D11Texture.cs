@@ -203,6 +203,70 @@ internal sealed unsafe class D3D11Texture : Texture
     }
 
     /// <summary>
+    /// Creates a depth texture that can be both written through a depth-stencil
+    /// view and read through a sampler.
+    /// </summary>
+    /// <remarks>
+    /// <b>The resource is TYPELESS and the depth-ness lives on the views.</b>
+    /// D3D refuses a shader-resource view over a resource declared
+    /// <c>D32_FLOAT</c>, so writing needs <c>D32_FLOAT</c> on the DSV and
+    /// reading needs <c>R32_FLOAT</c> on the SRV, over one <c>R32_TYPELESS</c>
+    /// resource. That is the whole of what "typeless depth" means and the whole
+    /// of why a deferred pass cannot just reuse the ordinary depth path.
+    /// </remarks>
+    internal static D3D11Texture CreateDepthTexture(
+        ComPtr<ID3D11Device> device, int width, int height)
+    {
+        var dev = (ID3D11Device*)device.Handle;
+
+        var desc = new Texture2DDesc
+        {
+            Width = (uint)width,
+            Height = (uint)height,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = Silk.NET.DXGI.Format.FormatR32Typeless,
+            SampleDesc = new SampleDesc(1, 0),
+            Usage = Usage.Default,
+            BindFlags = (uint)(BindFlag.DepthStencil | BindFlag.ShaderResource),
+        };
+
+        ID3D11Texture2D* texPtr = null;
+        SilkMarshal.ThrowHResult(dev->CreateTexture2D(&desc, null, &texPtr));
+
+        ID3D11ShaderResourceView* srvPtr = CreateSrv(
+            dev, texPtr, Silk.NET.DXGI.Format.FormatR32Float, mipLevels: 1);
+        // Point sampling: a depth is data, and interpolating two of them yields
+        // a value that lies on neither surface.
+        ID3D11SamplerState* samplerPtr = CreateSampler(dev, TextureFilter.Nearest, TextureWrap.Clamp);
+
+        return new D3D11Texture(
+            ComOwnership.Own(texPtr),
+            ComOwnership.Own(srvPtr),
+            ComOwnership.Own(samplerPtr),
+            width, height, TextureFormat.Depth32Float, TextureColorSpace.Linear,
+            Silk.NET.DXGI.Format.FormatR32Typeless);
+    }
+
+    /// <summary>Reallocates a depth texture in place, keeping the wrapper.</summary>
+    internal void ReplaceDepthStorage(ComPtr<ID3D11Device> device, int width, int height)
+    {
+        D3D11Texture replacement = CreateDepthTexture(device, width, height);
+
+        ComOwnership.Release(ref _srv);
+        ComOwnership.Release(ref _texture);
+
+        _texture = replacement._texture;
+        _srv = replacement._srv;
+        replacement._texture = default;
+        replacement._srv = default;
+        replacement.Dispose();
+
+        Width = width;
+        Height = height;
+    }
+
+    /// <summary>
     /// Replaces this texture's resource and view at a new size, <b>keeping the
     /// same wrapper object</b>. What a render-target resize needs; the sampler
     /// is unaffected and is deliberately kept.

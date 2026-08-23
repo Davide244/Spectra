@@ -92,6 +92,56 @@ internal sealed unsafe class D3D12Texture : Texture
     };
 
     /// <summary>
+    /// Creates a depth texture written through a depth-stencil view and read
+    /// through a sampler.
+    /// </summary>
+    /// <remarks>
+    /// <b>The resource is TYPELESS and the depth-ness lives on the views.</b>
+    /// D3D refuses a shader-resource view over a resource declared
+    /// <c>D32_FLOAT</c>, so the resource is <c>R32_TYPELESS</c>, the DSV says
+    /// <c>D32_FLOAT</c> and the SRV says <c>R32_FLOAT</c>.
+    /// </remarks>
+    internal static D3D12Texture CreateDepthTexture(D3D12Renderer renderer, int width, int height)
+    {
+        var texture = new D3D12Texture(
+            renderer, width, height, TextureFormat.Depth32Float, TextureColorSpace.Linear,
+            Silk.NET.DXGI.Format.FormatR32Typeless, TextureFilter.Nearest, TextureWrap.Clamp);
+        texture.AllocateDepthStorage(renderer, width, height);
+        return texture;
+    }
+
+    /// <summary>Reallocates a depth texture in place, keeping the wrapper and its SRV slot.</summary>
+    internal void ReplaceDepthStorage(D3D12Renderer renderer, int width, int height)
+    {
+        ComOwnership.Release(ref _texture);
+        AllocateDepthStorage(renderer, width, height);
+        Width = width;
+        Height = height;
+    }
+
+    private void AllocateDepthStorage(D3D12Renderer renderer, int width, int height)
+    {
+        _texture = renderer.CreateDepthResource((uint)width, (uint)height);
+
+        var srvDesc = new ShaderResourceViewDesc
+        {
+            // R32_FLOAT, not the typeless resource format: a typeless SRV is
+            // rejected, and this is the read half of the two views.
+            Format = Silk.NET.DXGI.Format.FormatR32Float,
+            ViewDimension = SrvDimension.Texture2D,
+            Shader4ComponentMapping = D3D12Renderer.DefaultComponentMapping,
+        };
+        srvDesc.Anonymous.Texture2D = new Tex2DSrv
+        {
+            MostDetailedMip = 0,
+            MipLevels = 1,
+            PlaneSlice = 0,
+            ResourceMinLODClamp = 0f,
+        };
+        renderer.DevicePtr->CreateShaderResourceView(Resource, &srvDesc, SrvCpu);
+    }
+
+    /// <summary>
     /// Replaces the resource at a new size, <b>keeping the same wrapper and the
     /// same SRV heap slot</b>, so materials and copied descriptor tables survive
     /// a render-target resize.

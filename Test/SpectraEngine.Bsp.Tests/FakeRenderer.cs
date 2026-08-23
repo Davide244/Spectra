@@ -276,6 +276,7 @@ internal sealed class FakeMesh : Mesh
 internal sealed class FakeRenderTarget : RenderTarget
 {
     private readonly FakeTexture _color;
+    private readonly FakeTexture? _depth;
 
     public FakeRenderTarget(in RenderTargetDesc desc)
     {
@@ -284,6 +285,12 @@ internal sealed class FakeRenderTarget : RenderTarget
         Height = desc.Height;
         _color = new FakeTexture(
             [], desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap);
+        if (desc.Depth)
+        {
+            _depth = new FakeTexture(
+                [], desc.Width, desc.Height, TextureFormat.Depth32Float, TextureColorSpace.Linear,
+                TextureFilter.Nearest, TextureWrap.Clamp);
+        }
     }
 
     public bool Disposed { get; private set; }
@@ -293,6 +300,8 @@ internal sealed class FakeRenderTarget : RenderTarget
 
     public override Texture ColorTexture => _color;
 
+    public override Texture? DepthTexture => _depth;
+
     public override void Resize(int width, int height)
     {
         if (width == Width && height == Height) return;
@@ -300,6 +309,7 @@ internal sealed class FakeRenderTarget : RenderTarget
         Width = width;
         Height = height;
         _color.ResizeInPlace(width, height);
+        _depth?.ResizeInPlace(width, height);
         Resizes.Add((width, height));
     }
 

@@ -785,7 +785,7 @@ public sealed unsafe class D3D12Renderer : Renderer
             // not, and the picture is wrong on some hardware and fine on others.
             offscreen.TransitionColor(list, ResourceStates.RenderTarget);
             _currentTargetState = new D3D12TargetState(
-                offscreen.ColorFormat, 1, offscreen.HasDepth ? DepthFormat : Format.FormatUnknown, 1);
+                offscreen.ColorFormat, 1, offscreen.DepthViewFormat, 1);
 
             rtv = offscreen.Rtv;
             dsv = offscreen.Dsv;
@@ -832,7 +832,12 @@ public sealed unsafe class D3D12Renderer : Renderer
                 formats[i] = extra.ColorFormat;
             }
 
-            _currentTargetState = D3D12TargetState.ForTargets(formats, hasDepth ? DepthFormat : Format.FormatUnknown);
+            // The FIRST target owns depth, so its view format is the one the
+            // pipeline must be built against.
+            Format depthFormat = targets[0] is D3D12RenderTarget first
+                ? first.DepthViewFormat
+                : Format.FormatUnknown;
+            _currentTargetState = D3D12TargetState.ForTargets(formats, depthFormat);
             list->OMSetRenderTargets((uint)targets.Length, views, 0, hasDepth ? &dsv : null);
             return;
         }
@@ -877,6 +882,38 @@ public sealed unsafe class D3D12Renderer : Renderer
         target.Unregister = () => _renderTargets.Remove(target);
         _renderTargets.Add(target);
         return target;
+    }
+
+    /// <summary>A typeless depth resource that can be both written and sampled.</summary>
+    internal ComPtr<ID3D12Resource> CreateDepthResource(uint width, uint height)
+    {
+        var heapProps = new HeapProperties { Type = HeapType.Default };
+        var desc = new ResourceDesc
+        {
+            Dimension = ResourceDimension.Texture2D,
+            Alignment = 0,
+            Width = width,
+            Height = height,
+            DepthOrArraySize = 1,
+            MipLevels = 1,
+            Format = Format.FormatR32Typeless,
+            SampleDesc = new SampleDesc(1, 0),
+            Layout = TextureLayout.LayoutUnknown,
+            // AllowDepthStencil WITHOUT DenyShaderResource, which is the flag
+            // that would make this unreadable and is easy to add by reflex.
+            Flags = ResourceFlags.AllowDepthStencil,
+        };
+
+        // The clear value must name a real depth format, not the typeless one.
+        var clearValue = new ClearValue { Format = Format.FormatD32Float };
+        clearValue.Anonymous.DepthStencil = new DepthStencilValue { Depth = 1f, Stencil = 0 };
+
+        ID3D12Resource* res = null;
+        Guid guid = ID3D12Resource.Guid;
+        SilkMarshal.ThrowHResult(DevicePtr->CreateCommittedResource(
+            &heapProps, HeapFlags.None, &desc, ResourceStates.DepthWrite, &clearValue,
+            &guid, (void**)&res));
+        return ComOwnership.Own(res);
     }
 
     /// <summary>A default-heap texture that can be both drawn into and sampled.</summary>

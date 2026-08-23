@@ -30,9 +30,9 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
 {
     private readonly D3D12Renderer _renderer;
     private readonly D3D12Texture _color;
+    private readonly D3D12Texture? _depth;
     private ComPtr<ID3D12DescriptorHeap> _rtvHeap;
     private ComPtr<ID3D12DescriptorHeap> _dsvHeap;
-    private ComPtr<ID3D12Resource> _depth;
     private bool _disposed;
 
     internal CpuDescriptorHandle Rtv { get; private set; }
@@ -55,6 +55,9 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
         _color = D3D12Texture.CreateRenderTargetTexture(
             renderer, desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap);
 
+        if (desc.Depth)
+            _depth = D3D12Texture.CreateDepthTexture(renderer, desc.Width, desc.Height);
+
         _rtvHeap = renderer.CreateDescriptorHeap(DescriptorHeapType.Rtv, 1, shaderVisible: false);
         Rtv = ((ID3D12DescriptorHeap*)_rtvHeap.Handle)->GetCPUDescriptorHandleForHeapStart();
 
@@ -69,8 +72,29 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
 
     public override Texture ColorTexture => _color;
 
+    public override Texture? DepthTexture => _depth;
+
+    /// <summary>
+    /// What state the depth attachment is in, tracked exactly like the colour
+    /// one so a barrier is only emitted on a real change.
+    /// </summary>
+    internal ResourceStates DepthState { get; private set; } = ResourceStates.DepthWrite;
+
     /// <summary>The DXGI format of the colour attachment: what a PSO drawing here must be built against.</summary>
     internal Format ColorFormat => _color.DxgiFormat;
+
+    /// <summary>
+    /// The format of the depth-stencil VIEW, which is what a pipeline state must
+    /// name.
+    /// </summary>
+    /// <remarks>
+    /// Not the resource format, which is typeless, and not the back buffer's,
+    /// which is D24_UNORM_S8_UINT. An offscreen target's depth is D32_FLOAT so
+    /// it can also be sampled, and a pipeline compiled against the wrong one is
+    /// rejected at every draw.
+    /// </remarks>
+    internal Format DepthViewFormat =>
+        HasDepth ? Format.FormatD32Float : Format.FormatUnknown;
 
     public override void Resize(int width, int height)
     {
@@ -85,9 +109,10 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
         // requirement rather than a coincidence.
         _renderer.WaitForGpu();
 
-        ComOwnership.Release(ref _depth);
         _color.ReplaceStorage(_renderer, width, height);
+        _depth?.ReplaceDepthStorage(_renderer, width, height);
         ColorState = ResourceStates.PixelShaderResource;
+        DepthState = ResourceStates.DepthWrite;
         Allocate(width, height);
     }
 
@@ -101,33 +126,18 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
         rtvDesc.Anonymous.Texture2D = new Tex2DRtv { MipSlice = 0, PlaneSlice = 0 };
         _renderer.DevicePtr->CreateRenderTargetView(_color.Resource, &rtvDesc, Rtv);
 
-        if (Desc.Depth)
+        if (_depth is not null)
         {
-            var depthDesc = new ResourceDesc
+            // An explicit desc, because the resource is typeless and a null one
+            // would ask the runtime to use R32_TYPELESS as a depth format.
+            var dsvDesc = new DepthStencilViewDesc
             {
-                Dimension = ResourceDimension.Texture2D,
-                Alignment = 0,
-                Width = (ulong)width,
-                Height = (uint)height,
-                DepthOrArraySize = 1,
-                MipLevels = 1,
-                Format = D3D12Renderer.DepthFormat,
-                SampleDesc = new SampleDesc(1, 0),
-                Layout = TextureLayout.LayoutUnknown,
-                Flags = ResourceFlags.AllowDepthStencil,
+                Format = Format.FormatD32Float,
+                ViewDimension = DsvDimension.Texture2D,
             };
-            var heapProps = new HeapProperties { Type = HeapType.Default };
-            var clearValue = new ClearValue { Format = D3D12Renderer.DepthFormat };
-            clearValue.Anonymous.DepthStencil = new DepthStencilValue { Depth = 1f, Stencil = 0 };
+            dsvDesc.Anonymous.Texture2D = new Tex2DDsv { MipSlice = 0 };
 
-            ID3D12Resource* depth = null;
-            Guid guid = ID3D12Resource.Guid;
-            SilkMarshal.ThrowHResult(_renderer.DevicePtr->CreateCommittedResource(
-                &heapProps, HeapFlags.None, &depthDesc, ResourceStates.DepthWrite, &clearValue,
-                &guid, (void**)&depth));
-            _depth = ComOwnership.Own(depth);
-
-            _renderer.DevicePtr->CreateDepthStencilView(depth, null, Dsv);
+            _renderer.DevicePtr->CreateDepthStencilView(_depth.Resource, &dsvDesc, Dsv);
         }
 
         Width = width;
@@ -146,14 +156,31 @@ internal sealed unsafe class D3D12RenderTarget : RenderTarget
         ColorState = state;
     }
 
+    /// <summary>
+    /// Moves the depth attachment between being written and being sampled.
+    /// </summary>
+    /// <remarks>
+    /// Unlike colour, depth's resting state is <c>DepthWrite</c>: it is written
+    /// by every geometry pass and read only by whatever reconstructs position
+    /// from it, so leaving it readable would mean a barrier on every frame
+    /// rather than only on the frames something samples it.
+    /// </remarks>
+    internal void TransitionDepth(ID3D12GraphicsCommandList* list, ResourceStates state)
+    {
+        if (_depth is null || DepthState == state) return;
+
+        D3D12Renderer.Transition(list, _depth.Resource, DepthState, state);
+        DepthState = state;
+    }
+
     public override void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
 
-        ComOwnership.Release(ref _depth);
         ComOwnership.Release(ref _dsvHeap);
         ComOwnership.Release(ref _rtvHeap);
         _color.Dispose();
+        _depth?.Dispose();
     }
 }

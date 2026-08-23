@@ -40,6 +40,21 @@ public enum TextureFormat
     /// </para>
     /// </remarks>
     Rgba16Float,
+
+    /// <summary>
+    /// 32-bit float depth. A render-target attachment only, and the one format
+    /// whose GPU resource is created in a <i>typeless</i> family so it can carry
+    /// two views: a depth-stencil view to write through and a red-channel float
+    /// view to read through.
+    /// </summary>
+    /// <remarks>
+    /// D3D refuses to create a shader-resource view over a resource declared
+    /// <c>D32_FLOAT</c>; the resource has to be <c>R32_TYPELESS</c> and the
+    /// depth-ness has to live on the view. Getting that wrong fails loudly at
+    /// creation rather than silently, which is the one mercy of this corner of
+    /// the API.
+    /// </remarks>
+    Depth32Float,
 }
 
 /// <summary>
@@ -97,7 +112,11 @@ public static class TextureFormatInfo
     /// Whether <paramref name="format"/> stores floating-point channels, and so
     /// cannot be filled from a byte array.
     /// </summary>
-    public static bool IsFloat(TextureFormat format) => format is TextureFormat.Rgba16Float;
+    public static bool IsFloat(TextureFormat format) =>
+        format is TextureFormat.Rgba16Float or TextureFormat.Depth32Float;
+
+    /// <summary>Whether <paramref name="format"/> is a depth format rather than a colour one.</summary>
+    public static bool IsDepth(TextureFormat format) => format is TextureFormat.Depth32Float;
 
     /// <summary>
     /// The colour space a texture will <i>actually</i> get, which is the

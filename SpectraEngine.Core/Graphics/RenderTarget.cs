@@ -7,12 +7,18 @@ namespace SpectraEngine.Core.Graphics;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Depth is a bool, not a format, and it is not sampleable.</b> A target you
-/// can read depth back from needs typeless formats on both D3D backends and
-/// comparison sampling in the shader language, none of which exist yet; that is
-/// `R6`'s work, and pretending to offer it here would be a flag that silently
-/// does nothing. Depth-only targets wait on the same milestone for the same
-/// reason: without sampleable depth there is nothing to do with one.
+/// <b>Depth is a bool, not a format, and it is always sampleable.</b> A deferred
+/// light pass reconstructs world position from depth rather than storing it,
+/// which saves an entire RGB channel of G-buffer, so depth being readable is not
+/// an extra: it is the point. Every backend therefore allocates depth as a
+/// texture in a typeless family, with a depth-stencil view for writing and a
+/// float view for reading.
+/// </para>
+/// <para>
+/// <b>Reading depth needs no comparison sampler.</b> A plain <c>sampler2D</c>
+/// returns the depth value in <c>.r</c> on all three backends. The comparison
+/// sampling that shadow-map filtering wants is a separate and much larger piece
+/// of work, and deliberately not required here.
 /// </para>
 /// <para>
 /// <b>The colour space is the same choice a texture makes</b>, because the
@@ -105,6 +111,13 @@ public abstract class RenderTarget : IDisposable
     /// stable across <see cref="Resize"/>.
     /// </summary>
     public abstract Texture ColorTexture { get; }
+
+    /// <summary>
+    /// The depth attachment as a sampleable texture, or null when this target
+    /// was created without depth. Its identity is stable across
+    /// <see cref="Resize"/>, exactly like <see cref="ColorTexture"/>.
+    /// </summary>
+    public abstract Texture? DepthTexture { get; }
 
     /// <summary>
     /// Resizes in place, keeping <see cref="ColorTexture"/>'s identity. A call
