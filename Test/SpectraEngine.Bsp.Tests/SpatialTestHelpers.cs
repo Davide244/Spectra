@@ -139,7 +139,17 @@ internal sealed class RecordingShaderProgram : ShaderProgram
     public override void SetUniform(string name, Vector3 value) => Vectors3[name] = value;
     public override void SetUniform(string name, Vector2 value) { }
     public override void SetUniform(string name, float value) => Floats[name] = value;
-    public override void SetUniform(string name, int value) { }
+    public override void SetUniform(string name, int value) => Ints[name] = value;
+
+    /// <summary>Array uniforms recorded whole, so a light upload is assertable headlessly.</summary>
+    public Dictionary<string, Vector4[]> Vector4Arrays { get; } = new(StringComparer.Ordinal);
+
+    public Dictionary<string, Matrix4x4[]> Matrix4Arrays { get; } = new(StringComparer.Ordinal);
+
+    public Dictionary<string, int> Ints { get; } = new(StringComparer.Ordinal);
+
+    public override void SetUniform(string name, ReadOnlySpan<Vector4> values) => Vector4Arrays[name] = values.ToArray();
+    public override void SetUniform(string name, ReadOnlySpan<Matrix4x4> values) => Matrix4Arrays[name] = values.ToArray();
 
     public override void SetTexture(string name, int unit, Texture texture) => Textures[name] = texture;
 
@@ -167,6 +177,8 @@ internal sealed class NoopShaderProgram : ShaderProgram
     public override void SetUniform(string name, Vector2 value) { }
     public override void SetUniform(string name, float value) { }
     public override void SetUniform(string name, int value) { }
+    public override void SetUniform(string name, ReadOnlySpan<Vector4> values) { }
+    public override void SetUniform(string name, ReadOnlySpan<Matrix4x4> values) { }
 
     public override void SetTexture(string name, int unit, Texture texture) { }
 

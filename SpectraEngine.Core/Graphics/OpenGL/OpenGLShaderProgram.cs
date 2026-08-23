@@ -98,6 +98,30 @@ internal sealed class OpenGLShaderProgram : ShaderProgram
         _gl.UseProgram(_handle);
     }
 
+    public override unsafe void SetUniform(string name, ReadOnlySpan<Vector4> values)
+    {
+        int location = GetLocation(name);
+        if (location < 0 || values.Length == 0) return;
+
+        // GL guarantees that a basic-type array's name resolves to element zero,
+        // so one location plus a count fills the whole array. No per-element
+        // "name[i]" lookup, and therefore no string allocated per light per
+        // frame.
+        fixed (Vector4* p = values)
+            _gl.Uniform4(location, (uint)values.Length, (float*)p);
+    }
+
+    public override unsafe void SetUniform(string name, ReadOnlySpan<Matrix4x4> values)
+    {
+        int location = GetLocation(name);
+        if (location < 0 || values.Length == 0) return;
+
+        // transpose: false, matching the single-matrix overload below. See the
+        // base class for why that is correct and why "fixing" it is not.
+        fixed (Matrix4x4* p = values)
+            _gl.UniformMatrix4(location, (uint)values.Length, false, (float*)p);
+    }
+
     public override unsafe void SetUniform(string name, Matrix4x4 value)
     {
         int location = GetLocation(name);

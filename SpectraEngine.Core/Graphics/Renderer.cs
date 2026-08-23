@@ -411,6 +411,9 @@ public abstract class Renderer
     /// </summary>
     internal void ResolveForTest(Texture source, RenderTarget? output) => ResolveTo(source, output, null);
 
+    /// <summary>The shared clip-space triangle, for tests that drive their own shader over it.</summary>
+    internal Mesh EnsureFullscreenTriangleForTest() => EnsureFullscreenTriangle();
+
     /// <summary>Frees the HDR target and the resolve's own resources. Render thread.</summary>
     protected void ReleaseResolveResources()
     {

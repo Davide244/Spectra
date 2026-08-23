@@ -540,18 +540,63 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
     public override void SetUniform(string name, float value) => Write(name, MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref value, 1)));
     public override void SetUniform(string name, int value) => Write(name, MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref value, 1)));
 
+    public override void SetUniform(string name, ReadOnlySpan<Vector4> values)
+        => WriteArray(name, MemoryMarshal.AsBytes(values), values.Length, sizeof(float) * 4, "vec4");
+
+    public override void SetUniform(string name, ReadOnlySpan<Matrix4x4> values)
+        => WriteArray(name, MemoryMarshal.AsBytes(values), values.Length, sizeof(float) * 16, "mat4");
+
+    // Bulk-copies an array uniform, refusing anything whose byte length does not
+    // exactly fill the shader's array.
+    //
+    // Refusing rather than clamping is the whole point. Math.Min would leave a
+    // stale tail from whatever was uploaded last -- a ten-light frame drawn
+    // after a sixty-light frame lit by fifty lights that are no longer there --
+    // which renders as plausible nonsense and gives nothing to trace back to
+    // this line. The reflected Size already accounts for HLSL's element padding,
+    // so it is the authority on what fits.
+    private void WriteArray(string name, ReadOnlySpan<byte> bytes, int count, int stride, string elementType)
+    {
+        // An unknown name is ignored, exactly as the scalar path ignores it: a
+        // pipeline sets uniforms that a given material's shader may not declare,
+        // and that is ordinary rather than an error.
+        if (!_uniforms.TryGetValue(name, out var loc)) return;
+        if (count == 0) return;
+
+        // A length mismatch throws, because it is a caller bug rather than
+        // content: the shader says how many elements it has and the code either
+        // agrees or does not. SetTexture already throws for a wrong-typed
+        // argument, and this is the same class of mistake. The alternative,
+        // clamping, leaves a stale tail from whatever was uploaded last -- a
+        // ten-light frame lit by fifty lights that are no longer there -- which
+        // renders as plausible nonsense and points nowhere near this line.
+        if (bytes.Length != (int)loc.Size)
+        {
+            throw new ArgumentException(
+                $"Uniform '{name}' is {loc.Size} bytes in the shader, but {count} {elementType} " +
+                $"element(s) is {bytes.Length}. An array uniform must be filled exactly.",
+                nameof(name));
+        }
+
+        WriteBytes(loc, bytes);
+    }
+
     private void Write(string name, ReadOnlySpan<byte> bytes)
     {
         if (!_uniforms.TryGetValue(name, out var loc)) return;
-        ref var slot = ref _cbuffers[loc.CBufferIndex];
         int copyLen = Math.Min((int)loc.Size, bytes.Length);
-        var source = bytes.Slice(0, copyLen);
-        var target = slot.Shadow.AsSpan((int)loc.Offset, copyLen);
+        WriteBytes(loc, bytes[..copyLen]);
+    }
+
+    private void WriteBytes(UniformLocation loc, ReadOnlySpan<byte> bytes)
+    {
+        ref var slot = ref _cbuffers[loc.CBufferIndex];
+        var target = slot.Shadow.AsSpan((int)loc.Offset, bytes.Length);
 
         // A write that changes nothing keeps the slot clean, letting Use()
         // rebind this frame's existing slice instead of uploading a new one.
-        if (source.SequenceEqual(target)) return;
-        source.CopyTo(target);
+        if (bytes.SequenceEqual(target)) return;
+        bytes.CopyTo(target);
         slot.Dirty = true;
     }
 
