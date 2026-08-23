@@ -41,7 +41,11 @@ internal sealed class OpenGLTexture : Texture
         uint handle = gl.GenTexture();
         gl.BindTexture(TextureTarget.Texture2D, handle);
 
-        (InternalFormat internalFormat, PixelFormat pixelFormat) = GlFormats(format, resolved);
+        if (TextureFormatInfo.IsFloat(format))
+            throw new ArgumentOutOfRangeException(
+                nameof(format), $"{format} cannot be uploaded from byte pixels; it is a render-target format.");
+
+        (InternalFormat internalFormat, PixelFormat pixelFormat, PixelType pixelType) = GlFormats(format, resolved);
 
         // Decoded image rows are tightly packed, but GL assumes 4-byte row
         // alignment by default and would then read past each row (skewing the
@@ -54,7 +58,7 @@ internal sealed class OpenGLTexture : Texture
         fixed (byte* p = pixels)
         {
             gl.TexImage2D(TextureTarget.Texture2D, 0, internalFormat,
-                (uint)width, (uint)height, 0, pixelFormat, PixelType.UnsignedByte, p);
+                (uint)width, (uint)height, 0, pixelFormat, pixelType, p);
         }
 
         bool wantsMipmaps = filter == TextureFilter.LinearMipmap;
@@ -97,9 +101,9 @@ internal sealed class OpenGLTexture : Texture
         uint handle = gl.GenTexture();
         gl.BindTexture(TextureTarget.Texture2D, handle);
 
-        (InternalFormat internalFormat, PixelFormat pixelFormat) = GlFormats(format, resolved);
+        (InternalFormat internalFormat, PixelFormat pixelFormat, PixelType pixelType) = GlFormats(format, resolved);
         gl.TexImage2D(TextureTarget.Texture2D, 0, internalFormat,
-            (uint)width, (uint)height, 0, pixelFormat, PixelType.UnsignedByte, null);
+            (uint)width, (uint)height, 0, pixelFormat, pixelType, null);
 
         // Never LinearMipmapLinear here: with no mip chain that filter samples a
         // level that does not exist and the texture reads as black.
@@ -127,11 +131,11 @@ internal sealed class OpenGLTexture : Texture
     /// </remarks>
     internal unsafe void ReallocateStorage(int width, int height)
     {
-        (InternalFormat internalFormat, PixelFormat pixelFormat) = GlFormats(Format, ColorSpace);
+        (InternalFormat internalFormat, PixelFormat pixelFormat, PixelType pixelType) = GlFormats(Format, ColorSpace);
 
         _gl.BindTexture(TextureTarget.Texture2D, Handle);
         _gl.TexImage2D(TextureTarget.Texture2D, 0, internalFormat,
-            (uint)width, (uint)height, 0, pixelFormat, PixelType.UnsignedByte, null);
+            (uint)width, (uint)height, 0, pixelFormat, pixelType, null);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
 
         Width = width;
@@ -149,16 +153,22 @@ internal sealed class OpenGLTexture : Texture
     // sRGB internal formats make the driver decode on every sample -- including
     // the samples GenerateMipmap takes below, which is why the mip chain of an
     // sRGB texture is an average of light rather than of display codes.
-    private static (InternalFormat Internal, PixelFormat Pixel) GlFormats(
+    private static (InternalFormat Internal, PixelFormat Pixel, PixelType Type) GlFormats(
         TextureFormat format, TextureColorSpace colorSpace)
     {
         bool srgb = colorSpace == TextureColorSpace.Srgb;
         return format switch
         {
-            TextureFormat.Rgba8 => (srgb ? InternalFormat.Srgb8Alpha8 : InternalFormat.Rgba8, PixelFormat.Rgba),
-            TextureFormat.Rgb8 => (srgb ? InternalFormat.Srgb8 : InternalFormat.Rgb8, PixelFormat.Rgb),
+            TextureFormat.Rgba8 =>
+                (srgb ? InternalFormat.Srgb8Alpha8 : InternalFormat.Rgba8, PixelFormat.Rgba, PixelType.UnsignedByte),
+            TextureFormat.Rgb8 =>
+                (srgb ? InternalFormat.Srgb8 : InternalFormat.Rgb8, PixelFormat.Rgb, PixelType.UnsignedByte),
             // No SR8 exists; TextureFormatInfo.Resolve has already forced linear.
-            TextureFormat.R8 => (InternalFormat.R8, PixelFormat.Red),
+            TextureFormat.R8 => (InternalFormat.R8, PixelFormat.Red, PixelType.UnsignedByte),
+            // The pixel type matters even with a null data pointer: the driver
+            // validates the (format, type) pair against the internal format, and
+            // UnsignedByte against RGBA16F is rejected on some drivers.
+            TextureFormat.Rgba16Float => (InternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float),
             _ => throw new ArgumentOutOfRangeException(nameof(format)),
         };
     }

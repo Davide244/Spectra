@@ -232,6 +232,94 @@ public sealed class GlRenderTargetTests
         renderer.DestroyRenderTarget(target);
     }
 
+    [Fact]
+    public void An_hdr_target_stores_values_above_one()
+    {
+        // The entire reason for an intermediate target. An 8-bit buffer clamps
+        // this to 1.0 and the tone curve downstream then has nothing left to
+        // work with; the whole point of rendering offscreen first is that the
+        // highlights survive as far as the resolve.
+        OpenGLRenderer renderer = _fixture.Renderer;
+        RenderTarget target = renderer.CreateRenderTarget(
+            new RenderTargetDesc(8, 8, TextureFormat.Rgba16Float));
+        try
+        {
+            target.ColorTexture.Format.ShouldBe(TextureFormat.Rgba16Float);
+            // A float format has no sRGB variant, so a request for one resolves
+            // to linear rather than throwing.
+            target.ColorTexture.ColorSpace.ShouldBe(TextureColorSpace.Linear);
+
+            renderer.BeginPass(target, PassClear.To(new System.Numerics.Vector4(4f, 2f, 0.5f, 1f)));
+            renderer.EndPass();
+
+            (float r, float g, float b) = ReadPixelFloat(target);
+            r.ShouldBe(4f, 0.01f);
+            g.ShouldBe(2f, 0.01f);
+            b.ShouldBe(0.5f, 0.01f);
+        }
+        finally
+        {
+            renderer.DestroyRenderTarget(target);
+        }
+    }
+
+    [Fact]
+    public void An_eight_bit_target_clamps_the_same_value()
+    {
+        // The control, and the evidence that the test above is measuring the
+        // format rather than the clear. Same clear, an Rgba8 target: 4.0 comes
+        // back as 1.0, which is what an LDR intermediate would cost.
+        OpenGLRenderer renderer = _fixture.Renderer;
+        RenderTarget target = renderer.CreateRenderTarget(new RenderTargetDesc(8, 8));
+        try
+        {
+            renderer.BeginPass(target, PassClear.To(new System.Numerics.Vector4(4f, 2f, 0.5f, 1f)));
+            renderer.EndPass();
+
+            (int r, int g, _) = ReadPixel(target);
+            r.ShouldBe(255);
+            g.ShouldBe(255);
+        }
+        finally
+        {
+            renderer.DestroyRenderTarget(target);
+        }
+    }
+
+    [Fact]
+    public void A_float_format_is_refused_as_an_uploaded_texture()
+    {
+        // Nothing decodes an image file to half-floats, so a byte array cannot
+        // fill one. Refusing beats reinterpreting the bytes, which produces a
+        // texture full of denormals and no error anywhere.
+        var pixels = new byte[] { 255, 255, 255, 255 };
+
+        Should.Throw<ArgumentOutOfRangeException>(() => _fixture.Renderer.CreateTexture(
+            pixels, 1, 1, TextureFormat.Rgba16Float, TextureColorSpace.Linear,
+            TextureFilter.Nearest, TextureWrap.Clamp));
+    }
+
+    // Reads texel (0,0) of an HDR target, as floats. The byte reader below
+    // cannot see what makes an HDR target HDR: it clamps to [0,1] on the way
+    // out and quantises what survives.
+    private unsafe (float R, float G, float B) ReadPixelFloat(RenderTarget target)
+    {
+        GL gl = _fixture.Gl;
+        uint fbo = gl.GenFramebuffer();
+        gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, fbo);
+        gl.FramebufferTexture2D(
+            FramebufferTarget.ReadFramebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, ((OpenGLTexture)target.ColorTexture).Handle, 0);
+
+        var pixel = new float[4];
+        fixed (float* p = pixel)
+            gl.ReadPixels(0, 0, 1, 1, PixelFormat.Rgba, PixelType.Float, p);
+
+        gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, 0);
+        gl.DeleteFramebuffer(fbo);
+        return (pixel[0], pixel[1], pixel[2]);
+    }
+
     // Reads texel (0,0) of a target's colour attachment as bytes.
     private unsafe (int R, int G, int B) ReadPixel(RenderTarget target)
     {

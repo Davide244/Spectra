@@ -25,7 +25,11 @@ namespace SpectraEngine.Core.Graphics;
 /// </remarks>
 /// <param name="Width">Pixel width. Must be positive.</param>
 /// <param name="Height">Pixel height. Must be positive.</param>
-/// <param name="ColorFormat">Format of the single colour attachment.</param>
+/// <param name="ColorFormat">
+/// Format of the single colour attachment: <see cref="TextureFormat.Rgba8"/> for
+/// a display-ready image, <see cref="TextureFormat.Rgba16Float"/> for an
+/// intermediate carrying linear light between passes.
+/// </param>
 /// <param name="ColorSpace">Whether the colour attachment encodes on write and decodes on read.</param>
 /// <param name="Depth">Whether to attach a depth buffer. Anything drawing 3D geometry wants one.</param>
 /// <param name="Filter">How the colour attachment samples. Mipmaps are not generated for targets.</param>
@@ -47,13 +51,16 @@ public readonly record struct RenderTargetDesc(
                 nameof(Width), $"A render target needs a positive size; got {Width}x{Height}.");
 
         // The attachment is created as a render target, and no backend can make
-        // one out of a three-channel format: D3D has no 24-bit format at all,
-        // and R8 has no sRGB form. Rejecting here beats a backend-specific
+        // one out of a three-channel format: D3D has no 24-bit format at all.
+        // R8 is excluded for a different reason: nothing needs a one-channel
+        // target until R6 wants a shadow map, and that milestone brings the
+        // typeless-depth work with it. Rejecting here beats a backend-specific
         // failure three layers down.
-        if (ColorFormat != TextureFormat.Rgba8)
+        if (ColorFormat is not (TextureFormat.Rgba8 or TextureFormat.Rgba16Float))
             throw new ArgumentOutOfRangeException(
                 nameof(ColorFormat),
-                $"Render targets support {nameof(TextureFormat.Rgba8)} only; got {ColorFormat}.");
+                $"Render targets support {nameof(TextureFormat.Rgba8)} and " +
+                $"{nameof(TextureFormat.Rgba16Float)}; got {ColorFormat}.");
     }
 }
 

@@ -11,6 +11,35 @@ public enum TextureFormat
 
     /// <summary>8 bits, single channel (red / luminance / mask).</summary>
     R8,
+
+    /// <summary>
+    /// 16-bit float per channel, four channels. A render-target format, not an
+    /// upload format.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is what makes an intermediate target worth having.</b> A post
+    /// chain that renders the scene into an 8-bit buffer and tone-maps out of
+    /// it is worse than no chain at all: the intermediate is linear light, and
+    /// 8 bits of linear spends almost all its codes on highlights nobody can
+    /// distinguish while leaving visible banding in the shadows, which is
+    /// precisely the problem the sRGB curve exists to solve. Half-float keeps
+    /// the dynamic range that exposure and a tone curve then have something to
+    /// work with.
+    /// </para>
+    /// <para>
+    /// <b>No sRGB variant, and that is not a limitation.</b> The transfer
+    /// function is a way of spending a small number of integer codes well; a
+    /// float format has no such problem and stores linear values directly. See
+    /// <see cref="TextureFormatInfo.SupportsSrgb"/>.
+    /// </para>
+    /// <para>
+    /// <b>Nothing decodes an image file to this.</b> <c>ImageDecoder</c> only
+    /// ever produces the three byte formats, so the CPU-upload paths refuse it
+    /// rather than pretending a byte array could be half-floats.
+    /// </para>
+    /// </remarks>
+    Rgba16Float,
 }
 
 /// <summary>
@@ -56,11 +85,19 @@ public static class TextureFormatInfo
 {
     /// <summary>
     /// Whether an sRGB variant of <paramref name="format"/> exists in hardware.
-    /// False for <see cref="TextureFormat.R8"/>: neither DXGI nor GL defines a
-    /// one-channel sRGB format.
+    /// False for <see cref="TextureFormat.R8"/> (neither DXGI nor GL defines a
+    /// one-channel sRGB format) and for <see cref="TextureFormat.Rgba16Float"/>
+    /// (a float format stores linear values; the curve exists to ration integer
+    /// codes, and there are none to ration).
     /// </summary>
     public static bool SupportsSrgb(TextureFormat format) =>
         format is TextureFormat.Rgba8 or TextureFormat.Rgb8;
+
+    /// <summary>
+    /// Whether <paramref name="format"/> stores floating-point channels, and so
+    /// cannot be filled from a byte array.
+    /// </summary>
+    public static bool IsFloat(TextureFormat format) => format is TextureFormat.Rgba16Float;
 
     /// <summary>
     /// The colour space a texture will <i>actually</i> get, which is the

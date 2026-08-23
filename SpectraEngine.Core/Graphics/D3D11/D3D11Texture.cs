@@ -52,6 +52,10 @@ internal sealed unsafe class D3D11Texture : Texture
         TextureColorSpace resolved = TextureFormatInfo.Resolve(format, colorSpace);
         bool srgb = resolved == TextureColorSpace.Srgb;
 
+        if (TextureFormatInfo.IsFloat(format))
+            throw new ArgumentOutOfRangeException(
+                nameof(format), $"{format} cannot be uploaded from byte pixels; it is a render-target format.");
+
         // D3D11 has no native 24-bit RGB texture format, so for Rgb8 input we
         // expand to RGBA8 on the CPU side. R8 and Rgba8 map directly.
         Silk.NET.DXGI.Format dxgiFormat;
@@ -184,9 +188,7 @@ internal sealed unsafe class D3D11Texture : Texture
         TextureWrap wrap)
     {
         TextureColorSpace resolved = TextureFormatInfo.Resolve(format, colorSpace);
-        Silk.NET.DXGI.Format dxgiFormat = resolved == TextureColorSpace.Srgb
-            ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
-            : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm;
+        Silk.NET.DXGI.Format dxgiFormat = RenderTargetDxgiFormat(format, resolved);
 
         var dev = (ID3D11Device*)device.Handle;
         ID3D11Texture2D* texPtr = CreateRenderTargetResource(dev, width, height, dxgiFormat);
@@ -221,6 +223,21 @@ internal sealed unsafe class D3D11Texture : Texture
         Width = width;
         Height = height;
     }
+
+    // The format argument used to be accepted and then ignored here, which was
+    // invisible only because RenderTargetDesc.Validate allowed nothing but
+    // Rgba8. The moment a float format became legal it would have produced a
+    // silently 8-bit target on this backend while OpenGL was correct.
+    private static Silk.NET.DXGI.Format RenderTargetDxgiFormat(
+        TextureFormat format, TextureColorSpace resolved) => format switch
+    {
+        TextureFormat.Rgba8 => resolved == TextureColorSpace.Srgb
+            ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
+            : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm,
+        TextureFormat.Rgba16Float => Silk.NET.DXGI.Format.FormatR16G16B16A16Float,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(format), $"{format} is not a render-target format."),
+    };
 
     private static ID3D11Texture2D* CreateRenderTargetResource(
         ID3D11Device* dev, int width, int height, Silk.NET.DXGI.Format dxgiFormat)

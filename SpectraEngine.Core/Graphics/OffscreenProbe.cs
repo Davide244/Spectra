@@ -37,16 +37,30 @@ namespace SpectraEngine.Core.Graphics;
 /// </remarks>
 public sealed class OffscreenProbe
 {
-    /// <summary>Frames rendered at each of the two sizes.</summary>
+    /// <summary>Frames rendered in each stage.</summary>
     private const int FramesPerStage = 3;
+
+    // One stage per thing that can independently be wrong. The two formats are
+    // separate DXGI formats, separate RTV formats and separate pipeline states
+    // on D3D12, and the float one is the format R4's scene target uses; the
+    // resize is where a stale view or a released-but-referenced resource shows
+    // up. `Resize` means "reuse the previous stage's target at half size".
+    private readonly record struct Stage(string What, TextureFormat Format, TextureColorSpace Space, bool Resize);
+
+    private static readonly Stage[] Stages =
+    [
+        new("HDR linear", TextureFormat.Rgba16Float, TextureColorSpace.Linear, Resize: false),
+        new("HDR linear, resized", TextureFormat.Rgba16Float, TextureColorSpace.Linear, Resize: true),
+        new("8-bit sRGB", TextureFormat.Rgba8, TextureColorSpace.Srgb, Resize: false),
+    ];
 
     private readonly ILogger _logger;
     private readonly int _width;
     private readonly int _height;
 
     private RenderTarget? _target;
+    private int _stage = -1;
     private int _frames;
-    private bool _resized;
     private int _errorsAtStart;
 
     /// <summary>True until the probe has finished and reported.</summary>
@@ -72,38 +86,26 @@ public sealed class OffscreenProbe
 
         try
         {
-            if (_target is null)
+            if (_stage < 0)
             {
-                // Deliberately not the window's size or aspect: a probe at the
-                // same shape as the back buffer would not catch a viewport or an
-                // aspect ratio that was still being taken from the window.
-                _target = renderer.CreateRenderTarget(new RenderTargetDesc(
-                    _width, _height, ColorSpace: TextureColorSpace.Srgb));
-                renderer.ProbeTarget = _target;
-
                 // The baseline matters: a run may already have logged debug
                 // layer errors for reasons that have nothing to do with render
                 // targets, and blaming those on the probe would make it a liar
                 // in the other direction.
                 _errorsAtStart = renderer.DebugLayerErrorCount;
                 _logger.LogInformation(
-                    "Offscreen probe: rendering into a {Width}x{Height} target for {Frames} frames, twice",
-                    _width, _height, FramesPerStage);
+                    "Offscreen probe: {Stages} stage(s), {Frames} frames each, starting at {Width}x{Height}",
+                    Stages.Length, FramesPerStage, _width, _height);
+                BeginStage(renderer, 0);
                 return;
             }
 
             _frames++;
             if (_frames < FramesPerStage) return;
 
-            if (!_resized)
+            if (_stage + 1 < Stages.Length)
             {
-                // The half-size second stage. Resizing a target the renderer is
-                // about to draw into is the ordinary case (an editor viewport
-                // does it whenever a pane moves), and it is where a stale view
-                // or a released-but-still-referenced resource shows up.
-                _resized = true;
-                _frames = 0;
-                _target.Resize(_width / 2, _height / 2);
+                BeginStage(renderer, _stage + 1);
                 return;
             }
 
@@ -111,10 +113,39 @@ public sealed class OffscreenProbe
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Offscreen probe: FAIL");
+            _logger.LogError(ex, "Offscreen probe: FAIL at stage {Stage}", Describe(_stage));
             Finish(renderer, passed: false);
         }
     }
+
+    private void BeginStage(Renderer renderer, int index)
+    {
+        Stage stage = Stages[index];
+        _stage = index;
+        _frames = 0;
+
+        if (stage.Resize && _target is not null)
+        {
+            _target.Resize(_width / 2, _height / 2);
+            return;
+        }
+
+        if (_target is not null)
+        {
+            renderer.ProbeTarget = null;
+            renderer.DestroyRenderTarget(_target);
+        }
+
+        // Deliberately not the window's size or aspect: a probe at the same
+        // shape as the back buffer would not catch a viewport or an aspect
+        // ratio that was still being taken from the window.
+        _target = renderer.CreateRenderTarget(
+            new RenderTargetDesc(_width, _height, stage.Format, stage.Space));
+        renderer.ProbeTarget = _target;
+    }
+
+    private static string Describe(int index) =>
+        index >= 0 && index < Stages.Length ? Stages[index].What : "setup";
 
     private void Finish(Renderer renderer, bool passed)
     {
@@ -147,10 +178,10 @@ public sealed class OffscreenProbe
         if (passed)
         {
             _logger.LogInformation(
-                "Offscreen probe: PASS - a full frame rendered into an offscreen target at " +
-                "{Width}x{Height} and again at {HalfWidth}x{HalfHeight} after an in-place resize, " +
-                "with the colour attachment keeping its identity and the debug layer silent",
-                _width, _height, _width / 2, _height / 2);
+                "Offscreen probe: PASS - full frames rendered into {Stages} offscreen target(s) " +
+                "({What}), the colour attachment kept its identity across an in-place resize, " +
+                "and the debug layer stayed silent",
+                Stages.Length, string.Join(", ", Array.ConvertAll(Stages, x => x.What)));
         }
     }
 }

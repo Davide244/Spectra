@@ -69,14 +69,27 @@ internal sealed unsafe class D3D12Texture : Texture
         TextureColorSpace colorSpace, TextureFilter filter, TextureWrap wrap)
     {
         TextureColorSpace resolved = TextureFormatInfo.Resolve(format, colorSpace);
-        Silk.NET.DXGI.Format dxgiFormat = resolved == TextureColorSpace.Srgb
-            ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
-            : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm;
+        Silk.NET.DXGI.Format dxgiFormat = RenderTargetDxgiFormat(format, resolved);
 
         var texture = new D3D12Texture(renderer, width, height, format, resolved, dxgiFormat, filter, wrap);
         texture.AllocateRenderTargetStorage(renderer, width, height);
         return texture;
     }
+
+    // The format argument used to be accepted and then ignored here, which was
+    // invisible only because RenderTargetDesc.Validate allowed nothing but
+    // Rgba8. The moment a float format became legal it would have produced a
+    // silently 8-bit target on this backend while OpenGL was correct.
+    private static Silk.NET.DXGI.Format RenderTargetDxgiFormat(
+        TextureFormat format, TextureColorSpace resolved) => format switch
+    {
+        TextureFormat.Rgba8 => resolved == TextureColorSpace.Srgb
+            ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
+            : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm,
+        TextureFormat.Rgba16Float => Silk.NET.DXGI.Format.FormatR16G16B16A16Float,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(format), $"{format} is not a render-target format."),
+    };
 
     /// <summary>
     /// Replaces the resource at a new size, <b>keeping the same wrapper and the
@@ -142,6 +155,10 @@ internal sealed unsafe class D3D12Texture : Texture
     {
         TextureColorSpace resolved = TextureFormatInfo.Resolve(format, colorSpace);
         bool srgb = resolved == TextureColorSpace.Srgb;
+
+        if (TextureFormatInfo.IsFloat(format))
+            throw new ArgumentOutOfRangeException(
+                nameof(format), $"{format} cannot be uploaded from byte pixels; it is a render-target format.");
 
         Width = width;
         Height = height;
