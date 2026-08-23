@@ -1,3 +1,4 @@
+using Xunit;
 using System;
 using System.IO;
 using SpectraEngine.Core.Physics;
@@ -19,6 +20,7 @@ namespace SpectraEngine.Physics.Tests;
 /// quietly pass, which would report a green binding nobody exercised.
 /// </para>
 /// </remarks>
+[Collection(NativeWorldCollection.Name)]
 public sealed class Box3DWorldTests
 {
     private static bool NativeAvailable =>

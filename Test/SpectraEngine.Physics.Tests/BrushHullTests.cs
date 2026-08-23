@@ -1,3 +1,4 @@
+using Xunit;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -14,6 +15,7 @@ namespace SpectraEngine.Physics.Tests;
 /// engine, and the place where a quiet mistake becomes a player walking through
 /// a wall that renders correctly.
 /// </summary>
+[Collection(NativeWorldCollection.Name)]
 public sealed class BrushHullTests
 {
     private static bool NativeAvailable =>

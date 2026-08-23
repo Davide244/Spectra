@@ -1,3 +1,4 @@
+using Xunit;
 using System;
 using System.IO;
 using System.Numerics;
@@ -15,6 +16,7 @@ namespace SpectraEngine.Physics.Tests;
 /// The compiled static world becoming collision: per-chunk static bodies
 /// carrying one hull per authored brush, synced at the harvest slot.
 /// </summary>
+[Collection(NativeWorldCollection.Name)]
 public sealed class Box3DScenePhysicsTests
 {
     private static bool NativeAvailable =>
