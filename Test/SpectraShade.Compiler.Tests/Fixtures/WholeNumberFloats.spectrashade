@@ -1,0 +1,35 @@
+// Float literals whose value happens to be a whole number.
+//
+// The point of this fixture is the DIVISION. A generator that prints 1.0 as
+// "1" turns `1.0 / 3.0` into `1 / 3`, which in GLSL is integer division
+// evaluating to zero: a silently wrong shader, on one backend only, with no
+// diagnostic from the compiler or the driver.
+
+struct VertexInput {
+    [Location(0)] vec3 position;
+}
+
+struct VertexOutput {
+    [Position] vec4 position;
+}
+
+struct FragmentInput {
+    vec2 uv;
+}
+
+shader WholeNumberFloats {
+    [Vertex]
+    VertexOutput VertexMain(VertexInput input) {
+        var output = new VertexOutput();
+        output.position = vec4(input.position, 1.0);
+        return output;
+    }
+
+    [Fragment] [Target(0)]
+    vec4 FragmentMain(FragmentInput input) {
+        float third = 1.0 / 3.0;
+        float scaled = 2.0 * third;
+        vec3 tint = vec3(1.0, 0.0, 0.0) * scaled;
+        return vec4(tint, 1.0);
+    }
+}

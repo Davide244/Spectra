@@ -49,14 +49,14 @@ public sealed class GlslGeneratorTests
         glsl.ShouldContain(
             "    if ((v_uv.x > 0.5))\n" +
             "    {\n" +
-            "        fragColor = vec4(1, 0, 0, 1);\n" +
+            "        fragColor = vec4(1.0, 0.0, 0.0, 1.0);\n" +
             "        return;\n" +
             "    }\n", Case.Sensitive);
 
         // The fall-through return after the if must still emit its own
         // assignment (with the leak, execution never reached it).
         glsl.ShouldContain(
-            "    fragColor = vec4(0, 1, 0, 1);\n" +
+            "    fragColor = vec4(0.0, 1.0, 0.0, 1.0);\n" +
             "    return;\n", Case.Sensitive);
     }
 
@@ -77,7 +77,7 @@ public sealed class GlslGeneratorTests
 
         // The statements after the if must still be emitted at function scope.
         glsl.ShouldContain(
-            "    result.uv = vec2(0, 0);\n" +
+            "    result.uv = vec2(0.0, 0.0);\n" +
             "    gl_Position = result.position;\n" +
             "    v_uv = result.uv;\n" +
             "    return;\n", Case.Sensitive);
@@ -93,7 +93,7 @@ public sealed class GlslGeneratorTests
         glsl.ShouldContain(
             "void main()\n" +
             "{\n" +
-            "    gl_Position = vec4(a_position, 1);\n" +
+            "    gl_Position = vec4(a_position, 1.0);\n" +
             "    return;\n" +
             "}\n", Case.Sensitive);
     }
@@ -120,7 +120,7 @@ public sealed class GlslGeneratorTests
         // the same name must be escaped, or it silently shadows the output
         // and the stage never writes it (the shader still compiles cleanly).
         glsl.ShouldContain("out vec4 fragColor;\n", Case.Sensitive);
-        glsl.ShouldContain("    vec4 _ss_fragColor = vec4(v_uv, 0, 1);\n", Case.Sensitive);
+        glsl.ShouldContain("    vec4 _ss_fragColor = vec4(v_uv, 0.0, 1.0);\n", Case.Sensitive);
         glsl.ShouldContain(
             "    fragColor = _ss_fragColor;\n" +
             "    return;\n", Case.Sensitive);
@@ -143,6 +143,37 @@ public sealed class GlslGeneratorTests
     // Compiles one stage to text for targeted string assertions. The generator
     // emits Environment.NewLine (via StringBuilder.AppendLine), so the result
     // is normalized to LF to keep multi-line ShouldContain checks OS-agnostic.
+    [Fact]
+    public void Whole_number_float_literals_keep_their_decimal_point()
+    {
+        var glsl = CompileStageText("WholeNumberFloats.spectrashade", ShaderStage.Fragment);
+
+        // The bug this pins is not cosmetic. GLSL has no float suffix, so a
+        // literal printed as "1" IS an int, and `1 / 3` is integer division
+        // evaluating to zero. The shader still compiles, the driver says
+        // nothing, and the result is wrong on OpenGL only, while the HLSL
+        // generator (which has always emitted "1.0") computes it correctly.
+        // Two backends agreeing is not a majority.
+        glsl.ShouldContain("float third = (1.0 / 3.0);", Case.Sensitive);
+        glsl.ShouldContain("float scaled = (2.0 * third);", Case.Sensitive);
+        glsl.ShouldContain("vec3(1.0, 0.0, 0.0)", Case.Sensitive);
+
+        // Stated as a refusal too: no bare integer literal may appear where a
+        // float was written, in any of the emitted arithmetic.
+        glsl.ShouldNotContain("(1 / 3)", Case.Sensitive);
+        glsl.ShouldNotContain("(2 * third)", Case.Sensitive);
+    }
+
+    [Fact]
+    public void The_hlsl_generator_agrees_digit_for_digit()
+    {
+        // The two generators read the same source, so a literal that differs
+        // between them is a divergence in the language, not in a backend.
+        var glsl = CompileStageText("WholeNumberFloats.spectrashade", ShaderStage.Fragment);
+
+        glsl.ShouldContain("1.0 / 3.0", Case.Sensitive);
+    }
+
     private static string CompileStageText(string fixtureName, ShaderStage stage)
     {
         var blob = Compile(fixtureName);

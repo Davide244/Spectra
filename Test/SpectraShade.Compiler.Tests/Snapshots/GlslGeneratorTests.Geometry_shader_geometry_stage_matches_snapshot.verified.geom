@@ -32,7 +32,7 @@ void main()
 {
     for (int i = 0; (i < 3); i = (i + 1))
     {
-        gl_Position = (gl_in[i].gl_Position + (vec4(v_normal[i], 0) * extrusion));
+        gl_Position = (gl_in[i].gl_Position + (vec4(v_normal[i], 0.0) * extrusion));
         g_normal = v_normal[i];
         EmitVertex();
     }

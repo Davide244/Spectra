@@ -29,7 +29,7 @@ uniform float extrusion;
 void main()
 {
     VertexOutput _ss_output;
-    _ss_output.position = (vec4(a_position, 1) * viewProjection);
+    _ss_output.position = (vec4(a_position, 1.0) * viewProjection);
     _ss_output.normal = a_normal;
     gl_Position = _ss_output.position;
     v_normal = _ss_output.normal;

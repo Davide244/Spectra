@@ -942,6 +942,20 @@ public sealed class GlslGenerator : ICodeGenerator
         ["WorkGroupSize"] = "gl_WorkGroupSize",
     };
 
+    // GLSL has no implicit int-to-float conversion in an arithmetic context that
+    // matters here: `1.0 / 3.0` written by an author becomes `(1 / 3)` if the
+    // literals lose their decimal point, and that is INTEGER division evaluating
+    // to zero. Silently, with no diagnostic from the driver, on OpenGL only,
+    // while HLSL (which has always had this helper) computes it correctly.
+    // A shader is one source file targeting three backends; two of them
+    // agreeing is not a majority, it is a bug.
+    private static string FormatFloat(float value)
+    {
+        string s = value.ToString("R", CultureInfo.InvariantCulture);
+        if (!s.Contains('.') && !s.Contains('e') && !s.Contains('E')) s += ".0";
+        return s;
+    }
+
     private string EmitExpression(Expression expr)
     {
         switch (expr)
@@ -950,7 +964,7 @@ public sealed class GlslGenerator : ICodeGenerator
                 return i.Value.ToString();
 
             case FloatLiteralExpression f:
-                return f.Value.ToString(CultureInfo.InvariantCulture);
+                return FormatFloat(f.Value);
 
             case BoolLiteralExpression b:
                 return b.Value ? "true" : "false";

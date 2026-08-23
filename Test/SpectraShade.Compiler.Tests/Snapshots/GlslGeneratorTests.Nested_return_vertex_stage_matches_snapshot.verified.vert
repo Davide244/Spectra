@@ -38,13 +38,13 @@ void main()
 {
     if ((a_position.x < threshold))
     {
-        VertexOutput _ss_ret0 = BuildOutput((vec4(a_position, 1) * viewProjection), (vec2(1, 1) - a_uv));
+        VertexOutput _ss_ret0 = BuildOutput((vec4(a_position, 1.0) * viewProjection), (vec2(1.0, 1.0) - a_uv));
         gl_Position = _ss_ret0.position;
         v_uv = _ss_ret0.uv;
         return;
     }
     VertexOutput _ss_output;
-    _ss_output.position = (vec4(a_position, 1) * viewProjection);
+    _ss_output.position = (vec4(a_position, 1.0) * viewProjection);
     _ss_output.uv = a_uv;
     gl_Position = _ss_output.position;
     v_uv = _ss_output.uv;

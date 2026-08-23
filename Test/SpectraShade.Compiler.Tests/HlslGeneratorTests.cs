@@ -67,6 +67,18 @@ public sealed class HlslGeneratorTests
     // Compiles one stage to text for targeted string assertions. The generator
     // emits Environment.NewLine (via StringBuilder.AppendLine), so the result
     // is normalized to LF to keep multi-line ShouldContain checks OS-agnostic.
+    [Fact]
+    public void Whole_number_float_literals_keep_their_decimal_point()
+    {
+        // The HLSL side has always been correct; this pins it so the two
+        // generators cannot drift apart again. See the GLSL test of the same
+        // name for what going wrong looks like.
+        var hlsl = CompileStageText("WholeNumberFloats.spectrashade", ShaderStage.Fragment);
+
+        hlsl.ShouldContain("float third = (1.0 / 3.0);", Case.Sensitive);
+        hlsl.ShouldNotContain("(1 / 3)", Case.Sensitive);
+    }
+
     private static string CompileStageText(string fixtureName, ShaderStage stage)
     {
         var blob = Compile(fixtureName);

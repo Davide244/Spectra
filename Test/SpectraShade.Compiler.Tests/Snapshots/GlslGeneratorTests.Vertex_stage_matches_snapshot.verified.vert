@@ -33,7 +33,7 @@ uniform mat4 viewProjection;
 void main()
 {
     VertexOutput _ss_output;
-    _ss_output.position = (vec4(a_position, 1) * viewProjection);
+    _ss_output.position = (vec4(a_position, 1.0) * viewProjection);
     _ss_output.normal = a_normal;
     _ss_output.uv = a_uv;
     gl_Position = _ss_output.position;

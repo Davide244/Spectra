@@ -27,6 +27,6 @@ uniform float extrusion;
 
 void main()
 {
-    fragColor = vec4(g_normal, 1);
+    fragColor = vec4(g_normal, 1.0);
     return;
 }

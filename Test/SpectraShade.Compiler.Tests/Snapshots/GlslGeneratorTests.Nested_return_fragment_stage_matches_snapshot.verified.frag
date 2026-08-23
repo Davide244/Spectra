@@ -39,12 +39,12 @@ void main()
     {
         if ((v_uv.y > threshold))
         {
-            fragColor = vec4(1, 0, 0, 1);
+            fragColor = vec4(1.0, 0.0, 0.0, 1.0);
             return;
         }
-        fragColor = vec4(0, 1, 0, 1);
+        fragColor = vec4(0.0, 1.0, 0.0, 1.0);
         return;
     }
-    fragColor = vec4(0, 0, 1, 1);
+    fragColor = vec4(0.0, 0.0, 1.0, 1.0);
     return;
 }
