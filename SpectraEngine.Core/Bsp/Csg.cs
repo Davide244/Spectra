@@ -257,7 +257,7 @@ public static class Csg
                 {
                     next.Clear();
                     foreach (Polygon fragment in current)
-                        CarveFragment(fragment, in carvers[k], planeBuffer, next, seedIsWall: false, seedOrigin: -1, carverIndex: k);
+                        CarveFragment(fragment, carvers, neighborIndices.Length, planeBuffer, next, seedIsWall: false, seedOrigin: -1, carverIndex: k);
 
                     (current, next) = (next, current);
                     if (current.Count == 0)
@@ -321,7 +321,7 @@ public static class Csg
                     {
                         next.Clear();
                         foreach (Polygon fragment in current)
-                            CarveFragment(fragment, in carvers[c], planeBuffer, next, seedIsWall: true, seedOrigin: k, carverIndex: c);
+                            CarveFragment(fragment, carvers, neighborIndices.Length, planeBuffer, next, seedIsWall: true, seedOrigin: k, carverIndex: c);
 
                         (current, next) = (next, current);
                         if (current.Count == 0)
@@ -448,9 +448,11 @@ public static class Csg
     //   WALL / other SUBTR.  as FACE/SUBTRACTIVE, plus an opposite-facing
     //                        coincidence tie-break on list position.
     private static void CarveFragment(
-        Polygon fragment, in CarverInFrame carver, Plane[] planes, List<Polygon> output,
+        Polygon fragment, CarverInFrame[] carvers, int carverCount, Plane[] planes, List<Polygon> output,
         bool seedIsWall, int seedOrigin, int carverIndex)
     {
+        ref readonly CarverInFrame carver = ref carvers[carverIndex];
+
         // Whole fragment clear of the carver: nothing to remove.
         if (!fragment.Bounds.Intersects(carver.Bounds))
         {
@@ -480,6 +482,7 @@ public static class Csg
         }
 
         Polygon? remaining = fragment;
+        bool onCarverPlane = false;
         int end = carver.PlaneStart + carver.PlaneCount;
         for (int p = carver.PlaneStart; p < end; p++)
         {
@@ -552,6 +555,7 @@ public static class Csg
 
                 // Skip the coincident plane; the remaining planes carve the
                 // footprint, and whatever survives behind them is dropped.
+                onCarverPlane = true;
                 continue;
             }
 
@@ -561,7 +565,108 @@ public static class Csg
             remaining = back;
         }
 
-        // Anything still behind every plane is buried inside the carver: dropped.
+        // Anything still behind every plane is buried inside the carver:
+        // dropped — with ONE exception, the interior interface over a hollow.
+        //
+        // The rule above deletes the shared footprint of an opposite-facing
+        // coincidence because the carver's own face on that plane covers exactly
+        // it, so precisely one surface survives there. That pairing breaks when a
+        // negative cuts flush through the carver ON THAT PLANE: the carver's own
+        // face is deleted over the cut by the flush-through-cut rule, and the
+        // cavity wall that would replace it is killed at seeding by the clip to
+        // inside(cut brush) — Split reports a coplanar seed on the front. Nobody
+        // is left to bound the cavity, the compiled skin is open, and the solid
+        // reconstruction leaks through the hole. Re-emit the hollowed part.
+        //
+        // Only after a coincident-plane skip: a fragment buried in the carver's
+        // OPEN interior is bounded by a cavity wall the seeding kept (it is not
+        // coplanar with any of the cut brush's own planes there), and re-emitting
+        // would duplicate that wall.
+        if (onCarverPlane && remaining is not null && !carver.Subtractive)
+            EmitHollowedRemainder(remaining, 0, carvers, carverCount, carverIndex, planes, output);
+    }
+
+    // Emits the parts of a buried fragment that lie inside one of the
+    // subtractive carvers at [first, carverCount) — i.e. the parts the carver
+    // that buried it no longer actually fills. Parts inside none of them stay
+    // buried and are dropped, exactly as before.
+    //
+    // A part strictly inside a negative is boundary the negative itself removes,
+    // and the ordinary ping-pong deletes it again when the fragment meets that
+    // negative (or already did, if it came earlier in the list), so this cannot
+    // resurrect material: what survives is the patch RESTING on the negative's
+    // own face, which is precisely the cavity floor nothing else emits.
+    private static void EmitHollowedRemainder(
+        Polygon buried, int first, CarverInFrame[] carvers, int carverCount, int carverIndex,
+        Plane[] planes, List<Polygon> output)
+    {
+        for (int s = first; s < carverCount; s++)
+        {
+            ref readonly CarverInFrame negative = ref carvers[s];
+            if (s == carverIndex || !negative.Subtractive)
+                continue;
+            if (!negative.Bounds.Intersects(carvers[carverIndex].Bounds) || !negative.Bounds.Intersects(buried.Bounds))
+                continue;
+
+            // The patch has to REST on one of the negative's own faces —
+            // coplanar with it and facing into the cavity — because that face
+            // is the cavity wall the seeding would have emitted, and this patch
+            // is the only other surface that can bound the same hollow.
+            // Classified with Polygon's per-vertex tolerance, not
+            // CoplanarOrientation's ten-times-looser one, for the reason the
+            // FACE/SUBTRACTIVE row states: the decision has to be taken at the
+            // same tolerance that decides whether the seed survives.
+            int rest = -1;
+            int end = negative.PlaneStart + negative.PlaneCount;
+            for (int p = negative.PlaneStart; p < end; p++)
+            {
+                if (Vector3.Dot(buried.Surface.Normal, planes[p].Normal) < 0f
+                    && buried.Classify(planes[p]) == PolygonClassification.Coplanar)
+                {
+                    rest = p;
+                    break;
+                }
+            }
+
+            // And that face has to lie on one of the carver's OWN planes, which
+            // is exactly when the seeding clip killed the cavity wall. A cut
+            // that stops inside the carver keeps its wall, and re-emitting here
+            // would put two coincident surfaces on the plane.
+            if (rest < 0 || !LiesOnOwnPlane(in carvers[carverIndex], planes, planes[rest]))
+                continue;
+
+            Polygon? inside = buried;
+            for (int p = negative.PlaneStart; p < end && inside is not null; p++)
+            {
+                if (p == rest)
+                    continue;
+
+                inside.Split(planes[p], out Polygon? outside, out Polygon? behind);
+                if (outside is not null)
+                    EmitHollowedRemainder(outside, s + 1, carvers, carverCount, carverIndex, planes, output);
+                inside = behind;
+            }
+
+            if (inside is not null)
+                output.Add(inside);
+            return;
+        }
+    }
+
+    // Whether `plane` is one of the carver's own planes, at the tolerance
+    // Polygon.Split classifies with — the same decision the cavity-wall clip
+    // takes when it kills a seed lying on a plane of the brush it cuts.
+    private static bool LiesOnOwnPlane(in CarverInFrame carver, Plane[] planes, in Plane plane)
+    {
+        int end = carver.PlaneStart + carver.PlaneCount;
+        for (int p = carver.PlaneStart; p < end; p++)
+        {
+            if (Vector3.Dot(planes[p].Normal, plane.Normal) > 1f - NormalEpsilon
+                && MathF.Abs(planes[p].D - plane.D) < Polygon.Epsilon)
+                return true;
+        }
+
+        return false;
     }
 
     // 0 = not coplanar; +1 = same geometric plane, normals agree;

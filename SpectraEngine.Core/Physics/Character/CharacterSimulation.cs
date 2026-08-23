@@ -55,6 +55,17 @@ public sealed class CharacterSimulation
         _state = CharacterState.AtFeet(Vector3.Zero);
     }
 
+    /// <summary>
+    /// The movement algorithm. Defaults to the engine's own; assign to install a
+    /// substitute, which is what a scripted controller will do.
+    /// </summary>
+    /// <remarks>
+    /// Settable rather than a constructor argument because a game may swap it at
+    /// runtime, and because the overwhelmingly common case should cost the
+    /// caller nothing to express.
+    /// </remarks>
+    public ICharacterMover Mover { get; set; } = DefaultCharacterMover.Instance;
+
     /// <summary>Every movement constant, live. Editing one takes effect next tick.</summary>
     public CharacterTuning Tuning { get; }
 
@@ -91,7 +102,7 @@ public sealed class CharacterSimulation
     /// </summary>
     public bool Tick(in CharacterCommand command, float deltaTime)
     {
-        CharacterMover.Tick(ref _state, in command, _source, Tuning, deltaTime);
+        Mover.Tick(ref _state, in command, _source, Tuning, deltaTime);
 
         if (_state.Position.Y >= FallOutHeight)
             return false;

@@ -30,7 +30,7 @@ camera. **F11** toggles fullscreen. **F1** to **F6** are debug views.
 | **Shader language** | SpectraShade compiles `.spectrashade` to GLSL and HLSL at runtime, with hot reload. LSP and a Visual Studio extension ship alongside. |
 | **Editor** | Translate / rotate / resize gizmos, undo with gesture transactions, multi-select and marquee, Studio-style camera. |
 | **Assets** | Textures, materials and models from real files, background decode with a render-thread upload pump, hot reload. |
-| **Physics** | Box3D vendored and bound, the compiled world as static collision, a first-person character mover that walks CSG holes. |
+| **Physics** | Box3D vendored and bound, the compiled world as static collision, a first-person character that walks CSG holes, and one gameplay raycast that agrees with what is drawn. |
 | **Animation** | Skeletons, clips and pose blending. CPU only so far, nothing imports or draws them yet. |
 
 Not built yet, and worth naming: skeletal mesh import and skinning on the GPU,
@@ -78,8 +78,8 @@ flowchart TD
     classDef partial fill:#7a5c12,stroke:#e0a800,color:#fff
     classDef planned fill:#2b2f36,stroke:#5a6068,color:#c9ced6
 
-    class F,E,P,S,Y,A partial
-    class R,D,O,C,N,H planned
+    class F,E,P,R,S,Y,A partial
+    class D,O,C,N,H planned
 ```
 
 <sub>Amber: partly landed. Grey: designed, not started. No arc is complete yet.</sub>
@@ -118,9 +118,9 @@ flowchart LR
 | **F** Foundations | [ROADMAP](ROADMAP.md) | F1, F2 | F3 ViewDrawer, F4 diagnostics contract |
 | **E** Editor | [ROADMAP](ROADMAP.md) | E1 to E5 | E7 face texturing, E6 structural edits |
 | **P** Persistence, entities | [ROADMAP](ROADMAP.md), [data-model](docs/data-model.md) | P7a, P7b | P2 map format, P11a play/stop |
-| **R** Rendering | [ROADMAP](ROADMAP.md) | none | R1 PSO key, R2 sRGB, R3 render targets |
+| **R** Rendering | [ROADMAP](ROADMAP.md) | R1 | R2 sRGB, R3 render targets |
 | **S** Shader authoring | [ROADMAP](ROADMAP.md) | the language itself, GLSL, HLSL, LSP | S2 parameter scopes, S5 type checker |
-| **Y** Physics | [physics](docs/physics.md) | Y0, Y1, Y2, Y3, Y5 | Y4 query unification, Y6 dynamic bodies |
+| **Y** Physics | [physics](docs/physics.md) | Y0 to Y5 | Y6 dynamic bodies, Y7 kinematic parts |
 | **A** Animation | this README, for now | pose primitives | import, then R5 array uniforms, then skinning |
 | **D** Formats, pipeline | [formats-and-pipeline](docs/formats-and-pipeline.md) | none | D0 cook gate |
 | **O** Scripting | [roblox-onboarding](docs/roblox-onboarding.md) | none | O0 Luau gate |
