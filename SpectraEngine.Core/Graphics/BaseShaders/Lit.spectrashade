@@ -11,11 +11,13 @@ struct VertexInput {
 struct VertexOutput {
     [Position] vec4 position;
     vec3 worldNormal;
+    vec3 worldPosition;
     vec2 uv;
 }
 
 struct FragmentInput {
     vec3 worldNormal;
+    vec3 worldPosition;
     vec2 uv;
 }
 
@@ -27,8 +29,19 @@ shader Lit {
     }
 
     [Binding(1)] cbuffer Lighting {
-        vec3 uLightDir;
         vec3 uBaseColor;
+    }
+
+    // Its own register, not an extension of Lighting. Both D3D backends keep one
+    // GPU buffer per register and upload the whole buffer when any member of it
+    // changes, and uBaseColor above is written per material while these are
+    // written per frame. Sharing a buffer would re-upload the light arrays on
+    // every single draw.
+    [Binding(2)] cbuffer Lights {
+        vec4[8] uLightPositions;
+        vec4[8] uLightColors;
+        int uLightCount;
+        float uAmbient;
     }
 
     [Binding(0)] sampler2D uDiffuse;
@@ -38,6 +51,7 @@ shader Lit {
         var output = new VertexOutput();
         output.position = uProjection * uView * uModel * vec4(input.position, 1.0);
         output.worldNormal = mat3(uModel) * input.normal;
+        output.worldPosition = (uModel * vec4(input.position, 1.0)).xyz;
         output.uv = input.uv;
         return output;
     }
@@ -45,10 +59,39 @@ shader Lit {
     [Fragment] [Target(0)]
     vec4 FragmentMain(FragmentInput input) {
         vec3 n = Math.Normalize(input.worldNormal);
-        float ndotl = Math.Max(Math.Dot(n, Math.Normalize(-uLightDir)), 0.0);
         vec3 albedo = uBaseColor * uDiffuse.Sample(input.uv).rgb;
-        vec3 ambient = albedo * 0.2;
-        vec3 diffuse = albedo * ndotl;
-        return vec4(ambient + diffuse, 1.0);
+
+        // Ambient is a uniform now rather than a hardcoded 0.2. With more than
+        // one light a constant floor that every light stacks on top of is
+        // visibly wrong: the scene gets brighter with each light added even
+        // where none of them reach.
+        vec3 total = albedo * uAmbient;
+
+        for (int i = 0; i < uLightCount; i = i + 1) {
+            vec4 posRange = uLightPositions[i];
+            vec3 radiance = uLightColors[i].rgb;
+
+            // w is the range for a point light and zero for a directional one,
+            // which is how the two are told apart without a second array.
+            vec3 toLight = -posRange.xyz;
+            float attenuation = 1.0;
+
+            if (posRange.w > 0.0) {
+                vec3 offset = posRange.xyz - input.worldPosition;
+                float distance = Math.Length(offset);
+                toLight = offset / Math.Max(distance, 0.0001);
+
+                // Inverse-square, faded to exactly zero at the range so the
+                // light can be culled at all, and squared at the end to keep
+                // the edge of the falloff from showing as a ring.
+                float falloff = Math.Max(1.0 - distance / posRange.w, 0.0);
+                attenuation = falloff * falloff / (1.0 + distance * distance);
+            }
+
+            float ndotl = Math.Max(Math.Dot(n, Math.Normalize(toLight)), 0.0);
+            total = total + albedo * radiance * ndotl * attenuation;
+        }
+
+        return vec4(total, 1.0);
     }
 }

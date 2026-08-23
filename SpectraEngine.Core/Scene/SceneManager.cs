@@ -433,6 +433,8 @@ public sealed class SceneManager
             .CreateBox(new Vector3(-0.5f, -0.65f, -0.15f), new Vector3(0.5f, 0.65f, 0.15f), accentMaterial)
             .WithOperation(BrushOperation.Subtractive);
 
+        AddDemoLights(scene);
+
         // The bobbing pillar re-compiles continuously, so its cells prove the
         // per-material split survives every incremental recompile — not just
         // the initial build. It stays editable while it does: the animation
@@ -650,6 +652,53 @@ public sealed class SceneManager
     // A non-default material makes the compile split that brush's cells into
     // per-material submeshes, so the demo exercises the multi-material render
     // path rather than only the uniform fast path.
+    // The demo's light rig: one sun plus a few coloured point lights.
+    //
+    // Deliberately more than the engine used to have and fewer than the cap, so
+    // an ordinary run exercises the nearest-N selection without ever hitting the
+    // drop path. Colours are LINEAR, because everything downstream of here is:
+    // a colour picked in a paint program goes through ColorSpace.SrgbToLinear
+    // first, and typing display values straight in is how a light ends up
+    // looking washed out and nothing says why.
+    private static void AddDemoLights(Scene scene)
+    {
+        // The sun. A directional light takes its direction from the node's
+        // forward axis, so it is placed by rotation rather than position.
+        SceneNode sun = scene.Root.CreateChild("Sun");
+        sun.LocalRotation = Quaternion.CreateFromYawPitchRoll(0.6f, -0.9f, 0f);
+        sun.Light = new Light
+        {
+            Kind = LightKind.Directional,
+            Color = ColorSpace.SrgbToLinear(new Vector3(1f, 0.96f, 0.88f)),
+            Intensity = 1.6f,
+        };
+
+        AddPointLight(scene, "LampWarm", new Vector3(-3f, 2.2f, 2.5f),
+            new Vector3(1f, 0.55f, 0.2f), intensity: 12f, range: 9f);
+        AddPointLight(scene, "LampCool", new Vector3(3.2f, 1.8f, -2.2f),
+            new Vector3(0.3f, 0.6f, 1f), intensity: 10f, range: 8f);
+
+        // Over the play area, so walking there in play mode is lit by something
+        // other than the sun and the point-light path is exercised where a
+        // person actually looks at it.
+        AddPointLight(scene, "PlayAreaLamp", DemoPlayArea.Center + new Vector3(-8f, 4f, 0f),
+            new Vector3(0.9f, 0.9f, 1f), intensity: 30f, range: 18f);
+    }
+
+    private static void AddPointLight(
+        Scene scene, string name, Vector3 position, Vector3 displayColor, float intensity, float range)
+    {
+        SceneNode node = scene.Root.CreateChild(name);
+        node.LocalPosition = position;
+        node.Light = new Light
+        {
+            Kind = LightKind.Point,
+            Color = ColorSpace.SrgbToLinear(displayColor),
+            Intensity = intensity,
+            Range = range,
+        };
+    }
+
     private static SceneNode AddBrushNode(
         Scene scene, string name, Vector3 center, Vector3 halfExtent, MaterialRef material = default)
     {

@@ -16,8 +16,16 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
 
     public string Name => "Forward";
 
-    /// <summary>Direction the single scene light comes <em>from</em>, in world space.</summary>
-    public Vector3 LightDirection { get; set; } = Vector3.Normalize(new Vector3(-0.4f, -1f, -0.6f));
+    /// <summary>
+    /// Ambient light level, added to every surface regardless of the lights.
+    /// </summary>
+    /// <remarks>
+    /// A uniform rather than the constant it used to be in the shader: with
+    /// more than one light, a floor that every light stacks on top of makes
+    /// the scene brighter with each light added even where none of them
+    /// reach.
+    /// </remarks>
+    public float Ambient { get; set; } = 0.05f;
 
     public void Initialize(OpenGLRenderer renderer)
     {
@@ -57,7 +65,7 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
         {
             RenderItem item = items[i];
             if (item.Material is { } material)
-                DrawRenderable(item.Mesh, material, item.World, camera);
+                DrawRenderable(item.Mesh, material, item.World, camera, view);
         }
 
         // The derived static world's chunks arrive pre-culled like the items,
@@ -69,11 +77,11 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
         {
             RenderItem item = worldItems[i];
             if (item.Material is { } material)
-                DrawRenderable(item.Mesh, material, item.World, camera);
+                DrawRenderable(item.Mesh, material, item.World, camera, view);
         }
     }
 
-    private void DrawRenderable(Mesh mesh, Material material, Matrix4x4 model, Camera camera)
+    private void DrawRenderable(Mesh mesh, Material material, Matrix4x4 model, Camera camera, RenderView view)
     {
         // A material with no program (the fallback built before a renderer had
         // one, or a shader that failed to resolve) is skipped rather than
@@ -84,7 +92,7 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
         shader.SetUniform("uModel", model);
         shader.SetUniform("uView", camera.View);
         shader.SetUniform("uProjection", camera.Projection);
-        shader.SetUniform("uLightDir", LightDirection);
+        LightUpload.Apply(shader, view, Ambient);
         material.Apply();
 
         mesh.Draw();

@@ -18,7 +18,8 @@ public sealed unsafe class D3D11ForwardPipeline : ID3D11RenderPipeline
 
     public string Name => "Forward";
 
-    public Vector3 LightDirection { get; set; } = Vector3.Normalize(new Vector3(-0.4f, -1f, -0.6f));
+    /// <summary>Ambient light level, added to every surface regardless of the lights.</summary>
+    public float Ambient { get; set; } = 0.05f;
 
     public void Initialize(D3D11Renderer renderer) => _renderer = renderer;
 
@@ -55,7 +56,7 @@ public sealed unsafe class D3D11ForwardPipeline : ID3D11RenderPipeline
         {
             RenderItem item = items[i];
             if (item.Material is { } material)
-                DrawRenderable(item.Mesh, material, item.World, camera);
+                DrawRenderable(item.Mesh, material, item.World, camera, view);
         }
 
         // The derived static world's chunks arrive pre-culled like the items,
@@ -67,11 +68,11 @@ public sealed unsafe class D3D11ForwardPipeline : ID3D11RenderPipeline
         {
             RenderItem item = worldItems[i];
             if (item.Material is { } material)
-                DrawRenderable(item.Mesh, material, item.World, camera);
+                DrawRenderable(item.Mesh, material, item.World, camera, view);
         }
     }
 
-    private void DrawRenderable(Mesh mesh, Material material, Matrix4x4 model, Camera camera)
+    private void DrawRenderable(Mesh mesh, Material material, Matrix4x4 model, Camera camera, RenderView view)
     {
         // A material with no program (the fallback built before a renderer had
         // one, or a shader that failed to resolve) is skipped rather than
@@ -83,7 +84,7 @@ public sealed unsafe class D3D11ForwardPipeline : ID3D11RenderPipeline
         shader.SetUniform("uModel", model);
         shader.SetUniform("uView", camera.View);
         shader.SetUniform("uProjection", camera.Projection * D3D11Renderer.GlToD3dClipZ);
-        shader.SetUniform("uLightDir", LightDirection);
+        LightUpload.Apply(shader, view, Ambient);
         material.Apply();
         shader.Use();
 

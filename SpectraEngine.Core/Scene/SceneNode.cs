@@ -20,6 +20,7 @@ public class SceneNode
     private Bsp.Brush? _brush;
     private BrushKind _brushKind = BrushKind.World;
     private MeshRenderer? _meshRenderer;
+    private Light? _light;
     private PhysicsFlags _physicsFlags = PhysicsFlags.Default;
     private byte _collisionGroup;
 
@@ -111,6 +112,31 @@ public class SceneNode
             // The node just became spatial, stopped being spatial, or changed
             // its renderable bounds — the owning scene's BVH must follow.
             Owner?.OnNodeSpatialComponentChanged(this);
+        }
+    }
+
+    /// <summary>
+    /// The light this node emits, or null. Attaching one registers the node with
+    /// the owning scene's light list; detaching removes it.
+    /// </summary>
+    /// <remarks>
+    /// <b>A light does not make a node spatial.</b> It stays out of the BVH on
+    /// purpose: the BVH is what <c>Raycast</c> and the physics queries walk, and
+    /// <see cref="PhysicsFlags.Default"/> includes both <c>CanCollide</c> and
+    /// <c>CanQuery</c>, so admitting light-only nodes would quietly make every
+    /// lamp in a level something a picking ray hits and a character walks into.
+    /// Lights are collected from the scene's own small list instead, which is
+    /// O(lights) rather than O(nodes) and needs no bounds at all.
+    /// </remarks>
+    public Light? Light
+    {
+        get => _light;
+        set
+        {
+            if (ReferenceEquals(_light, value))
+                return;
+            _light = value;
+            Owner?.UpdateLightMembership(this);
         }
     }
 

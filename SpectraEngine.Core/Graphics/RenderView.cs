@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 
@@ -103,6 +104,86 @@ public sealed class RenderView
     /// <summary>Total nodes carrying a part brush, culled or not.</summary>
     public int PartBrushesTotal { get; internal set; }
 
+    // ---- lights ------------------------------------------------------------
+
+    /// <summary>
+    /// How many lights a single pass can carry.
+    /// </summary>
+    /// <remarks>
+    /// <b>A hard cap, and the ceiling is real.</b> Every light is a uniform-array
+    /// element shaded by every fragment, so the cost is N times the pixel count
+    /// whether or not a light reaches a given surface. The correct answer is
+    /// clustered or tiled shading, which needs storage buffers that SpectraShade
+    /// does not have, so this is a genuine ceiling rather than a tuning knob:
+    /// past it, lights are dropped and the drop is visible as popping when the
+    /// camera moves. <c>LightsDropped</c> says when it is happening.
+    /// </remarks>
+    public const int MaxLights = 8;
+
+    private readonly RenderLight[] _lights = new RenderLight[MaxLights];
+    private readonly float[] _lightKeys = new float[MaxLights];
+
+    /// <summary>Lights for this pass, nearest first. Only the first <see cref="LightCount"/> are valid.</summary>
+    public ReadOnlySpan<RenderLight> Lights => _lights.AsSpan(0, LightCount);
+
+    /// <summary>How many of <see cref="Lights"/> are filled.</summary>
+    public int LightCount { get; private set; }
+
+    /// <summary>
+    /// Lights the scene had that did not fit. Non-zero means the picture is
+    /// missing light it should have had, so it is reported rather than absorbed.
+    /// </summary>
+    public int LightsDropped { get; private set; }
+
+    /// <summary>
+    /// Offers a light for inclusion, keeping the nearest <see cref="MaxLights"/>.
+    /// Build-side use only.
+    /// </summary>
+    /// <param name="light">The flattened light.</param>
+    /// <param name="sortKey">
+    /// Distance from the viewer, or a negative value to mean "always keep this
+    /// one" — which is what a directional light passes, since a sun has no
+    /// position to be far from.
+    /// </param>
+    /// <remarks>
+    /// An insertion sort into a fixed buffer: no list, no comparer, no
+    /// allocation, because <c>RenderViewTests</c> asserts a per-frame delta of
+    /// exactly zero bytes. At eight elements it is also simply faster than
+    /// anything cleverer.
+    /// <para>
+    /// Ties keep the earlier offer, which makes the result a function of the
+    /// scene's light order rather than of float comparison luck. Two lamps at
+    /// exactly equal distance is ordinary content, not a pathological case.
+    /// </para>
+    /// </remarks>
+    internal void OfferLight(in RenderLight light, float sortKey)
+    {
+        if (LightCount == MaxLights && sortKey >= _lightKeys[MaxLights - 1])
+        {
+            LightsDropped++;
+            return;
+        }
+
+        int insertAt = LightCount;
+        while (insertAt > 0 && _lightKeys[insertAt - 1] > sortKey)
+            insertAt--;
+
+        int last = LightCount == MaxLights ? MaxLights - 1 : LightCount;
+        if (LightCount == MaxLights)
+            LightsDropped++;
+        else
+            LightCount++;
+
+        for (int i = last; i > insertAt; i--)
+        {
+            _lights[i] = _lights[i - 1];
+            _lightKeys[i] = _lightKeys[i - 1];
+        }
+
+        _lights[insertAt] = light;
+        _lightKeys[insertAt] = sortKey;
+    }
+
     /// <summary>Appends one draw to the list (build-side use only).</summary>
     internal void Add(in RenderItem item) => _items.Add(item);
 
@@ -125,5 +206,7 @@ public sealed class RenderView
         WorldMaterialBatchesTotal = 0;
         PartBrushesVisible = 0;
         PartBrushesTotal = 0;
+        LightCount = 0;
+        LightsDropped = 0;
     }
 }

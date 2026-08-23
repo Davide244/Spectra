@@ -148,6 +148,7 @@ public sealed partial class Scene
         // pump's sweep.
         _partBrushNodes.Remove(node);
         _subtractiveBrushNodes.Remove(node);
+        _lightNodes.Remove(node);
         NodeRemoved?.Invoke(node);
     }
 
@@ -171,6 +172,20 @@ public sealed partial class Scene
     // Adds or drops `node` from the part set to match what it currently
     // carries. Idempotent and O(1), so every caller may just say "recheck this
     // node" rather than reasoning about which transition happened.
+    // Adds or drops `node` from the light list to match what it carries.
+    // Idempotent, so a caller may just say "recheck this node".
+    internal void UpdateLightMembership(SceneNode node)
+    {
+        bool shouldBeListed = node.Light is not null;
+        int index = _lightNodes.IndexOf(node);
+
+        if (shouldBeListed && index < 0) _lightNodes.Add(node);
+        else if (!shouldBeListed && index >= 0) _lightNodes.RemoveAt(index);
+    }
+
+    /// <summary>Nodes currently carrying a <see cref="Scene.Light"/>, in attachment order.</summary>
+    public IReadOnlyList<SceneNode> LightNodes => _lightNodes;
+
     internal void UpdatePartBrushMembership(SceneNode node)
     {
         // ADDITIVE part brushes only. A subtractive brush has no outward skin —
@@ -440,6 +455,50 @@ public sealed partial class Scene
     /// ascending material id) — deterministic and stable while the scene is
     /// unchanged. Render thread only, like every other scene member;
     /// allocation-free in steady state (the view and the internal scratch list
+    // Flattens the scene's lights into the view, keeping the nearest few.
+    //
+    // Not frustum-culled, and that is deliberate rather than an omission: a
+    // light behind the camera still lights what is in front of it, so culling
+    // lights by visibility would switch them off exactly when the player turns
+    // around. Range is the only thing that bounds a light's reach, and distance
+    // to the viewer is the only cheap proxy for "does this matter here".
+    //
+    // Iterates the scene's light list, which is O(lights) rather than O(nodes)
+    // and needs no bounds, which is why a light does not enter the BVH at all.
+    private void CollectLights(Vector3 viewer, RenderView view)
+    {
+        for (int i = 0; i < _lightNodes.Count; i++)
+        {
+            SceneNode node = _lightNodes[i];
+            if (node.Light is not { Enabled: true } light) continue;
+
+            Vector3 radiance = light.Color * light.Intensity;
+            var color = new Vector4(radiance, 0f);
+
+            if (light.Kind == LightKind.Directional)
+            {
+                // The node's forward axis is the direction the light travels.
+                // A negative key keeps a sun ahead of every point light: it has
+                // no position, so it cannot be "far away", and dropping the sun
+                // because a lamp happens to be nearer would be absurd.
+                Matrix4x4 world = node.WorldMatrix;
+                var forward = Vector3.Normalize(new Vector3(world.M31, world.M32, world.M33));
+                view.OfferLight(new RenderLight(new Vector4(forward, 0f), color), -1f);
+                continue;
+            }
+
+            Vector3 position = node.WorldPosition;
+            float distance = Vector3.Distance(position, viewer);
+
+            // Past its own range plus the viewer's distance it cannot reach
+            // anything being drawn near the camera; skipping keeps a distant
+            // lamp from occupying one of the few slots.
+            view.OfferLight(
+                new RenderLight(new Vector4(position, light.Range), color),
+                distance);
+        }
+    }
+
     /// retain their capacity).
     /// </summary>
     public void BuildRenderView(Camera camera, RenderView view)
@@ -447,6 +506,8 @@ public sealed partial class Scene
         view.Clear();
 
         Frustum frustum = camera.GetFrustum();
+        CollectLights(camera.Position, view);
+
         _renderViewScratch.Clear();
         Bvh.QueryFrustum(in frustum, _renderViewScratch);
 
@@ -553,6 +614,12 @@ public sealed partial class Scene
     // maintained from the same four places that already learn about a brush
     // arriving, leaving or changing kind, and it is deliberately NOT a third
     // counter (see SceneNode's two lanes for why that distinction matters).
+    // A LIST, not a set, and that is the whole reason it is worth a comment:
+    // the light selection is a nearest-N, so ties have to be broken by something
+    // stable or two runs of the same scene light it differently. A hash set's
+    // iteration order is not that something. Insertion order is.
+    private readonly List<SceneNode> _lightNodes = [];
+
     private readonly HashSet<SceneNode> _partBrushNodes = [];
     private readonly PartBrushMeshCache _partBrushMeshes = new();
 

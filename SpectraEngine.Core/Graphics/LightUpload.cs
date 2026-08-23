@@ -1,0 +1,66 @@
+using System;
+using System.Numerics;
+
+namespace SpectraEngine.Core.Graphics;
+
+/// <summary>
+/// Pushes a frame's lights into a shader program.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>One implementation, called from all six pipelines.</b> The single
+/// directional light this replaces was six independent auto-properties, one per
+/// pipeline class, each initialised to the same hardcoded vector with nothing
+/// tying them together. Adding a light meant remembering six places, and
+/// forgetting the wireframe ones was a bug that only appeared after somebody
+/// pressed the pipeline-cycle key.
+/// </para>
+/// <para>
+/// <b>Uploaded per draw, not per frame, and that is affordable rather than
+/// sloppy.</b> Each material carries its own program, so there is no single
+/// point at which "the frame's lights" could be set once; the alternative is
+/// tracking which programs have already seen this frame, which costs more than
+/// it saves. Both D3D backends skip an upload whose bytes did not change, and
+/// OpenGL's array upload is a single call, so a static light rig costs one
+/// comparison per draw.
+/// </para>
+/// </remarks>
+public static class LightUpload
+{
+    // Scratch buffers, reused. Sized to the hard cap so they never grow, and
+    // static because the render thread is the only caller: the draw path is
+    // asserted allocation-free in steady state and a per-draw array would be
+    // the largest single violation of that.
+    [ThreadStatic] private static Vector4[]? _positions;
+    [ThreadStatic] private static Vector4[]? _colors;
+
+    /// <summary>
+    /// Writes <paramref name="view"/>'s lights and ambient level into
+    /// <paramref name="shader"/>. Safe on a shader that declares none of them:
+    /// unknown uniform names are ignored on every backend.
+    /// </summary>
+    /// <remarks>
+    /// The arrays are always filled to their full declared length, with unused
+    /// slots zeroed. An array uniform must be written whole (see
+    /// <see cref="ShaderProgram.SetUniform(string, ReadOnlySpan{Vector4})"/>),
+    /// and a zeroed slot beyond the count is harmless because the shader's loop
+    /// stops at the count anyway.
+    /// </remarks>
+    public static void Apply(ShaderProgram shader, RenderView view, float ambient)
+    {
+        Vector4[] positions = _positions ??= new Vector4[RenderView.MaxLights];
+        Vector4[] colors = _colors ??= new Vector4[RenderView.MaxLights];
+
+        ReadOnlySpan<RenderLight> lights = view.Lights;
+        for (int i = 0; i < RenderView.MaxLights; i++)
+        {
+            positions[i] = i < lights.Length ? lights[i].PositionRange : default;
+            colors[i] = i < lights.Length ? lights[i].ColorIntensity : default;
+        }
+
+        shader.SetUniform("uLightPositions", positions);
+        shader.SetUniform("uLightColors", colors);
+        shader.SetUniform("uLightCount", lights.Length);
+        shader.SetUniform("uAmbient", ambient);
+    }
+}
