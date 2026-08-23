@@ -278,9 +278,9 @@ public sealed unsafe class D3D11Renderer : Renderer
 
     public override Texture CreateTexture(
         ReadOnlySpan<byte> pixels, int width, int height,
-        TextureFormat format, TextureFilter filter, TextureWrap wrap)
+        TextureFormat format, TextureColorSpace colorSpace, TextureFilter filter, TextureWrap wrap)
     {
-        var texture = D3D11Texture.Create(_device, pixels, width, height, format, filter, wrap);
+        var texture = D3D11Texture.Create(_device, pixels, width, height, format, colorSpace, filter, wrap);
         texture.Unregister = () => _textures.Remove(texture);
         _textures.Add(texture);
         return texture;
@@ -440,7 +440,16 @@ public sealed unsafe class D3D11Renderer : Renderer
         {
             Width = (uint)width,
             Height = (uint)height,
-            Format = Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm,
+            // R2: the back buffer encodes sRGB on write, so the shader's linear
+            // output becomes correct display values with no shader involvement.
+            //
+            // Named directly on the CHAIN rather than on the RTV, which is the
+            // opposite of what D3D12 does two files over, and the difference is
+            // the swap effect. A bitblt chain (Discard, above) may be created
+            // with an _SRGB format outright; a flip-model chain may NOT, and
+            // gets its sRGB-ness from an _SRGB view over a _UNORM buffer
+            // instead. Each backend uses the form its own swap effect allows.
+            Format = Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb,
             Stereo = 0,
             SampleDesc = new SampleDesc(1, 0),
             BufferUsage = DxgiApi.UsageRenderTargetOutput,

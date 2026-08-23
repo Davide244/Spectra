@@ -28,6 +28,29 @@ namespace SpectraEngine.Core.Graphics.D3D12;
 public sealed unsafe class D3D12Renderer : Renderer
 {
     internal const Format BackBufferFormat = Format.FormatR8G8B8A8Unorm;
+
+    /// <summary>
+    /// The format the back buffer is <i>viewed</i> through, and therefore what a
+    /// shader write and a clear are encoded into. R2's display-encode step.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The resource stays <see cref="BackBufferFormat"/> and only the view is
+    /// sRGB, which is not a stylistic choice: a flip-model swap chain (mandatory
+    /// on D3D12) may not be created with an _SRGB format at all, and gets its
+    /// display encoding from an _SRGB render-target view over the _UNORM buffer.
+    /// D3D11 next door does the opposite for the same reason in reverse, because
+    /// its bitblt chain allows the format directly.
+    /// </para>
+    /// <para>
+    /// <b>A pipeline state is compiled against the VIEW format, not the resource
+    /// format</b>, so this is what <see cref="D3D12TargetState.BackBuffer"/>
+    /// carries. Naming the _UNORM format there instead would mismatch every PSO
+    /// against the RTV bound to it, which the debug layer reports and a
+    /// release build renders wrong.
+    /// </para>
+    /// </remarks>
+    internal const Format BackBufferRtvFormat = Format.FormatR8G8B8A8UnormSrgb;
     internal const Format DepthFormat = Format.FormatD24UnormS8Uint;
     private const uint BufferCount = 2;
 
@@ -212,7 +235,13 @@ public sealed unsafe class D3D12Renderer : Renderer
         // 1×1 white fallback so unset texture slots in a descriptor table are
         // always valid (sampling it is a no-op multiply).
         ReadOnlySpan<byte> white = [255, 255, 255, 255];
-        _fallbackTexture = new D3D12Texture(this, white, 1, 1, TextureFormat.Rgba8, TextureFilter.Nearest, TextureWrap.Repeat);
+        // sRGB, like every other colour texture: white is 255 in both spaces, so
+        // the choice does not change this one texel, but a slot whose colour
+        // space differed from the texture it stands in for would be a trap the
+        // first time the fallback is anything but white.
+        _fallbackTexture = new D3D12Texture(
+            this, white, 1, 1, TextureFormat.Rgba8, TextureColorSpace.Srgb,
+            TextureFilter.Nearest, TextureWrap.Repeat);
 
         RegisterPipeline(new D3D12ForwardPipeline());
         RegisterPipeline(new D3D12WireframePipeline());
@@ -397,8 +426,17 @@ public sealed unsafe class D3D12Renderer : Renderer
             // backend's window used to kill the render thread. See ComOwnership.
             _backBuffers[i] = ComOwnership.Own(backBuffer);
 
+            // An explicit desc, not null: null means "the resource's own format",
+            // which is _UNORM and would skip the sRGB encode entirely.
+            var rtvDesc = new RenderTargetViewDesc
+            {
+                Format = BackBufferRtvFormat,
+                ViewDimension = RtvDimension.Texture2D,
+            };
+            rtvDesc.Anonymous.Texture2D = new Tex2DRtv { MipSlice = 0, PlaneSlice = 0 };
+
             var handle = new CpuDescriptorHandle { Ptr = rtvStart.Ptr + i * _rtvStride };
-            DevicePtr->CreateRenderTargetView(backBuffer, null, handle);
+            DevicePtr->CreateRenderTargetView(backBuffer, &rtvDesc, handle);
         }
 
         var depthDesc = new ResourceDesc
@@ -1021,9 +1059,9 @@ public sealed unsafe class D3D12Renderer : Renderer
 
     public override Texture CreateTexture(
         ReadOnlySpan<byte> pixels, int width, int height,
-        TextureFormat format, TextureFilter filter, TextureWrap wrap)
+        TextureFormat format, TextureColorSpace colorSpace, TextureFilter filter, TextureWrap wrap)
     {
-        var texture = new D3D12Texture(this, pixels, width, height, format, filter, wrap);
+        var texture = new D3D12Texture(this, pixels, width, height, format, colorSpace, filter, wrap);
         texture.Unregister = () => _textures.Remove(texture);
         _textures.Add(texture);
         return texture;

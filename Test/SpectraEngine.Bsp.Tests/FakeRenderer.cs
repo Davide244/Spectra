@@ -91,10 +91,11 @@ internal sealed class FakeRenderer : Renderer
         int width,
         int height,
         TextureFormat format,
+        TextureColorSpace colorSpace,
         TextureFilter filter = TextureFilter.Linear,
         TextureWrap wrap = TextureWrap.Repeat)
     {
-        var texture = new FakeTexture(pixels.ToArray(), width, height, format, filter, wrap);
+        var texture = new FakeTexture(pixels.ToArray(), width, height, format, colorSpace, filter, wrap);
         // Same wiring the real backends use, so DestroyTexture removes it from
         // the live list exactly once.
         texture.Unregister = () => LiveTextures.Remove(texture);
@@ -220,12 +221,15 @@ internal sealed class FakeTexture : Texture
     public bool Disposed { get; private set; }
 
     public FakeTexture(byte[] pixels, int width, int height, TextureFormat format,
-        TextureFilter filter, TextureWrap wrap)
+        TextureColorSpace colorSpace, TextureFilter filter, TextureWrap wrap)
     {
         Pixels = pixels;
         Width = width;
         Height = height;
         Format = format;
+        // Resolved exactly as the three real backends do, so a test that asserts
+        // on the colour space is asserting on the same rule they follow.
+        ColorSpace = TextureFormatInfo.Resolve(format, colorSpace);
         Filter = filter;
         Wrap = wrap;
     }

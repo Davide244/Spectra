@@ -13,6 +13,72 @@ public enum TextureFormat
     R8,
 }
 
+/// <summary>
+/// How the bytes in a texture should be interpreted: as sRGB-encoded colour, or
+/// as raw linear values.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>This is a property of the content, not of the sampler.</b> A photograph of
+/// a brick wall and a normal map may be byte-identical RGBA8 files; one is a
+/// picture of light and the other is a table of vectors, and only the author
+/// knows which. Getting it wrong is not subtle in either direction: a normal map
+/// decoded as sRGB bends every surface, and an albedo left linear renders dark
+/// and muddy.
+/// </para>
+/// <para>
+/// <b>The conversion is done by the hardware sampler, never in a shader.</b>
+/// That is the whole reason this is a format flag rather than a
+/// <c>pow()</c> in <c>Lit.spectrashade</c>: the sampler decodes each texel
+/// <i>before</i> filtering, so bilinear taps and mip levels average light rather
+/// than display codes. On the tiled brush surfaces that cover most of this
+/// engine's screen, that difference is the difference between a wall that stays
+/// the same brightness into the distance and one that darkens.
+/// </para>
+/// <para>
+/// <b>Not every format can be sRGB.</b> There is no single-channel sRGB format
+/// on any of the three backends, so <see cref="TextureFormat.R8"/> is always
+/// linear; see <see cref="TextureFormatInfo.SupportsSrgb"/>, which is the one
+/// place that rule lives so the backends cannot disagree about it.
+/// </para>
+/// </remarks>
+public enum TextureColorSpace
+{
+    /// <summary>Raw values, uploaded and sampled untouched. Normal, roughness, metallic, AO, masks.</summary>
+    Linear,
+
+    /// <summary>sRGB-encoded colour, decoded to linear by the sampler. Albedo, emissive.</summary>
+    Srgb,
+}
+
+/// <summary>Facts about a <see cref="TextureFormat"/> that all three backends must agree on.</summary>
+public static class TextureFormatInfo
+{
+    /// <summary>
+    /// Whether an sRGB variant of <paramref name="format"/> exists in hardware.
+    /// False for <see cref="TextureFormat.R8"/>: neither DXGI nor GL defines a
+    /// one-channel sRGB format.
+    /// </summary>
+    public static bool SupportsSrgb(TextureFormat format) =>
+        format is TextureFormat.Rgba8 or TextureFormat.Rgb8;
+
+    /// <summary>
+    /// The colour space a texture will <i>actually</i> get, which is the
+    /// requested one unless the format cannot carry it.
+    /// </summary>
+    /// <remarks>
+    /// Backends call this instead of testing the format themselves, so a request
+    /// that cannot be honoured degrades to linear identically everywhere rather
+    /// than throwing on one backend and silently working on another. The
+    /// downgrade is reported once, with a file path, by
+    /// <c>AssetManager</c>, which is the layer that knows which file it was.
+    /// </remarks>
+    public static TextureColorSpace Resolve(TextureFormat format, TextureColorSpace requested) =>
+        requested == TextureColorSpace.Srgb && SupportsSrgb(format)
+            ? TextureColorSpace.Srgb
+            : TextureColorSpace.Linear;
+}
+
 /// <summary>Magnification and minification filtering applied when sampling.</summary>
 public enum TextureFilter
 {

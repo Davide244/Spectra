@@ -41,7 +41,10 @@ public sealed unsafe class D3D11ForwardPipeline : ID3D11RenderPipeline
 
         // Same colour as OpenGL's CornflowerBlue so swapping backends looks
         // visually identical when the geometry is unchanged.
-        Span<float> clearColor = stackalloc float[4] { 0.392f, 0.584f, 0.929f, 1f };
+        // Linear: the back buffer is an _SRGB format, and ClearRenderTargetView
+        // encodes through it exactly as a shader write would.
+        Span<float> clearColor = stackalloc float[4]
+            { ClearColors.Sky.X, ClearColors.Sky.Y, ClearColors.Sky.Z, ClearColors.Sky.W };
         fixed (float* pColor = clearColor)
         {
             ctx->ClearRenderTargetView(rtvPtr, pColor);

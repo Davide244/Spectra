@@ -1,7 +1,6 @@
 ﻿using Silk.NET.OpenGL;
 using SpectraEngine.Core.Scene;
 using System.Collections.Generic;
-using System.Drawing;
 using System.Numerics;
 
 namespace SpectraEngine.Core.Graphics.OpenGL;
@@ -33,7 +32,8 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
         var size = context.Renderer.FramebufferSize;
         gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
 
-        gl.ClearColor(Color.CornflowerBlue);
+        // Linear, because GL_FRAMEBUFFER_SRGB encodes the clear too.
+        gl.ClearColor(ClearColors.Sky.X, ClearColors.Sky.Y, ClearColors.Sky.Z, ClearColors.Sky.W);
         gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
 
         if (context.Scene is null)

@@ -192,11 +192,27 @@ public abstract class Renderer
     /// returns a renderer-owned handle. Pixel data is expected as tightly packed
     /// rows from bottom-left to top-right (OpenGL convention).
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b><paramref name="colorSpace"/> has no default on purpose.</b> Whether a
+    /// block of bytes is colour or data is a fact about the content that this
+    /// layer cannot infer, and every wrong answer is a rendering bug that looks
+    /// like an art problem. A default would be a guess made silently at the one
+    /// layer with the least information; asking makes each caller state what it
+    /// knows.
+    /// </para>
+    /// <para>
+    /// A request the format cannot carry degrades to linear rather than failing
+    /// (see <see cref="TextureFormatInfo.Resolve"/>), identically on all three
+    /// backends.
+    /// </para>
+    /// </remarks>
     public abstract Texture CreateTexture(
         ReadOnlySpan<byte> pixels,
         int width,
         int height,
         TextureFormat format,
+        TextureColorSpace colorSpace,
         TextureFilter filter = TextureFilter.Linear,
         TextureWrap wrap = TextureWrap.Repeat);
 

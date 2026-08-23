@@ -18,8 +18,8 @@ namespace SpectraEngine.Core.Assets;
 /// </para>
 /// <para>
 /// Threading: <see cref="RelativePath"/>, <see cref="SourcePath"/>,
-/// <see cref="Filter"/> and <see cref="Wrap"/> are immutable and readable from
-/// any thread. <see cref="Texture"/>, <see cref="IsPlaceholder"/> and
+/// <see cref="Filter"/>, <see cref="Wrap"/> and <see cref="ColorSpace"/> are
+/// immutable and readable from any thread. <see cref="Texture"/>, <see cref="IsPlaceholder"/> and
 /// <see cref="Version"/> are written only by <see cref="AssetManager"/> on the
 /// render thread and should only be read there.
 /// </para>
@@ -37,6 +37,7 @@ public sealed class TextureAsset
         string sourcePath,
         TextureFilter filter,
         TextureWrap wrap,
+        TextureColorSpace colorSpace,
         Texture initialTexture,
         bool isPlaceholder)
     {
@@ -44,6 +45,7 @@ public sealed class TextureAsset
         SourcePath = sourcePath;
         Filter = filter;
         Wrap = wrap;
+        ColorSpace = colorSpace;
         Texture = initialTexture;
         IsPlaceholder = isPlaceholder;
     }
@@ -59,6 +61,17 @@ public sealed class TextureAsset
 
     /// <summary>Wrap mode requested at load time. Any thread.</summary>
     public TextureWrap Wrap { get; }
+
+    /// <summary>
+    /// Colour space requested at load time, and part of this handle's cache
+    /// identity. Any thread.
+    /// </summary>
+    /// <remarks>
+    /// The <i>requested</i> space, not the resolved one: what identifies the
+    /// variant is what the caller asked for, and
+    /// <see cref="Texture.ColorSpace"/> on the bound texture is what it got.
+    /// </remarks>
+    public TextureColorSpace ColorSpace { get; }
 
     /// <summary>
     /// The texture to bind right now — the shared placeholder while an async

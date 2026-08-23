@@ -1,6 +1,7 @@
 using System;
 using Microsoft.Extensions.Logging.Abstractions;
 using Silk.NET.Maths;
+using Silk.NET.OpenGL;
 using Silk.NET.Windowing;
 using SpectraEngine.Core;
 using SpectraEngine.Core.Graphics;
@@ -45,6 +46,13 @@ public sealed class GlRendererFixture : IDisposable
     /// </summary>
     public IWindow HostWindow => _window;
 
+    /// <summary>
+    /// A GL function table over the fixture's context, for tests that need to
+    /// ask the driver what it actually did. Loading a second table is free and
+    /// changes no state; the context itself stays the one the renderer owns.
+    /// </summary>
+    public GL Gl { get; }
+
     public GlRendererFixture()
     {
         // Same call the engine makes before its own Window.Create: the fixture
@@ -67,6 +75,9 @@ public sealed class GlRendererFixture : IDisposable
             NullLogger<Renderer>.Instance,
             new SpectraShadeCompiler());
         Renderer.Initialize(_window);
+
+        // After Initialize, so the context exists and is current on this thread.
+        Gl = _window.CreateOpenGL();
     }
 
     public void Dispose()

@@ -38,7 +38,10 @@ public sealed unsafe class D3D12ForwardPipeline : ID3D12RenderPipeline
         // visually identical when the geometry is unchanged.
         var rtv = context.BackBufferRtv;
         var dsv = context.DepthView;
-        float* clearColor = stackalloc float[4] { 0.392f, 0.584f, 0.929f, 1f };
+        // Linear: the back-buffer RTV is an _SRGB view, and
+        // ClearRenderTargetView encodes through it exactly as a shader write would.
+        float* clearColor = stackalloc float[4]
+            { ClearColors.Sky.X, ClearColors.Sky.Y, ClearColors.Sky.Z, ClearColors.Sky.W };
         list->ClearRenderTargetView(rtv, clearColor, 0, null);
         list->ClearDepthStencilView(dsv, ClearFlags.Depth | ClearFlags.Stencil, 1.0f, 0, 0, null);
         list->OMSetRenderTargets(1, &rtv, 0, &dsv);

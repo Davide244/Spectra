@@ -34,7 +34,7 @@ namespace SpectraEngine.Core.Assets;
 /// <c>.spectramat</c> file (see <see cref="MaterialParser"/>) and resolves its
 /// texture references through the same texture cache, so materials naming an
 /// image with the same sampler state share one GPU texture (differing
-/// filter/wrap gets its own — see <see cref="LoadTexture"/>). Content problems
+/// filter/wrap/colour-space gets its own — see <see cref="LoadTexture"/>). Content problems
 /// never propagate as exceptions:
 /// a missing material falls back to <see cref="DefaultMaterial"/> and a missing
 /// texture to the placeholder checker, both with a warning.
@@ -294,11 +294,13 @@ public sealed partial class AssetManager : IDisposable
     /// <i>with the same sampler state</i>.
     /// </summary>
     /// <remarks>
-    /// <para><b>Sampler state is part of the identity.</b> Every backend bakes
-    /// filter and wrap into the GPU texture, so asking for the same image with a
-    /// different <paramref name="filter"/>/<paramref name="wrap"/> loads a second
-    /// variant rather than handing back the first one's sampling — which would
-    /// silently give one of the two callers the wrong mode.</para>
+    /// <para><b>Sampler state and colour space are part of the identity.</b>
+    /// Every backend bakes filter, wrap and sRGB-ness into the GPU texture, so
+    /// asking for the same image with different ones loads a second variant
+    /// rather than handing back the first one's — which would silently give one
+    /// of the two callers the wrong mode. The colour space matters most: one
+    /// image legitimately serves as albedo in one material and as a mask in
+    /// another, and those need two GPU textures.</para>
     /// <para><b>A previously failed load is retried</b>, into the same handle, so
     /// a material already bound to it picks the result up.</para>
     /// </remarks>
@@ -309,7 +311,8 @@ public sealed partial class AssetManager : IDisposable
     public TextureAsset LoadTexture(
         string relativePath,
         TextureFilter filter = TextureFilter.LinearMipmap,
-        TextureWrap wrap = TextureWrap.Repeat)
+        TextureWrap wrap = TextureWrap.Repeat,
+        TextureColorSpace colorSpace = TextureColorSpace.Srgb)
     {
         Renderer renderer = RequireRenderer();
         string key = ContentRoot.NormalizeRelativePath(relativePath);
@@ -317,7 +320,7 @@ public sealed partial class AssetManager : IDisposable
         TextureAsset? failed;
         lock (_sync)
         {
-            TextureAsset? cached = FindVariant(key, filter, wrap);
+            TextureAsset? cached = FindVariant(key, filter, wrap, colorSpace);
             // A handle whose decode failed is NOT a cache hit: this method is
             // documented to read the disk, and the file may well be readable now
             // (authored late, or an art tool that was holding the write lock).
@@ -331,8 +334,9 @@ public sealed partial class AssetManager : IDisposable
         // the newer result.
         long sequence = failed?.NextRequestSequence() ?? 0;
         DecodedImage image = ImageDecoder.DecodeFile(absolute);
+        WarnIfSrgbUnavailable(key, image.Format, colorSpace);
         Texture texture = renderer.CreateTexture(
-            image.Pixels, image.Width, image.Height, image.Format, filter, wrap);
+            image.Pixels, image.Width, image.Height, image.Format, colorSpace, filter, wrap);
 
         if (failed is not null)
         {
@@ -353,7 +357,7 @@ public sealed partial class AssetManager : IDisposable
             return failed;
         }
 
-        var asset = new TextureAsset(key, absolute, filter, wrap, texture, isPlaceholder: false)
+        var asset = new TextureAsset(key, absolute, filter, wrap, colorSpace, texture, isPlaceholder: false)
         {
             // Version 1 means "one texture has been bound", the same state an
             // async load reaches after its first pump; a hot-reload takes it to 2.
@@ -367,7 +371,7 @@ public sealed partial class AssetManager : IDisposable
             // same variant while we were decoding; the cache stays
             // single-instance per variant, so the loser's GPU texture is
             // destroyed rather than leaked.
-            if (FindVariant(key, filter, wrap) is { } raced)
+            if (FindVariant(key, filter, wrap, colorSpace) is { } raced)
             {
                 renderer.DestroyTexture(texture);
                 return raced;
@@ -391,8 +395,8 @@ public sealed partial class AssetManager : IDisposable
     /// placeholder is a GPU resource.
     /// </summary>
     /// <remarks>
-    /// <para>Sampler state is part of the cache identity, exactly as in
-    /// <see cref="LoadTexture"/>.</para>
+    /// <para>Sampler state and colour space are part of the cache identity,
+    /// exactly as in <see cref="LoadTexture"/>.</para>
     /// <para>Asking again while a decode is in flight is free (at most one
     /// decode per handle is queued at a time), and asking again <i>after a
     /// failure retries</i> — the same contract <see cref="RequestModel"/>
@@ -402,7 +406,8 @@ public sealed partial class AssetManager : IDisposable
     public TextureAsset RequestTexture(
         string relativePath,
         TextureFilter filter = TextureFilter.LinearMipmap,
-        TextureWrap wrap = TextureWrap.Repeat)
+        TextureWrap wrap = TextureWrap.Repeat,
+        TextureColorSpace colorSpace = TextureColorSpace.Srgb)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         Texture placeholder = _placeholder
@@ -414,7 +419,7 @@ public sealed partial class AssetManager : IDisposable
         bool retry = false;
         lock (_sync)
         {
-            if (FindVariant(key, filter, wrap) is { } cached)
+            if (FindVariant(key, filter, wrap, colorSpace) is { } cached)
             {
                 // Retry a failed handle, but only when nothing is already on its
                 // way back: polling this from a frame loop must not pile up one
@@ -433,6 +438,7 @@ public sealed partial class AssetManager : IDisposable
                     ContentRoot.ResolveAbsolute(ContentRootPath, key),
                     filter,
                     wrap,
+                    colorSpace,
                     placeholder,
                     isPlaceholder: true);
                 asset.PendingDecodes++;
@@ -478,11 +484,12 @@ public sealed partial class AssetManager : IDisposable
         string relativePath,
         TextureFilter filter,
         TextureWrap wrap,
-        [MaybeNullWhen(false)] out TextureAsset asset)
+        [MaybeNullWhen(false)] out TextureAsset asset,
+        TextureColorSpace colorSpace = TextureColorSpace.Srgb)
     {
         string key = ContentRoot.NormalizeRelativePath(relativePath);
         lock (_sync)
-            asset = FindVariant(key, filter, wrap);
+            asset = FindVariant(key, filter, wrap, colorSpace);
         return asset is not null;
     }
 
@@ -879,7 +886,7 @@ public sealed partial class AssetManager : IDisposable
 
         try
         {
-            TextureAsset asset = LoadTexture(textureKey, slot.Filter, slot.Wrap);
+            TextureAsset asset = LoadTexture(textureKey, slot.Filter, slot.Wrap, slot.ColorSpace);
             // Bound as a handle, not a Texture: the material then follows the
             // asset through hot-reloads instead of pinning today's GPU object.
             material.SetTexture(slot.Name, slot.Unit, asset);
@@ -1000,8 +1007,10 @@ public sealed partial class AssetManager : IDisposable
         Texture created;
         try
         {
+            WarnIfSrgbUnavailable(asset.RelativePath, image.Format, asset.ColorSpace);
             created = _renderer!.CreateTexture(
-                image.Pixels, image.Width, image.Height, image.Format, asset.Filter, asset.Wrap);
+                image.Pixels, image.Width, image.Height, image.Format,
+                asset.ColorSpace, asset.Filter, asset.Wrap);
         }
         catch (Exception ex)
         {
@@ -1144,14 +1153,16 @@ public sealed partial class AssetManager : IDisposable
     // All three assume _sync is already held, except IsCachedVariant which takes
     // it itself (it is called from the pump, outside any critical section).
 
-    private TextureAsset? FindVariant(string key, TextureFilter filter, TextureWrap wrap)
+    private TextureAsset? FindVariant(
+        string key, TextureFilter filter, TextureWrap wrap, TextureColorSpace colorSpace)
     {
         if (!_textures.TryGetValue(key, out List<TextureAsset>? variants)) return null;
 
         for (int i = 0; i < variants.Count; i++)
         {
             TextureAsset candidate = variants[i];
-            if (candidate.Filter == filter && candidate.Wrap == wrap) return candidate;
+            if (candidate.Filter == filter && candidate.Wrap == wrap && candidate.ColorSpace == colorSpace)
+                return candidate;
         }
         return null;
     }
@@ -1173,7 +1184,8 @@ public sealed partial class AssetManager : IDisposable
     private bool IsCachedVariant(TextureAsset asset)
     {
         lock (_sync)
-            return ReferenceEquals(FindVariant(asset.RelativePath, asset.Filter, asset.Wrap), asset);
+            return ReferenceEquals(
+                FindVariant(asset.RelativePath, asset.Filter, asset.Wrap, asset.ColorSpace), asset);
     }
 
     // 8x8 magenta/black checker: unmistakable on screen, and nearest-filtered
@@ -1194,8 +1206,26 @@ public sealed partial class AssetManager : IDisposable
             }
         }
 
+        // sRGB: it stands in for colour textures, and #FF00FF has to be the same
+        // magenta on screen as the same value typed into a material would be.
         return renderer.CreateTexture(
-            pixels, size, size, TextureFormat.Rgb8, TextureFilter.Nearest, TextureWrap.Repeat);
+            pixels, size, size, TextureFormat.Rgb8, TextureColorSpace.Srgb,
+            TextureFilter.Nearest, TextureWrap.Repeat);
+    }
+
+    // The one place an unhonourable sRGB request is reported, because it is the
+    // only layer that knows which file it was. The backends silently resolve to
+    // linear (TextureFormatInfo.Resolve) so that all three behave alike; without
+    // this line the downgrade would be invisible.
+    private void WarnIfSrgbUnavailable(string key, TextureFormat format, TextureColorSpace requested)
+    {
+        if (requested != TextureColorSpace.Srgb || TextureFormatInfo.SupportsSrgb(format))
+            return;
+
+        _logger.LogWarning(
+            "Texture {Path} decoded as {Format}, which has no sRGB form; loading it as data. " +
+            "Mark the slot 'data' in the material to silence this.",
+            key, format);
     }
 
     // Struct, so an empty drain does not allocate.

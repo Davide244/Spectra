@@ -54,12 +54,18 @@ public readonly record struct MaterialParameter(string Name, MaterialParameterKi
 /// <param name="Unit">Texture unit, assigned by declaration order within the file (first slot is 0).</param>
 /// <param name="Filter">Sampling filter; <see cref="TextureFilter.LinearMipmap"/> unless the file says otherwise.</param>
 /// <param name="Wrap">Wrap mode; <see cref="TextureWrap.Repeat"/> unless the file says otherwise.</param>
+/// <param name="ColorSpace">
+/// How to read the file's bytes; <see cref="TextureColorSpace.Srgb"/> unless the
+/// line says <c>data</c>. See <see cref="MaterialParser"/> for why that is the
+/// default.
+/// </param>
 public readonly record struct MaterialTextureSlot(
     string Name,
     string TexturePath,
     int Unit,
     TextureFilter Filter,
-    TextureWrap Wrap);
+    TextureWrap Wrap,
+    TextureColorSpace ColorSpace);
 
 /// <summary>
 /// The parsed contents of a <c>.spectramat</c> file — a pure CPU-side value with

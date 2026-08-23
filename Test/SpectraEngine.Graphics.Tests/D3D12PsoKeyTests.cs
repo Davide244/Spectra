@@ -55,7 +55,10 @@ public sealed class D3D12PsoKeyTests
     }
 
     [Theory]
-    [InlineData(Format.FormatR8G8B8A8UnormSrgb, 1u, Format.FormatD24UnormS8Uint, 1u)]  // sRGB view, R2
+    // R2 moved the baseline: the back buffer's own view is the _SRGB one now, so
+    // the row that varies the colour format is the plain _UNORM it used to be,
+    // which is also what an LDR offscreen target would use.
+    [InlineData(Format.FormatR8G8B8A8Unorm, 1u, Format.FormatD24UnormS8Uint, 1u)]      // LDR offscreen, R3
     [InlineData(Format.FormatR16G16B16A16Float, 1u, Format.FormatD24UnormS8Uint, 1u)]  // HDR offscreen, R4
     [InlineData(Format.FormatR8G8B8A8Unorm, 0u, Format.FormatD32Float, 1u)]            // depth only, R6
     [InlineData(Format.FormatR8G8B8A8Unorm, 1u, Format.FormatD24UnormS8Uint, 4u)]      // MSAA, R11
@@ -67,6 +70,25 @@ public sealed class D3D12PsoKeyTests
         // through a pipeline compiled for the back buffer.
         var target = new D3D12TargetState(color, count, depth, samples);
         Assert.NotEqual(Key(), Key(target: target));
+    }
+
+    [Fact]
+    public void The_back_buffer_target_names_the_srgb_view_format()
+    {
+        // A pipeline is validated against the VIEW bound at draw time, and R2
+        // gave the back buffer an _SRGB view over its _UNORM resource. Naming
+        // the resource format here instead would mismatch every PSO against the
+        // RTV it draws through -- a whole-screen failure the debug layer
+        // reports and a release build does not.
+        Assert.Equal(Format.FormatR8G8B8A8UnormSrgb, D3D12TargetState.BackBuffer.ColorFormat);
+        Assert.NotEqual(Format.FormatR8G8B8A8Unorm, D3D12TargetState.BackBuffer.ColorFormat);
+
+        // And the two formats are not interchangeable as far as the cache is
+        // concerned, which is what makes the assertion above load-bearing
+        // rather than decorative.
+        Assert.NotEqual(
+            Key(target: D3D12TargetState.BackBuffer),
+            Key(target: D3D12TargetState.BackBuffer with { ColorFormat = Format.FormatR8G8B8A8Unorm }));
     }
 
     [Fact]

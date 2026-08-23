@@ -46,6 +46,7 @@ internal sealed class CompilingRenderer : Renderer
         int width,
         int height,
         TextureFormat format,
+        TextureColorSpace colorSpace,
         TextureFilter filter = TextureFilter.Linear,
         TextureWrap wrap = TextureWrap.Repeat)
         => throw new NotSupportedException("CompilingRenderer creates no textures.");

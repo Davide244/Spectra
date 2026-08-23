@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Silk.NET.Maths;
 using Silk.NET.OpenGL;
 using Silk.NET.Windowing;
 using SpectraEngine.Core.Graphics.Shaders;
@@ -25,6 +26,7 @@ public class OpenGLRenderer : Renderer
     private int _pipelineIndex;
     private OpenGLLineBatch? _lineBatch;
     private ShaderProgram? _debugShader;
+    private OpenGLSrgbTarget? _srgbTarget;
 
     public override GraphicsBackend Backend => GraphicsBackend.OpenGL;
 
@@ -52,6 +54,8 @@ public class OpenGLRenderer : Renderer
         _gl.CullFace(TriangleFace.Back);
         _gl.FrontFace(FrontFaceDirection.Ccw);
 
+        EnableFramebufferSrgb(_gl);
+
         // Prefer source-on-disk so the dev build hot-reloads on save.
         // Deployed builds (where the source tree isn't present) silently fall
         // back to the embedded resource and keep the shader frozen.
@@ -67,6 +71,85 @@ public class OpenGLRenderer : Renderer
         RegisterPipeline(new WireframePipeline());
 
         _logger.LogInformation("Renderer initialized (OpenGL, pipeline={Pipeline})", CurrentPipelineName);
+    }
+
+    /// <summary>
+    /// Whether what reaches the display is sRGB-encoded, by either route.
+    /// </summary>
+    /// <remarks>
+    /// This is the property worth asserting on, because it is a statement about
+    /// the picture rather than about the mechanism. See
+    /// <see cref="UsesSrgbTarget"/> for which route is in use.
+    /// </remarks>
+    public bool FramebufferSrgb { get; private set; }
+
+    /// <summary>
+    /// True when encoding comes from an offscreen sRGB buffer because the
+    /// window's own framebuffer could not do it. See <see cref="OpenGLSrgbTarget"/>.
+    /// </summary>
+    public bool UsesSrgbTarget => _srgbTarget is not null;
+
+    // GL's half of R2. The D3D backends get display encoding by naming an sRGB
+    // format on the back-buffer view; GL needs a state enable AND a framebuffer
+    // that can honour it, and the second half is not something to assume: the
+    // enable is silently a no-op on a framebuffer that was not created
+    // sRGB-capable. So enable, then ask the driver what the window's colour
+    // encoding actually is, and stand up the offscreen fallback if the answer
+    // is no.
+    private void EnableFramebufferSrgb(GL gl)
+    {
+        // Stays enabled for the rest of the run either way. On a linear default
+        // framebuffer it does nothing; on the fallback target it is what makes
+        // the encode happen. Only the blit in Present turns it off, briefly.
+        gl.Enable(EnableCap.FramebufferSrgb);
+
+        if (QueryDefaultFramebufferSrgb(gl))
+        {
+            FramebufferSrgb = true;
+            _logger.LogInformation("Framebuffer sRGB encoding enabled (window framebuffer)");
+            return;
+        }
+
+        // Not a driver bug and not worth a warning: Silk.NET 2.23 has no way to
+        // ask GLFW for an sRGB-capable window, so this is the ordinary case
+        // rather than the exceptional one.
+        _srgbTarget = new OpenGLSrgbTarget();
+        FramebufferSrgb = true;
+        _logger.LogInformation(
+            "Framebuffer sRGB encoding enabled (offscreen target; the window framebuffer is linear)");
+    }
+
+    // Called when the fallback itself turns out to be unavailable, which leaves
+    // the run uncorrected. That IS worth a warning, because it is the only state
+    // in which this backend disagrees with the other two.
+    private void AbandonSrgbTarget()
+    {
+        _srgbTarget = null;
+        FramebufferSrgb = false;
+        _logger.LogWarning(
+            "The offscreen sRGB target could not be created; colour output will be uncorrected " +
+            "and will not match the D3D backends");
+    }
+
+    // GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING on the default framebuffer's
+    // GL_BACK_LEFT attachment: GL_SRGB (0x8C40) if writes are encoded,
+    // GL_LINEAR (0x2601) if the enable is being ignored.
+    private static unsafe bool QueryDefaultFramebufferSrgb(GL gl)
+    {
+        gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+
+        // Clear any error the query would otherwise inherit, so a driver that
+        // rejects the enum below is distinguishable from one that answers it.
+        while (gl.GetError() != GLEnum.NoError) { }
+
+        int encoding = 0;
+        gl.GetFramebufferAttachmentParameter(
+            GLEnum.Framebuffer,
+            GLEnum.BackLeft,
+            GLEnum.FramebufferAttachmentColorEncoding,
+            &encoding);
+
+        return gl.GetError() == GLEnum.NoError && encoding == (int)GLEnum.Srgb;
     }
 
     /// <summary>Adds <paramref name="pipeline"/> to the rotation; the first registered pipeline is the default.</summary>
@@ -102,7 +185,20 @@ public class OpenGLRenderer : Renderer
             View = view,
             DeltaTime = deltaTime,
         };
+
+        // The pipelines know nothing about any of this: they set a viewport,
+        // clear, and draw, which is the same work whichever framebuffer is
+        // bound. Wrapping them here is what keeps the fallback from leaking
+        // into every pipeline that will ever exist.
+        Vector2D<int> size = FramebufferSize;
+        bool offscreen = _srgbTarget is not null && _srgbTarget.Begin(_gl, size.X, size.Y);
+        if (_srgbTarget is { Usable: false })
+            AbandonSrgbTarget();
+
         _pipelines[_pipelineIndex].Execute(context);
+
+        if (offscreen)
+            _srgbTarget!.Present(_gl, size.X, size.Y);
     }
 
     /// <summary>
@@ -126,6 +222,20 @@ public class OpenGLRenderer : Renderer
         _gl.Enable(EnableCap.DepthTest);
     }
 
+    // The two halves of the frame wrapper in Render, reachable from the test
+    // assembly so a test can draw one known colour through the real path and
+    // read the window back. Internal rather than public: nothing in a game
+    // drives these, and the seam exists because "the enable silently did
+    // nothing" is not observable any other way.
+    internal bool BeginSrgbTargetForTest(int width, int height)
+        => _gl is not null && _srgbTarget is not null && _srgbTarget.Begin(_gl, width, height);
+
+    internal void PresentSrgbTargetForTest(int width, int height)
+    {
+        if (_gl is not null)
+            _srgbTarget?.Present(_gl, width, height);
+    }
+
     public override void Shutdown()
     {
         foreach (var pipeline in _pipelines)
@@ -135,6 +245,9 @@ public class OpenGLRenderer : Renderer
         _lineBatch?.Dispose();
         _lineBatch = null;
         _debugShader = null;
+
+        if (_gl is not null) _srgbTarget?.Dispose(_gl);
+        _srgbTarget = null;
 
         foreach (var mesh in _meshes)
             mesh.Dispose();
@@ -166,9 +279,9 @@ public class OpenGLRenderer : Renderer
 
     public override Texture CreateTexture(
         ReadOnlySpan<byte> pixels, int width, int height,
-        TextureFormat format, TextureFilter filter, TextureWrap wrap)
+        TextureFormat format, TextureColorSpace colorSpace, TextureFilter filter, TextureWrap wrap)
     {
-        var texture = OpenGLTexture.Create(_gl!, pixels, width, height, format, filter, wrap);
+        var texture = OpenGLTexture.Create(_gl!, pixels, width, height, format, colorSpace, filter, wrap);
         texture.Unregister = () => _textures.Remove(texture);
         _textures.Add(texture);
         return texture;

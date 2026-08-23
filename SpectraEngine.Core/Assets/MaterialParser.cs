@@ -41,20 +41,36 @@ namespace SpectraEngine.Core.Assets;
 /// <c>lit</c> (the default) selects the engine's built-in lit shader; other names
 /// are resolved by the host through <see cref="AssetManager.ShaderResolver"/> and
 /// fall back to the lit shader with a warning if nothing claims them.</description></item>
-/// <item><description><c>texture &lt;sampler&gt; = &lt;path&gt;[, &lt;filter&gt;][, &lt;wrap&gt;]</c> —
-/// the path is relative to the content root. Filter is <c>nearest</c>,
-/// <c>linear</c>, or <c>linearmipmap</c> (default); wrap is <c>repeat</c>
-/// (default) or <c>clamp</c>. Texture units are assigned by declaration order,
-/// so the first <c>texture</c> line is unit 0.</description></item>
+/// <item><description><c>texture &lt;sampler&gt; = &lt;path&gt;[, &lt;option&gt;]...</c> —
+/// the path is relative to the content root. Options may appear in any order:
+/// filter is <c>nearest</c>, <c>linear</c>, or <c>linearmipmap</c> (default);
+/// wrap is <c>repeat</c> (default) or <c>clamp</c>; colour space is
+/// <c>srgb</c> (default) or <c>data</c>. Texture units are assigned by
+/// declaration order, so the first <c>texture</c> line is unit 0.</description></item>
 /// <item><description><c>float</c>, <c>vec2</c>, <c>vec3</c>, <c>vec4</c> —
 /// whitespace- or comma-separated numbers, parsed with the invariant culture, so
 /// <c>0.5</c> is a half everywhere on earth.</description></item>
 /// <item><description><c>color</c> — either <c>#RRGGBB</c> / <c>#RRGGBBAA</c>
-/// (byte values mapped linearly onto 0..1; the engine does no gamma conversion
-/// anywhere, so what you type is what the shader gets) or 3–4 plain numbers.
-/// Three components produce a <see cref="MaterialParameterKind.Vector3"/>, four a
-/// <see cref="MaterialParameterKind.Vector4"/>.</description></item>
+/// or 3–4 plain numbers. Three components produce a
+/// <see cref="MaterialParameterKind.Vector3"/>, four a
+/// <see cref="MaterialParameterKind.Vector4"/>. <b>The value is read as sRGB and
+/// stored as linear</b> — see below.</description></item>
 /// </list>
+///
+/// <para><b>Colour space: <c>color</c> is sRGB, <c>vec3</c> is not.</b> That is
+/// the whole rule, and it is the same split Unity and Unreal draw between a
+/// Color and a Vector. A <c>color</c> is something a person picked out of a
+/// colour picker, so <c>#B4A08C</c> here means exactly what <c>#B4A08C</c> means
+/// in any paint program, and the parser converts it to the linear value the
+/// shader needs. A <c>vec3</c> is three numbers and is passed through untouched,
+/// which is what a direction, a tiling rate or a hand-tuned coefficient wants.
+/// Alpha is never converted in either case: it is coverage, not light.</para>
+///
+/// <para><b>Textures default to <c>srgb</c> for the same reason</b> — an image
+/// file is a picture until someone says otherwise. Write <c>data</c> on the
+/// texture line for anything the shader does arithmetic on rather than looks at:
+/// normal, roughness, metallic, AO, masks. A single-channel image is always
+/// treated as data, because no backend has a one-channel sRGB format.</para>
 ///
 /// <para><b>Render flags</b> (blending, culling, depth state) are deliberately
 /// absent: no pipeline consumes per-material render state today, and a key that
@@ -82,6 +98,12 @@ public static class MaterialParser
     // so an option-free texture line behaves exactly like a code-authored load.
     private const TextureFilter DefaultFilter = TextureFilter.LinearMipmap;
     private const TextureWrap DefaultWrap = TextureWrap.Repeat;
+
+    // An image file is a picture unless its author says otherwise. Defaulting
+    // the other way would leave every albedo in the project quietly rendering
+    // dark with nothing on screen or in the log to say why, whereas a data map
+    // read as colour is caught the moment anyone looks at the surface.
+    private const TextureColorSpace DefaultColorSpace = TextureColorSpace.Srgb;
 
     /// <summary>
     /// Reads and parses the material file at <paramref name="absolutePath"/>.
@@ -271,12 +293,19 @@ public static class MaterialParser
             return;
         }
 
+        // sRGB in the file, linear in the shader. This is the one place the
+        // engine converts a colour in software, because it is the one colour
+        // that does not arrive through a sampler; every texel gets the same
+        // treatment from the hardware. Alpha rides through unconverted.
+        var authored = new Vector4(components[0], components[1], components[2], components[3]);
+        Vector4 linear = ColorSpace.SrgbToLinear(authored);
+
         AddParameter(
             parameters, warnings, origin, line,
             new MaterialParameter(
                 name.ToString(),
                 count == 3 ? MaterialParameterKind.Vector3 : MaterialParameterKind.Vector4,
-                new Vector4(components[0], components[1], components[2], components[3])));
+                linear));
     }
 
     private static void ParseTexture(
@@ -299,6 +328,7 @@ public static class MaterialParser
 
         TextureFilter filter = DefaultFilter;
         TextureWrap wrap = DefaultWrap;
+        TextureColorSpace colorSpace = DefaultColorSpace;
         ReadOnlySpan<char> options = comma < 0 ? default : value[(comma + 1)..];
         while (!options.IsEmpty)
         {
@@ -307,11 +337,17 @@ public static class MaterialParser
             options = next < 0 ? default : options[(next + 1)..];
             if (option.IsEmpty) continue;
 
+            // Filter is tried first, and that is why the colour-space keywords
+            // are 'srgb' and 'data' rather than 'srgb' and 'linear': 'linear'
+            // already means bilinear filtering here, and one token that meant
+            // two things depending on which other tokens were present would be
+            // unreadable in a file and ambiguous in this loop.
             if (TryParseFilter(option, out TextureFilter parsedFilter)) filter = parsedFilter;
             else if (TryParseWrap(option, out TextureWrap parsedWrap)) wrap = parsedWrap;
+            else if (TryParseColorSpace(option, out TextureColorSpace parsedSpace)) colorSpace = parsedSpace;
             else
                 Warn(warnings, origin, line,
-                    $"texture '{name.ToString()}' has unknown option '{option.ToString()}' (expected nearest/linear/linearmipmap or repeat/clamp)");
+                    $"texture '{name.ToString()}' has unknown option '{option.ToString()}' (expected nearest/linear/linearmipmap, repeat/clamp or srgb/data)");
         }
 
         string slotName = name.ToString();
@@ -322,11 +358,13 @@ public static class MaterialParser
             // Keep the original unit: the sampler already has one, and shifting
             // it would silently renumber every slot declared after it.
             Warn(warnings, origin, line, $"texture '{slotName}' declared more than once; the last one wins");
-            textures[i] = new MaterialTextureSlot(slotName, path.ToString(), textures[i].Unit, filter, wrap);
+            textures[i] = new MaterialTextureSlot(
+                slotName, path.ToString(), textures[i].Unit, filter, wrap, colorSpace);
             return;
         }
 
-        textures.Add(new MaterialTextureSlot(slotName, path.ToString(), textures.Count, filter, wrap));
+        textures.Add(new MaterialTextureSlot(
+            slotName, path.ToString(), textures.Count, filter, wrap, colorSpace));
     }
 
     private static void AddParameter(
@@ -432,6 +470,16 @@ public static class MaterialParser
         if (token.Equals("clamp", StringComparison.OrdinalIgnoreCase)) { wrap = TextureWrap.Clamp; return true; }
 
         wrap = DefaultWrap;
+        return false;
+    }
+
+    private static bool TryParseColorSpace(ReadOnlySpan<char> token, out TextureColorSpace colorSpace)
+    {
+        if (token.Equals("srgb", StringComparison.OrdinalIgnoreCase)) { colorSpace = TextureColorSpace.Srgb; return true; }
+        // 'data', never 'linear': that word is already a filter on this line.
+        if (token.Equals("data", StringComparison.OrdinalIgnoreCase)) { colorSpace = TextureColorSpace.Linear; return true; }
+
+        colorSpace = DefaultColorSpace;
         return false;
     }
 

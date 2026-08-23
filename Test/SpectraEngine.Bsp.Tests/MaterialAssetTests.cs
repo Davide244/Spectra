@@ -36,9 +36,10 @@ public sealed class MaterialAssetTests
         material.SourcePath.ShouldBe(DevGrid);
         material.Shader.ShouldBeSameAs(renderer.DefaultShader);
 
-        // #8C8C99 as three linear components.
+        // #8C8C99, decoded from sRGB. The shipped material files are authored in
+        // display colours; what reaches a uniform is linear.
         material.TryGetVector3("uBaseColor", out Vector3 baseColor).ShouldBeTrue();
-        baseColor.ShouldBe(new Vector3(0x8C / 255f, 0x8C / 255f, 0x99 / 255f));
+        baseColor.ShouldBe(ColorSpace.SrgbToLinear(new Vector3(0x8C / 255f, 0x8C / 255f, 0x99 / 255f)));
 
         material.TryGetTexture("uDiffuse", out int unit, out Texture? texture).ShouldBeTrue();
         unit.ShouldBe(0);
@@ -118,7 +119,7 @@ public sealed class MaterialAssetTests
             material.ShouldNotBeSameAs(assets.DefaultMaterial);
             material.Shader.ShouldBeSameAs(renderer.DefaultShader);
             material.TryGetVector3("uBaseColor", out Vector3 color).ShouldBeTrue();
-            color.ShouldBe(new Vector3(1f, 0.5f, 0f));
+            color.ShouldBe(ColorSpace.SrgbToLinear(new Vector3(1f, 0.5f, 0f)));
             material.TryGetTexture("uDiffuse", out _, out _).ShouldBeTrue();
 
             logger.MessagesAt(LogLevel.Warning).ShouldContain(

@@ -43,6 +43,7 @@ public sealed class MaterialParserTests
         diffuse.Unit.ShouldBe(0);
         diffuse.Filter.ShouldBe(TextureFilter.Nearest);
         diffuse.Wrap.ShouldBe(TextureWrap.Clamp);
+        diffuse.ColorSpace.ShouldBe(TextureColorSpace.Srgb);
 
         definition.TryGetTextureSlot("uMask", out MaterialTextureSlot mask).ShouldBeTrue();
         mask.TexturePath.ShouldBe("Textures/gradient_mask.png");
@@ -50,13 +51,24 @@ public sealed class MaterialParserTests
         // Omitted options match what AssetManager.LoadTexture defaults to.
         mask.Filter.ShouldBe(TextureFilter.LinearMipmap);
         mask.Wrap.ShouldBe(TextureWrap.Repeat);
+        mask.ColorSpace.ShouldBe(TextureColorSpace.Srgb);
 
         definition.Parameters.Count.ShouldBe(6);
         ShouldBe(definition, "uRoughness", MaterialParameterKind.Float, new Vector4(0.25f, 0f, 0f, 0f));
-        // 0x80/255, 0x40/255, 0xFF/255 — hex bytes map linearly onto 0..1.
+        // A 'color' is authored in sRGB and stored linear: the hex bytes map onto
+        // 0..1 and then through the transfer curve. ColorSpaceTests pins the curve
+        // itself against known values, so this only pins that it was applied.
         ShouldBe(definition, "uBaseColor", MaterialParameterKind.Vector3,
-            new Vector4(128 / 255f, 64 / 255f, 1f, 0f));
-        ShouldBe(definition, "uTint", MaterialParameterKind.Vector4, new Vector4(0.1f, 0.2f, 0.3f, 0.4f));
+            ColorSpace.SrgbToLinear(new Vector4(128 / 255f, 64 / 255f, 1f, 0f)));
+        // A four-component 'color' converts its RGB and leaves alpha alone,
+        // because alpha is coverage rather than light.
+        ShouldBe(definition, "uTint", MaterialParameterKind.Vector4,
+            ColorSpace.SrgbToLinear(new Vector4(0.1f, 0.2f, 0.3f, 0.4f)));
+        definition.TryGetParameter("uTint", out MaterialParameter tint).ShouldBeTrue();
+        tint.Value.W.ShouldBe(0.4f);
+
+        // ...and 'vec2'/'vec3'/'vec4' are numbers, not colours, so they pass
+        // through untouched. That split is the whole rule of the format.
         ShouldBe(definition, "uTiling", MaterialParameterKind.Vector2, new Vector4(4f, 8f, 0f, 0f));
         ShouldBe(definition, "uEmissive", MaterialParameterKind.Vector3, new Vector4(0.5f, 0.25f, 0.125f, 0f));
         ShouldBe(definition, "uParams", MaterialParameterKind.Vector4, new Vector4(1f, 0f, 0f, 1f));
@@ -108,6 +120,7 @@ public sealed class MaterialParserTests
         // The bad option is dropped, the texture itself is not.
         definition.TryGetTextureSlot("uDiffuse", out MaterialTextureSlot slot).ShouldBeTrue();
         slot.Filter.ShouldBe(TextureFilter.LinearMipmap);
+        slot.ColorSpace.ShouldBe(TextureColorSpace.Srgb);
         definition.Parameters.ShouldBeEmpty();
     }
 

@@ -9,13 +9,15 @@ internal sealed class OpenGLTexture : Texture
     public uint Handle { get; }
     private bool _disposed;
 
-    private OpenGLTexture(GL gl, uint handle, int width, int height, TextureFormat format)
+    private OpenGLTexture(
+        GL gl, uint handle, int width, int height, TextureFormat format, TextureColorSpace colorSpace)
     {
         _gl = gl;
         Handle = handle;
         Width = width;
         Height = height;
         Format = format;
+        ColorSpace = colorSpace;
     }
 
     internal static unsafe OpenGLTexture Create(
@@ -24,13 +26,16 @@ internal sealed class OpenGLTexture : Texture
         int width,
         int height,
         TextureFormat format,
+        TextureColorSpace colorSpace,
         TextureFilter filter,
         TextureWrap wrap)
     {
+        TextureColorSpace resolved = TextureFormatInfo.Resolve(format, colorSpace);
+
         uint handle = gl.GenTexture();
         gl.BindTexture(TextureTarget.Texture2D, handle);
 
-        (InternalFormat internalFormat, PixelFormat pixelFormat) = GlFormats(format);
+        (InternalFormat internalFormat, PixelFormat pixelFormat) = GlFormats(format, resolved);
 
         // Decoded image rows are tightly packed, but GL assumes 4-byte row
         // alignment by default and would then read past each row (skewing the
@@ -60,7 +65,7 @@ internal sealed class OpenGLTexture : Texture
         gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, wrapMode);
 
         gl.BindTexture(TextureTarget.Texture2D, 0);
-        return new OpenGLTexture(gl, handle, width, height, format);
+        return new OpenGLTexture(gl, handle, width, height, format, resolved);
     }
 
     internal void Bind(int unit)
@@ -69,13 +74,24 @@ internal sealed class OpenGLTexture : Texture
         _gl.BindTexture(TextureTarget.Texture2D, Handle);
     }
 
-    private static (InternalFormat Internal, PixelFormat Pixel) GlFormats(TextureFormat format) => format switch
+    // Only the INTERNAL format carries the colour space; the pixel format
+    // describes the bytes being handed over, which are the same either way. The
+    // sRGB internal formats make the driver decode on every sample -- including
+    // the samples GenerateMipmap takes below, which is why the mip chain of an
+    // sRGB texture is an average of light rather than of display codes.
+    private static (InternalFormat Internal, PixelFormat Pixel) GlFormats(
+        TextureFormat format, TextureColorSpace colorSpace)
     {
-        TextureFormat.Rgba8 => (InternalFormat.Rgba8, PixelFormat.Rgba),
-        TextureFormat.Rgb8 => (InternalFormat.Rgb8, PixelFormat.Rgb),
-        TextureFormat.R8 => (InternalFormat.R8, PixelFormat.Red),
-        _ => throw new ArgumentOutOfRangeException(nameof(format)),
-    };
+        bool srgb = colorSpace == TextureColorSpace.Srgb;
+        return format switch
+        {
+            TextureFormat.Rgba8 => (srgb ? InternalFormat.Srgb8Alpha8 : InternalFormat.Rgba8, PixelFormat.Rgba),
+            TextureFormat.Rgb8 => (srgb ? InternalFormat.Srgb8 : InternalFormat.Rgb8, PixelFormat.Rgb),
+            // No SR8 exists; TextureFormatInfo.Resolve has already forced linear.
+            TextureFormat.R8 => (InternalFormat.R8, PixelFormat.Red),
+            _ => throw new ArgumentOutOfRangeException(nameof(format)),
+        };
+    }
 
     private static GLEnum MinFilter(TextureFilter filter, bool mipmaps) => filter switch
     {

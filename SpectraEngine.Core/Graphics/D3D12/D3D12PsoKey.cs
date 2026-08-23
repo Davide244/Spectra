@@ -29,8 +29,14 @@ internal readonly record struct D3D12TargetState(
     uint SampleCount)
 {
     /// <summary>The window's back buffer with the shared depth buffer: what every draw uses today.</summary>
+    /// <remarks>
+    /// <b>The RTV format, not the resource format.</b> A PSO is validated
+    /// against the view bound at draw time, and the back buffer is a _UNORM
+    /// resource seen through an _SRGB view (see
+    /// <see cref="D3D12Renderer.BackBufferRtvFormat"/>).
+    /// </remarks>
     public static D3D12TargetState BackBuffer => new(
-        D3D12Renderer.BackBufferFormat, 1, D3D12Renderer.DepthFormat, 1);
+        D3D12Renderer.BackBufferRtvFormat, 1, D3D12Renderer.DepthFormat, 1);
 }
 
 /// <summary>

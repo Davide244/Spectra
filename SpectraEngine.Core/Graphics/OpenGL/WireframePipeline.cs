@@ -1,7 +1,6 @@
 ﻿using Silk.NET.OpenGL;
 using SpectraEngine.Core.Scene;
 using System.Collections.Generic;
-using System.Drawing;
 using System.Numerics;
 
 namespace SpectraEngine.Core.Graphics.OpenGL;
@@ -33,7 +32,7 @@ public sealed class WireframePipeline : IOpenGLRenderPipeline
         var size = context.Renderer.FramebufferSize;
         gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
 
-        gl.ClearColor(Color.Black);
+        gl.ClearColor(ClearColors.Wireframe.X, ClearColors.Wireframe.Y, ClearColors.Wireframe.Z, ClearColors.Wireframe.W);
         gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
 
         if (context.Scene is null)

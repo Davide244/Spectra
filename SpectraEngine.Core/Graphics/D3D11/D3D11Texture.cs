@@ -20,7 +20,7 @@ internal sealed unsafe class D3D11Texture : Texture
         ComPtr<ID3D11Texture2D> texture,
         ComPtr<ID3D11ShaderResourceView> srv,
         ComPtr<ID3D11SamplerState> sampler,
-        int width, int height, TextureFormat format)
+        int width, int height, TextureFormat format, TextureColorSpace colorSpace)
     {
         _texture = texture;
         _srv = srv;
@@ -28,6 +28,7 @@ internal sealed unsafe class D3D11Texture : Texture
         Width = width;
         Height = height;
         Format = format;
+        ColorSpace = colorSpace;
     }
 
     internal static D3D11Texture Create(
@@ -36,9 +37,13 @@ internal sealed unsafe class D3D11Texture : Texture
         int width,
         int height,
         TextureFormat format,
+        TextureColorSpace colorSpace,
         TextureFilter filter,
         TextureWrap wrap)
     {
+        TextureColorSpace resolved = TextureFormatInfo.Resolve(format, colorSpace);
+        bool srgb = resolved == TextureColorSpace.Srgb;
+
         // D3D11 has no native 24-bit RGB texture format, so for Rgb8 input we
         // expand to RGBA8 on the CPU side. R8 and Rgba8 map directly.
         Silk.NET.DXGI.Format dxgiFormat;
@@ -48,16 +53,22 @@ internal sealed unsafe class D3D11Texture : Texture
         switch (format)
         {
             case TextureFormat.Rgba8:
-                dxgiFormat = Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm;
+                dxgiFormat = srgb
+                    ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
+                    : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm;
                 rowPitch = (uint)(width * 4);
                 break;
             case TextureFormat.Rgb8:
-                dxgiFormat = Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm;
+                dxgiFormat = srgb
+                    ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
+                    : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm;
                 expanded = ExpandRgbToRgba(pixels, width, height);
                 uploadPixels = expanded;
                 rowPitch = (uint)(width * 4);
                 break;
             case TextureFormat.R8:
+                // No R8_UNORM_SRGB exists; TextureFormatInfo.Resolve already
+                // forced `resolved` to linear for this case.
                 dxgiFormat = Silk.NET.DXGI.Format.FormatR8Unorm;
                 rowPitch = (uint)width;
                 break;
@@ -72,6 +83,9 @@ internal sealed unsafe class D3D11Texture : Texture
         if (wantsMipmaps)
         {
             // For runtime GenerateMips we need RenderTarget bind + GenerateMips misc flag.
+            // An sRGB format is fine here and is in fact the point: GenerateMips
+            // filters through the view's format, so an sRGB chain is built by
+            // decoding, averaging light, and re-encoding.
             bindFlags |= (uint)BindFlag.RenderTarget;
             miscFlags |= (uint)ResourceMiscFlag.GenerateMips;
         }
@@ -168,7 +182,7 @@ internal sealed unsafe class D3D11Texture : Texture
             ComOwnership.Own(texPtr),
             ComOwnership.Own(srvPtr),
             ComOwnership.Own(samplerPtr),
-            width, height, format);
+            width, height, format, resolved);
     }
 
     private static byte[] ExpandRgbToRgba(ReadOnlySpan<byte> rgb, int width, int height)

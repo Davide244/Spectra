@@ -13,6 +13,13 @@ public abstract class Texture : IDisposable
     public TextureFormat Format { get; protected set; }
 
     /// <summary>
+    /// How the sampler interprets this texture's bytes. This is the <i>resolved</i>
+    /// space, not the requested one: a format with no sRGB variant reports
+    /// <see cref="TextureColorSpace.Linear"/> however it was asked for.
+    /// </summary>
+    public TextureColorSpace ColorSpace { get; protected set; }
+
+    /// <summary>
     /// Removes this texture from the creating renderer's tracking list; the
     /// renderer hands it over at creation time and <see cref="Renderer.DestroyTexture"/>
     /// invokes it exactly once. Unsynchronized on purpose: resource creation

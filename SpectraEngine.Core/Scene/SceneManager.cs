@@ -267,7 +267,11 @@ public sealed class SceneManager
         // around the one texture no material file references — so every run
         // still exercises the placeholder swap and the per-frame upload pump,
         // which a cache hit from one of the loads above would hide.
-        TextureAsset orbiterTexture = assets.RequestTexture(OrbiterTexturePath);
+        // Asked for as data, not colour: it is a single-channel gradient, and R8
+        // has no sRGB form on any backend, so requesting the default would only
+        // earn a warning about a downgrade that was always going to happen.
+        TextureAsset orbiterTexture = assets.RequestTexture(
+            OrbiterTexturePath, colorSpace: TextureColorSpace.Linear);
 
         // Split here so the log can attribute the startup cost: surfaces and
         // models are very different bills (five PNG decodes versus spinning up
