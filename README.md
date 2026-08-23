@@ -26,7 +26,7 @@ camera. **F11** toggles fullscreen. **F1** to **F6** are debug views.
 |---|---|
 | **Brush world** | CSG carve, snap, weld, per-cell BSP, chunked open world. Edits recompile incrementally in the background, at a cost independent of world size. |
 | **Subtractive brushes** | Doorways and holes cut by negative brushes, unordered composition, cavity walls. |
-| **Rendering** | OpenGL, D3D11 and D3D12 backends, live. Forward and wireframe pipelines over one shared draw list, through a render-pass seam that can target the window or an offscreen texture. All shading in linear light, with sRGB decode and display encode done by the hardware. |
+| **Rendering** | OpenGL, D3D11 and D3D12 backends, live. Forward and wireframe pipelines over one shared draw list, through a render-pass seam that targets the window or an offscreen texture. The scene renders to a half-float target and is exposed and tone-mapped on the way out; all shading is in linear light, with sRGB decode and display encode done by the hardware. |
 | **Shader language** | SpectraShade compiles `.spectrashade` to GLSL and HLSL at runtime, with hot reload. LSP and a Visual Studio extension ship alongside. |
 | **Editor** | Translate / rotate / resize gizmos, undo with gesture transactions, multi-select and marquee, Studio-style camera. |
 | **Assets** | Textures, materials and models from real files, background decode with a render-thread upload pump, hot reload. Materials declare whether a texture is colour or data. |
@@ -108,8 +108,9 @@ exist at all:
 
 - **`R3` offscreen render targets was the rendering keystone, and it has
   landed.** Shadows, post processing, anti-aliasing, material previews and the
-  Uno viewport were all waiting on it. What they wait on now is `R4`, the
-  resolve pass that puts linear-to-display conversion in exactly one place.
+  Uno viewport were all waiting on it, and `R4` has since put the
+  linear-to-display conversion in exactly one place on top of it. Shadows
+  (`R6`) are next in that chain.
 - **GPU skinning waits on `R5` array uniforms.** The animation arc has
   skeletons, clips and pose blending, all on the CPU. No backend can set an
   array of bone matrices yet, so nothing can draw them.
@@ -124,7 +125,7 @@ exist at all:
 | **F** Foundations | [ROADMAP](ROADMAP.md) | F1, F2 | F3 ViewDrawer, F4 diagnostics contract |
 | **E** Editor | [ROADMAP](ROADMAP.md) | E1 to E5 | E7 face texturing, E6 structural edits |
 | **P** Persistence, entities | [ROADMAP](ROADMAP.md), [data-model](docs/data-model.md) | P7a, P7b | P2 map format, P11a play/stop |
-| **R** Rendering | [ROADMAP](ROADMAP.md) | R1 PSO key, R2 sRGB, R3 render targets | R4 post + tone mapping, R5 array uniforms |
+| **R** Rendering | [ROADMAP](ROADMAP.md) | R1 PSO key, R2 sRGB, R3 render targets, R4 tone mapping | R5 array uniforms, R6 shadows |
 | **S** Shader authoring | [ROADMAP](ROADMAP.md) | the language itself, GLSL, HLSL, LSP | S2 parameter scopes, S5 type checker |
 | **Y** Physics | [physics](docs/physics.md) | Y0 to Y5 | Y6 dynamic bodies, Y7 kinematic parts |
 | **A** Animation | this README, for now | pose primitives | import, then R5, then skinning |
