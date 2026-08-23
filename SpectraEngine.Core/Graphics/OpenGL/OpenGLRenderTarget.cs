@@ -92,6 +92,62 @@ internal sealed class OpenGLRenderTarget : RenderTarget
         Height = height;
     }
 
+    /// <summary>
+    /// Attaches the other targets of a multi-target pass as colour attachments
+    /// 1..N-1 of this framebuffer, and enables all N draw buffers.
+    /// </summary>
+    /// <remarks>
+    /// <b>The draw-buffer list is the part that is easy to miss.</b> A
+    /// framebuffer defaults to writing attachment 0 only, so attaching three
+    /// textures and emitting three fragment outputs produces one populated
+    /// surface and two untouched ones, with no error from anything.
+    /// </remarks>
+    internal void BindExtraColorTargets(GL gl, ReadOnlySpan<RenderTarget> targets)
+    {
+        if (targets.Length <= 1) return;
+
+        Span<GLEnum> buffers = stackalloc GLEnum[targets.Length];
+        buffers[0] = GLEnum.ColorAttachment0;
+
+        for (int i = 1; i < targets.Length; i++)
+        {
+            var extra = (OpenGLRenderTarget)targets[i];
+            var attachment = (FramebufferAttachment)(GLEnum.ColorAttachment0 + i);
+            gl.FramebufferTexture2D(
+                FramebufferTarget.Framebuffer, attachment,
+                TextureTarget.Texture2D, ((OpenGLTexture)extra.ColorTexture).Handle, 0);
+            buffers[i] = GLEnum.ColorAttachment0 + i;
+        }
+
+        gl.DrawBuffers((uint)targets.Length, buffers);
+
+        GLEnum status = gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+        if (status != GLEnum.FramebufferComplete)
+        {
+            throw new InvalidOperationException(
+                $"OpenGL refused a {targets.Length}-attachment pass: framebuffer status {status}.");
+        }
+    }
+
+    /// <summary>
+    /// Detaches the extra attachments and restores single-target drawing, so
+    /// this framebuffer is left exactly as an ordinary pass expects it.
+    /// </summary>
+    internal void UnbindExtraColorTargets(GL gl, ReadOnlySpan<RenderTarget> targets)
+    {
+        gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+
+        for (int i = 1; i < targets.Length; i++)
+        {
+            var attachment = (FramebufferAttachment)(GLEnum.ColorAttachment0 + i);
+            gl.FramebufferTexture2D(
+                FramebufferTarget.Framebuffer, attachment, TextureTarget.Texture2D, 0, 0);
+        }
+
+        Span<GLEnum> single = [GLEnum.ColorAttachment0];
+        gl.DrawBuffers(1, single);
+    }
+
     public override void Dispose()
     {
         if (_disposed) return;

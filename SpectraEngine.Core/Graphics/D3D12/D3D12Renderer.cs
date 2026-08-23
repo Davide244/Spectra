@@ -764,7 +764,8 @@ public sealed unsafe class D3D12Renderer : Renderer
     private CpuDescriptorHandle DepthStencilView =>
         ((ID3D12DescriptorHeap*)_dsvHeap.Handle)->GetCPUDescriptorHandleForHeapStart();
 
-    protected override void BeginPassCore(RenderTarget? target, in PassClear clear)
+    protected override void BeginPassCore(
+        RenderTarget? target, ReadOnlySpan<RenderTarget> targets, in PassClear clear)
     {
         var list = CurrentList;
         if (list is null) return;
@@ -806,14 +807,50 @@ public sealed unsafe class D3D12Renderer : Renderer
         if (clear.Depth is { } depth && hasDepth)
             list->ClearDepthStencilView(dsv, ClearFlags.Depth | ClearFlags.Stencil, depth, 0, 0, null);
 
+        if (targets.Length > 1)
+        {
+            // Every attachment needs its own barrier into RenderTarget and its
+            // own clear, and the pipeline state must be compiled against ALL of
+            // their formats: a PSO built for one RTV bound to three is a
+            // validation failure, not a wrong pixel.
+            CpuDescriptorHandle* views = stackalloc CpuDescriptorHandle[targets.Length];
+            var formats = new Format[targets.Length];
+            for (int i = 0; i < targets.Length; i++)
+            {
+                var extra = (D3D12RenderTarget)targets[i];
+                if (i > 0)
+                {
+                    extra.TransitionColor(list, ResourceStates.RenderTarget);
+                    if (clear.Color is { } extraColor)
+                    {
+                        float* value = stackalloc float[4]
+                            { extraColor.X, extraColor.Y, extraColor.Z, extraColor.W };
+                        list->ClearRenderTargetView(extra.Rtv, value, 0, null);
+                    }
+                }
+                views[i] = extra.Rtv;
+                formats[i] = extra.ColorFormat;
+            }
+
+            _currentTargetState = D3D12TargetState.ForTargets(formats, hasDepth ? DepthFormat : Format.FormatUnknown);
+            list->OMSetRenderTargets((uint)targets.Length, views, 0, hasDepth ? &dsv : null);
+            return;
+        }
+
         if (hasDepth)
             list->OMSetRenderTargets(1, &rtv, 0, &dsv);
         else
             list->OMSetRenderTargets(1, &rtv, 0, null);
     }
 
-    protected override void EndPassCore(RenderTarget? target)
+    protected override void EndPassCore(RenderTarget? target, ReadOnlySpan<RenderTarget> targets)
     {
+        for (int i = 1; i < targets.Length; i++)
+        {
+            if (CurrentList is not null && targets[i] is D3D12RenderTarget extra)
+                extra.TransitionColor(CurrentList, ResourceStates.PixelShaderResource);
+        }
+
         _currentTargetState = D3D12TargetState.BackBuffer;
 
         var list = CurrentList;

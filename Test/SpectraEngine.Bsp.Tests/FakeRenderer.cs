@@ -69,9 +69,14 @@ internal sealed class FakeRenderer : Renderer
     /// <summary>Targets still registered, mirroring the real backends' tracking lists.</summary>
     public List<FakeRenderTarget> LiveRenderTargets { get; } = [];
 
-    protected override void BeginPassCore(RenderTarget? target, in PassClear clear)
+    /// <summary>Attachment count of each pass, so a multi-target bind is observable.</summary>
+    public List<int> PassTargetCounts { get; } = [];
+
+    protected override void BeginPassCore(
+        RenderTarget? target, ReadOnlySpan<RenderTarget> targets, in PassClear clear)
     {
         Passes.Add((clear, PassSize, target));
+        PassTargetCounts.Add(targets.Length);
         OpenPasses++;
     }
 
@@ -85,7 +90,7 @@ internal sealed class FakeRenderer : Renderer
 
     protected override void DrawFullscreen(PostPass pass) => FullscreenDraws++;
 
-    protected override void EndPassCore(RenderTarget? target) => OpenPasses--;
+    protected override void EndPassCore(RenderTarget? target, ReadOnlySpan<RenderTarget> targets) => OpenPasses--;
 
     public override RenderTarget CreateRenderTarget(in RenderTargetDesc desc)
     {

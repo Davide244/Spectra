@@ -150,7 +150,17 @@ public abstract class Renderer
 
     private Vector2D<int> _passSize;
     private bool _inPass;
+    private int _currentTargetCount;
     private RenderTarget? _currentTarget;
+    private RenderTarget[] _currentTargets = [];
+
+    /// <summary>Maximum colour attachments a single pass may bind.</summary>
+    /// <remarks>
+    /// Four rather than D3D's eight: a G-buffer wider than four surfaces is
+    /// bandwidth this engine has no use for yet, and the pipeline-state key
+    /// carries one format field per slot, so the number is not free.
+    /// </remarks>
+    public const int MaxColorTargets = 4;
 
     /// <summary>
     /// The size of the target the current pass is drawing into.
@@ -192,7 +202,7 @@ public abstract class Renderer
     /// another.
     /// </para>
     /// </remarks>
-    public void BeginPass(in PassClear clear) => BeginPass(null, clear);
+    public void BeginPass(in PassClear clear) => BeginPass((RenderTarget?)null, clear);
 
     /// <summary>
     /// Points rendering at <paramref name="target"/> (or the back buffer when it
@@ -200,6 +210,59 @@ public abstract class Renderer
     /// Must be matched by <see cref="EndPass"/>. Render thread only.
     /// </summary>
     public void BeginPass(RenderTarget? target, in PassClear clear)
+    {
+        BeginPassChecked(target, [], clear);
+    }
+
+    /// <summary>
+    /// Opens a pass writing to several colour attachments at once, which is what
+    /// a deferred geometry pass needs.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Separate targets rather than one target with several attachments.</b>
+    /// A <see cref="RenderTarget"/> stays one surface with one
+    /// <see cref="RenderTarget.ColorTexture"/>, which is what makes an
+    /// attachment bindable into a material with no new concept; grouping happens
+    /// here, at the pass, which is where "where does this draw go" already
+    /// lives.
+    /// </para>
+    /// <para>
+    /// <b>Depth comes from the first target.</b> The others should be created
+    /// with <c>Depth: false</c>; a depth buffer on each would be several
+    /// full-screen surfaces allocated and never read.
+    /// </para>
+    /// <para>
+    /// Every target must be the same size. They are written by one rasterisation
+    /// and a mismatch is a driver error on some backends and a silently clipped
+    /// attachment on others, so it is rejected here instead.
+    /// </para>
+    /// </remarks>
+    public void BeginPass(ReadOnlySpan<RenderTarget> targets, in PassClear clear)
+    {
+        if (targets.Length == 0)
+            throw new ArgumentException("A multi-target pass needs at least one target.", nameof(targets));
+        if (targets.Length > MaxColorTargets)
+            throw new ArgumentException(
+                $"A pass may bind at most {MaxColorTargets} colour targets; got {targets.Length}.",
+                nameof(targets));
+
+        for (int i = 1; i < targets.Length; i++)
+        {
+            if (targets[i].Width != targets[0].Width || targets[i].Height != targets[0].Height)
+            {
+                throw new ArgumentException(
+                    $"Every target in a pass must be the same size; target 0 is " +
+                    $"{targets[0].Width}x{targets[0].Height} and target {i} is " +
+                    $"{targets[i].Width}x{targets[i].Height}.",
+                    nameof(targets));
+            }
+        }
+
+        BeginPassChecked(targets[0], targets, clear);
+    }
+
+    private void BeginPassChecked(RenderTarget? target, ReadOnlySpan<RenderTarget> targets, in PassClear clear)
     {
         if (_inPass)
             throw new InvalidOperationException("BeginPass was called inside a pass; passes do not nest.");
@@ -213,8 +276,13 @@ public abstract class Renderer
             ? FramebufferSize
             : new Vector2D<int>(target.Width, target.Height);
         _currentTarget = target;
+        if (_currentTargets.Length < targets.Length)
+            _currentTargets = new RenderTarget[MaxColorTargets];
+        _currentTargetCount = targets.Length;
+        targets.CopyTo(_currentTargets);
+
         _inPass = true;
-        BeginPassCore(target, clear);
+        BeginPassCore(target, _currentTargets.AsSpan(0, _currentTargetCount), clear);
     }
 
     /// <summary>Finishes the pass opened by <see cref="BeginPass"/>. Render thread only.</summary>
@@ -225,8 +293,10 @@ public abstract class Renderer
 
         _inPass = false;
         RenderTarget? target = _currentTarget;
+        var targets = _currentTargets.AsSpan(0, _currentTargetCount);
         _currentTarget = null;
-        EndPassCore(target);
+        _currentTargetCount = 0;
+        EndPassCore(target, targets);
     }
 
     /// <summary>
@@ -468,14 +538,22 @@ public abstract class Renderer
     }
 
     /// <summary>Binds the target, sets the viewport, and clears. See <see cref="BeginPass"/>.</summary>
-    protected abstract void BeginPassCore(RenderTarget? target, in PassClear clear);
+    /// <param name="target">The single target, or null for the window.</param>
+    /// <param name="targets">
+    /// The full attachment set for a multi-target pass, or empty when
+    /// <paramref name="target"/> says everything. Backends that ignore it draw
+    /// to one attachment, which is what every pass but the deferred geometry one
+    /// wants.
+    /// </param>
+    protected abstract void BeginPassCore(
+        RenderTarget? target, ReadOnlySpan<RenderTarget> targets, in PassClear clear);
 
     /// <summary>
     /// Whatever the target needs on the way out: nothing for a back buffer that
     /// the frame's own barriers already cover, a state transition back to
     /// readable for an offscreen one.
     /// </summary>
-    protected abstract void EndPassCore(RenderTarget? target);
+    protected abstract void EndPassCore(RenderTarget? target, ReadOnlySpan<RenderTarget> targets);
 
     /// <summary>
     /// Creates an offscreen render target. Render thread only, like every other

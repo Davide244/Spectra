@@ -299,6 +299,91 @@ public sealed class GlRenderTargetTests
             TextureFilter.Nearest, TextureWrap.Clamp));
     }
 
+    [Fact]
+    public void A_multi_target_pass_writes_every_attachment()
+    {
+        // The G-buffer's whole premise. The failure this catches is specific and
+        // silent: a framebuffer writes attachment 0 only unless the draw-buffer
+        // list says otherwise, so a shader emitting three outputs into three
+        // attached textures fills one and leaves two untouched, with no error
+        // from the driver, the API or the compiler.
+        OpenGLRenderer renderer = _fixture.Renderer;
+        RenderTarget a = renderer.CreateRenderTarget(new RenderTargetDesc(8, 8));
+        RenderTarget b = renderer.CreateRenderTarget(new RenderTargetDesc(8, 8, Depth: false));
+        RenderTarget c = renderer.CreateRenderTarget(
+            new RenderTargetDesc(8, 8, TextureFormat.Rgba16Float, Depth: false));
+
+        try
+        {
+            RenderTarget[] targets = [a, b, c];
+            renderer.BeginPass(targets, PassClear.To(new System.Numerics.Vector4(0.5f, 0f, 0f, 1f)));
+            renderer.EndPass();
+
+            // The clear reaches all three, which is what proves they were bound
+            // rather than merely created.
+            ReadPixel(a).R.ShouldBeInRange(126, 130);
+            ReadPixel(b).R.ShouldBeInRange(126, 130);
+            ReadPixelFloat(c).R.ShouldBe(0.5f, 0.01f);
+        }
+        finally
+        {
+            renderer.DestroyRenderTarget(c);
+            renderer.DestroyRenderTarget(b);
+            renderer.DestroyRenderTarget(a);
+        }
+    }
+
+    [Fact]
+    public void Targets_of_different_sizes_are_refused()
+    {
+        // One rasterisation writes all of them, so a mismatch is a driver error
+        // on some backends and a silently clipped attachment on others.
+        OpenGLRenderer renderer = _fixture.Renderer;
+        RenderTarget a = renderer.CreateRenderTarget(new RenderTargetDesc(8, 8));
+        RenderTarget b = renderer.CreateRenderTarget(new RenderTargetDesc(16, 8, Depth: false));
+
+        try
+        {
+            RenderTarget[] targets = [a, b];
+            Should.Throw<ArgumentException>(() => renderer.BeginPass(targets, PassClear.Keep));
+        }
+        finally
+        {
+            renderer.DestroyRenderTarget(b);
+            renderer.DestroyRenderTarget(a);
+        }
+    }
+
+    [Fact]
+    public void A_multi_target_pass_leaves_the_framebuffer_single_target()
+    {
+        // Otherwise the next ordinary pass through the same target still has
+        // three draw buffers enabled and writes garbage into two textures it was
+        // never told about.
+        OpenGLRenderer renderer = _fixture.Renderer;
+        RenderTarget a = renderer.CreateRenderTarget(new RenderTargetDesc(8, 8));
+        RenderTarget b = renderer.CreateRenderTarget(new RenderTargetDesc(8, 8, Depth: false));
+
+        try
+        {
+            RenderTarget[] targets = [a, b];
+            renderer.BeginPass(targets, PassClear.To(new System.Numerics.Vector4(1f, 0f, 0f, 1f)));
+            renderer.EndPass();
+
+            // Now a single-target pass on `a` alone must not touch `b`.
+            renderer.BeginPass(a, PassClear.To(new System.Numerics.Vector4(0f, 0f, 0f, 1f)));
+            renderer.EndPass();
+
+            ReadPixel(a).R.ShouldBe(0);
+            ReadPixel(b).R.ShouldBe(255, "the second attachment should have been left alone");
+        }
+        finally
+        {
+            renderer.DestroyRenderTarget(b);
+            renderer.DestroyRenderTarget(a);
+        }
+    }
+
     // Reads texel (0,0) of an HDR target, as floats. The byte reader below
     // cannot see what makes an HDR target HDR: it clamps to [0,1] on the way
     // out and quantises what survives.

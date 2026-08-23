@@ -289,7 +289,8 @@ public sealed unsafe class D3D11Renderer : Renderer
         context->OMSetDepthStencilState((ID3D11DepthStencilState*)_defaultDepth.Handle, 0);
     }
 
-    protected override void BeginPassCore(RenderTarget? target, in PassClear clear)
+    protected override void BeginPassCore(
+        RenderTarget? target, ReadOnlySpan<RenderTarget> targets, in PassClear clear)
     {
         var ctx = (ID3D11DeviceContext*)_context.Handle;
 
@@ -337,10 +338,32 @@ public sealed unsafe class D3D11Renderer : Renderer
         if (clear.Depth is { } depth && dsv is not null)
             ctx->ClearDepthStencilView(dsv, (uint)(ClearFlag.Depth | ClearFlag.Stencil), depth, 0);
 
+        if (targets.Length > 1)
+        {
+            // All N views at once. Clearing was done on attachment 0 above; the
+            // extras are cleared here so a geometry pass never reads a stale
+            // G-buffer channel from the previous frame.
+            ID3D11RenderTargetView** views = stackalloc ID3D11RenderTargetView*[targets.Length];
+            for (int i = 0; i < targets.Length; i++)
+            {
+                var extra = (D3D11RenderTarget)targets[i];
+                views[i] = extra.Rtv;
+                if (i > 0 && clear.Color is { } extraColor)
+                {
+                    Span<float> value = stackalloc float[4]
+                        { extraColor.X, extraColor.Y, extraColor.Z, extraColor.W };
+                    fixed (float* pExtra = value)
+                        ctx->ClearRenderTargetView(extra.Rtv, pExtra);
+                }
+            }
+            ctx->OMSetRenderTargets((uint)targets.Length, views, dsv);
+            return;
+        }
+
         ctx->OMSetRenderTargets(1, &rtv, dsv);
     }
 
-    protected override void EndPassCore(RenderTarget? target)
+    protected override void EndPassCore(RenderTarget? target, ReadOnlySpan<RenderTarget> targets)
     {
         if (target is null) return;
 

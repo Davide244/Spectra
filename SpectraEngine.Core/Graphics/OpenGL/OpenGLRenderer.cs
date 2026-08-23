@@ -235,7 +235,8 @@ public class OpenGLRenderer : Renderer
     // whichever framebuffer is actually carrying the frame.
     private bool _passUsedSrgbTarget;
 
-    protected override void BeginPassCore(RenderTarget? target, in PassClear clear)
+    protected override void BeginPassCore(
+        RenderTarget? target, ReadOnlySpan<RenderTarget> targets, in PassClear clear)
     {
         GL gl = _gl!;
         Vector2D<int> size = PassSize;
@@ -243,6 +244,10 @@ public class OpenGLRenderer : Renderer
         if (target is OpenGLRenderTarget offscreen)
         {
             gl.BindFramebuffer(FramebufferTarget.Framebuffer, offscreen.Framebuffer);
+            // The first target's framebuffer owns the depth attachment; the rest
+            // are attached to it as extra colour buffers for the duration of
+            // this pass.
+            offscreen.BindExtraColorTargets(gl, targets);
             _passUsedSrgbTarget = false;
         }
         else
@@ -271,8 +276,11 @@ public class OpenGLRenderer : Renderer
             gl.Clear(mask);
     }
 
-    protected override void EndPassCore(RenderTarget? target)
+    protected override void EndPassCore(RenderTarget? target, ReadOnlySpan<RenderTarget> targets)
     {
+        if (target is OpenGLRenderTarget offscreen && targets.Length > 1)
+            offscreen.UnbindExtraColorTargets(_gl!, targets);
+
         if (target is not null)
         {
             // Back to the window, so a pass that forgets to bind cannot silently

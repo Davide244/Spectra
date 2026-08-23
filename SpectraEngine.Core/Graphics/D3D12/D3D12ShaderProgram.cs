@@ -407,9 +407,12 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
             {
                 desc.VS = new ShaderBytecode { PShaderBytecode = vs, BytecodeLength = (nuint)_vsBytecode.Length };
                 desc.PS = new ShaderBytecode { PShaderBytecode = ps, BytecodeLength = (nuint)_psBytecode.Length };
-                // Zero colour targets is legal: that is a depth-only pass.
-                if (target.RenderTargetCount > 0)
-                    desc.RTVFormats[0] = target.ColorFormat;
+                // Zero colour targets is legal: that is a depth-only pass. Every
+                // bound attachment's format must appear here, not just the
+                // first: a pipeline compiled for one RTV and bound to three is a
+                // validation failure rather than a wrong pixel.
+                for (int i = 0; i < (int)target.RenderTargetCount; i++)
+                    desc.RTVFormats[i] = target.ColorAt(i);
 
                 bool alphaBlend = blend == BlendMode.AlphaBlend;
                 desc.BlendState = new BlendDesc { AlphaToCoverageEnable = 0, IndependentBlendEnable = 0 };

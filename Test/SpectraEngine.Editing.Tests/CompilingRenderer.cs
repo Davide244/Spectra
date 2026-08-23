@@ -55,11 +55,12 @@ internal sealed class CompilingRenderer : Renderer
     // stubs stand in for a renderer during scene and editor tests, which drive
     // no pipeline and so open no passes, but a future one that does should not
     // fail for the wrong reason.
-    protected override void BeginPassCore(RenderTarget? target, in PassClear clear)
+    protected override void BeginPassCore(
+        RenderTarget? target, ReadOnlySpan<RenderTarget> targets, in PassClear clear)
     {
     }
 
-    protected override void EndPassCore(RenderTarget? target)
+    protected override void EndPassCore(RenderTarget? target, ReadOnlySpan<RenderTarget> targets)
     {
     }
 
