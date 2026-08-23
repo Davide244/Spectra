@@ -1,0 +1,53 @@
+// Array uniforms, in the exact spelling LANGUAGE.md teaches.
+//
+// The documentation used to show the C-style `vec3 lightPositions[8];`, which is
+// a hard parse error: the parser reads a whole type, brackets included, and then
+// expects a name. Nothing caught that, because no fixture used arrays at all.
+// This file exists so the documented form and the accepted form cannot drift
+// apart again.
+
+struct VertexInput {
+    [Location(0)] vec3 position;
+    [Location(1)] vec3 normal;
+    [Location(2)] vec2 uv;
+}
+
+struct VertexOutput {
+    [Position] vec4 position;
+    vec2 uv;
+}
+
+struct FragmentInput {
+    vec2 uv;
+}
+
+shader ArrayUniforms {
+    [Binding(0)] cbuffer Lights {
+        vec4[4] uLightPositions;
+        vec4[4] uLightColors;
+        int uLightCount;
+    }
+
+    [Binding(1)] cbuffer Cascades {
+        mat4[2] uCascadeMatrices;
+    }
+
+    [Vertex]
+    VertexOutput VertexMain(VertexInput input) {
+        var output = new VertexOutput();
+        output.position = uCascadeMatrices[0] * vec4(input.position, 1.0);
+        output.uv = input.uv;
+        return output;
+    }
+
+    [Fragment] [Target(0)]
+    vec4 FragmentMain(FragmentInput input) {
+        // A dynamic index driven by a loop variable, which is what any real
+        // lighting loop needs and what a fragment stage must therefore allow.
+        vec3 total = vec3(0.0, 0.0, 0.0);
+        for (int i = 0; i < uLightCount; i = i + 1) {
+            total = total + uLightColors[i].rgb * uLightPositions[i].w;
+        }
+        return vec4(total, 1.0);
+    }
+}

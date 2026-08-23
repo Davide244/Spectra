@@ -79,6 +79,32 @@ public sealed class HlslGeneratorTests
         hlsl.ShouldNotContain("(1 / 3)", Case.Sensitive);
     }
 
+    [Fact]
+    public void Array_uniforms_land_inside_their_cbuffer()
+    {
+        // The D3D side of the same claim. Element order and declaration order
+        // matter here in a way they do not in GLSL: the runtime learns each
+        // member's byte offset by reflecting this cbuffer out of the compiled
+        // bytecode, so what is declared here is what the engine can address.
+        var hlsl = CompileStageText("ArrayUniforms.spectrashade", ShaderStage.Fragment);
+
+        hlsl.ShouldContain("cbuffer Lights : register(b0)", Case.Sensitive);
+        hlsl.ShouldContain("float4 uLightPositions[4];", Case.Sensitive);
+        hlsl.ShouldContain("float4 uLightColors[4];", Case.Sensitive);
+    }
+
+    [Fact]
+    public void A_matrix_array_gets_its_own_register()
+    {
+        // Its own cbuffer, not an extension of Lights: both D3D backends key one
+        // GPU buffer per register, so mixing a frame-constant array into a
+        // per-draw buffer would re-upload the whole array on every draw.
+        var hlsl = CompileStageText("ArrayUniforms.spectrashade", ShaderStage.Vertex);
+
+        hlsl.ShouldContain("cbuffer Cascades : register(b1)", Case.Sensitive);
+        hlsl.ShouldContain("float4x4 uCascadeMatrices[2];", Case.Sensitive);
+    }
+
     private static string CompileStageText(string fixtureName, ShaderStage stage)
     {
         var blob = Compile(fixtureName);

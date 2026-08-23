@@ -25,7 +25,7 @@
 - [x] Compute shaders ([Compute] attribute, [NumThreads(x,y,z)], Barrier(), MemoryBarrier())
 - [x] Multiple render targets (struct with multiple [Target(N)] fields, index uniqueness validation)
 - [x] Depth testing hints ([DepthWrite], [EarlyDepthStencil])
-- [x] Array uniforms (float[] values, sampler2D[] textures in cbuffers and samplers)
+- [x] Array uniforms (`vec4[8] colors;` in cbuffers, `sampler2D[4] textures;`) — size on the type, not after the name. The engine can fill `vec4[N]` and `mat4[N]`; other element types are language-level only, because their D3D and GL strides differ.
 - [x] Texture arrays (sampler2DArray type)
 
 ## Medium Priority — Competitive Rendering

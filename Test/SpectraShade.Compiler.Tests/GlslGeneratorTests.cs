@@ -174,6 +174,38 @@ public sealed class GlslGeneratorTests
         glsl.ShouldContain("1.0 / 3.0", Case.Sensitive);
     }
 
+    [Fact]
+    public void Array_uniforms_use_the_syntax_the_documentation_teaches()
+    {
+        // LANGUAGE.md taught `vec3 lightPositions[8];` for as long as arrays
+        // existed, and that spelling is a hard parse error: the parser reads a
+        // whole type, brackets included, then expects a name. Nothing caught it
+        // because no fixture used an array at all. This fixture IS the
+        // documented example, so the two cannot drift apart again.
+        var glsl = CompileStageText("ArrayUniforms.spectrashade", ShaderStage.Fragment);
+
+        glsl.ShouldContain("uniform vec4 uLightColors[4];", Case.Sensitive);
+        glsl.ShouldContain("uniform vec4 uLightPositions[4];", Case.Sensitive);
+    }
+
+    [Fact]
+    public void An_array_uniform_can_be_indexed_by_a_loop_variable()
+    {
+        // Whether a lighting loop is expressible at all comes down to this.
+        var glsl = CompileStageText("ArrayUniforms.spectrashade", ShaderStage.Fragment);
+
+        glsl.ShouldContain("for (int i = 0; (i < uLightCount); i = (i + 1))", Case.Sensitive);
+        glsl.ShouldContain("uLightColors[i].rgb", Case.Sensitive);
+    }
+
+    [Fact]
+    public void A_matrix_array_survives_into_the_vertex_stage()
+    {
+        var glsl = CompileStageText("ArrayUniforms.spectrashade", ShaderStage.Vertex);
+
+        glsl.ShouldContain("uniform mat4 uCascadeMatrices[2];", Case.Sensitive);
+    }
+
     private static string CompileStageText(string fixtureName, ShaderStage stage)
     {
         var blob = Compile(fixtureName);

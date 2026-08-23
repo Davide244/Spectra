@@ -54,15 +54,27 @@ Paths are quoted string literals, resolved relative to the compiler's import roo
 `sampler2D`, `sampler2DArray`, `sampler3D`, `samplerCube`
 
 ### Arrays
-`T[N]` fixed-size array syntax. Supported for uniform fields and sampler declarations:
+`T[N]` fixed-size array syntax, with the size on the **type**, not after the name.
+Supported for uniform fields and sampler declarations:
 
 ```
 [Binding(0)] cbuffer Lights {
-    vec3 lightPositions[8];
-    vec4 lightColors[8];
+    vec3[8] lightPositions;
+    vec4[8] lightColors;
 }
-[Binding(1)] sampler2D textures[4];
+[Binding(1)] sampler2D[4] textures;
 ```
+
+The C-style `vec3 lightPositions[8];` spelling that this section used to show is a
+parse error: the parser reads a full type (brackets included) and then expects a
+name. Index with `a[i]` as usual, including with a loop variable in a fragment
+shader.
+
+**Only `vec4[N]` and `mat4[N]` can be filled from the engine.** Every other
+element type is padded to a 16-byte stride inside an HLSL constant buffer but
+packed tightly in GLSL, so one byte buffer cannot serve both backends; the engine
+refuses those rather than uploading something that is correct on OpenGL and
+scrambled on D3D. See `ShaderProgram.SetUniform`.
 
 ### User structs
 Declared with `struct Name { field; field; }`. Instantiate with `new Name()` — the expression
