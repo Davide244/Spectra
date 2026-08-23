@@ -51,6 +51,10 @@ internal sealed class StubRenderer : Renderer
     {
     }
 
+    protected override void FlushDebugDrawCore(SpectraEngine.Core.Scene.Camera camera)
+    {
+    }
+
     public override RenderTarget CreateRenderTarget(in RenderTargetDesc desc)
         => throw new NotSupportedException($"{GetType().Name} creates no GPU resources.");
 

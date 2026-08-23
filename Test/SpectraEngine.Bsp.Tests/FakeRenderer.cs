@@ -75,6 +75,11 @@ internal sealed class FakeRenderer : Renderer
         OpenPasses++;
     }
 
+    /// <summary>Overlay lines this stub was asked to draw, one entry per call.</summary>
+    public int OverlayFlushes { get; private set; }
+
+    protected override void FlushDebugDrawCore(SpectraEngine.Core.Scene.Camera camera) => OverlayFlushes++;
+
     protected override void EndPassCore(RenderTarget? target) => OpenPasses--;
 
     public override RenderTarget CreateRenderTarget(in RenderTargetDesc desc)

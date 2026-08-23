@@ -38,8 +38,6 @@ public sealed unsafe class D3D11ForwardPipeline : ID3D11RenderPipeline
                 camera.AspectRatio = aspect;
 
             DrawView(context.View, camera);
-
-            _renderer!.FlushDebugDraw(camera);
         }
         finally
         {

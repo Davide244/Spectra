@@ -40,8 +40,6 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
                 camera.AspectRatio = aspect;
 
             DrawView(context.View, camera);
-
-            _renderer!.FlushDebugDraw(camera);
         }
         finally
         {

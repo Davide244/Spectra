@@ -558,6 +558,8 @@ public sealed unsafe class D3D12Renderer : Renderer
         FrameTarget = null;
         _pipelines[_pipelineIndex].Execute(context);
 
+        DrawOverlay(scene);
+
         Transition(list, (ID3D12Resource*)_backBuffers[_frameIndex].Handle,
             ResourceStates.RenderTarget, ResourceStates.Present);
 
@@ -893,7 +895,7 @@ public sealed unsafe class D3D12Renderer : Renderer
     /// Uploads and draws the accumulated <see cref="Renderer.DebugDraw"/> lines.
     /// Called by pipelines after their main scene pass.
     /// </summary>
-    internal void FlushDebugDraw(Scene.Camera camera)
+    protected override void FlushDebugDrawCore(Scene.Camera camera)
     {
         if (DebugDraw.VertexCount == 0 || _debugShader is null || _lineBatch is null) return;
 

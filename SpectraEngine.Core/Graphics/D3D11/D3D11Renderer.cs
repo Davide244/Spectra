@@ -257,6 +257,8 @@ public sealed unsafe class D3D11Renderer : Renderer
 
         FrameTarget = null;
         _pipelines[_pipelineIndex].Execute(ctx);
+
+        DrawOverlay(scene);
     }
 
     protected override void BeginPassCore(RenderTarget? target, in PassClear clear)
@@ -345,7 +347,7 @@ public sealed unsafe class D3D11Renderer : Renderer
     /// Uploads and draws the accumulated <see cref="Renderer.DebugDraw"/> lines
     /// with depth-test off. Called by pipelines after their main scene pass.
     /// </summary>
-    internal void FlushDebugDraw(Scene.Camera camera)
+    protected override void FlushDebugDrawCore(Scene.Camera camera)
     {
         if (DebugDraw.VertexCount == 0 || _debugShader is null || _lineBatch is null) return;
 

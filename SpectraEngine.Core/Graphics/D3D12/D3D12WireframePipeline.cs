@@ -41,8 +41,6 @@ public sealed unsafe class D3D12WireframePipeline : ID3D12RenderPipeline
             renderer.CurrentFillMode = FillMode.Wireframe;
             DrawView(context.View, camera);
             renderer.CurrentFillMode = FillMode.Solid;
-
-            renderer.FlushDebugDraw(camera);
         }
         finally
         {

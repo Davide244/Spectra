@@ -291,6 +291,46 @@ public abstract class Renderer
     /// <summary>Recorded by a backend's debug-layer drain. Render thread only.</summary>
     private protected void NoteDebugLayerErrors(int count) => DebugLayerErrorCount += count;
 
+    /// <summary>
+    /// Draws the frame's accumulated <see cref="DebugDraw"/> lines with depth
+    /// testing off. Called inside an already-open pass.
+    /// </summary>
+    protected abstract void FlushDebugDrawCore(Scene.Camera camera);
+
+    /// <summary>
+    /// Draws the debug overlay into the window, in its own pass on top of
+    /// whatever the frame already rendered.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The overlay must not go through the scene's pass.</b> Gizmo handles,
+    /// the selection highlight and the marquee are authored as display colours
+    /// and mean exactly what they say; the moment the scene renders into an
+    /// intermediate target they would be exposure-scaled and tone-mapped along
+    /// with it, so a handle would change brightness depending on whether the
+    /// camera happened to be looking at something bright. Editor chrome is not
+    /// part of the picture being photographed.
+    /// </para>
+    /// <para>
+    /// It costs the overlay nothing it uses: it draws with depth off, so it
+    /// never reads scene depth and does not care that this pass has none.
+    /// </para>
+    /// </remarks>
+    protected void DrawOverlay(Scene.Scene? scene)
+    {
+        if (scene is null || DebugDraw.VertexCount == 0) return;
+
+        BeginPass(PassClear.Keep);
+        try
+        {
+            FlushDebugDrawCore(scene.Camera);
+        }
+        finally
+        {
+            EndPass();
+        }
+    }
+
     /// <summary>Binds the target, sets the viewport, and clears. See <see cref="BeginPass"/>.</summary>
     protected abstract void BeginPassCore(RenderTarget? target, in PassClear clear);
 

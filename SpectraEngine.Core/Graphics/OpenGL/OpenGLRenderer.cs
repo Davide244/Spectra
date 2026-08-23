@@ -197,6 +197,8 @@ public class OpenGLRenderer : Renderer
 
         FrameTarget = null;
         _pipelines[_pipelineIndex].Execute(context);
+
+        DrawOverlay(scene);
     }
 
     // The sRGB fallback is what "the back buffer" means on this backend when
@@ -269,7 +271,7 @@ public class OpenGLRenderer : Renderer
     /// Uploads and draws the accumulated <see cref="Renderer.DebugDraw"/> lines
     /// with depth-test off. Called by pipelines after their main scene pass.
     /// </summary>
-    internal void FlushDebugDraw(Scene.Camera camera)
+    protected override void FlushDebugDrawCore(Scene.Camera camera)
     {
         if (DebugDraw.VertexCount == 0 || _debugShader is null || _lineBatch is null || _gl is null)
             return;

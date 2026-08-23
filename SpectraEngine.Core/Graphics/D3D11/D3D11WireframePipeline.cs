@@ -70,8 +70,6 @@ public sealed unsafe class D3D11WireframePipeline : ID3D11RenderPipeline
             ctx->RSSetState((ID3D11RasterizerState*)_wireframeState.Handle);
             DrawView(context.View, camera);
             ctx->RSSetState((ID3D11RasterizerState*)_solidState.Handle);
-
-            _renderer!.FlushDebugDraw(camera);
         }
         finally
         {

@@ -50,8 +50,6 @@ public sealed class WireframePipeline : IOpenGLRenderPipeline
 
             gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Fill);
             gl.Enable(EnableCap.CullFace);
-
-            _renderer!.FlushDebugDraw(camera);
         }
         finally
         {
