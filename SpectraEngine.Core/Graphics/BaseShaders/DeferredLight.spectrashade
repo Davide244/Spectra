@@ -1,0 +1,169 @@
+// DeferredLight.spectrashade — the deferred light pass.
+//
+// Reads the G-buffer and shades it with a Cook-Torrance microfacet BRDF: GGX
+// for the normal distribution, Smith height-correlated for visibility, Schlick
+// for Fresnel. This is the step that turns the roughness and metallic channels
+// from stored bytes into an actual surface response; before it, the engine's
+// lighting was albedo times N dot L, with no specular term of any kind.
+//
+// World position is RECONSTRUCTED from depth rather than read from a G-buffer
+// channel. The pixel's UV gives clip-space xy, the depth buffer gives z, and one
+// inverse view-projection multiply gives the world point. That saves a whole
+// RGBA16F attachment for something already written.
+//
+// Radiance accumulates over a uniform array of lights, which caps them. That is
+// a stepping stone: the deferred answer is a bounding volume drawn per light
+// with additive blending, which removes the cap entirely and needs no storage
+// buffers. It needs BlendMode.Additive, which does not exist yet.
+
+struct VertexInput {
+    [Location(0)] vec3 position;
+    [Location(1)] vec3 normal;
+    [Location(2)] vec2 uv;
+}
+
+struct VertexOutput {
+    [Position] vec4 position;
+    vec2 uv;
+}
+
+struct FragmentInput {
+    vec2 uv;
+}
+
+shader DeferredLight {
+    [Binding(0)] cbuffer Frame {
+        mat4 uInverseViewProjection;
+        vec3 uCameraPosition;
+        float uAmbient;
+        int uLightCount;
+    }
+
+    [Binding(1)] cbuffer Lights {
+        vec4[8] uLightPositions;
+        vec4[8] uLightColors;
+    }
+
+    [Binding(0)] sampler2D uAlbedoAo;
+    [Binding(1)] sampler2D uNormalRoughness;
+    [Binding(2)] sampler2D uMaterialData;
+    [Binding(3)] sampler2D uEmissive;
+    [Binding(4)] sampler2D uDepth;
+
+    [Vertex]
+    VertexOutput VertexMain(VertexInput input) {
+        var output = new VertexOutput();
+        output.position = vec4(input.position, 1.0);
+        output.uv = input.uv;
+        return output;
+    }
+
+    [Fragment] [Target(0)]
+    vec4 FragmentMain(FragmentInput input) {
+        vec4 albedoAo = uAlbedoAo.Sample(input.uv);
+        vec4 normalRoughness = uNormalRoughness.Sample(input.uv);
+        vec4 materialData = uMaterialData.Sample(input.uv);
+
+        vec3 albedo = albedoAo.rgb;
+        float ao = albedoAo.a;
+        vec3 n = Math.Normalize(normalRoughness.rgb);
+
+        // Clamped away from zero: a perfectly smooth surface makes the GGX
+        // denominator vanish and the highlight becomes an infinity that shows
+        // up as a single blinding pixel.
+        float roughness = Math.Max(normalRoughness.a, 0.04);
+        float metallic = materialData.r;
+
+        vec3 worldPosition = ReconstructWorldPosition(input.uv, uDepth.Sample(input.uv).r);
+        vec3 v = Math.Normalize(uCameraPosition - worldPosition);
+
+        // Dielectrics reflect about 4% at normal incidence; metals have no
+        // diffuse response at all and tint their reflection with the albedo.
+        // One lerp expresses both, which is the whole of the metallic workflow.
+        vec3 f0 = Math.Mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
+        vec3 diffuseColor = albedo * (1.0 - metallic);
+
+        vec3 total = diffuseColor * uAmbient * ao;
+
+        for (int i = 0; i < uLightCount; i = i + 1) {
+            vec4 posRange = uLightPositions[i];
+            vec3 radiance = uLightColors[i].rgb;
+
+            vec3 l = -posRange.xyz;
+            float attenuation = 1.0;
+
+            if (posRange.w > 0.0) {
+                vec3 offset = posRange.xyz - worldPosition;
+                float distance = Math.Length(offset);
+                l = offset / Math.Max(distance, 0.0001);
+
+                // Inverse-square, windowed to reach exactly zero at the range.
+                // Without the window a light never stops mattering and can never
+                // be culled; without the inverse square it is not light.
+                float window = Math.Max(1.0 - distance / posRange.w, 0.0);
+                attenuation = window * window / (1.0 + distance * distance);
+            }
+
+            l = Math.Normalize(l);
+            total = total + Shade(n, v, l, diffuseColor, f0, roughness) * radiance * attenuation;
+        }
+
+        // Emissive is added after shading, never lit: a surface that emits does
+        // not also receive its own light.
+        return vec4(total + uEmissive.Sample(input.uv).rgb, 1.0);
+    }
+
+    // Clip space back to world space. uv is 0..1 across the screen; clip xy is
+    // -1..1, and depth is already the clip z the projection produced.
+    vec3 ReconstructWorldPosition(vec2 uv, float depth) {
+        vec4 clip = vec4(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, depth, 1.0);
+        vec4 world = uInverseViewProjection * clip;
+        return world.xyz / world.w;
+    }
+
+    // Cook-Torrance: D * G * F over 4 (N.L)(N.V), plus a Lambert diffuse for
+    // whatever energy the Fresnel term did not reflect.
+    vec3 Shade(vec3 n, vec3 v, vec3 l, vec3 diffuseColor, vec3 f0, float roughness) {
+        float ndotl = Math.Max(Math.Dot(n, l), 0.0);
+        if (ndotl <= 0.0) {
+            return vec3(0.0, 0.0, 0.0);
+        }
+
+        float ndotv = Math.Max(Math.Dot(n, v), 0.0001);
+        vec3 h = Math.Normalize(v + l);
+        float ndoth = Math.Max(Math.Dot(n, h), 0.0);
+        float vdoth = Math.Max(Math.Dot(v, h), 0.0);
+
+        // Disney's reparameterisation: perceptual roughness squared, so an
+        // artist's 0..1 slider behaves linearly to the eye rather than
+        // collapsing everything interesting into the bottom tenth.
+        float a = roughness * roughness;
+        float a2 = a * a;
+
+        // GGX / Trowbridge-Reitz normal distribution.
+        float denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
+        float d = a2 / Math.Max(3.14159265 * denom * denom, 0.0000001);
+
+        // Smith visibility, height-correlated, already divided by the BRDF's
+        // 4 (N.L)(N.V) denominator. Folding them together is both cheaper and
+        // better conditioned than computing G and dividing afterwards.
+        float k = a * 0.5;
+        float visV = ndotv * (1.0 - k) + k;
+        float visL = ndotl * (1.0 - k) + k;
+        float vis = 0.25 / Math.Max(visV * visL, 0.0000001);
+
+        // Schlick's Fresnel.
+        float fresnelWeight = Math.Pow(1.0 - vdoth, 5.0);
+        vec3 f = f0 + (vec3(1.0, 1.0, 1.0) - f0) * fresnelWeight;
+
+        vec3 specular = f * (d * vis);
+
+        // Energy conservation: what the surface reflected specularly cannot also
+        // be diffused. Without this a rough metal is brighter than the light
+        // that hit it.
+        vec3 kd = vec3(1.0, 1.0, 1.0) - f;
+        vec3 diffuse = kd * diffuseColor / 3.14159265;
+
+        return (diffuse + specular) * ndotl;
+    }
+}

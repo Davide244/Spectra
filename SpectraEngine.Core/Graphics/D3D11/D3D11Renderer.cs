@@ -344,15 +344,26 @@ public sealed unsafe class D3D11Renderer : Renderer
             // extras are cleared here so a geometry pass never reads a stale
             // G-buffer channel from the previous frame.
             ID3D11RenderTargetView** views = stackalloc ID3D11RenderTargetView*[targets.Length];
+
+            // Hoisted: a stackalloc inside the loop cannot reuse its space, so
+            // an eight-attachment pass would allocate eight times per pass and
+            // grow the frame's stack use with the G-buffer's width.
+            Span<float> clearValue = stackalloc float[4];
+            if (clear.Color is { } extraColor)
+            {
+                clearValue[0] = extraColor.X;
+                clearValue[1] = extraColor.Y;
+                clearValue[2] = extraColor.Z;
+                clearValue[3] = extraColor.W;
+            }
+
             for (int i = 0; i < targets.Length; i++)
             {
                 var extra = (D3D11RenderTarget)targets[i];
                 views[i] = extra.Rtv;
-                if (i > 0 && clear.Color is { } extraColor)
+                if (i > 0 && clear.Color is not null)
                 {
-                    Span<float> value = stackalloc float[4]
-                        { extraColor.X, extraColor.Y, extraColor.Z, extraColor.W };
-                    fixed (float* pExtra = value)
+                    fixed (float* pExtra = clearValue)
                         ctx->ClearRenderTargetView(extra.Rtv, pExtra);
                 }
             }

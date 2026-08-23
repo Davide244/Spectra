@@ -156,11 +156,13 @@ public abstract class Renderer
 
     /// <summary>Maximum colour attachments a single pass may bind.</summary>
     /// <remarks>
-    /// Four rather than D3D's eight: a G-buffer wider than four surfaces is
-    /// bandwidth this engine has no use for yet, and the pipeline-state key
-    /// carries one format field per slot, so the number is not free.
+    /// Eight, which is what both D3D backends allow and the minimum OpenGL
+    /// guarantees, so this is the hardware's number rather than one of ours. A
+    /// deferred G-buffer carrying albedo, normals, a material set, emissive and
+    /// a per-shading-model custom channel already wants five, and a cap sitting
+    /// exactly on the current layout is not a cap, it is a tripwire.
     /// </remarks>
-    public const int MaxColorTargets = 4;
+    public const int MaxColorTargets = 8;
 
     /// <summary>
     /// The size of the target the current pass is drawing into.

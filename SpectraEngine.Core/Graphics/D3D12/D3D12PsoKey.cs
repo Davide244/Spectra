@@ -29,7 +29,11 @@ internal readonly record struct D3D12TargetState(
     uint SampleCount,
     Format ColorFormat1 = Format.FormatUnknown,
     Format ColorFormat2 = Format.FormatUnknown,
-    Format ColorFormat3 = Format.FormatUnknown)
+    Format ColorFormat3 = Format.FormatUnknown,
+    Format ColorFormat4 = Format.FormatUnknown,
+    Format ColorFormat5 = Format.FormatUnknown,
+    Format ColorFormat6 = Format.FormatUnknown,
+    Format ColorFormat7 = Format.FormatUnknown)
 {
     /// <summary>
     /// The state for a multi-target pass: every attachment's format, because a
@@ -41,14 +45,15 @@ internal readonly record struct D3D12TargetState(
     /// would miss the cache and compile a new pipeline. Four is
     /// <see cref="Graphics.Renderer.MaxColorTargets"/>.
     /// </remarks>
-    public static D3D12TargetState ForTargets(ReadOnlySpan<Format> colors, Format depth) => new(
-        colors.Length > 0 ? colors[0] : Format.FormatUnknown,
-        (uint)colors.Length,
-        depth,
-        1,
-        colors.Length > 1 ? colors[1] : Format.FormatUnknown,
-        colors.Length > 2 ? colors[2] : Format.FormatUnknown,
-        colors.Length > 3 ? colors[3] : Format.FormatUnknown);
+    public static D3D12TargetState ForTargets(ReadOnlySpan<Format> colors, Format depth)
+    {
+        static Format At(ReadOnlySpan<Format> c, int i) => i < c.Length ? c[i] : Format.FormatUnknown;
+
+        return new D3D12TargetState(
+            At(colors, 0), (uint)colors.Length, depth, 1,
+            At(colors, 1), At(colors, 2), At(colors, 3),
+            At(colors, 4), At(colors, 5), At(colors, 6), At(colors, 7));
+    }
 
     /// <summary>The attachment format at <paramref name="index"/>.</summary>
     public Format ColorAt(int index) => index switch
@@ -57,6 +62,10 @@ internal readonly record struct D3D12TargetState(
         1 => ColorFormat1,
         2 => ColorFormat2,
         3 => ColorFormat3,
+        4 => ColorFormat4,
+        5 => ColorFormat5,
+        6 => ColorFormat6,
+        7 => ColorFormat7,
         _ => Format.FormatUnknown,
     };
 

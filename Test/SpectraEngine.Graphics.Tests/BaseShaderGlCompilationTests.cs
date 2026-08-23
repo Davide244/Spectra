@@ -28,6 +28,18 @@ public sealed class BaseShaderGlCompilationTests
     }
 
     [Fact]
+    public void The_deferred_shaders_compile_in_opengl()
+    {
+        // The semantic analyser does no name resolution and no type checking, so
+        // a misspelled builtin emits literally and is first rejected here, by
+        // the driver. These two carry the most arithmetic in the engine: a
+        // five-output G-buffer write and a Cook-Torrance BRDF with two helper
+        // functions and an early return.
+        _fixture.Renderer.CreateShaderFromSource(BaseShaders.GBufferFill).ShouldNotBeNull();
+        _fixture.Renderer.CreateShaderFromSource(BaseShaders.DeferredLight).ShouldNotBeNull();
+    }
+
+    [Fact]
     public void Lit_recompiles_explicitly()
     {
         // A second, explicit compile via the public surface — guards against

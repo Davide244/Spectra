@@ -815,18 +815,25 @@ public sealed unsafe class D3D12Renderer : Renderer
             // validation failure, not a wrong pixel.
             CpuDescriptorHandle* views = stackalloc CpuDescriptorHandle[targets.Length];
             var formats = new Format[targets.Length];
+            // Hoisted out of the loop: a stackalloc inside one cannot reuse its
+            // space, so an eight-attachment pass would allocate eight times.
+            float* clearValue = stackalloc float[4];
+            if (clear.Color is { } extraColor)
+            {
+                clearValue[0] = extraColor.X;
+                clearValue[1] = extraColor.Y;
+                clearValue[2] = extraColor.Z;
+                clearValue[3] = extraColor.W;
+            }
+
             for (int i = 0; i < targets.Length; i++)
             {
                 var extra = (D3D12RenderTarget)targets[i];
                 if (i > 0)
                 {
                     extra.TransitionColor(list, ResourceStates.RenderTarget);
-                    if (clear.Color is { } extraColor)
-                    {
-                        float* value = stackalloc float[4]
-                            { extraColor.X, extraColor.Y, extraColor.Z, extraColor.W };
-                        list->ClearRenderTargetView(extra.Rtv, value, 0, null);
-                    }
+                    if (clear.Color is not null)
+                        list->ClearRenderTargetView(extra.Rtv, clearValue, 0, null);
                 }
                 views[i] = extra.Rtv;
                 formats[i] = extra.ColorFormat;

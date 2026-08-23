@@ -15,6 +15,8 @@ public static class BaseShaders
     private const string LitFileName = "Lit.spectrashade";
     private const string DebugLineFileName = "DebugLine.spectrashade";
     private const string PostResolveFileName = "PostResolve.spectrashade";
+    private const string GBufferFillFileName = "GBufferFill.spectrashade";
+    private const string DeferredLightFileName = "DeferredLight.spectrashade";
 
     /// <summary>The built-in lit shader — diffuse + ambient from one directional light, modulated by a diffuse texture.</summary>
     public static string Lit => ReadEmbedded(LitFileName);
@@ -24,6 +26,12 @@ public static class BaseShaders
 
     /// <summary>The tone-mapping resolve: the one place linear light becomes a display image.</summary>
     public static string PostResolve => ReadEmbedded(PostResolveFileName);
+
+    /// <summary>The deferred geometry pass: writes surface properties, never light.</summary>
+    public static string GBufferFill => ReadEmbedded(GBufferFillFileName);
+
+    /// <summary>The deferred light pass: a Cook-Torrance BRDF over the G-buffer.</summary>
+    public static string DeferredLight => ReadEmbedded(DeferredLightFileName);
 
     /// <summary>
     /// Resolves the absolute path of <paramref name="fileName"/> on disk if the
@@ -46,6 +54,12 @@ public static class BaseShaders
 
     /// <summary>Source-file path for <see cref="PostResolve"/>, if locatable on disk.</summary>
     public static string? PostResolvePath => TryResolveSourcePath(PostResolveFileName);
+
+    /// <summary>Source-file path for <see cref="GBufferFill"/>, if locatable on disk.</summary>
+    public static string? GBufferFillPath => TryResolveSourcePath(GBufferFillFileName);
+
+    /// <summary>Source-file path for <see cref="DeferredLight"/>, if locatable on disk.</summary>
+    public static string? DeferredLightPath => TryResolveSourcePath(DeferredLightFileName);
 
     private static string ReadEmbedded(string fileName)
     {
