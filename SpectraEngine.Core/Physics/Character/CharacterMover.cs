@@ -30,7 +30,16 @@ public static class CharacterMover
     /// <summary>Padding added to the tick's query volume, covering skin width and a tick of solver error.</summary>
     public const float BroadphaseMargin = 0.5f;
 
-    /// <summary>Two contact planes closer than this in normal and offset are the same plane.</summary>
+    /// <summary>Two contact planes closer than this in NORMAL are one plane, for clipping purposes.</summary>
+    /// <remarks>
+    /// Offset deliberately does not enter it, though an earlier version of this
+    /// comment said it did. The planes collected here feed
+    /// <see cref="ICharacterCollisionSource.ClipVelocity"/> and nothing else,
+    /// and that reads only the normal, so two parallel planes at different
+    /// offsets clip identically and keeping both would be wasted budget. The
+    /// depenetration pass, which does care about offset, gathers its own planes
+    /// and never sees these.
+    /// </remarks>
     private const float PlaneDedupeDot = 0.999f;
 
     /// <summary>Advances the character by exactly one fixed tick.</summary>

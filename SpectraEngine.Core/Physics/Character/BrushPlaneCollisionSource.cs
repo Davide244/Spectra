@@ -92,6 +92,8 @@ public sealed class BrushPlaneCollisionSource : ICharacterCollisionSource
 
     // The part lane plus this tick's candidates, both rebuilt per tick.
     private readonly List<ConvexPiece> _partPieces = [];
+    private long _partSignature;
+    private bool _hasPartSignature;
     private readonly List<SceneNode> _partScratch = [];
     private readonly List<ConvexPiece> _candidates = [];
 
@@ -399,19 +401,24 @@ public sealed class BrushPlaneCollisionSource : ICharacterCollisionSource
         // transforms by value, which is exactly what every other change detector
         // in the engine does: a brush is immutable, so a new reference IS the
         // edit.
-        if (covered &&
-            SameSelection(_builtAdditives, _scratchAdditives) &&
-            SameSelection(_builtNegatives, _scratchNegatives))
-        {
-            _builtCompileCount = compileCount;
-            return;
-        }
+        // The region is adopted whether or not the CONTENT changed, and the two
+        // are kept separate deliberately. Walking out of the region re-centres
+        // it; that is not a change to the world and must not read as one, or the
+        // replay guard below refuses a perfectly legal replay every time the
+        // character travels 24 units.
+        bool contentChanged =
+            !SameSelection(_builtAdditives, _scratchAdditives) ||
+            !SameSelection(_builtNegatives, _scratchNegatives);
 
         _builtCompileCount = compileCount;
         _builtRegion = region;
         _hasRegion = true;
+
+        if (!contentChanged)
+            return;
+
         WorldLaneRebuilds++;
-        Revision++;
+        BumpRevision();
         _worldPieces.Clear();
         UncoveredCutBrushes = 0;
 
@@ -597,11 +604,29 @@ public sealed class BrushPlaneCollisionSource : ICharacterCollisionSource
         }
     }
 
+    // Revision is a REPLAY GUARD, not a rebuild counter: a predicted frame
+    // records it, and a replay that crosses a change is refused rather than
+    // being silently wrong about a world that moved underneath it. So it must
+    // move when the geometry the mover can see moves, and only then. Under-
+    // reporting is the dangerous direction, because the consumer trusts it.
+    private void BumpRevision() => Revision++;
+
     private void RebuildPartLane(in Aabb volume, in CharacterQueryFilter filter)
     {
         _partPieces.Clear();
+
+        // Signature of what the part lane held LAST tick, so a part that moved,
+        // appeared, vanished or stopped colliding moves the revision. Without
+        // this the guard covered only the compiled world and reported nothing at
+        // all for the live lane, which is exactly the half that can change
+        // between two ticks of one frame.
+        long signature = 0L;
+
         if (!filter.IncludeParts)
+        {
+            NotePartLane(signature);
             return;
+        }
 
         _partScratch.Clear();
         _scene.GetPartBoundsInBox(in volume, _partScratch);
@@ -625,6 +650,21 @@ public sealed class BrushPlaneCollisionSource : ICharacterCollisionSource
                 continue;
 
             Matrix4x4 world = node.WorldMatrix;
+
+            // Identity and the WHOLE pose, summed so the BVH's traversal order
+            // (which the tick itself can perturb by flushing dirty leaves) does
+            // not read as a geometry change on its own.
+            //
+            // The full basis, not just the translation: a part that rotates in
+            // place moves its planes without moving its origin, and the Brush
+            // reference does not change either, since rotation lives on the node
+            // transform. Hashing position alone would miss a spinning platform
+            // entirely, which is precisely the geometry a replay must not cross.
+            signature += node.Id.GetHashCode()
+                + (long)HashCode.Combine(world.M11, world.M12, world.M13, world.M21)
+                + (long)HashCode.Combine(world.M22, world.M23, world.M31, world.M32)
+                + (long)HashCode.Combine(world.M33, world.M41, world.M42, world.M43);
+
             _partPieces.Add(new ConvexPiece(
                 WorldPlanes(brush, world),
                 WorldFaces(brush, world),
@@ -633,6 +673,27 @@ public sealed class BrushPlaneCollisionSource : ICharacterCollisionSource
                 node,
                 -1));
         }
+
+        NotePartLane(signature);
+    }
+
+    // Moves the revision when the live lane's contents differ from last tick.
+    // A hash can collide, so this can in principle miss a change; the cost of
+    // that is one replay accepted that should have been refused, against the
+    // cost of comparing whole placement lists every tick for a guard whose
+    // consumer does not exist yet. Worth revisiting when rollback lands.
+    private void NotePartLane(long signature)
+    {
+        if (_hasPartSignature && signature == _partSignature)
+            return;
+
+        bool first = !_hasPartSignature;
+        _partSignature = signature;
+        _hasPartSignature = true;
+
+        // The first tick establishes a baseline rather than reporting a change.
+        if (!first)
+            BumpRevision();
     }
 
     private static Plane[] WorldPlanes(Brush brush, Matrix4x4 transform)
