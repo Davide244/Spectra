@@ -57,7 +57,8 @@ internal sealed record DemoStartupOptions(
     bool OffscreenProbe = false,
     string? Pipeline = null,
     bool Shadows = true,
-    bool Profile = false)
+    bool Profile = false,
+    bool? DebugLayer = null)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -69,7 +70,8 @@ internal sealed record DemoStartupOptions(
     private const string Usage =
         "Usage: SpectraEngine.Executable [opengl|d3d11|d3d12] [--selftest[=true|false]] " +
         "[--fullscreen-cycle[=seconds]] [--play[=true|false]] [--offscreen-probe[=true|false]] " +
-        "[--pipeline=<name>] [--shadows[=true|false]] [--profile[=true|false]].";
+        "[--pipeline=<name>] [--shadows[=true|false]] [--profile[=true|false]] " +
+        "[--debug-layer[=true|false]].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -98,6 +100,7 @@ internal sealed record DemoStartupOptions(
         string? pipeline = null;
         bool shadows = true;
         bool profile = false;
+        bool? debugLayer = null;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -170,6 +173,13 @@ internal sealed record DemoStartupOptions(
                 case "profile":
                     profile = ParseBoolean(value, token);
                     continue;
+
+                // The graphics validation layer. Defaults to the build flavour
+                // (on in Debug, off in Release); this overrides either way.
+                // Any measurement taken with it on is measuring validation.
+                case "debug-layer" or "debuglayer":
+                    debugLayer = ParseBoolean(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -184,7 +194,7 @@ internal sealed record DemoStartupOptions(
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
-                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile);
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -192,12 +202,12 @@ internal sealed record DemoStartupOptions(
                 selfTestEnvironmentValue.Trim(), SelfTestEnvironmentVariable);
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
-                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile);
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
-            fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile);
+            fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer);
     }
 
     // A switch that takes a name needs one: a bare --pipeline says nothing

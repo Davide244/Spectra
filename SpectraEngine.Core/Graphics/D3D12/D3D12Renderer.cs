@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D.Compilers;
 using Silk.NET.Direct3D12;
@@ -272,19 +272,28 @@ public sealed unsafe class D3D12Renderer : Renderer
 
     private void CreateDevice()
     {
-        // Enable the debug layer when the SDK layers are installed; fall back
-        // silently so dev machines without Graphics Tools still run.
-        ID3D12Debug* debug = null;
-        Guid debugGuid = ID3D12Debug.Guid;
-        if (D3D12Api.GetDebugInterface(&debugGuid, (void**)&debug) >= 0)
+        // Only when asked for. This layer validates EVERY command-list call, so
+        // leaving it on unconditionally taxed every frame anyone ever measured
+        // and would have shipped with the engine. See Renderer.EnableDebugLayer.
+        if (!EnableDebugLayer)
         {
-            debug->EnableDebugLayer();
-            debug->Release();
-            _logger.LogInformation("D3D12 debug layer active.");
+            _logger.LogInformation("D3D12 debug layer off (not requested).");
         }
         else
         {
-            _logger.LogInformation("D3D12 debug layer unavailable; creating without it.");
+            ID3D12Debug* debug = null;
+            Guid debugGuid = ID3D12Debug.Guid;
+            if (D3D12Api.GetDebugInterface(&debugGuid, (void**)&debug) >= 0)
+            {
+                debug->EnableDebugLayer();
+                debug->Release();
+                DebugLayerActive = true;
+                _logger.LogInformation("D3D12 debug layer active.");
+            }
+            else
+            {
+                _logger.LogInformation("D3D12 debug layer unavailable; creating without it.");
+            }
         }
 
         ID3D12Device* device = null;

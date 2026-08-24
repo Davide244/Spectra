@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using System;
 
 namespace SpectraEngine.Core.Graphics;
@@ -96,6 +96,20 @@ public sealed class OffscreenProbe
                 _logger.LogInformation(
                     "Offscreen probe: {Stages} stage(s), {Frames} frames each, starting at {Width}x{Height}",
                     Stages.Length, FramesPerStage, _width, _height);
+
+                // HALF THIS PROBE'S VERDICT IS "the debug layer stayed silent",
+                // and on D3D that number only exists while the validation layer
+                // is running. Without it the probe still proves the passes do
+                // not throw, but a missing barrier or a mismatched pipeline
+                // state would sail straight through it. Saying so is the
+                // difference between a weaker gate and a gate that lies.
+                if (!renderer.DebugLayerActive && renderer.Backend != GraphicsBackend.OpenGL)
+                {
+                    _logger.LogWarning(
+                        "Offscreen probe: the graphics validation layer is OFF, so this run cannot " +
+                        "detect a missing barrier or a mismatched pipeline state. Re-run with " +
+                        "--debug-layer=true for the full check.");
+                }
                 BeginStage(renderer, 0);
                 return;
             }
@@ -180,8 +194,11 @@ public sealed class OffscreenProbe
             _logger.LogInformation(
                 "Offscreen probe: PASS - full frames rendered into {Stages} offscreen target(s) " +
                 "({What}), the colour attachment kept its identity across an in-place resize, " +
-                "and the debug layer stayed silent",
-                Stages.Length, string.Join(", ", Array.ConvertAll(Stages, x => x.What)));
+                "and {Validation}",
+                Stages.Length, string.Join(", ", Array.ConvertAll(Stages, x => x.What)),
+                renderer.DebugLayerActive
+                    ? "the debug layer stayed silent"
+                    : "NO validation layer was running, so this is the weak form of the check");
         }
     }
 }

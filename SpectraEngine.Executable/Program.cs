@@ -114,6 +114,7 @@ try
         StartupPipeline = options.Pipeline,
         ShadowsEnabled = options.Shadows,
         ProfileFrames = options.Profile,
+        DebugLayer = options.DebugLayer,
     };
 
     // The fullscreen-cycle harness, when asked for: a driver thread that hits

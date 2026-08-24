@@ -159,6 +159,12 @@ public sealed class Engine
     /// <summary>Whether to measure and report where each frame's time goes.</summary>
     public bool ProfileFrames { get; set; }
 
+    /// <summary>
+    /// Overrides the renderer's graphics validation layer, or null to keep the
+    /// build flavour's default. See <see cref="Renderer.EnableDebugLayer"/>.
+    /// </summary>
+    public bool? DebugLayer { get; set; }
+
     /// <summary>The key that enters and leaves play mode.</summary>
     public const Key PlayModeKey = Key.F8;
 
@@ -349,6 +355,9 @@ public sealed class Engine
         try
         {
             _renderer.AcquireContext(window);
+
+            if (DebugLayer is { } wanted)
+                _renderer.EnableDebugLayer = wanted;
 
             _renderer.Initialize(window);
 

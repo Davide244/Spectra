@@ -574,7 +574,9 @@ public sealed unsafe class D3D11Renderer : Renderer
 
         fixed (D3DFeatureLevel* featureLevels = requested)
         {
-            int hr = _d3d11.CreateDevice(
+            // Only when asked for: validation is not free, and it was previously
+            // always attempted. See Renderer.EnableDebugLayer.
+            int hr = EnableDebugLayer ? _d3d11.CreateDevice(
                 default(ComPtr<IDXGIAdapter>),
                 D3DDriverType.Hardware,
                 Software: 0,
@@ -584,11 +586,15 @@ public sealed unsafe class D3D11Renderer : Renderer
                 SDKVersion: D3D11Api.SdkVersion,
                 ppDevice: ref _device,
                 pFeatureLevel: ref featureLevel,
-                ppImmediateContext: ref _context);
+                ppImmediateContext: ref _context) : -1;
 
             if (hr < 0)
             {
-                _logger.LogInformation("D3D11 debug layer unavailable (hr=0x{Hr:X}); creating without it.", hr);
+                if (EnableDebugLayer)
+                    _logger.LogInformation("D3D11 debug layer unavailable (hr=0x{Hr:X}); creating without it.", hr);
+                else
+                    _logger.LogInformation("D3D11 debug layer off (not requested).");
+
                 SilkMarshal.ThrowHResult(_d3d11.CreateDevice(
                     default(ComPtr<IDXGIAdapter>),
                     D3DDriverType.Hardware,
@@ -603,6 +609,7 @@ public sealed unsafe class D3D11Renderer : Renderer
             }
             else
             {
+                DebugLayerActive = true;
                 _logger.LogInformation("D3D11 debug layer active.");
 
                 ID3D11InfoQueue* infoQueue = null;

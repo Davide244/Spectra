@@ -95,6 +95,38 @@ public abstract class Renderer
     public ShaderProgram? DefaultShader { get; protected set; }
 
     /// <summary>
+    /// Whether to ask the graphics API for its validation layer when the device
+    /// is created. Set before <see cref="Initialize"/>; ignored afterwards.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Defaults to on in a Debug build and off in Release, and both halves
+    /// matter.</b> The engine's own error gate reads
+    /// <see cref="DebugLayerErrorCount"/>, and on D3D that number only exists
+    /// because the validation layer produces it: turning it off silently would
+    /// make <c>--offscreen-probe</c> pass by having nothing to report. But
+    /// validation is not free and it is not subtle. D3D12's layer validates
+    /// every command-list call, and it measured roughly five times the cost on
+    /// the static-world swap alone.
+    /// </para>
+    /// <para>
+    /// It was previously always on, with a fallback only for machines that had
+    /// no Graphics Tools installed. That means every measurement anyone took on
+    /// a developer machine included validation, and a shipped build would have
+    /// carried it too.
+    /// </para>
+    /// </remarks>
+    public bool EnableDebugLayer { get; set; } =
+#if DEBUG
+        true;
+#else
+        false;
+#endif
+
+    /// <summary>Whether the validation layer is actually running. False when it was not asked for or not available.</summary>
+    public bool DebugLayerActive { get; protected set; }
+
+    /// <summary>
     /// Per-frame primitive accumulator for debug visualisations. Callers push
     /// lines/boxes/arrows before <see cref="Render"/>; the renderer uploads and
     /// draws them after the main scene pass. The engine clears it each frame.
