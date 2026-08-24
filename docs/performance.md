@@ -45,7 +45,7 @@ waiting rather than working.
 | Technique | State | Where |
 |---|---|---|
 | Frustum culling, scene nodes | **Yes**, through a BVH | `SceneBvh.QueryFrustum` |
-| Frustum culling, static world | **Yes**, but a linear scan | `Scene.CollectVisible` |
+| Frustum culling, static world | **Yes**, clustered over a Z-ordered list | `Scene.CollectVisible` |
 | Backface culling | **Yes**, all three backends | rasteriser state |
 | Depth testing / early-Z | **Yes** | default depth state |
 | Mipmapping | **Yes**, generated on upload | `D3D11Texture`, GL equivalent |
@@ -55,6 +55,7 @@ waiting rather than working.
 | Async world compile | **Yes**, background thread | `Scene.ProcessStaticWorldCompilation` |
 | Shadow cascades | **Yes**, 4, texel-snapped | `ShadowMap` |
 | Mesh buffer pooling | **D3D12 only** | `D3D12Renderer.RentMeshBuffer` |
+| Draw list built from drawables only | **Yes** | `Scene.DrawableNodes` |
 | Sorting / batching by state | No | — |
 | Instancing | No | roadmap `R12` |
 | Occlusion culling | No | — |
@@ -98,7 +99,22 @@ Scaling measured directly, not extrapolated:
 
 ## 4. Don't submit it: culling
 
-### 4.1 A hierarchy over static-world chunks — *the single biggest win available*
+### 4.1 A hierarchy over static-world chunks — *partly done*
+
+**Done:** the chunk list is Z-ordered (`ChunkCoord.MortonKey`) and culled through
+a bounding box per run of 64, and the draw list is built from
+`Scene.DrawableNodes` rather than from the whole spatial index. At 25,638
+brushes that took the frame from 8.44 ms to 4.78 ms, ViewBuild from 2.09 to 0.48
+and Shadows from 2.67 to 0.20.
+
+**Left:** the cluster array is rebuilt whole on every world swap, which cost
+WorldSwap 0.36 ms. Caching chunk render bounds in a flat array parallel to the
+list would make that rebuild a contiguous pass instead of a pointer chase. And
+`DrawableNodes` is a linear scan, correct while drawables number in the tens or
+hundreds and wanting a second BVH once they number in the thousands.
+
+<details><summary>The original finding, kept because the reasoning still applies</summary>
+
 
 `Scene.CollectVisible` walks **every chunk in the world** testing its AABB
 against the frustum, and runs once for the camera plus once per shadow cascade:
@@ -116,6 +132,7 @@ view (every frame), exactly as `SceneBvh` already does for mesh nodes.
 
 **Buys:** turns O(world) into O(log world + visible). **Costs:** one BVH build
 per world swap. **Blocks on:** nothing.
+</details>
 
 ### 4.2 Occlusion culling
 

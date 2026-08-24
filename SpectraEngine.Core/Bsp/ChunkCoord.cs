@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Numerics;
 
 namespace SpectraEngine.Core.Bsp;
@@ -54,6 +54,52 @@ public readonly record struct ChunkCoord(int X, int Y, int Z) : IComparable<Chun
         if (c != 0) return c;
         c = Y.CompareTo(other.Y);
         return c != 0 ? c : Z.CompareTo(other.Z);
+    }
+
+    /// <summary>
+    /// A Z-order (Morton) key for this cell: the bits of X, Y and Z interleaved.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Spatial locality in one number.</b> Cells that are near each other in
+    /// space have near keys, which lexicographic order does NOT give: sorting by
+    /// (x, y, z) makes a run of consecutive cells a long thin line along z, and a
+    /// bounding box around such a run is nearly the width of the world. A run of
+    /// Morton-ordered cells is a compact block, which is what makes a box over a
+    /// run worth testing against a frustum.
+    /// </para>
+    /// <para>
+    /// <b>Separate from <see cref="CompareTo"/> on purpose.</b> That ordering is
+    /// relied on elsewhere for deterministic dirty-cell sets, where "ascending
+    /// cell order" means the obvious thing and a spatial curve would not.
+    /// </para>
+    /// <para>
+    /// Coordinates are biased into unsigned range before interleaving, because
+    /// the world is unbounded in both directions and a negative cell must sort
+    /// below a positive one rather than above every one. 21 bits each covers
+    /// roughly a million cells per axis, or 33 million world units at the
+    /// current cell size, which is past the point where float precision fails
+    /// anyway.
+    /// </para>
+    /// </remarks>
+    public ulong MortonKey => Interleave(Bias(X)) | (Interleave(Bias(Y)) << 1) | (Interleave(Bias(Z)) << 2);
+
+    private const int MortonBits = 21;
+    private const int MortonBias = 1 << (MortonBits - 1);
+
+    private static uint Bias(int value) =>
+        (uint)Math.Clamp(value + MortonBias, 0, (1 << MortonBits) - 1);
+
+    // Spreads 21 low bits so each occupies every third position.
+    private static ulong Interleave(uint value)
+    {
+        ulong x = value & 0x1FFFFFUL;
+        x = (x | (x << 32)) & 0x1F00000000FFFFUL;
+        x = (x | (x << 16)) & 0x1F0000FF0000FFUL;
+        x = (x | (x << 8)) & 0x100F00F00F00F00FUL;
+        x = (x | (x << 4)) & 0x10C30C30C30C30C3UL;
+        x = (x | (x << 2)) & 0x1249249249249249UL;
+        return x;
     }
 
     private static int FloorToCell(float value) => (int)MathF.Floor(value / CellSize);
