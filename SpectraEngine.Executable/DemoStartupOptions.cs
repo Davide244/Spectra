@@ -55,7 +55,8 @@ internal sealed record DemoStartupOptions(
     TimeSpan? FullscreenCycleInterval = null,
     bool StartInPlayMode = false,
     bool OffscreenProbe = false,
-    string? Pipeline = null)
+    string? Pipeline = null,
+    bool Shadows = true)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -67,7 +68,7 @@ internal sealed record DemoStartupOptions(
     private const string Usage =
         "Usage: SpectraEngine.Executable [opengl|d3d11|d3d12] [--selftest[=true|false]] " +
         "[--fullscreen-cycle[=seconds]] [--play[=true|false]] [--offscreen-probe[=true|false]] " +
-        "[--pipeline=<name>].";
+        "[--pipeline=<name>] [--shadows[=true|false]].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -94,6 +95,7 @@ internal sealed record DemoStartupOptions(
         bool play = false;
         bool offscreenProbe = false;
         string? pipeline = null;
+        bool shadows = true;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -153,6 +155,12 @@ internal sealed record DemoStartupOptions(
                 case "pipeline":
                     pipeline = ParseName(value, token);
                     continue;
+
+                // Shadows off, for measuring what they cost and for telling a
+                // shadow bug from a lighting one in a single run.
+                case "shadows":
+                    shadows = ParseBoolean(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -167,7 +175,7 @@ internal sealed record DemoStartupOptions(
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
-                fullscreenCycle, play, offscreenProbe, pipeline);
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -175,12 +183,12 @@ internal sealed record DemoStartupOptions(
                 selfTestEnvironmentValue.Trim(), SelfTestEnvironmentVariable);
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
-                fullscreenCycle, play, offscreenProbe, pipeline);
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
-            fullscreenCycle, play, offscreenProbe, pipeline);
+            fullscreenCycle, play, offscreenProbe, pipeline, shadows);
     }
 
     // A switch that takes a name needs one: a bare --pipeline says nothing

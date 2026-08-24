@@ -262,6 +262,9 @@ public class OpenGLRenderer : Renderer
     // whichever framebuffer is actually carrying the frame.
     private bool _passUsedSrgbTarget;
 
+    protected override void SetViewportCore(int x, int y, int width, int height) =>
+        _gl!.Viewport(x, y, (uint)width, (uint)height);
+
     protected override void BeginPassCore(
         RenderTarget? target, ReadOnlySpan<RenderTarget> targets, in PassClear clear)
     {
@@ -286,7 +289,7 @@ public class OpenGLRenderer : Renderer
                 gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         }
 
-        gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
+        SetViewportCore(0, 0, size.X, size.Y);
 
         uint mask = 0;
         if (clear.Color is { } color)

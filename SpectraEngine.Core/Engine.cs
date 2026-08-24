@@ -147,6 +147,9 @@ public sealed class Engine
     /// </remarks>
     public string? StartupPipeline { get; set; }
 
+    /// <summary>Whether the frame's directional light casts a shadow. On by default.</summary>
+    public bool ShadowsEnabled { get; set; } = true;
+
     /// <summary>The key that enters and leaves play mode.</summary>
     public const Key PlayModeKey = Key.F8;
 
@@ -335,6 +338,8 @@ public sealed class Engine
             _renderer.AcquireContext(window);
 
             _renderer.Initialize(window);
+
+            _renderer.ShadowsEnabled = ShadowsEnabled;
 
             // After Initialize, because that is where a backend registers its
             // pipelines and there is nothing to select before it.
@@ -595,6 +600,12 @@ public sealed class Engine
                 {
                     _pendingTitle =
                         $"{WindowTitle}  —  {_fpsCounter.Fps:0} FPS  ({_fpsCounter.FrameTimeMs:0.00} ms)  —  {_renderer.CurrentPipelineName}";
+
+                    // Published for the periodic stats line as well as the title:
+                    // a window caption is invisible to an unattended run, and the
+                    // frame cost is exactly the number a smoke run should carry.
+                    _sceneManager.FrameTimeMs = _fpsCounter.FrameTimeMs;
+                    _sceneManager.Fps = _fpsCounter.Fps;
                 }
 
                 _renderer.Present(window);

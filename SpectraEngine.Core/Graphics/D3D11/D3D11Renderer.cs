@@ -318,6 +318,17 @@ public sealed unsafe class D3D11Renderer : Renderer
         context->OMSetDepthStencilState((ID3D11DepthStencilState*)_defaultDepth.Handle, 0);
     }
 
+    protected override void SetViewportCore(int x, int y, int width, int height)
+    {
+        var viewport = new Viewport
+        {
+            TopLeftX = x, TopLeftY = y,
+            Width = width, Height = height,
+            MinDepth = 0f, MaxDepth = 1f,
+        };
+        ((ID3D11DeviceContext*)_context.Handle)->RSSetViewports(1, &viewport);
+    }
+
     protected override void BeginPassCore(
         RenderTarget? target, ReadOnlySpan<RenderTarget> targets, in PassClear clear)
     {
@@ -351,13 +362,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         if (rtv is null && !depthOnly) return;
 
         Vector2D<int> size = PassSize;
-        var viewport = new Viewport
-        {
-            TopLeftX = 0, TopLeftY = 0,
-            Width = size.X, Height = size.Y,
-            MinDepth = 0f, MaxDepth = 1f,
-        };
-        ctx->RSSetViewports(1, &viewport);
+        SetViewportCore(0, 0, size.X, size.Y);
 
         if (clear.Color is { } color && rtv is not null)
         {

@@ -457,36 +457,21 @@ Honest state: one cascade over 28 units puts a texel at about 3.6 cm, which is
 soft at close range and is what `R7` fixes. Point and spot lights do not cast at
 all. **Size**: **M**, and the risk was in the fit, not the plumbing.
 
-### R7 — Cascaded shadow maps *(the next rendering item)*
-N=3–4 with per-slice ortho fitting, texel-snap stabilisation (already built and
-tested in `R6`, and reusable as-is: `ShadowMap.TryFitLightMatrix` is a pure
-function of a near/far pair), and split-boundary blending. The remaining work is
-an atlas or N targets, a per-cascade viewport, and the split selection in the
-light pass. Clamp the far cascade to a **shadow distance**, never the camera far plane, or the ortho box grows unboundedly. Atlas first (no array-slice RTV concept yet). **Depends on** — `R6`. **Size** — **M.**
+### R7. Cascaded shadow maps ✅ **landed**
+Four slices, per-slice ortho fitting, texel-snap stabilisation, and one depth
+atlas rather than one texture per cascade (SpectraShade cannot pass a sampler to
+a function, so N textures would mean the filter kernel written N times).
 
-### R8. Multiple lights ✅ **landed**, and the arc pivoted to DEFERRED
-A `Light` component on `SceneNode` beside `MeshRenderer`, collected during
-`BuildRenderView` into a fixed-capacity, deterministically-ordered
-`RenderView.Lights` (nearest-N, ties broken by the existing spatial emission
-order so determinism survives).
+Measured rather than asserted: the near texel went from 3.6 cm to 5.7 mm and the
+penumbra from 22 screen pixels to 3, on the same frame at the same camera.
 
-**The plan above said the ceiling was unfixable without storage buffers.
-That was wrong, and the reason is the pivot.** Clustered FORWARD shading needs
-storage buffers that SpectraShade does not have. Deferred does not: the answer
-is a bounding volume drawn per light with additive blending, over a G-buffer
-that was rasterised once. So the engine now has a third pipeline on all three
-backends, and the eight-light array is a stepping stone rather than a ceiling.
+**Split-boundary blending is NOT done.** Cascades overlap slightly at their
+seams so nothing falls between two of them, but the transition is a hard switch,
+so a seam is visible as a change in shadow softness if you look for it. Dithering
+or blending across the boundary is the remaining polish.
 
-What actually landed: a five-attachment G-buffer (`GBuffer`), a geometry pass
-that writes surface properties and knows nothing about lights, and a full-screen
-Cook-Torrance light pass with GGX, height-correlated Smith and Schlick Fresnel.
-Forward stays in the rotation for what deferred structurally cannot do, and
-`--pipeline=<name>` selects either so an unattended run can gate both.
-
-**What still caps lights is BLEND STATE, not the language.** D3D11 never calls
-`OMSetBlendState`, OpenGL never enables `GL_BLEND`, D3D12 hardcodes
-`BlendEnable = 0`. That is `R10`'s work, and it now unblocks two things instead
-of one. **Size** — **M.**
+**Size**: **M.** **What is left in this arc:** `R10` blend state (which also
+unblocks uncapped lights), IBL for the ambient term, and split blending.
 
 ### R9 — Normal mapping and tangents *(the shading half is done)*
 **The BRDF itself shipped with the deferred pipeline**, so what is left here is the vertex format and normal mapping, which is where the risk always was. `StandardLayout` goes 8 → 12 floats (tangent4 with bitangent sign), and **the CSG mesh builder emits exact, seam-free tangents for the entire static world for free, because `F1`'s Hammer-style per-face u/v axes *are* the tangent frame.** That is strictly better than any derived approximation and matters precisely because tiled brush surfaces dominate the screen. Shading becomes Cook-Torrance GGX + normal mapping — **no language change needed**, every builtin required is already in the table. Screen-space derivative tangents are not an option: `Math.Ddx/Ddy` do not exist in SpectraShade.

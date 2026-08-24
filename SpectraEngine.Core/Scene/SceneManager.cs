@@ -126,6 +126,16 @@ public sealed class SceneManager
         _logger = logger;
     }
 
+    /// <summary>Smoothed frame time in milliseconds, published by the engine loop.</summary>
+    /// <remarks>
+    /// Reported by the periodic stats line so an unattended run records what a
+    /// frame cost. The window title carries the same number for a human.
+    /// </remarks>
+    public double FrameTimeMs { get; set; }
+
+    /// <summary>Smoothed frames per second, published by the engine loop.</summary>
+    public double Fps { get; set; }
+
     /// <summary>The scene currently being simulated and rendered, if one is loaded.</summary>
     public Scene? ActiveScene { get; private set; }
 
@@ -790,7 +800,9 @@ public sealed class SceneManager
         if (renderer.ShadowMap is not { } map) return "shadows on, no caster yet";
 
         return $"shadows on ({renderer.ShadowCasterCount} caster(s), " +
-               $"{map.Resolution}px map, {map.WorldTexelSize:0.000} sunit texel)";
+               $"{map.CascadeCount} cascade(s) in a {map.Resolution}px atlas, " +
+               $"texel {map.WorldTexelSize:0.000} sunit near / " +
+               $"{map.CoarsestWorldTexelSize:0.000} far, {map.Distance:0} sunit range)";
     }
 
     private static SceneNode AddBrushNode(
@@ -880,7 +892,7 @@ public sealed class SceneManager
                     "physics: {PhysicsBackend}, {PhysicsBodies} body(ies) / {PhysicsShapes} shape(s); " +
                     "editing: {Selected} selected, {GizmoMode} gizmo, {Navigation} navigation, " +
                     "undo {UndoDepth} / redo {RedoDepth}; " +
-                    "rendering: {Pipeline} pipeline, {Shadows}; " +
+                    "rendering: {Pipeline} pipeline, {Shadows}, {FrameMs:0.00} ms/frame ({Fps:0} fps); " +
                     "character: {CharacterMode}",
                     assets?.TextureCount ?? 0, assets?.MaterialCount ?? 0,
                     _modelsRequested, _modelsPlaced,
@@ -894,7 +906,7 @@ public sealed class SceneManager
                     editor?.SelectionCount ?? 0, editor?.GizmoModeName ?? "none",
                     editor?.NavigationModeName ?? "none",
                     editor?.UndoDepth ?? 0, editor?.RedoDepth ?? 0,
-                    _renderer?.CurrentPipelineName ?? "none", DescribeShadows(_renderer),
+                    _renderer?.CurrentPipelineName ?? "none", DescribeShadows(_renderer), FrameTimeMs, Fps,
                     DescribeCharacter());
             }
 

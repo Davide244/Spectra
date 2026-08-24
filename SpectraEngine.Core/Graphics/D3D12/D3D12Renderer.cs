@@ -1042,21 +1042,28 @@ public sealed unsafe class D3D12Renderer : Renderer
     /// </summary>
     internal DepthMode CurrentDepthMode { get; set; } = DepthMode.TestWrite;
 
-    internal void SetViewportAndScissor(int width, int height)
+    internal void SetViewportAndScissor(int width, int height) =>
+        SetViewportCore(0, 0, width, height);
+
+    protected override void SetViewportCore(int x, int y, int width, int height)
     {
         var list = CurrentList;
         if (list is null) return;
         var viewport = new Viewport
         {
-            TopLeftX = 0,
-            TopLeftY = 0,
+            TopLeftX = x,
+            TopLeftY = y,
             Width = width,
             Height = height,
             MinDepth = 0f,
             MaxDepth = 1f,
         };
         list->RSSetViewports(1, &viewport);
-        var scissor = new Box2D<int>(0, 0, width, height);
+
+        // The scissor moves with the viewport, or a cascade would rasterise
+        // into its own quadrant and still be allowed to clear or blend outside
+        // it. They are separate state on this backend and easy to desync.
+        var scissor = new Box2D<int>(x, y, x + width, y + height);
         list->RSSetScissorRects(1, &scissor);
     }
 

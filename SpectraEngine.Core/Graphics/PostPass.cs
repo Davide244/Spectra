@@ -38,6 +38,7 @@ public sealed class PostPass
     private readonly Dictionary<string, Vector3> _vec3 = [];
     private readonly Dictionary<string, Matrix4x4> _matrices = [];
     private readonly Dictionary<string, Vector4[]> _vec4Arrays = [];
+    private readonly Dictionary<string, Matrix4x4[]> _matrixArrays = [];
     private readonly Dictionary<string, (int Unit, Texture Texture)> _textures = [];
 
     public PostPass(ShaderProgram shader)
@@ -102,6 +103,19 @@ public sealed class PostPass
         return this;
     }
 
+    /// <summary>
+    /// Stages a <c>mat4</c> array uniform, copying the values into a buffer this
+    /// pass owns. Same contract as the <c>vec4</c> overload.
+    /// </summary>
+    public PostPass SetUniform(string name, ReadOnlySpan<Matrix4x4> values)
+    {
+        if (!_matrixArrays.TryGetValue(name, out Matrix4x4[]? buffer) || buffer.Length != values.Length)
+            _matrixArrays[name] = buffer = new Matrix4x4[values.Length];
+
+        values.CopyTo(buffer);
+        return this;
+    }
+
     /// <summary>Stages a texture on a sampler unit.</summary>
     public PostPass SetTexture(string name, int unit, Texture texture)
     {
@@ -126,6 +140,8 @@ public sealed class PostPass
         foreach ((string name, Matrix4x4 value) in _matrices)
             shader.SetUniform(name, value);
         foreach ((string name, Vector4[] values) in _vec4Arrays)
+            shader.SetUniform(name, values);
+        foreach ((string name, Matrix4x4[] values) in _matrixArrays)
             shader.SetUniform(name, values);
         foreach ((string name, (int unit, Texture texture)) in _textures)
             shader.SetTexture(name, unit, texture);

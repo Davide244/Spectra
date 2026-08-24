@@ -624,15 +624,29 @@ public abstract class Renderer
 
         // Culled against the LIGHT, not the camera. See Scene.BuildShadowView
         // for why reusing the camera's list makes shadows flicker as you turn.
-        scene.BuildShadowView(map.LightViewProjection, _shadowView);
-
-        Matrix4x4 lightClip = map.LightViewProjection * ClipZCorrection;
-
+        // One pass over the whole atlas, one depth clear, then a viewport per
+        // cascade. Clearing per cascade would clear the whole target each time
+        // and wipe the cascades already drawn.
         BeginPass(map.Target, PassClear.DepthOnly);
         try
         {
-            DrawShadowCasters(_shadowView.Items, lightClip);
-            DrawShadowCasters(_shadowView.WorldItems, lightClip);
+            for (int cascade = 0; cascade < map.CascadeCount; cascade++)
+            {
+                (int x, int y, int size) = map.TileAt(cascade);
+                SetPassViewport(x, y, size, size);
+
+                Matrix4x4 lightViewProjection = map.LightViewProjectionAt(cascade);
+
+                // Culled against THIS CASCADE, not once for the whole atlas. The
+                // near cascade covers a few metres, so re-culling is most of
+                // what makes it cheap: it draws a handful of casters where a
+                // shared list would draw everything within the shadow distance.
+                scene.BuildShadowView(lightViewProjection, _shadowView);
+
+                Matrix4x4 lightClip = lightViewProjection * ClipZCorrection;
+                DrawShadowCasters(_shadowView.Items, lightClip);
+                DrawShadowCasters(_shadowView.WorldItems, lightClip);
+            }
         }
         finally
         {
@@ -674,6 +688,13 @@ public abstract class Renderer
             ShadowCasterCount++;
         }
     }
+
+    // Filled once: an array uniform has to be written whole, and a frame with
+    // no shadow map still has to write something of the declared length.
+    private static readonly Matrix4x4[] IdentityCascades =
+        [Matrix4x4.Identity, Matrix4x4.Identity, Matrix4x4.Identity, Matrix4x4.Identity];
+
+    private static readonly Vector4[] EmptyCascadeRects = new Vector4[ShadowMap.MaxCascades];
 
     /// <summary>
     /// Whether a program must be bound before its uniforms are written.
@@ -805,16 +826,24 @@ public abstract class Renderer
         ShadowMap? map = casting ? _shadowMap : null;
 
         _lightPass
-            .SetUniform("uWorldToShadow", map?.WorldToShadow ?? Matrix4x4.Identity)
             .SetUniform("uShadowLightIndex", casting ? shadowLightIndex : -1)
+            .SetUniform("uCascadeCount", map?.CascadeCount ?? 0)
             .SetUniform("uShadowStrength", casting ? ShadowStrength : 0f)
             .SetUniform("uShadowTexel", map?.TexelSize ?? 0f)
-            // In world units, derived from the texel's own world size: the offset
-            // that stops acne is a property of how coarse the map is here, not a
-            // constant somebody tuned once against one scene's scale.
-            .SetUniform("uShadowNormalBias", (map?.WorldTexelSize ?? 0f) * (map?.NormalBias ?? 0f))
+            // In TEXELS: the shader scales it by the chosen cascade's own world
+            // texel size, because the offset that stops acne is a property of
+            // how coarse the map is right there, not a constant somebody tuned
+            // once against one scene's scale.
+            .SetUniform("uShadowNormalBias", map?.NormalBias ?? 0f)
             .SetUniform("uShadowDepthBias", map?.DepthBias ?? 0f)
             .SetTexture("uShadowMap", 5, map?.Depth ?? gbuffer.Depth);
+
+        // The arrays must be written whole and must be the length the shader
+        // declares, so an unfitted frame still uploads identities rather than
+        // leaving the previous frame's matrices behind a count of zero.
+        _lightPass
+            .SetUniform("uWorldToShadow", map is not null ? map.WorldToShadow : IdentityCascades)
+            .SetUniform("uCascadeRects", map is not null ? map.CascadeRects : EmptyCascadeRects);
 
         LightUpload.Apply(_lightPass, view, ambient);
 
@@ -870,6 +899,35 @@ public abstract class Renderer
             EndPass();
         }
     }
+
+    /// <summary>
+    /// Narrows the open pass to a sub-rectangle of its target, in texels.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The y origin is the v = 0 edge of the texture, on every backend</b>,
+    /// which sounds like it cannot be true and is. OpenGL measures a viewport
+    /// from the bottom and its texture row zero IS the bottom; D3D measures from
+    /// the top and its row zero is the top. The two conventions differ in the
+    /// same direction and cancel, so one rectangle in texture space means the
+    /// same region of the same texture on both.
+    /// </para>
+    /// <para>
+    /// This exists for the shadow atlas, where several cascades share one map
+    /// and each is rendered into its own quadrant. It is reset by the next
+    /// <see cref="BeginPass"/>, which always sets the full-target viewport.
+    /// </para>
+    /// </remarks>
+    public void SetPassViewport(int x, int y, int width, int height)
+    {
+        if (!_inPass)
+            throw new InvalidOperationException("SetPassViewport was called outside a pass.");
+
+        SetViewportCore(x, y, width, height);
+    }
+
+    /// <summary>Applies a viewport rectangle. See <see cref="SetPassViewport"/> for the y convention.</summary>
+    protected abstract void SetViewportCore(int x, int y, int width, int height);
 
     /// <summary>Binds the target, sets the viewport, and clears. See <see cref="BeginPass"/>.</summary>
     /// <param name="target">The single target, or null for the window.</param>

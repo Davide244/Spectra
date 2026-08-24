@@ -5,136 +5,249 @@ using System.Numerics;
 namespace SpectraEngine.Core.Graphics;
 
 /// <summary>
-/// A directional light's depth map, and the transform that reads it.
+/// A directional light's cascaded depth map, and the transforms that read it.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>The world is unbounded, so the map cannot be fitted to it.</b> A sealed
 /// level would fit one ortho box around the whole map and be done; here there is
-/// no whole map, so the box is fitted to a near SLICE of the camera frustum, and
-/// everything past <see cref="Distance"/> is simply unshadowed. That is the same
-/// trade every open-world engine makes, and it is why cascades exist: several
-/// slices at several resolutions instead of one.
+/// no whole map, so boxes are fitted to SLICES of the camera frustum, and
+/// everything past <see cref="Distance"/> is lit but never shadowed.
 /// </para>
 /// <para>
-/// <b>Two things make the shadow stop crawling, and both are mandatory rather
-/// than polish.</b> The slice is bounded by a SPHERE rather than a box, so the
+/// <b>Cascades are not a quality setting, they are what makes the near shadow
+/// sharp at all.</b> One box over the whole shadow distance has to be as wide as
+/// the far end of the view, and a texel of it is then centimetres across
+/// wherever you are actually looking: the 3x3 filter kernel spans three of those
+/// texels, so a 40 cm post gets a penumbra a third of its own width and reads as
+/// a smudge rather than a shadow. Splitting the range means the slice nearest
+/// the camera is metres across instead of tens of metres, and its texels shrink
+/// by the same factor. The far cascades stay coarse, which is invisible because
+/// they are far away.
+/// </para>
+/// <para>
+/// <b>Two things make a cascade stop crawling, and both are mandatory rather
+/// than polish.</b> Each slice is bounded by a SPHERE rather than a box, so the
 /// box's size cannot change when the camera merely turns; and the box's centre
-/// is then snapped to whole shadow-map texels, so it cannot slide by a fraction
-/// of a texel between frames. Without the sphere, the extents breathe as you
-/// look around; without the snap, every shadow edge shimmers as you walk. Fixing
-/// one and not the other fixes nothing, because the snap is only meaningful once
-/// the texel size is constant.
+/// is then snapped to whole texels, so it cannot slide by a fraction of one
+/// between frames. Fixing one and not the other fixes nothing, because the snap
+/// is only meaningful once the texel size is constant.
 /// </para>
 /// <para>
-/// <b>The map is depth-only</b>, which is what
-/// <see cref="RenderTargetDesc.DepthOnly(int)"/> exists for: no colour
-/// attachment to allocate, and no render target bound while it is drawn.
+/// <b>One depth-only texture, split into quadrants.</b> An atlas rather than N
+/// textures because the light pass then samples ONE sampler with one filter
+/// kernel: N textures would need the kernel written out N times, since
+/// SpectraShade cannot pass a sampler to a function.
 /// </para>
 /// </remarks>
 public sealed class ShadowMap : IDisposable
 {
-    /// <summary>Square resolution used when a caller does not say. One cascade's worth.</summary>
+    /// <summary>Square resolution of the whole atlas when a caller does not say.</summary>
+    /// <remarks>
+    /// 2048 holds four 1024-square cascades in 16 MB. Doubling it doubles the
+    /// sharpness everywhere and costs 64 MB, which is the same memory four
+    /// 2048-square cascades would need and strictly better spent here.
+    /// </remarks>
     public const int DefaultResolution = 2048;
+
+    /// <summary>Cascades in the 2x2 atlas.</summary>
+    public const int MaxCascades = 4;
 
     private readonly Renderer _renderer;
     private readonly RenderTarget _target;
+    private readonly Matrix4x4[] _lightViewProjection = new Matrix4x4[MaxCascades];
+    private readonly Matrix4x4[] _worldToShadow = new Matrix4x4[MaxCascades];
+    private readonly Vector4[] _rects = new Vector4[MaxCascades];
+    private int _cascadeCount = MaxCascades;
     private bool _disposed;
 
-    /// <summary>Creates the map at <paramref name="resolution"/> square. Render thread.</summary>
+    /// <summary>Creates the atlas at <paramref name="resolution"/> square. Render thread.</summary>
     public ShadowMap(Renderer renderer, int resolution = DefaultResolution)
     {
         ArgumentNullException.ThrowIfNull(renderer);
-        ArgumentOutOfRangeException.ThrowIfLessThan(resolution, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(resolution, 2);
 
         _renderer = renderer;
         Resolution = resolution;
         _target = renderer.CreateRenderTarget(RenderTargetDesc.DepthOnly(resolution));
+
+        for (int i = 0; i < MaxCascades; i++)
+        {
+            _lightViewProjection[i] = Matrix4x4.Identity;
+            _worldToShadow[i] = Matrix4x4.Identity;
+        }
     }
 
-    /// <summary>Square resolution of the map.</summary>
+    /// <summary>Square resolution of the whole atlas.</summary>
     public int Resolution { get; }
+
+    /// <summary>Square resolution of one cascade's quadrant.</summary>
+    public int TileResolution => Resolution / 2;
 
     /// <summary>The target the depth pass draws into.</summary>
     public RenderTarget Target => _target;
 
-    /// <summary>The depth map, sampled by the light pass. Never null: the target is depth-only.</summary>
+    /// <summary>The depth atlas, sampled by the light pass. Never null: the target is depth-only.</summary>
     public Texture Depth => _target.DepthTexture!;
+
+    /// <summary>How many cascades are fitted and drawn. 1 to <see cref="MaxCascades"/>.</summary>
+    public int CascadeCount
+    {
+        get => _cascadeCount;
+        set => _cascadeCount = Math.Clamp(value, 1, MaxCascades);
+    }
 
     /// <summary>
     /// How far from the camera shadows are drawn. Beyond it surfaces are lit but
     /// never shadowed, which is the open-world trade this type documents.
     /// </summary>
     /// <remarks>
-    /// Not the camera's far plane, deliberately. Fitting to the far plane grows
-    /// the ortho box until one texel covers metres and every shadow turns to
-    /// mush, which is the single most common way a first shadow implementation
-    /// is judged broken.
+    /// Not the camera's far plane, deliberately: fitting the last cascade to a
+    /// kilometre would make even the coarsest one useless. It can be much larger
+    /// than a single-cascade map could afford, because only the last cascade
+    /// pays for it.
     /// </remarks>
-    public float Distance { get; set; } = 28f;
+    public float Distance { get; set; } = 60f;
 
     /// <summary>
-    /// World-space distance a sample point is pushed along its surface normal
-    /// before the depth comparison, in units of one shadow texel.
+    /// How the range is divided between cascades: 0 splits it evenly, 1
+    /// logarithmically.
     /// </summary>
     /// <remarks>
-    /// <b>Normal offset rather than a depth bias, and the difference matters.</b>
-    /// A constant added to the compared depth has to be tuned against the clip-Z
-    /// convention, which differs between backends, and trades acne for peter
-    /// panning wherever the surface is steep. Offsetting along the normal is a
-    /// world-space quantity: it scales with the texel footprint, needs no
-    /// per-backend constant, and moves the sample sideways out of its own
-    /// shadow instead of pretending the surface is nearer the light.
+    /// Even splits waste the near cascades on slivers of view; logarithmic
+    /// splits waste the far ones. The blend is the standard practical scheme,
+    /// and this leans toward the log end because texel size is what matters and
+    /// the log split is what equalises it.
     /// </remarks>
-    public float NormalBias { get; set; } = 1.1f;
-
-    /// <summary>Small constant subtracted from the compared depth, to catch what the normal offset does not.</summary>
-    public float DepthBias { get; set; } = 0.0015f;
-
-    /// <summary>World-to-light-clip, for the depth pass to draw with. Valid after <see cref="Fit"/>.</summary>
-    public Matrix4x4 LightViewProjection { get; private set; } = Matrix4x4.Identity;
+    public float SplitBlend { get; set; } = 0.88f;
 
     /// <summary>
-    /// World position to shadow-map lookup: xy is the texture coordinate, z is
-    /// directly comparable with what the map stores. Valid after <see cref="Fit"/>.
+    /// How far a sample is pushed along its surface normal before the depth
+    /// comparison, in units of the CHOSEN cascade's texel.
+    /// </summary>
+    /// <remarks>
+    /// <b>Normal offset rather than a depth bias, and per cascade rather than
+    /// global.</b> A constant added to the compared depth has to be tuned
+    /// against the clip-Z convention, which differs between backends, and trades
+    /// acne for detached shadows wherever the surface is steep. Offsetting along
+    /// the normal is a world-space quantity that scales with the texel
+    /// footprint, so the near cascade gets a small offset and the far one a
+    /// large one for free. A single global value would be either useless in the
+    /// far cascade or would eat the near one's shadows whole.
+    /// </remarks>
+    public float NormalBias { get; set; } = 1.4f;
+
+    /// <summary>Small constant subtracted from the compared depth, for what the normal offset does not catch.</summary>
+    public float DepthBias { get; set; } = 0.0012f;
+
+    /// <summary>World-to-light-clip for one cascade, for the depth pass to draw with.</summary>
+    public Matrix4x4 LightViewProjectionAt(int cascade) => _lightViewProjection[cascade];
+
+    /// <summary>
+    /// Per cascade: world position to a lookup in that cascade's own 0..1 space,
+    /// with z directly comparable against what the map stores.
     /// </summary>
     /// <remarks>
     /// <b>Every convention difference between the backends is folded in here, on
     /// the CPU, so the shader has none.</b> The Y flip (render targets are
     /// bottom-left on OpenGL and top-left on D3D) and the clip-Z-to-depth-buffer
-    /// mapping are both baked into this one matrix. Doing either in the shader
-    /// means a shadow that is upside down or offset in depth on exactly one
-    /// backend, which produces no error anywhere.
+    /// mapping are both baked in. Doing either in the shader means a shadow that
+    /// is upside down or offset in depth on exactly one backend, which produces
+    /// no error anywhere.
     /// </remarks>
-    public Matrix4x4 WorldToShadow { get; private set; } = Matrix4x4.Identity;
-
-    /// <summary>One texel's size in shadow-map texture coordinates. The PCF kernel's step.</summary>
-    public float TexelSize => 1f / Resolution;
-
-    /// <summary>World-space size of one shadow texel after the last <see cref="Fit"/>. Diagnostics.</summary>
-    public float WorldTexelSize { get; private set; }
+    public ReadOnlySpan<Matrix4x4> WorldToShadow => _worldToShadow.AsSpan(0, _cascadeCount);
 
     /// <summary>
-    /// Aims the map at the slice of <paramref name="camera"/>'s frustum that
-    /// shadows are drawn for, lit from <paramref name="lightDirection"/>.
+    /// Per cascade: the atlas quadrant as (u, v, scale), plus that cascade's
+    /// world texel size in w, which is what scales the normal offset.
+    /// </summary>
+    public ReadOnlySpan<Vector4> CascadeRects => _rects.AsSpan(0, _cascadeCount);
+
+    /// <summary>One texel of a cascade, in that cascade's own 0..1 space. The filter kernel's step.</summary>
+    public float TexelSize => 1f / TileResolution;
+
+    /// <summary>World-space texel size of the sharpest cascade. Diagnostics.</summary>
+    public float WorldTexelSize => _rects[0].W;
+
+    /// <summary>World-space texel size of the coarsest fitted cascade. Diagnostics.</summary>
+    public float CoarsestWorldTexelSize => _rects[_cascadeCount - 1].W;
+
+    /// <summary>The atlas rectangle cascade <paramref name="cascade"/> is drawn into, in texels.</summary>
+    public (int X, int Y, int Size) TileAt(int cascade)
+    {
+        int tile = TileResolution;
+        return ((cascade % 2) * tile, (cascade / 2) * tile, tile);
+    }
+
+    /// <summary>
+    /// Fits every cascade to its slice of <paramref name="camera"/>'s frustum,
+    /// lit from <paramref name="lightDirection"/>.
     /// </summary>
     /// <param name="camera">The camera whose view is being shadowed.</param>
     /// <param name="lightDirection">The direction the light TRAVELS, as a <see cref="RenderLight"/> carries it.</param>
-    /// <returns>False when the direction is degenerate and nothing was fitted.</returns>
+    /// <returns>False when nothing could be fitted and no shadow should be drawn.</returns>
     public bool Fit(Camera camera, Vector3 lightDirection)
     {
-        if (!TryFitLightMatrix(camera, lightDirection, Distance, Resolution,
-                out Matrix4x4 lightViewProjection, out float worldTexelSize))
+        ArgumentNullException.ThrowIfNull(camera);
+
+        float near = camera.NearPlane;
+        float far = MathF.Min(Distance, camera.FarPlane);
+        if (far <= near) return false;
+
+        Span<float> splits = stackalloc float[MaxCascades];
+        ComputeSplits(near, far, _cascadeCount, SplitBlend, splits);
+
+        Matrix4x4 ndcToTexture = NdcToShadowTexture(
+            _renderer.DepthToNdcZ, _renderer.TargetOriginIsTopLeft);
+
+        float sliceNear = near;
+        for (int i = 0; i < _cascadeCount; i++)
         {
-            return false;
+            float sliceFar = splits[i];
+
+            // Slices OVERLAP slightly at their boundary. Without it a receiver
+            // sitting exactly on a split can fall outside both cascades for a
+            // pixel or two and flicker as the camera moves.
+            float overlappedNear = i == 0 ? sliceNear : sliceNear * 0.96f;
+
+            if (!TryFitLightMatrix(
+                    camera, lightDirection, overlappedNear, sliceFar, TileResolution,
+                    out Matrix4x4 lightViewProjection, out float worldTexel))
+            {
+                return false;
+            }
+
+            _lightViewProjection[i] = lightViewProjection;
+            _worldToShadow[i] = lightViewProjection * _renderer.ClipZCorrection * ndcToTexture;
+
+            (int x, int y, int size) = TileAt(i);
+            _rects[i] = new Vector4(
+                x / (float)Resolution, y / (float)Resolution, size / (float)Resolution, worldTexel);
+
+            sliceNear = sliceFar;
         }
 
-        LightViewProjection = lightViewProjection;
-        WorldToShadow = lightViewProjection
-            * _renderer.ClipZCorrection
-            * NdcToShadowTexture(_renderer.DepthToNdcZ, _renderer.TargetOriginIsTopLeft);
-        WorldTexelSize = worldTexelSize;
         return true;
+    }
+
+    /// <summary>
+    /// Where each cascade ends, from <paramref name="near"/> to
+    /// <paramref name="far"/>.
+    /// </summary>
+    internal static void ComputeSplits(float near, float far, int count, float blend, Span<float> splits)
+    {
+        for (int i = 1; i <= count; i++)
+        {
+            float fraction = i / (float)count;
+            float logarithmic = near * MathF.Pow(far / near, fraction);
+            float uniform = near + (far - near) * fraction;
+            splits[i - 1] = blend * logarithmic + (1f - blend) * uniform;
+        }
+
+        // The last one is the shadow distance exactly, whatever the blend
+        // rounded it to: it is the number the caller set and the number the
+        // documentation quotes.
+        splits[count - 1] = far;
     }
 
     /// <summary>
@@ -145,7 +258,8 @@ public sealed class ShadowMap : IDisposable
     internal static bool TryFitLightMatrix(
         Camera camera,
         Vector3 lightDirection,
-        float distance,
+        float near,
+        float far,
         int resolution,
         out Matrix4x4 lightViewProjection,
         out float worldTexelSize)
@@ -155,11 +269,8 @@ public sealed class ShadowMap : IDisposable
         worldTexelSize = 0f;
 
         if (lightDirection.LengthSquared() < 1e-12f) return false;
-        Vector3 forward = Vector3.Normalize(lightDirection);
-
-        float near = camera.NearPlane;
-        float far = MathF.Min(distance, camera.FarPlane);
         if (far <= near) return false;
+        Vector3 forward = Vector3.Normalize(lightDirection);
 
         BoundSlice(camera, near, far, out Vector3 center, out float radius);
         if (radius <= 0f) return false;
@@ -271,8 +382,8 @@ public sealed class ShadowMap : IDisposable
         for (int i = 0; i < corners.Length; i++)
             furthest = MathF.Max(furthest, Vector3.DistanceSquared(corners[i], center));
 
-        // Rounded up a little: the snap below moves the box by up to a texel, and
-        // a radius that exactly touches the corners would clip them afterwards.
+        // Rounded up a little: the snap moves the box by up to a texel, and a
+        // radius that exactly touches the corners would clip them afterwards.
         radius = MathF.Sqrt(furthest) * 1.02f;
     }
 

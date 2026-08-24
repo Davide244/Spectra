@@ -19,6 +19,7 @@ public sealed class ShadowMapTests
 {
     private const int Resolution = 1024;
     private const float Distance = 40f;
+    private const float Near = 0.1f;
 
     private static Camera MakeCamera(Vector3 position, Vector3 lookAt)
     {
@@ -44,7 +45,7 @@ public sealed class ShadowMapTests
         Vector3 lightDirection = Vector3.Normalize(new Vector3(0.2f, -1f, 0.15f));
 
         Camera baseline = MakeCamera(new Vector3(0f, 2f, 10f), new Vector3(0f, 0f, 9f));
-        ShadowMap.TryFitLightMatrix(baseline, lightDirection, Distance, Resolution, out Matrix4x4 first, out float texel)
+        ShadowMap.TryFitLightMatrix(baseline, lightDirection, Near, Distance, Resolution, out Matrix4x4 first, out float texel)
             .ShouldBeTrue();
         float reference = TexelX(probe, first);
 
@@ -55,7 +56,7 @@ public sealed class ShadowMapTests
         {
             float offset = texel * step / 12f;
             Camera moved = MakeCamera(new Vector3(offset, 2f, 10f), new Vector3(offset, 0f, 9f));
-            ShadowMap.TryFitLightMatrix(moved, lightDirection, Distance, Resolution, out Matrix4x4 fit, out _)
+            ShadowMap.TryFitLightMatrix(moved, lightDirection, Near, Distance, Resolution, out Matrix4x4 fit, out _)
                 .ShouldBeTrue();
 
             float shift = TexelX(probe, fit) - reference;
@@ -63,6 +64,54 @@ public sealed class ShadowMapTests
                 $"after a {offset:0.####} unit camera move the probe shifted {shift:0.####} texels, " +
                 "which is not a whole number: the light box is sliding rather than snapping");
         }
+    }
+
+    [Fact]
+    public void The_near_cascade_is_much_finer_than_the_far_one()
+    {
+        // The whole reason cascades exist. One box over the whole range puts a
+        // texel centimetres across right where the camera is looking; four
+        // boxes put the near one millimetres across. If this ratio ever
+        // collapses toward 1 the splits have gone uniform and the sharpness
+        // near the camera has quietly gone with them.
+        Camera camera = MakeCamera(new Vector3(0f, 2f, 10f), Vector3.Zero);
+        Vector3 direction = Vector3.Normalize(new Vector3(0.2f, -1f, 0.15f));
+
+        Span<float> splits = stackalloc float[ShadowMap.MaxCascades];
+        ShadowMap.ComputeSplits(Near, Distance, 4, 0.88f, splits);
+
+        ShadowMap.TryFitLightMatrix(camera, direction, Near, splits[0], Resolution, out _, out float nearest)
+            .ShouldBeTrue();
+        ShadowMap.TryFitLightMatrix(camera, direction, splits[2], splits[3], Resolution, out _, out float coarsest)
+            .ShouldBeTrue();
+
+        (coarsest / nearest).ShouldBeGreaterThan(5f,
+            $"the near cascade's texel is {nearest:0.0000} and the far one's {coarsest:0.0000}; " +
+            "cascades that do not differ are one cascade with extra passes");
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public void The_splits_cover_the_whole_range_and_never_go_backwards(int count)
+    {
+        // Each cascade starts where the previous ended, so a gap or an inversion
+        // is a band of the world no cascade owns: shadows would simply stop
+        // there, which reads as a bug in the shadow rather than in the splits.
+        Span<float> splits = stackalloc float[ShadowMap.MaxCascades];
+        ShadowMap.ComputeSplits(Near, Distance, count, 0.88f, splits);
+
+        float previous = Near;
+        for (int i = 0; i < count; i++)
+        {
+            splits[i].ShouldBeGreaterThan(previous);
+            previous = splits[i];
+        }
+
+        // The last split IS the shadow distance, not whatever the blend rounded
+        // to: it is the number the caller set and the documentation quotes.
+        splits[count - 1].ShouldBe(Distance, 1e-4f);
     }
 
     // Where a world point lands along the shadow map's x axis, in texels.
@@ -83,9 +132,9 @@ public sealed class ShadowMapTests
         Camera facingX = MakeCamera(new Vector3(0f, 2f, 0f), new Vector3(1f, 2f, 0f));
         Camera diagonal = MakeCamera(new Vector3(0f, 2f, 0f), new Vector3(1f, 2.6f, -1f));
 
-        ShadowMap.TryFitLightMatrix(facingZ, -Vector3.UnitY, Distance, Resolution, out _, out float a).ShouldBeTrue();
-        ShadowMap.TryFitLightMatrix(facingX, -Vector3.UnitY, Distance, Resolution, out _, out float b).ShouldBeTrue();
-        ShadowMap.TryFitLightMatrix(diagonal, -Vector3.UnitY, Distance, Resolution, out _, out float c).ShouldBeTrue();
+        ShadowMap.TryFitLightMatrix(facingZ, -Vector3.UnitY, Near, Distance, Resolution, out _, out float a).ShouldBeTrue();
+        ShadowMap.TryFitLightMatrix(facingX, -Vector3.UnitY, Near, Distance, Resolution, out _, out float b).ShouldBeTrue();
+        ShadowMap.TryFitLightMatrix(diagonal, -Vector3.UnitY, Near, Distance, Resolution, out _, out float c).ShouldBeTrue();
 
         b.ShouldBe(a, 1e-5f);
         c.ShouldBe(a, 1e-5f);
@@ -99,7 +148,7 @@ public sealed class ShadowMapTests
         // screen, which reads as shadows that stop halfway across the floor.
         Camera camera = MakeCamera(new Vector3(0f, 3f, 12f), Vector3.Zero);
         ShadowMap.TryFitLightMatrix(
-            camera, Vector3.Normalize(new Vector3(0.3f, -1f, 0.2f)), Distance, Resolution,
+            camera, Vector3.Normalize(new Vector3(0.3f, -1f, 0.2f)), Near, Distance, Resolution,
             out Matrix4x4 lightViewProjection, out _).ShouldBeTrue();
 
         // Points along the view axis, from just in front of the camera to the
@@ -128,7 +177,7 @@ public sealed class ShadowMapTests
     public void A_light_with_no_direction_fits_nothing()
     {
         Camera camera = MakeCamera(new Vector3(0f, 2f, 5f), Vector3.Zero);
-        ShadowMap.TryFitLightMatrix(camera, Vector3.Zero, Distance, Resolution, out _, out _)
+        ShadowMap.TryFitLightMatrix(camera, Vector3.Zero, Near, Distance, Resolution, out _, out _)
             .ShouldBeFalse();
     }
 
@@ -139,7 +188,7 @@ public sealed class ShadowMapTests
         // obvious up-reference is parallel to it. A NaN basis here would produce
         // a matrix full of NaN and a shadow map full of nothing.
         Camera camera = MakeCamera(new Vector3(0f, 2f, 5f), Vector3.Zero);
-        ShadowMap.TryFitLightMatrix(camera, -Vector3.UnitY, Distance, Resolution, out Matrix4x4 m, out _)
+        ShadowMap.TryFitLightMatrix(camera, -Vector3.UnitY, Near, Distance, Resolution, out Matrix4x4 m, out _)
             .ShouldBeTrue();
 
         float sum = m.M11 + m.M22 + m.M33 + m.M44 + m.M41 + m.M42 + m.M43;

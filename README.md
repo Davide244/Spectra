@@ -110,8 +110,8 @@ exist at all:
   landed.** Shadows, post processing, anti-aliasing, material previews and the
   Uno viewport were all waiting on it; `R4` has since put the linear-to-display
   conversion in exactly one place on top of it, and the deferred G-buffer and
-  its Cook-Torrance light pass on top of that, and one directional shadow
-  cascade on top of that. Cascades (`R7`) are next in that chain.
+  its Cook-Torrance light pass on top of that, and four cascaded shadow maps on
+  top of that.
 - **Uncapped lights wait on blend state, which no backend has.** Deferred
   removes the reason for a light cap, but the version that actually removes it
   draws a bounding volume per light and adds the results, and today D3D11 never
@@ -133,7 +133,7 @@ exist at all:
 | **F** Foundations | [ROADMAP](ROADMAP.md) | F1, F2 | F3 ViewDrawer, F4 diagnostics contract |
 | **E** Editor | [ROADMAP](ROADMAP.md) | E1 to E5 | E7 face texturing, E6 structural edits |
 | **P** Persistence, entities | [ROADMAP](ROADMAP.md), [data-model](docs/data-model.md) | P7a, P7b | P2 map format, P11a play/stop |
-| **R** Rendering | [ROADMAP](ROADMAP.md) | R1 PSO key, R2 sRGB, R3 targets, R4 tone mapping, R5 array uniforms, R8 lights, deferred + PBR, R6 shadows | R7 cascades, blend state, IBL |
+| **R** Rendering | [ROADMAP](ROADMAP.md) | R1 PSO key, R2 sRGB, R3 targets, R4 tone mapping, R5 array uniforms, R8 lights, deferred + PBR, R6/R7 cascaded shadows | blend state, IBL, D3D12 pipelining |
 | **S** Shader authoring | [ROADMAP](ROADMAP.md) | the language itself, GLSL, HLSL, LSP | S2 parameter scopes, S5 type checker |
 | **Y** Physics | [physics](docs/physics.md) | Y0 to Y5 | Y6 dynamic bodies, Y7 kinematic parts |
 | **A** Animation | this README, for now | pose primitives | import, then R5, then skinning |

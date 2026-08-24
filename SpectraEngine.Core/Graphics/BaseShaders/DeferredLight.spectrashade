@@ -47,13 +47,6 @@ shader DeferredLight {
     [Binding(0)] cbuffer Frame {
         mat4 uInverseViewProjection;
 
-        // World position straight to a shadow-map lookup: xy is the texture
-        // coordinate and z is directly comparable with what the map stores.
-        // EVERY convention difference between the backends is folded into this
-        // matrix on the CPU (see ShadowMap.WorldToShadow), so nothing here has
-        // to know which way up a render target is.
-        mat4 uWorldToShadow;
-
         vec3 uCameraPosition;
         float uAmbient;
 
@@ -76,15 +69,19 @@ shader DeferredLight {
         // flag because the second one costs a second map and not a rewrite.
         int uShadowLightIndex;
 
+        // How many cascades were fitted this frame.
+        int uCascadeCount;
+
         // 0 disables shadowing entirely, 1 is fully dark in shadow. Anything
         // between fakes the bounce light that an ambient term this crude cannot
         // provide, which is why it is exposed rather than hardcoded to 1.
         float uShadowStrength;
 
-        // One shadow texel in texture coordinates: the PCF kernel's step.
+        // One texel in a CASCADE's own 0..1 space: the filter kernel's step.
         float uShadowTexel;
 
-        // World units to push a sample along its normal before comparing, and a
+        // Texels (not world units) to push a sample along its normal before
+        // comparing, scaled per cascade by that cascade's own texel size, and a
         // small constant off the compared depth for what that does not catch.
         float uShadowNormalBias;
         float uShadowDepthBias;
@@ -93,6 +90,20 @@ shader DeferredLight {
     [Binding(1)] cbuffer Lights {
         vec4[8] uLightPositions;
         vec4[8] uLightColors;
+    }
+
+    [Binding(2)] cbuffer Shadows {
+        // World position to a lookup in one cascade's OWN 0..1 space. Every
+        // convention difference between the backends is folded into these on the
+        // CPU (see ShadowMap.WorldToShadow), so nothing here has to know which
+        // way up a render target is.
+        mat4[4] uWorldToShadow;
+
+        // Per cascade: the atlas quadrant as (u, v, scale), and that cascade's
+        // world texel size in w. The bias reads w because a texel of the far
+        // cascade is many times the size of a near one, and one global offset
+        // would either do nothing out there or eat every near shadow whole.
+        vec4[4] uCascadeRects;
     }
 
     [Binding(0)] sampler2D uAlbedoAo;
@@ -194,37 +205,58 @@ shader DeferredLight {
             return 1.0;
         }
 
-        // NORMAL OFFSET rather than a depth bias, widened as the light gets
-        // more grazing. A surface lit edge-on spans many shadow texels in
-        // depth within one texel of area, so the constant that stops acne
-        // there would detach every shadow from its caster everywhere else.
-        // Moving the sample point sideways out of its own shadow costs no such
-        // trade, and it is a world-space quantity, so no backend constant.
-        float ndotl = Math.Max(Math.Dot(n, l), 0.0);
-        float grazing = 1.0 - ndotl;
-        vec3 offset = n * (uShadowNormalBias * (1.0 + grazing * 3.0));
+        // Pick the sharpest cascade that contains this point. The near ones are
+        // small and are tested first, so most of the screen resolves on the
+        // first iteration; a point past the last cascade falls out of the loop
+        // unchosen and is simply lit, which is the shadow distance showing
+        // itself honestly rather than as a hard black edge.
+        int chosen = -1;
+        for (int k = 0; k < uCascadeCount; k = k + 1) {
+            if (chosen < 0) {
+                vec4 probe = uWorldToShadow[k] * vec4(worldPosition, 1.0);
+                vec3 p = probe.xyz / probe.w;
+                float inside = Math.Step(0.0, p.x) * Math.Step(p.x, 1.0)
+                             * Math.Step(0.0, p.y) * Math.Step(p.y, 1.0)
+                             * Math.Step(p.z, 1.0);
+                if (inside > 0.0) {
+                    chosen = k;
+                }
+            }
+        }
 
-        vec4 coords = uWorldToShadow * vec4(worldPosition + offset, 1.0);
-        vec3 s = coords.xyz / coords.w;
-
-        // Outside the map, or past its far plane: lit. An open world always has
-        // more world than shadow map, and the alternative to admitting that is
-        // a hard black edge at the shadow distance.
-        float inside = Math.Step(0.0, s.x) * Math.Step(s.x, 1.0)
-                     * Math.Step(0.0, s.y) * Math.Step(s.y, 1.0)
-                     * Math.Step(s.z, 1.0);
-        if (inside <= 0.0) {
+        if (chosen < 0) {
             return 1.0;
         }
+
+        vec4 rect = uCascadeRects[chosen];
+
+        // NORMAL OFFSET rather than a depth bias, widened as the light gets
+        // more grazing. A surface lit edge-on spans many shadow texels in depth
+        // within one texel of area, so the constant that stops acne there would
+        // detach every shadow from its caster everywhere else. Moving the sample
+        // sideways out of its own shadow costs no such trade, and it is a
+        // world-space quantity, so no backend constant.
+        float ndotl = Math.Max(Math.Dot(n, l), 0.0);
+        float grazing = 1.0 - ndotl;
+        vec3 offset = n * (rect.w * uShadowNormalBias * (1.0 + grazing * 3.0));
+
+        vec4 coords = uWorldToShadow[chosen] * vec4(worldPosition + offset, 1.0);
+        vec3 s = coords.xyz / coords.w;
 
         // 3x3 PCF. The taps are point samples because filtering DEPTH averages
         // two distances into one that is at neither surface; what gets averaged
         // is the nine comparison RESULTS, which is the whole idea.
+        //
+        // Clamped inside the cascade BEFORE the atlas offset: a tap that walked
+        // off the edge of one quadrant would land in the next cascade's, and
+        // read a depth from a completely different projection.
         float reference = s.z - uShadowDepthBias;
         float sum = 0.0;
         for (float y = -1.0; y <= 1.0; y = y + 1.0) {
             for (float x = -1.0; x <= 1.0; x = x + 1.0) {
-                vec2 tap = s.xy + vec2(x, y) * uShadowTexel;
+                vec2 local = s.xy + vec2(x, y) * uShadowTexel;
+                local = Math.Clamp(local, vec2(0.0, 0.0), vec2(1.0, 1.0));
+                vec2 tap = rect.xy + local * rect.z;
                 sum = sum + Math.Step(reference, uShadowMap.Sample(tap).r);
             }
         }

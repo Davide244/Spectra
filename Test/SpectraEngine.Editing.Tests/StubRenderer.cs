@@ -30,6 +30,9 @@ internal sealed class StubRenderer : Renderer
     public override bool TrySelectPipeline(string name) =>
         string.Equals(name, "Stub", StringComparison.OrdinalIgnoreCase);
 
+    // No rasteriser, so no viewport. Present because the shadow atlas needs one.
+    protected override void SetViewportCore(int x, int y, int width, int height) { }
+
     public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
         => throw new NotSupportedException("StubRenderer creates no GPU resources.");
 
