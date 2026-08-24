@@ -919,6 +919,7 @@ public abstract class Renderer
             // once against one scene's scale.
             .SetUniform("uShadowNormalBias", map?.NormalBias ?? 0f)
             .SetUniform("uShadowDepthBias", map?.DepthBias ?? 0f)
+            .SetUniform("uShadowMaxSlope", map?.MaxSlope ?? 1f)
             .SetTexture("uShadowMap", 5, map?.Depth ?? gbuffer.Depth);
 
         // The arrays must be written whole and must be the length the shader

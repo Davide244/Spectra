@@ -184,6 +184,19 @@ what makes a city's skyline cost a handful of draws instead of thousands.
 **Buys:** enormous at open-world scale. **Costs:** a bake step; belongs with the
 cook pipeline. **Blocks on:** `D` arc.
 
+### 5.2b A cheaper shadow filter
+
+The filter takes four bilinearly weighted samples, sixteen texture fetches, and
+that is 0.65 ms of a 7 ms frame at 1080p on an Intel UHD 770. One weighted
+sample would be four fetches and should be enough on its own: the saw-tooth
+combing the weighting exists to fix comes from snapping to the texel grid, not
+from a narrow kernel.
+
+**A first attempt at that produced no shadow at all** in the pixel test, with the
+wide path passing and the single path failing on the same scene. The cause is
+not understood and the switch was withdrawn rather than shipped broken. Worth
+returning to with a debug capture of the raw comparison value.
+
 ### 5.3 Shadow LOD
 
 Distant cascades do not need full-detail casters, and small objects need not

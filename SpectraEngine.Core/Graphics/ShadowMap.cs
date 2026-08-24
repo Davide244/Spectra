@@ -140,6 +140,19 @@ public sealed class ShadowMap : IDisposable
     /// <summary>Small constant subtracted from the compared depth, for what the normal offset does not catch.</summary>
     public float DepthBias { get; set; } = 0.0012f;
 
+    /// <summary>
+    /// Ceiling on the slope factor both biases are scaled by.
+    /// </summary>
+    /// <remarks>
+    /// The slope term is <c>tan</c> of the angle between the surface normal and
+    /// the light, which is the right quantity and diverges: a surface seen
+    /// edge-on would ask for an unbounded offset and its shadow would detach
+    /// entirely. Clamping trades a little acne at extreme angles, where the
+    /// surface is barely lit and it cannot be seen anyway, for shadows that stay
+    /// attached everywhere else.
+    /// </remarks>
+    public float MaxSlope { get; set; } = 8f;
+
     /// <summary>World-to-light-clip for one cascade, for the depth pass to draw with.</summary>
     public Matrix4x4 LightViewProjectionAt(int cascade) => _lightViewProjection[cascade];
 
