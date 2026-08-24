@@ -186,16 +186,46 @@ cook pipeline. **Blocks on:** `D` arc.
 
 ### 5.2b A cheaper shadow filter
 
-The filter takes four bilinearly weighted samples, sixteen texture fetches, and
-that is 0.65 ms of a 7 ms frame at 1080p on an Intel UHD 770. One weighted
-sample would be four fetches and should be enough on its own: the saw-tooth
-combing the weighting exists to fix comes from snapping to the texel grid, not
-from a narrow kernel.
+The filter takes four bilinearly weighted samples on a rotated circle: sixteen
+texture fetches, and the whole frame is 7.01 ms at 1080p on an Intel UHD 770.
+One weighted sample would be four fetches, and the question is only how much
+extra softness the other three buy.
 
-**A first attempt at that produced no shadow at all** in the pixel test, with the
-wide path passing and the single path failing on the same scene. The cause is
-not understood and the switch was withdrawn rather than shipped broken. Worth
-returning to with a debug capture of the raw comparison value.
+Two things are now known that were not when this section was first written. An
+earlier note here claimed a single-sample version "produced no shadow at all";
+it does not reproduce against the current shader, so that observation belonged
+to a bug since fixed rather than to the idea. And the saw-tooth this filter was
+built to fight is **not** a filter problem at all: see §5.2c.
+
+### 5.2c More shadow-map resolution where the camera is looking
+
+The residual saw-tooth on a shadow edge is **resolution, not error**. A caster's
+silhouette is rasterised onto the map's texel grid, so a straight edge is stored
+as a staircase: steps one texel tall, and for an edge at a shallow angle to the
+grid, many texels long. No filter shortens the runs, and a hardware comparison
+sampler would produce the same staircase. Rotating the tap pattern per pixel
+turns it from a comb into grain, which is what ships, but the error is still
+there.
+
+The measurement that pins it: cascade 0's world texel is **4.8 mm** in the demo,
+and at a wall 1.3 units from the eye that is 2.5 screen pixels, so the map is
+being magnified. Cutting `ShadowMap.Distance` from 60 to 15 shrinks cascade 0's
+slice by about 4x and the saw-tooth very nearly disappears.
+
+So the options are all "spend more texels near the camera":
+
+- **A larger atlas.** 2048 to 4096 quarters the texel size and costs 64 MB plus
+  4x the depth-pass fill. Blunt, and it pays for the far cascades too.
+- **A better split.** Cascade 0 currently runs 0.1 to 2.24 units, and its
+  bounding SPHERE is 4.9 units across for a frustum slice far smaller than that.
+  Most of the near cascade is empty (visible in a dump of the atlas). Tightening
+  the near plane used for the split, or bounding the slice more cleverly, buys
+  texel density for nothing.
+- **A fifth cascade.** Needs an atlas that is not 2x2.
+
+Measure before choosing: the sphere bound is what makes the map stable under
+camera rotation, and any scheme that replaces it has to keep that property or it
+trades a saw-tooth for a shimmer.
 
 ### 5.3 Shadow LOD
 

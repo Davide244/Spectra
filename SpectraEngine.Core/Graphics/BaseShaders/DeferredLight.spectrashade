@@ -64,6 +64,10 @@ shader DeferredLight {
         // half of the frustum.
         vec2 uDepthToNdc;
 
+        // The pass's pixel size. Only the shadow filter uses it, to recover a
+        // pixel coordinate from uv and dither its tap rotation with it.
+        vec2 uTargetSize;
+
         // Which light in the array the shadow map was rendered for, or -1 when
         // nothing casts this frame. One caster today; an index rather than a
         // flag because the second one costs a second map and not a rewrite.
@@ -80,15 +84,13 @@ shader DeferredLight {
         // One texel in a CASCADE's own 0..1 space: the filter kernel's step.
         float uShadowTexel;
 
-        // Texels (not world units) to push a sample along its normal before
-        // comparing, scaled per cascade by that cascade's own texel size, and a
-        // small constant off the compared depth for what that does not catch.
-        float uShadowNormalBias;
+        // A small constant off the compared depth, against depth-buffer
+        // quantisation. SMALL, because the acne it used to fight is fixed at
+        // raster time now (see DepthBias) rather than here.
         float uShadowDepthBias;
 
-        // Ceiling on the slope term. Without one, a surface seen exactly edge-on
-        // asks for an unbounded offset and its shadow detaches entirely.
-        float uShadowMaxSlope;
+        // Radius of the PCF tap circle, in texels of the chosen cascade.
+        float uShadowFilterRadius;
     }
 
     [Binding(1)] cbuffer Lights {
@@ -184,7 +186,7 @@ shader DeferredLight {
 
             float shadow = 1.0;
             if (i == uShadowLightIndex) {
-                shadow = ShadowFactor(worldPosition, n, l);
+                shadow = ShadowFactor(worldPosition, input.uv * uTargetSize);
             }
 
             total = total + Shade(n, v, l, diffuseColor, f0, roughness) * radiance * attenuation * shadow;
@@ -229,7 +231,7 @@ shader DeferredLight {
     }
 
     // How much of this light reaches the point: 1 fully lit, 0 fully shadowed.
-    float ShadowFactor(vec3 worldPosition, vec3 n, vec3 l) {
+    float ShadowFactor(vec3 worldPosition, vec2 pixel) {
         if (uShadowStrength <= 0.0) {
             return 1.0;
         }
@@ -259,71 +261,55 @@ shader DeferredLight {
 
         vec4 rect = uCascadeRects[chosen];
 
-        // NORMAL OFFSET rather than a depth bias, widened as the light gets
-        // more grazing. A surface lit edge-on spans many shadow texels in depth
-        // within one texel of area, so the constant that stops acne there would
-        // detach every shadow from its caster everywhere else. Moving the sample
-        // sideways out of its own shadow costs no such trade, and it is a
-        // world-space quantity, so no backend constant.
-        // SLOPE-SCALED, by the actual tangent rather than by a linear stand-in
-        // for it. How far a surface's depth moves across one shadow texel is
-        // proportional to tan(angle between the normal and the light), which
-        // diverges as the surface turns edge-on; (1 - N.L) rises to 1 and stops,
-        // so a capped multiple of it is always too small somewhere. Too small
-        // shows up as a regular saw-tooth comb along the shadow boundary at
-        // exactly shadow-texel frequency: the surface is shadowing itself one
-        // texel at a time.
-        float ndotl = Math.Max(Math.Dot(n, l), 0.0);
-        // The Max under the root is not defensive tidying. A surface facing
-        // straight at the light gives a dot product that rounds to just over 1,
-        // so 1 - cos*cos goes slightly NEGATIVE, the root is NaN, and every
-        // comparison against it is false: the shadow vanishes completely rather
-        // than glitching. It only happens on surfaces square to the light, which
-        // is why an angled demo sun never showed it and a pixel test with a
-        // light pointing straight down did.
-        float cosine = Math.Clamp(ndotl, 0.08, 1.0);
-        float sinSquared = Math.Max(1.0 - cosine * cosine, 0.0);
-        float slope = Math.Min(Math.Sqrt(sinSquared) / cosine, uShadowMaxSlope);
-
-        vec3 offset = n * (rect.w * uShadowNormalBias * (1.0 + slope));
-
-        vec4 coords = uWorldToShadow[chosen] * vec4(worldPosition + offset, 1.0);
+        // NO NORMAL OFFSET. There was one, scaled by tan of the angle between
+        // the surface and the light and clamped at eight, and removing it is
+        // most of what this shader gained. It existed to stop acne, which it
+        // did by pushing the sample up to twelve texels off its own surface;
+        // since the push is along the NORMAL, the shadow slid several
+        // centimetres sideways, by a DIFFERENT amount on every face, so a
+        // shadow crossing a corner visibly failed to meet itself. The depth
+        // pass now biases each caster by its own depth slope at raster time,
+        // which is the same fix applied to the actual cause and does not move
+        // the shadow at all. See DepthBias.
+        vec4 coords = uWorldToShadow[chosen] * vec4(worldPosition, 1.0);
         vec3 s = coords.xyz / coords.w;
 
-        // PCF with BILINEAR WEIGHTS, which is the part that stops the edge
-        // combing. Nine point taps all land on the texel grid, so they can only
-        // ever answer "is this texel's centre shadowed" and never "where inside
-        // the texel does the edge fall": the boundary then snaps to texel
-        // centres and a 3x3 box over that staircase renders it as a row of
-        // regular saw teeth. Weighting the four texels around each sample by
-        // where the sample actually sits between them recovers the sub-texel
-        // position, which is exactly what a hardware comparison sampler does
-        // for free and what this engine cannot ask for, because SpectraShade
-        // has no sampler2DShadow.
+        float reference = s.z - uShadowDepthBias;
+
+        // FOUR TAPS ON A CIRCLE, ROTATED PER PIXEL. Each is bilinearly
+        // weighted, so sixteen fetches, measured at 7.01 ms/frame at 1080p on
+        // an Intel UHD 770.
         //
-        // Four weighted samples on a half-texel lattice, so the kernel still
-        // spans about three texels and the penumbra width is unchanged. Sixteen
-        // fetches, against nine for the point taps this replaces, and measured
-        // at 0.65 ms of a 7 ms frame at 1080p on an Intel UHD 770. A single
-        // weighted sample would be four fetches and should be enough on its own,
-        // since the combing came from grid snapping rather than kernel width,
-        // but the obvious version of that produced no shadow at all in
-        // DeferredGlTests and the reason is not yet understood. Shipping the
-        // measured path rather than the plausible one.
-        float reference = s.z - uShadowDepthBias * (1.0 + slope);
-        // ONE weighted sample already removes the combing, because the combing
-        // came from grid snapping and not from kernel width; it costs four
-        // fetches, fewer than the nine unweighted taps it replaces. Four samples
-        // on a half-texel lattice additionally widen the penumbra, at sixteen
-        // fetches, which measured 0.65 ms at 1080p on an Intel UHD 770. That is
-        // a real choice on low-power hardware rather than a quality default, so
-        // it is a switch.
-        float sum = 0.0;
-        for (float y = -0.5; y <= 0.5; y = y + 1.0) {
-            for (float x = -0.5; x <= 0.5; x = x + 1.0) {
-                sum = sum + CompareBilinear(s.xy + vec2(x, y) * uShadowTexel, rect, reference);
-            }
-        }
+        // The weighting is what lets a tap answer "where inside this texel does
+        // the edge fall" rather than only "is this texel's centre shadowed",
+        // which is what a hardware comparison sampler does for free and what
+        // this engine cannot ask for, because SpectraShade has no
+        // sampler2DShadow.
+        //
+        // The ROTATION is the part that matters here, and it is nearly free.
+        //
+        // What is left after the bias work above is not error, it is
+        // RESOLUTION: a caster's silhouette is rasterised onto the map's texel
+        // grid, so a straight edge is stored as a staircase whose steps are one
+        // texel tall and, for an edge at a shallow angle to the grid, many
+        // texels long. Filtering spreads each step into a ramp but cannot
+        // shorten the runs between them, so the edge keeps a periodic
+        // saw-tooth. A hardware comparison sampler would produce exactly the
+        // same one; it is not a defect in this filter.
+        //
+        // Periodicity is what makes it visible. The eye finds a repeating comb
+        // instantly and ignores the same amount of error scattered. Rotating
+        // the tap pattern by a per-pixel angle turns the comb into grain at no
+        // extra fetches, which is the same trade every engine that uses a
+        // rotated Poisson disk is making.
+        float angle = 6.2831853 * Math.Fract(
+            52.9829189 * Math.Fract(0.06711056 * pixel.x + 0.00583715 * pixel.y));
+        vec2 spin = vec2(Math.Cos(angle), Math.Sin(angle)) * (uShadowFilterRadius * uShadowTexel);
+
+        float sum = CompareBilinear(s.xy + vec2(spin.x, spin.y), rect, reference)
+                  + CompareBilinear(s.xy + vec2(-spin.y, spin.x), rect, reference)
+                  + CompareBilinear(s.xy + vec2(-spin.x, -spin.y), rect, reference)
+                  + CompareBilinear(s.xy + vec2(spin.y, -spin.x), rect, reference);
 
         return Math.Mix(1.0, sum * 0.25, uShadowStrength);
     }

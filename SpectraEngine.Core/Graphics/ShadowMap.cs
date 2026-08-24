@@ -122,36 +122,48 @@ public sealed class ShadowMap : IDisposable
     public float SplitBlend { get; set; } = 0.88f;
 
     /// <summary>
-    /// How far a sample is pushed along its surface normal before the depth
-    /// comparison, in units of the CHOSEN cascade's texel.
+    /// The rasterizer's depth offset while the map is drawn: THE acne fix.
     /// </summary>
     /// <remarks>
-    /// <b>Normal offset rather than a depth bias, and per cascade rather than
-    /// global.</b> A constant added to the compared depth has to be tuned
-    /// against the clip-Z convention, which differs between backends, and trades
-    /// acne for detached shadows wherever the surface is steep. Offsetting along
-    /// the normal is a world-space quantity that scales with the texel
-    /// footprint, so the near cascade gets a small offset and the far one a
-    /// large one for free. A single global value would be either useless in the
-    /// far cascade or would eat the near one's shadows whole.
+    /// <para>
+    /// <b>This is the bias that costs nothing, and <see cref="CompareBias"/>
+    /// only exists for the sliver it cannot reach.</b> Acne comes from a
+    /// receiver comparing its own
+    /// ramping depth against a stored depth that is constant across each texel;
+    /// their difference is a sawtooth at texel frequency, and the slope-scaled
+    /// term is multiplied by exactly the quantity that sets that sawtooth's
+    /// height. See <see cref="Graphics.DepthBias"/>.
+    /// </para>
+    /// <para>
+    /// The numbers are in the graphics API's own units and are the standard
+    /// shadow-map starting point. They need no per-cascade scaling, unlike
+    /// everything else here, because a depth-buffer unit is already a fraction
+    /// of that cascade's own ortho depth range.
+    /// </para>
     /// </remarks>
-    public float NormalBias { get; set; } = 1.4f;
-
-    /// <summary>Small constant subtracted from the compared depth, for what the normal offset does not catch.</summary>
-    public float DepthBias { get; set; } = 0.0012f;
+    public DepthBias RasterBias { get; set; } = new(Constant: 2000, SlopeScaled: 2.5f);
 
     /// <summary>
-    /// Ceiling on the slope factor both biases are scaled by.
+    /// Radius of the PCF tap circle, in texels of the chosen cascade.
     /// </summary>
     /// <remarks>
-    /// The slope term is <c>tan</c> of the angle between the surface normal and
-    /// the light, which is the right quantity and diverges: a surface seen
-    /// edge-on would ask for an unbounded offset and its shadow would detach
-    /// entirely. Clamping trades a little acne at extreme angles, where the
-    /// surface is barely lit and it cannot be seen anyway, for shadows that stay
-    /// attached everywhere else.
+    /// Four taps, each bilinearly weighted, so sixteen fetches whatever this
+    /// says: widening the filter costs nothing but softness. It is a real dial
+    /// rather than a constant because what it trades is a shadow's crispness
+    /// against how much of the map's own texel staircase survives, and those
+    /// are worth different amounts at different map resolutions.
     /// </remarks>
-    public float MaxSlope { get; set; } = 8f;
+    public float FilterRadius { get; set; } = 1.2f;
+
+    /// <summary>Constant subtracted from the compared depth, for the sliver <see cref="RasterBias"/> misses.</summary>
+    /// <remarks>
+    /// Small, and deliberately not slope-scaled: with the raster bias doing the
+    /// real work this is a floor against depth-buffer quantisation rather than a
+    /// tuning dial. Raising it detaches shadows from their casters, which is the
+    /// one failure the light pass cannot compensate for. Named for what it does
+    /// rather than <c>DepthBias</c>, which is the TYPE the raster bias uses.
+    /// </remarks>
+    public float CompareBias { get; set; } = 0.0002f;
 
     /// <summary>World-to-light-clip for one cascade, for the depth pass to draw with.</summary>
     public Matrix4x4 LightViewProjectionAt(int cascade) => _lightViewProjection[cascade];

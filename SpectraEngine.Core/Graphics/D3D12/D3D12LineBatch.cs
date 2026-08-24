@@ -56,7 +56,7 @@ internal sealed unsafe class D3D12LineBatch : IDisposable
         var target = _renderer.CurrentTargetState;
         var pso = _shader.GetPso(
             LineLayout, FillMode.Solid, PrimitiveTopologyType.Line,
-            DepthMode.None, BlendMode.Opaque, in target);
+            DepthMode.None, BlendMode.Opaque, DepthBias.None, in target);
         list->SetPipelineState(pso);
         list->IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
 

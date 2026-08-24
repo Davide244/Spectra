@@ -147,6 +147,91 @@ public sealed class DeferredGlTests
     }
 
     // A ground plane with a plate hanging over the middle of it, lit from
+    [Fact]
+    public void A_lit_surface_with_nothing_over_it_is_not_shadowed_by_itself()
+    {
+        // ACNE, which is the one shadow failure that darkens a surface with no
+        // caster anywhere near it. The ground compares its own depth against a
+        // stored depth sampled at a texel centre: constant across each texel
+        // while the ground's own depth ramps, so their difference is a sawtooth
+        // at texel frequency and every second texel decides it is in shadow.
+        //
+        // GRAZING, because that is where it bites. The steeper the light, the
+        // more depth a surface covers within one texel and the taller the
+        // sawtooth; at this angle a map drawn with no rasterizer depth bias
+        // covers the whole plane in moire. The fix is DepthBias, applied to the
+        // casters as they are drawn, and this test is what says so: delete
+        // ShadowMap.RasterBias and it fails.
+        //
+        // Nothing is above the probe, so the answer is not a matter of degree.
+        // Shadows on must be indistinguishable from shadows off.
+        bool restore = _fixture.Renderer.ShadowsEnabled;
+        try
+        {
+            _fixture.Renderer.ShadowsEnabled = true;
+            (int onR, int onG, int onB) = RenderDeferred(BuildGrazingGroundScene());
+
+            _fixture.Renderer.ShadowsEnabled = false;
+            (int offR, int offG, int offB) = RenderDeferred(BuildGrazingGroundScene());
+
+            int on = onR + onG + onB;
+            int off = offR + offG + offB;
+            (off - on).ShouldBeLessThan(12,
+                $"open ground read {on} with shadows on and {off} with them off; nothing casts onto " +
+                "this pixel, so any difference is the surface shadowing itself");
+        }
+        finally
+        {
+            _fixture.Renderer.ShadowsEnabled = restore;
+        }
+    }
+
+    // One large ground plane and a grazing sun. No caster at all: the only
+    // thing that can darken this is the ground against its own shadow map.
+    private Scene BuildGrazingGroundScene()
+    {
+        OpenGLRenderer renderer = _fixture.Renderer;
+
+        var scene = new Scene("grazing");
+        scene.Camera.Position = new Vector3(0f, 1.2f, 6f);
+        scene.Camera.LookAt(new Vector3(0f, 0f, 0f));
+
+        var (vertices, indices) = Primitives.Cube();
+        Mesh cube = renderer.CreateMesh(vertices, indices, VertexAttribute.StandardLayout);
+        Texture white = renderer.CreateTexture(
+            [255, 255, 255, 255], 1, 1, TextureFormat.Rgba8, TextureColorSpace.Linear,
+            TextureFilter.Nearest, TextureWrap.Clamp);
+
+        var ground = scene.Root.CreateChild("Ground");
+        ground.LocalTransform = new Transform
+        {
+            Position = new Vector3(0f, -0.5f, 0f),
+            Rotation = Quaternion.Identity,
+            Scale = new Vector3(60f, 1f, 60f),
+        };
+        ground.MeshRenderer = new MeshRenderer(cube, new Material(renderer.DefaultShader)
+            .SetVector3("uBaseColor", new Vector3(0.8f, 0.8f, 0.8f))
+            .SetFloat("uRoughness", 0.9f)
+            .SetFloat("uMetallic", 0f)
+            .SetFloat("uAmbientOcclusion", 1f)
+            .SetVector3("uEmissive", Vector3.Zero)
+            .SetFloat("uShadingModel", 0f)
+            .SetTexture("uDiffuse", 0, white));
+
+        // Barely off horizontal: the ground covers many shadow texels of depth
+        // within one texel of area, which is the acne case.
+        var sun = scene.Root.CreateChild("Sun");
+        sun.LocalRotation = Light.RotationForDirection(new Vector3(-0.97f, -0.24f, 0f));
+        sun.Light = new Light
+        {
+            Kind = LightKind.Directional,
+            Color = new Vector3(1f, 1f, 1f),
+            Intensity = 12f,
+        };
+
+        return scene;
+    }
+
     // straight above. The camera looks along the ground rather than down at it,
     // so the plate is above the line of sight and never occludes the pixel whose
     // shadow it casts.

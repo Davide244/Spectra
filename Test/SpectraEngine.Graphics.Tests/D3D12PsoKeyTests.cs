@@ -54,6 +54,19 @@ public sealed class D3D12PsoKeyTests
         Assert.NotEqual(Key(blend: BlendMode.Opaque), Key(blend: BlendMode.AlphaBlend));
     }
 
+    [Fact]
+    public void The_depth_bias_separates_two_keys()
+    {
+        // The shadow pass draws the same meshes, with the same layout, into a
+        // depth-only target, differing from every other pass ONLY in its
+        // rasterizer depth offset. Leave that out of the key and the pass is
+        // handed an unbiased pipeline, the map records every caster's depth
+        // exactly, and every lit surface shadows itself. See DepthBias.
+        Assert.NotEqual(Key(bias: DepthBias.None), Key(bias: new DepthBias(2000, 2.5f)));
+        Assert.NotEqual(Key(bias: new DepthBias(2000, 2.5f)), Key(bias: new DepthBias(2000, 3f)));
+        Assert.NotEqual(Key(bias: new DepthBias(2000, 2.5f)), Key(bias: new DepthBias(3000, 2.5f)));
+    }
+
     [Theory]
     // R2 moved the baseline: the back buffer's own view is the _SRGB one now, so
     // the row that varies the colour format is the plain _UNORM it used to be,
@@ -141,10 +154,12 @@ public sealed class D3D12PsoKeyTests
         PrimitiveTopologyType topology = PrimitiveTopologyType.Triangle,
         DepthMode depth = DepthMode.TestWrite,
         BlendMode blend = BlendMode.Opaque,
+        DepthBias bias = default,
         D3D12TargetState? target = null)
     {
         D3D12TargetState state = target ?? D3D12TargetState.BackBuffer;
-        return new D3D12PsoKey(layout ?? Layout(Format.FormatR32G32B32Float), fill, topology, depth, blend, in state);
+        return new D3D12PsoKey(
+            layout ?? Layout(Format.FormatR32G32B32Float), fill, topology, depth, blend, bias, in state);
     }
 
     private static D3D12VertexLayout Layout(Format firstElementFormat) => new(

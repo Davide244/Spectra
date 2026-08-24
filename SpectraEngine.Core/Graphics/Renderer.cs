@@ -643,6 +643,38 @@ public abstract class Renderer
     private readonly RenderView _shadowView = new();
 
     /// <summary>
+    /// The depth offset the rasterizer is currently applying. Ambient state,
+    /// like the fill mode, because it belongs to a PASS rather than to a draw.
+    /// </summary>
+    public DepthBias CurrentDepthBias { get; private set; }
+
+    /// <summary>
+    /// Sets the rasterizer's depth offset for the draws that follow. Idempotent.
+    /// </summary>
+    /// <remarks>
+    /// Only the shadow pass uses this today, and it puts it back to
+    /// <see cref="DepthBias.None"/> before it returns: a bias left on would
+    /// offset the camera's own depth pass and produce z-fighting nobody would
+    /// connect to shadows.
+    /// </remarks>
+    public void SetDepthBias(DepthBias bias)
+    {
+        if (bias == CurrentDepthBias) return;
+        CurrentDepthBias = bias;
+        ApplyDepthBias(bias);
+    }
+
+    /// <summary>
+    /// Makes <paramref name="bias"/> current on this backend.
+    /// </summary>
+    /// <remarks>
+    /// Immediate on OpenGL and D3D11, which have rasterizer state objects. On
+    /// D3D12 the bias is baked into a pipeline state, so that backend records
+    /// the value and lets it reach the PSO key instead.
+    /// </remarks>
+    protected virtual void ApplyDepthBias(DepthBias bias) { }
+
+    /// <summary>
     /// Whether the frame's first directional light casts a shadow. On by
     /// default; off costs nothing and is the fastest way to tell a shadow bug
     /// from a lighting one.
@@ -709,6 +741,14 @@ public abstract class Renderer
         using var measured = Profiler.Measure(Diagnostics.FramePhase.Shadows);
 
         BeginPass(map.Target, PassClear.DepthOnly);
+
+        // THE ACNE FIX, and the reason the light pass gets to bias gently.
+        // Slope-scaled at raster time pushes each caster back by what that
+        // caster's own depth slope needs, which is the quantity that produces
+        // acne in the first place; every alternative is a constant tuned for
+        // the worst surface on screen and paid for by every other one. See
+        // DepthBias.
+        SetDepthBias(map.RasterBias);
         try
         {
             for (int cascade = 0; cascade < map.CascadeCount; cascade++)
@@ -731,6 +771,7 @@ public abstract class Renderer
         }
         finally
         {
+            SetDepthBias(DepthBias.None);
             EndPass();
         }
 
@@ -913,13 +954,9 @@ public abstract class Renderer
             .SetUniform("uCascadeCount", map?.CascadeCount ?? 0)
             .SetUniform("uShadowStrength", casting ? ShadowStrength : 0f)
             .SetUniform("uShadowTexel", map?.TexelSize ?? 0f)
-            // In TEXELS: the shader scales it by the chosen cascade's own world
-            // texel size, because the offset that stops acne is a property of
-            // how coarse the map is right there, not a constant somebody tuned
-            // once against one scene's scale.
-            .SetUniform("uShadowNormalBias", map?.NormalBias ?? 0f)
-            .SetUniform("uShadowDepthBias", map?.DepthBias ?? 0f)
-            .SetUniform("uShadowMaxSlope", map?.MaxSlope ?? 1f)
+            .SetUniform("uShadowDepthBias", map?.CompareBias ?? 0f)
+            .SetUniform("uShadowFilterRadius", map?.FilterRadius ?? 1f)
+            .SetUniform("uTargetSize", new Vector2(PassSize.X, PassSize.Y))
             .SetTexture("uShadowMap", 5, map?.Depth ?? gbuffer.Depth);
 
         // The arrays must be written whole and must be the length the shader

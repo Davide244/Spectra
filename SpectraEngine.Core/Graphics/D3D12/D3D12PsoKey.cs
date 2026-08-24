@@ -105,6 +105,15 @@ internal readonly struct D3D12PsoKey : IEquatable<D3D12PsoKey>
     public readonly PrimitiveTopologyType Topology;
     public readonly DepthMode Depth;
     public readonly BlendMode Blend;
+
+    /// <summary>
+    /// The rasterizer depth offset. In the key because D3D12 bakes it into the
+    /// pipeline state: the shadow pass draws the same meshes with the same
+    /// layout into the same target format as nothing else does, and without
+    /// this it would be handed the unbiased pipeline the camera pass compiled.
+    /// </summary>
+    public readonly DepthBias Bias;
+
     public readonly D3D12TargetState Target;
 
     public D3D12PsoKey(
@@ -113,6 +122,7 @@ internal readonly struct D3D12PsoKey : IEquatable<D3D12PsoKey>
         PrimitiveTopologyType topology,
         DepthMode depth,
         BlendMode blend,
+        DepthBias bias,
         in D3D12TargetState target)
     {
         Layout = layout;
@@ -120,6 +130,7 @@ internal readonly struct D3D12PsoKey : IEquatable<D3D12PsoKey>
         Topology = topology;
         Depth = depth;
         Blend = blend;
+        Bias = bias;
         Target = target;
     }
 
@@ -128,6 +139,7 @@ internal readonly struct D3D12PsoKey : IEquatable<D3D12PsoKey>
         && Topology == other.Topology
         && Depth == other.Depth
         && Blend == other.Blend
+        && Bias == other.Bias
         && Target == other.Target
         && Layout.StrideBytes == other.Layout.StrideBytes
         && Layout.Elements.AsSpan().SequenceEqual(other.Layout.Elements);

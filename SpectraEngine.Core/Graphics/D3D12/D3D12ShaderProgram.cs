@@ -352,13 +352,14 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
         PrimitiveTopologyType topology,
         DepthMode depth,
         BlendMode blend,
+        DepthBias bias,
         in D3D12TargetState target)
     {
-        var key = new D3D12PsoKey(layout, fill, topology, depth, blend, in target);
+        var key = new D3D12PsoKey(layout, fill, topology, depth, blend, bias, in target);
         if (_psoCache.TryGetValue(key, out var cached))
             return (ID3D12PipelineState*)cached.Handle;
 
-        var pso = CreatePso(layout, fill, topology, depth, blend, in target);
+        var pso = CreatePso(layout, fill, topology, depth, blend, bias, in target);
         _psoCache[key] = pso;
         return (ID3D12PipelineState*)pso.Handle;
     }
@@ -372,6 +373,7 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
         PrimitiveTopologyType topology,
         DepthMode depth,
         BlendMode blend,
+        DepthBias bias,
         in D3D12TargetState target)
     {
         Span<InputElementDesc> elements = stackalloc InputElementDesc[layout.Elements.Length];
@@ -438,9 +440,12 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
                     FillMode = fill,
                     CullMode = fill == FillMode.Wireframe ? CullMode.None : CullMode.Back,
                     FrontCounterClockwise = 1,
-                    DepthBias = 0,
+                    DepthBias = bias.Constant,
+                    // Unclamped on purpose: the clamp exists to bound a
+                    // near-edge-on triangle's offset, and a shadow caster seen
+                    // edge-on from the light shades nothing anyway.
                     DepthBiasClamp = 0f,
-                    SlopeScaledDepthBias = 0f,
+                    SlopeScaledDepthBias = bias.SlopeScaled,
                     DepthClipEnable = 1,
                     MultisampleEnable = 0,
                     AntialiasedLineEnable = 0,

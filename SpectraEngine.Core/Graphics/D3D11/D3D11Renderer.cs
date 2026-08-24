@@ -37,6 +37,13 @@ public sealed unsafe class D3D11Renderer : Renderer
     private ComPtr<ID3D11Texture2D> _depthBuffer;
     private ComPtr<ID3D11DepthStencilView> _depthView;
     private ComPtr<ID3D11RasterizerState> _solidRasterizer;
+
+    // The depth-biased twin of _solidRasterizer, rebuilt only when the bias
+    // values themselves change (which in practice is once, if ever). A
+    // dictionary would be the general answer; there is exactly one biased pass
+    // in the engine, and one cached object says so.
+    private ComPtr<ID3D11RasterizerState> _biasedRasterizer;
+    private DepthBias _biasedRasterizerFor;
     private ComPtr<ID3D11DepthStencilState> _defaultDepth;
     private ComPtr<ID3D11DepthStencilState> _overlayDepth;
 
@@ -540,6 +547,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         // everything the first pass already freed. See ComOwnership.
         ReleaseBackBufferViews();
         ComOwnership.Release(ref _solidRasterizer);
+        ComOwnership.Release(ref _biasedRasterizer);
         ComOwnership.Release(ref _defaultDepth);
         ComOwnership.Release(ref _overlayDepth);
         EnsureSwapChainWindowed();
@@ -882,6 +890,51 @@ public sealed unsafe class D3D11Renderer : Renderer
         _swapChainSize = newSize;
         _failedResizeSize = null;
         RestoreDefaultContextState(ctx);
+    }
+
+    /// <summary>
+    /// Swaps in a rasterizer state carrying <paramref name="bias"/>. D3D11's
+    /// two fields are the same two quantities <see cref="DepthBias"/> carries.
+    /// </summary>
+    protected override void ApplyDepthBias(DepthBias bias)
+    {
+        var context = (ID3D11DeviceContext*)_context.Handle;
+        if (context is null) return;
+
+        if (bias.IsZero)
+        {
+            context->RSSetState((ID3D11RasterizerState*)_solidRasterizer.Handle);
+            return;
+        }
+
+        if (_biasedRasterizer.Handle is null || _biasedRasterizerFor != bias)
+        {
+            ComOwnership.Release(ref _biasedRasterizer);
+            var desc = new RasterizerDesc
+            {
+                FillMode = FillMode.Solid,
+                CullMode = CullMode.Back,
+                FrontCounterClockwise = 1,
+                DepthBias = bias.Constant,
+                // Unclamped on purpose: the clamp exists to stop a near-edge-on
+                // triangle asking for an unbounded offset, and a shadow caster
+                // seen edge-on from the light contributes nothing to shade
+                // anyway, so the offset is harmless where the clamp would bite.
+                DepthBiasClamp = 0f,
+                SlopeScaledDepthBias = bias.SlopeScaled,
+                DepthClipEnable = 1,
+                ScissorEnable = 0,
+                MultisampleEnable = 0,
+                AntialiasedLineEnable = 0,
+            };
+            ID3D11RasterizerState* state = null;
+            SilkMarshal.ThrowHResult(
+                ((ID3D11Device*)_device.Handle)->CreateRasterizerState(&desc, &state));
+            _biasedRasterizer = ComOwnership.Own(state);
+            _biasedRasterizerFor = bias;
+        }
+
+        context->RSSetState((ID3D11RasterizerState*)_biasedRasterizer.Handle);
     }
 
     // ClearState above reset our default rasterizer/depth state; restore them

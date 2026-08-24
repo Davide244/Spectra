@@ -284,6 +284,28 @@ public class OpenGLRenderer : Renderer
     protected override void SetViewportCore(int x, int y, int width, int height) =>
         _gl!.Viewport(x, y, (uint)width, (uint)height);
 
+    /// <summary>
+    /// glPolygonOffset, whose two arguments are the same two quantities
+    /// <see cref="DepthBias"/> carries, in the same order of meaning.
+    /// </summary>
+    /// <remarks>
+    /// Disabled rather than set to zero when there is no bias: the enable is
+    /// separate state on this backend, and leaving it on with zeroes still
+    /// costs the rasterizer the offset path on some drivers.
+    /// </remarks>
+    protected override void ApplyDepthBias(DepthBias bias)
+    {
+        GL gl = _gl!;
+        if (bias.IsZero)
+        {
+            gl.Disable(EnableCap.PolygonOffsetFill);
+            return;
+        }
+
+        gl.Enable(EnableCap.PolygonOffsetFill);
+        gl.PolygonOffset(bias.SlopeScaled, bias.Constant);
+    }
+
     protected override void BeginPassCore(
         RenderTarget? target, ReadOnlySpan<RenderTarget> targets, in PassClear clear)
     {
