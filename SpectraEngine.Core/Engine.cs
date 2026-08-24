@@ -165,6 +165,12 @@ public sealed class Engine
     /// </summary>
     public bool? DebugLayer { get; set; }
 
+    /// <summary>Substring of the graphics adapter to run on, or null for the system default.</summary>
+    public string? PreferredAdapter { get; set; }
+
+    /// <summary>Window size, or null for the default.</summary>
+    public (int Width, int Height)? WindowSize { get; set; }
+
     /// <summary>The key that enters and leaves play mode.</summary>
     public const Key PlayModeKey = Key.F8;
 
@@ -189,7 +195,9 @@ public sealed class Engine
         var options = WindowOptions.Default with
         {
             Title = WindowTitle,
-            Size = new Silk.NET.Maths.Vector2D<int>(1280, 720),
+            Size = WindowSize is { } requested
+                ? new Silk.NET.Maths.Vector2D<int>(requested.Width, requested.Height)
+                : new Silk.NET.Maths.Vector2D<int>(1280, 720),
             VSync = false,
             FramesPerSecond = 0,
             UpdatesPerSecond = 0,
@@ -358,6 +366,7 @@ public sealed class Engine
 
             if (DebugLayer is { } wanted)
                 _renderer.EnableDebugLayer = wanted;
+            _renderer.PreferredAdapter = PreferredAdapter;
 
             _renderer.Initialize(window);
 

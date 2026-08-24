@@ -572,13 +572,19 @@ public sealed unsafe class D3D11Renderer : Renderer
         const uint baseFlags = (uint)CreateDeviceFlag.BgraSupport;
         const uint debugFlags = baseFlags | (uint)CreateDeviceFlag.Debug;
 
+        // Null means the system default. With an explicit adapter the driver
+        // type must be Unknown: D3D11 refuses Hardware plus an adapter.
+        ComPtr<IDXGIAdapter> chosenAdapter = DxgiAdapters.Find(_dxgi, PreferredAdapter, _logger, out string adapterName);
+        AdapterName = adapterName;
+        D3DDriverType driverType = chosenAdapter.Handle is null ? D3DDriverType.Hardware : D3DDriverType.Unknown;
+
         fixed (D3DFeatureLevel* featureLevels = requested)
         {
             // Only when asked for: validation is not free, and it was previously
             // always attempted. See Renderer.EnableDebugLayer.
             int hr = EnableDebugLayer ? _d3d11.CreateDevice(
-                default(ComPtr<IDXGIAdapter>),
-                D3DDriverType.Hardware,
+                chosenAdapter,
+                driverType,
                 Software: 0,
                 Flags: debugFlags,
                 pFeatureLevels: featureLevels,
@@ -596,8 +602,8 @@ public sealed unsafe class D3D11Renderer : Renderer
                     _logger.LogInformation("D3D11 debug layer off (not requested).");
 
                 SilkMarshal.ThrowHResult(_d3d11.CreateDevice(
-                    default(ComPtr<IDXGIAdapter>),
-                    D3DDriverType.Hardware,
+                    chosenAdapter,
+                    driverType,
                     Software: 0,
                     Flags: baseFlags,
                     pFeatureLevels: featureLevels,

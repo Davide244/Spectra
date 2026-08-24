@@ -123,6 +123,23 @@ public abstract class Renderer
         false;
 #endif
 
+    /// <summary>
+    /// Substring of the graphics adapter to run on, or null for the system
+    /// default. Set before <see cref="Initialize"/>.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not a preference, a measurement tool.</b> A machine with a discrete
+    /// card and an integrated one is the cheapest integrated-GPU test rig there
+    /// is, and "how does this run on weak hardware" is otherwise a question
+    /// nobody can answer without buying the weak hardware. Matched
+    /// case-insensitively against the adapter description, so "Intel" or "UHD"
+    /// picks the integrated part on most machines.
+    /// </remarks>
+    public string? PreferredAdapter { get; set; }
+
+    /// <summary>Description of the adapter actually in use, once a device exists.</summary>
+    public string AdapterName { get; protected set; } = "unknown";
+
     /// <summary>Whether the validation layer is actually running. False when it was not asked for or not available.</summary>
     public bool DebugLayerActive { get; protected set; }
 

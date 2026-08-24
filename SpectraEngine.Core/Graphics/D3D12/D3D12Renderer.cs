@@ -296,10 +296,22 @@ public sealed unsafe class D3D12Renderer : Renderer
             }
         }
 
+        // Null means the system default, which is what every previous build
+        // did unconditionally.
+        ComPtr<IDXGIAdapter> adapter = DxgiAdapters.Find(_dxgi, PreferredAdapter, _logger, out string adapterName);
+        AdapterName = adapterName;
+
         ID3D12Device* device = null;
         Guid deviceGuid = ID3D12Device.Guid;
-        SilkMarshal.ThrowHResult(D3D12Api.CreateDevice(
-            default(ComPtr<IUnknown>), D3DFeatureLevel.Level110, &deviceGuid, (void**)&device));
+        try
+        {
+            SilkMarshal.ThrowHResult(D3D12Api.CreateDevice(
+                (IUnknown*)adapter.Handle, D3DFeatureLevel.Level110, &deviceGuid, (void**)&device));
+        }
+        finally
+        {
+            ComOwnership.Release(ref adapter);
+        }
         _device = ComOwnership.Own(device);
 
         ID3D12InfoQueue* infoQueue = null;

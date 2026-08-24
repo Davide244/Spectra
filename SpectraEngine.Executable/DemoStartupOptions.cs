@@ -58,7 +58,9 @@ internal sealed record DemoStartupOptions(
     string? Pipeline = null,
     bool Shadows = true,
     bool Profile = false,
-    bool? DebugLayer = null)
+    bool? DebugLayer = null,
+    string? Adapter = null,
+    (int Width, int Height)? WindowSize = null)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -71,7 +73,7 @@ internal sealed record DemoStartupOptions(
         "Usage: SpectraEngine.Executable [opengl|d3d11|d3d12] [--selftest[=true|false]] " +
         "[--fullscreen-cycle[=seconds]] [--play[=true|false]] [--offscreen-probe[=true|false]] " +
         "[--pipeline=<name>] [--shadows[=true|false]] [--profile[=true|false]] " +
-        "[--debug-layer[=true|false]].";
+        "[--debug-layer[=true|false]] [--adapter=<name>] [--size=WxH].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -101,6 +103,8 @@ internal sealed record DemoStartupOptions(
         bool shadows = true;
         bool profile = false;
         bool? debugLayer = null;
+        string? adapter = null;
+        (int, int)? windowSize = null;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -180,6 +184,18 @@ internal sealed record DemoStartupOptions(
                 case "debug-layer" or "debuglayer":
                     debugLayer = ParseBoolean(value, token);
                     continue;
+
+                // Which GPU to run on, matched as a substring of the adapter
+                // name. On a desktop with both a discrete and an integrated
+                // part this is the whole low-power test rig.
+                case "adapter" or "gpu":
+                    adapter = ParseName(value, token);
+                    continue;
+
+                // Window size, for measuring how frame cost scales with pixels.
+                case "size" or "resolution":
+                    windowSize = ParseSize(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -194,7 +210,7 @@ internal sealed record DemoStartupOptions(
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
-                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer);
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -202,12 +218,12 @@ internal sealed record DemoStartupOptions(
                 selfTestEnvironmentValue.Trim(), SelfTestEnvironmentVariable);
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
-                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer);
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
-            fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer);
+            fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize);
     }
 
     // A switch that takes a name needs one: a bare --pipeline says nothing
@@ -219,6 +235,22 @@ internal sealed record DemoStartupOptions(
             throw new ArgumentException($"'{origin}' needs a value, e.g. --pipeline=deferred. {Usage}");
 
         return value.Trim();
+    }
+
+    // "1280x720" or "1280X720". Both halves must be positive: a zero-sized
+    // window is not creatable and the failure would surface three layers down.
+    private static (int Width, int Height) ParseSize(string? value, string origin)
+    {
+        string[] parts = (value ?? string.Empty).Split('x', 'X');
+        if (parts.Length != 2 ||
+            !int.TryParse(parts[0], out int width) ||
+            !int.TryParse(parts[1], out int height) ||
+            width <= 0 || height <= 0)
+        {
+            throw new ArgumentException($"'{origin}' needs a size like --size=1280x720. {Usage}");
+        }
+
+        return (width, height);
     }
 
     // Aliases mirror the SpectraShade compiler CLI for consistency.

@@ -115,6 +115,8 @@ try
         ShadowsEnabled = options.Shadows,
         ProfileFrames = options.Profile,
         DebugLayer = options.DebugLayer,
+        PreferredAdapter = options.Adapter,
+        WindowSize = options.WindowSize,
     };
 
     // The fullscreen-cycle harness, when asked for: a driver thread that hits
