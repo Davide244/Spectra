@@ -1,4 +1,4 @@
-using Silk.NET.OpenGL;
+﻿using Silk.NET.OpenGL;
 using SpectraEngine.Core.Graphics.Shaders;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.OpenGL;
@@ -128,12 +128,12 @@ public sealed class PostResolveGlTests
         {
             renderer.BeginPass(hdr, PassClear.To(new System.Numerics.Vector4(1f, 1f, 1f, 1f)));
             renderer.EndPass();
-            renderer.ResolveForTest(hdr.ColorTexture, output);
+            renderer.ResolveForTest(hdr.ColorTexture!, output);
             (int atOne, _, _) = ReadPixel(output);
 
             renderer.BeginPass(hdr, PassClear.To(new System.Numerics.Vector4(8f, 8f, 8f, 1f)));
             renderer.EndPass();
-            renderer.ResolveForTest(hdr.ColorTexture, output);
+            renderer.ResolveForTest(hdr.ColorTexture!, output);
             (int atEight, _, _) = ReadPixel(output);
 
             atEight.ShouldBeGreaterThan(atOne,
@@ -186,7 +186,7 @@ public sealed class PostResolveGlTests
         gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, fbo);
         gl.FramebufferTexture2D(
             FramebufferTarget.ReadFramebuffer, FramebufferAttachment.ColorAttachment0,
-            TextureTarget.Texture2D, ((OpenGLTexture)target.ColorTexture).Handle, 0);
+            TextureTarget.Texture2D, ((OpenGLTexture)target.ColorTexture!).Handle, 0);
 
         var pixel = new byte[4];
         fixed (byte* p = pixel)

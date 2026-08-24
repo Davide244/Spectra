@@ -113,6 +113,7 @@ try
         RunOffscreenProbe = options.OffscreenProbe,
         StartupPipeline = options.Pipeline,
         ShadowsEnabled = options.Shadows,
+        ProfileFrames = options.Profile,
     };
 
     // The fullscreen-cycle harness, when asked for: a driver thread that hits

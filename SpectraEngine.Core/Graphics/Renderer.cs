@@ -102,6 +102,34 @@ public abstract class Renderer
     public DebugDraw DebugDraw { get; } = new();
 
     /// <summary>
+    /// Where each frame's time goes, phase by phase. Off unless asked for: the
+    /// scopes cost a branch each, but a profile nobody reads is still work.
+    /// </summary>
+    public Diagnostics.FrameProfiler Profiler { get; } = new();
+
+    /// <summary>GPU meshes created over this renderer's life. Diagnostics.</summary>
+    /// <remarks>
+    /// Counted because mesh creation turned out to be the single most expensive
+    /// thing the engine did per frame on D3D12, and a rate is the only way to
+    /// see that from a log: a static scene should create almost none.
+    /// </remarks>
+    public long MeshesCreated { get; private protected set; }
+
+    /// <summary>GPU meshes destroyed over this renderer's life.</summary>
+    public long MeshesDestroyed { get; private protected set; }
+
+    /// <summary>
+    /// Buffers a backend is holding for reuse rather than releasing. Zero on
+    /// backends that do not pool.
+    /// </summary>
+    /// <remarks>
+    /// Reported so a pool that grows without bound is visible as a number rather
+    /// than as memory: it converges on the scene's high-water mark and is never
+    /// trimmed.
+    /// </remarks>
+    public virtual int PooledBufferCount => 0;
+
+    /// <summary>
     /// Hot-reloads shaders created via <see cref="CreateShaderFromFile"/> when
     /// the source file changes on disk. The render loop must call
     /// <see cref="ShaderHotReloader.PumpPendingReloads"/> once per frame.
@@ -437,6 +465,8 @@ public abstract class Renderer
     /// </summary>
     protected void ResolveTo(Texture source, RenderTarget? output, Scene.Scene? scene)
     {
+        using var measured = Profiler.Measure(Diagnostics.FramePhase.Resolve);
+
         _resolveShader ??= BaseShaders.PostResolvePath is { } path
             ? CreateShaderFromFile(path)
             : CreateShaderFromSource(BaseShaders.PostResolve);
@@ -627,6 +657,8 @@ public abstract class Renderer
         // One pass over the whole atlas, one depth clear, then a viewport per
         // cascade. Clearing per cascade would clear the whole target each time
         // and wipe the cascades already drawn.
+        using var measured = Profiler.Measure(Diagnostics.FramePhase.Shadows);
+
         BeginPass(map.Target, PassClear.DepthOnly);
         try
         {
@@ -788,6 +820,8 @@ public abstract class Renderer
     internal void DrawDeferredLightPass(
         GBuffer gbuffer, RenderView view, Scene.Camera camera, float ambient, int shadowLightIndex)
     {
+        using var measured = Profiler.Measure(Diagnostics.FramePhase.Lighting);
+
         _lightShader ??= BaseShaders.DeferredLightPath is { } path
             ? CreateShaderFromFile(path)
             : CreateShaderFromSource(BaseShaders.DeferredLight);
@@ -1022,6 +1056,7 @@ public abstract class Renderer
     /// </summary>
     public void DestroyMesh(Mesh mesh)
     {
+        MeshesDestroyed++;
         // The callback closes over the list of the renderer that created the
         // mesh, so this deregisters correctly even on the wrong renderer.
         mesh.Unregister?.Invoke();

@@ -789,6 +789,30 @@ public sealed class SceneManager
         }
     }
 
+    // Meshes created per second since the last report. A static scene should
+    // create none: any steady rate is GPU resource churn, which on D3D12 costs
+    // far more than the drawing it feeds.
+    private long _lastMeshesCreated;
+
+    private int _lastCompileCount;
+
+    private double CompileRate(Scene scene)
+    {
+        int now = scene.StaticWorldCompileCount;
+        double rate = (now - _lastCompileCount) / CompileLogIntervalSeconds;
+        _lastCompileCount = now;
+        return rate;
+    }
+
+    private double MeshCreationRate()
+    {
+        if (_renderer is null) return 0;
+        long now = _renderer.MeshesCreated;
+        double rate = (now - _lastMeshesCreated) / CompileLogIntervalSeconds;
+        _lastMeshesCreated = now;
+        return rate;
+    }
+
     // One phrase for the shadow state, because "shadows are on" and "shadows
     // drew something" are different claims and a smoke log needs the second.
     // A caster count of zero with shadows enabled means the map was fitted and
@@ -892,7 +916,8 @@ public sealed class SceneManager
                     "physics: {PhysicsBackend}, {PhysicsBodies} body(ies) / {PhysicsShapes} shape(s); " +
                     "editing: {Selected} selected, {GizmoMode} gizmo, {Navigation} navigation, " +
                     "undo {UndoDepth} / redo {RedoDepth}; " +
-                    "rendering: {Pipeline} pipeline, {Shadows}, {FrameMs:0.00} ms/frame ({Fps:0} fps); " +
+                    "rendering: {Pipeline} pipeline, {Shadows}, {FrameMs:0.00} ms/frame ({Fps:0} fps) [{Phases}]; " +
+                    "churn: {MeshRate:0} mesh(es)/s, {CompileRate:0} compile(s)/s, {Pooled} buffer(s) pooled; " +
                     "character: {CharacterMode}",
                     assets?.TextureCount ?? 0, assets?.MaterialCount ?? 0,
                     _modelsRequested, _modelsPlaced,
@@ -907,6 +932,7 @@ public sealed class SceneManager
                     editor?.NavigationModeName ?? "none",
                     editor?.UndoDepth ?? 0, editor?.RedoDepth ?? 0,
                     _renderer?.CurrentPipelineName ?? "none", DescribeShadows(_renderer), FrameTimeMs, Fps,
+                    _renderer?.Profiler.Describe() ?? "not measured", MeshCreationRate(), CompileRate(scene), _renderer?.PooledBufferCount ?? 0,
                     DescribeCharacter());
             }
 

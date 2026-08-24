@@ -179,6 +179,25 @@ public class OpenGLRenderer : Renderer
         return false;
     }
 
+    /// <summary>
+    /// Makes the context current on the render thread, and re-applies the swap
+    /// interval there.
+    /// </summary>
+    /// <remarks>
+    /// <b>The interval is set again HERE, not only where the window is
+    /// created.</b> <c>glfwSwapInterval</c> acts on the context current on the
+    /// CALLING thread, and this engine hands the context to a dedicated render
+    /// thread after creation; an interval set on the main thread can therefore
+    /// be applied to no context at all. The symptom is a frame time pinned to
+    /// exactly the refresh interval with almost no work in it, which reads as a
+    /// slow renderer rather than as a wait.
+    /// </remarks>
+    public override void AcquireContext(IWindow window)
+    {
+        base.AcquireContext(window);
+        window.GLContext?.SwapInterval(0);
+    }
+
     /// <inheritdoc/>
     /// <remarks>True: glUniform writes into whichever program is active.</remarks>
     protected override bool BindsProgramBeforeUniforms => true;
@@ -416,6 +435,7 @@ public class OpenGLRenderer : Renderer
 
     public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
     {
+        MeshesCreated++;
         var mesh = OpenGLMesh.Create(_gl!, vertices, indices, attributes);
         mesh.Unregister = () => _meshes.Remove(mesh);
         _meshes.Add(mesh);

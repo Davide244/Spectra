@@ -27,6 +27,12 @@ public sealed class Engine
     private readonly ILogger<Engine> _logger;
     private OffscreenProbe? _offscreenProbe;
     private readonly FpsCounter _fpsCounter = new();
+
+    /// <summary>
+    /// Where each frame's time goes, phase by phase. Lives on the renderer,
+    /// because that is where most of the phases are.
+    /// </summary>
+    public FrameProfiler Profiler => _renderer.Profiler;
     private readonly Renderer _renderer;
     private readonly SceneManager _sceneManager;
     private readonly AssetManager _assetManager;
@@ -150,6 +156,9 @@ public sealed class Engine
     /// <summary>Whether the frame's directional light casts a shadow. On by default.</summary>
     public bool ShadowsEnabled { get; set; } = true;
 
+    /// <summary>Whether to measure and report where each frame's time goes.</summary>
+    public bool ProfileFrames { get; set; }
+
     /// <summary>The key that enters and leaves play mode.</summary>
     public const Key PlayModeKey = Key.F8;
 
@@ -184,9 +193,13 @@ public sealed class Engine
         _window = Window.Create(options);
         _window.Initialize();
 
-        // VSync goes through the window/context (glfwSwapInterval), which is a
-        // main-thread call — set it here, not on the render thread. For OpenGL
-        // the fresh context is still current on this thread at this point.
+        // VSync goes through the window/context. This sets Silk's own flag; on
+        // OpenGL it is NOT sufficient, because glfwSwapInterval acts on the
+        // context current on the calling thread and the render thread takes the
+        // context away immediately after. OpenGLRenderer.AcquireContext applies
+        // it again over there, which is what actually turns vsync off; leaving
+        // this out pins the frame time to the refresh interval with almost no
+        // work in it and reads as a slow renderer rather than as a wait.
         _window.VSync = false;
 
         // Subsystems that touch no GPU state are set up on this (OS-event) thread.
@@ -340,6 +353,7 @@ public sealed class Engine
             _renderer.Initialize(window);
 
             _renderer.ShadowsEnabled = ShadowsEnabled;
+            _renderer.Profiler.Enabled = ProfileFrames;
 
             // After Initialize, because that is where a backend registers its
             // pipelines and there is nothing to select before it.
@@ -454,7 +468,8 @@ public sealed class Engine
 
                 // The demo update animates and logs; it gets last frame's
                 // render view for its culling stats alongside time.
-                _sceneManager.Update(deltaTime, _renderView);
+                using (Profiler.Measure(FramePhase.Update))
+                    _sceneManager.Update(deltaTime, _renderView);
 
                 // Drive the async static-world pipeline: harvest a finished
                 // background compile (the swap and GPU mesh creation happen
@@ -482,7 +497,8 @@ public sealed class Engine
                 for (int tick = 0; tick < ticks; tick++)
                 {
                     physics.PushKinematicTargets(_physicsTicks.FixedDeltaTime);
-                    physics.Step(_physicsTicks.FixedDeltaTime);
+                    using (Profiler.Measure(FramePhase.Physics))
+                        physics.Step(_physicsTicks.FixedDeltaTime);
                     physics.DrainEvents();
 
                     // After the step, so a character resolves against the pose
@@ -494,7 +510,8 @@ public sealed class Engine
                 }
                 // ─── end tick loop ─────────────────────────────────────
 
-                _sceneManager.ActiveScene?.ProcessStaticWorldCompilation(_renderer, _logger);
+                using (Profiler.Measure(FramePhase.WorldSwap))
+                    _sceneManager.ActiveScene?.ProcessStaticWorldCompilation(_renderer, _logger);
 
                 // Static collision follows the compiled world in the SAME slot
                 // the render meshes swap in, deliberately: geometry that is
@@ -515,7 +532,8 @@ public sealed class Engine
                 // Same shape, for content: background decodes hand their pixel
                 // buffers over here and the GPU textures are created on this
                 // thread. Costs nothing on a frame with nothing pending.
-                _assetManager.PumpPendingUploads();
+                using (Profiler.Measure(FramePhase.Assets))
+                    _assetManager.PumpPendingUploads();
 
                 // Render poses last, once per frame: the blend between the two
                 // most recent ticks. A render-only overlay — it must never
@@ -581,7 +599,8 @@ public sealed class Engine
                     var framebuffer = _renderer.FramebufferSize;
                     if (framebuffer.Y > 0)
                         viewScene.Camera.AspectRatio = framebuffer.X / (float)framebuffer.Y;
-                    viewScene.BuildRenderView(viewScene.Camera, _renderView);
+                    using (Profiler.Measure(FramePhase.ViewBuild))
+                        viewScene.BuildRenderView(viewScene.Camera, _renderView);
                 }
                 else
                 {
@@ -608,7 +627,10 @@ public sealed class Engine
                     _sceneManager.Fps = _fpsCounter.Fps;
                 }
 
-                _renderer.Present(window);
+                using (Profiler.Measure(FramePhase.Present))
+                    _renderer.Present(window);
+
+                Profiler.EndFrame();
             }
 
             // Asset-owned textures are destroyed through the renderer, so they

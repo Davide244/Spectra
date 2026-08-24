@@ -469,6 +469,7 @@ public sealed unsafe class D3D11Renderer : Renderer
 
     public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
     {
+        MeshesCreated++;
         var litShader = (D3D11ShaderProgram?)DefaultShader
             ?? throw new InvalidOperationException("Default shader must be created before meshes.");
         var mesh = D3D11Mesh.Create(_device, vertices, indices, attributes, litShader.VertexBytecode);

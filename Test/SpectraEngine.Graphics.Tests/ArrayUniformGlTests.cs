@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using Silk.NET.OpenGL;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.OpenGL;
@@ -191,7 +191,7 @@ public sealed class ArrayUniformGlTests
         gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, fbo);
         gl.FramebufferTexture2D(
             FramebufferTarget.ReadFramebuffer, FramebufferAttachment.ColorAttachment0,
-            TextureTarget.Texture2D, ((OpenGLTexture)target.ColorTexture).Handle, 0);
+            TextureTarget.Texture2D, ((OpenGLTexture)target.ColorTexture!).Handle, 0);
 
         var pixel = new byte[4];
         fixed (byte* p = pixel)

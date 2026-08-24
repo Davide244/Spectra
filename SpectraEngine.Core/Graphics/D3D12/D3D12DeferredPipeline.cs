@@ -60,6 +60,8 @@ public sealed unsafe class D3D12DeferredPipeline : ID3D12RenderPipeline
         // D3D12 it is slower still, because a clear to a value other than the
         // one the resource was created with takes the unoptimised path and says
         // so once per attachment per frame.
+        using (renderer.Profiler.Measure(SpectraEngine.Core.Diagnostics.FramePhase.Geometry))
+        {
         renderer.BeginPass(gbuffer.Targets, PassClear.DepthOnly);
         try
         {
@@ -73,6 +75,7 @@ public sealed unsafe class D3D12DeferredPipeline : ID3D12RenderPipeline
         finally
         {
             renderer.EndPass();
+        }
         }
 
         renderer.DrawDeferredLightPass(gbuffer, context.View, camera, Ambient, shadowLight);

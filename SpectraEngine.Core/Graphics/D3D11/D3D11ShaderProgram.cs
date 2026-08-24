@@ -37,6 +37,9 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
     // SamplerState at the same register index, so one number serves both.
     private Dictionary<string, uint> _textureSlots = new(StringComparer.Ordinal);
 
+    // TEMP-PROBE: last SRV/sampler bound per register, to skip redundant sets.
+    private readonly Dictionary<uint, (nint srv, nint samp)> _boundSrv = new();
+
     private bool _disposed;
 
     /// <summary>The VS bytecode used for input-layout creation by D3D11Mesh.</summary>
@@ -340,6 +343,7 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
                 }
                 ctx->Unmap((ID3D11Resource*)slot.Buffer.Handle, 0);
                 slot.Dirty = false;
+                ProbeMaps++; // TEMP-PROBE
             }
         }
 
@@ -420,9 +424,14 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
     private void WriteBytes(UniformLocation loc, ReadOnlySpan<byte> bytes)
     {
         ref var slot = ref _cbuffers[loc.CBufferIndex];
-        bytes.CopyTo(slot.Shadow.AsSpan((int)loc.Offset));
+        var target = slot.Shadow.AsSpan((int)loc.Offset, bytes.Length);
+        if (bytes.SequenceEqual(target)) { ProbeSkippedWrites++; return; }
+        bytes.CopyTo(target);
         slot.Dirty = true;
     }
+
+    // TEMP-PROBE
+    internal static long ProbeSkippedWrites, ProbeMaps, ProbeTexSkips, ProbeTexBinds;
 
     public override void SetTexture(string name, int unit, Texture texture)
     {
@@ -433,6 +442,13 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
         var ctx = (ID3D11DeviceContext*)_context.Handle;
         ID3D11ShaderResourceView* srv = (ID3D11ShaderResourceView*)d3dTex.Srv.Handle;
         ID3D11SamplerState* samp = (ID3D11SamplerState*)d3dTex.Sampler.Handle;
+        if (_boundSrv.TryGetValue(slot, out var bound) && bound.srv == (nint)srv && bound.samp == (nint)samp)
+        {
+            ProbeTexSkips++; // TEMP-PROBE
+            return;
+        }
+        _boundSrv[slot] = ((nint)srv, (nint)samp);
+        ProbeTexBinds++; // TEMP-PROBE
         ctx->PSSetShaderResources(slot, 1, &srv);
         ctx->PSSetSamplers(slot, 1, &samp);
     }

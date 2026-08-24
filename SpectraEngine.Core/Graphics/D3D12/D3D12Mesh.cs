@@ -19,6 +19,11 @@ internal sealed unsafe class D3D12Mesh : Mesh
     private readonly D3D12Renderer _renderer;
     private ComPtr<ID3D12Resource> _vertexBuffer;
     private ComPtr<ID3D12Resource> _indexBuffer;
+
+    // The POOL bucket each buffer came from, which is what it must be returned
+    // under: the buffer is at least this big and usually bigger than the data.
+    private readonly uint _vertexCapacity;
+    private readonly uint _indexCapacity;
     private readonly VertexBufferView _vbView;
     private readonly IndexBufferView _ibView;
     private bool _disposed;
@@ -47,8 +52,13 @@ internal sealed unsafe class D3D12Mesh : Mesh
 
         uint vbBytes = (uint)(vertices.Length * sizeof(float));
         uint ibBytes = (uint)(indices.Length * sizeof(uint));
-        _vertexBuffer = renderer.CreateUploadBuffer(vbBytes, "MeshVB");
-        _indexBuffer = renderer.CreateUploadBuffer(ibBytes, "MeshIB");
+        // Rented, not created. CreateCommittedResource costs about half a
+        // millisecond per call on this backend, and the static-world compiler
+        // frees and re-creates chunk meshes every frame a world brush moves.
+        _vertexCapacity = D3D12Renderer.MeshBufferBucket(vbBytes);
+        _indexCapacity = D3D12Renderer.MeshBufferBucket(ibBytes);
+        _vertexBuffer = renderer.RentMeshBuffer(_vertexCapacity);
+        _indexBuffer = renderer.RentMeshBuffer(_indexCapacity);
         CopyInto(_vertexBuffer, vertices, vbBytes);
         CopyInto(_indexBuffer, indices, ibBytes);
 
@@ -174,7 +184,11 @@ internal sealed unsafe class D3D12Mesh : Mesh
     {
         if (_disposed) return;
         _disposed = true;
-        _indexBuffer.Dispose();
-        _vertexBuffer.Dispose();
+        // Back to the pool rather than released: see D3D12Renderer's mesh
+        // buffer pool for why this backend cannot afford to allocate them again.
+        _renderer.ReturnMeshBuffer(_indexCapacity, _indexBuffer);
+        _renderer.ReturnMeshBuffer(_vertexCapacity, _vertexBuffer);
+        _indexBuffer = default;
+        _vertexBuffer = default;
     }
 }

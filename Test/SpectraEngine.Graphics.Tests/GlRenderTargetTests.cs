@@ -1,4 +1,4 @@
-using Silk.NET.OpenGL;
+﻿using Silk.NET.OpenGL;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.OpenGL;
 using Texture = SpectraEngine.Core.Graphics.Texture;
@@ -85,7 +85,7 @@ public sealed class GlRenderTargetTests
         RenderTarget target = renderer.CreateRenderTarget(new RenderTargetDesc(16, 16));
         try
         {
-            Texture before = target.ColorTexture;
+            Texture before = target.ColorTexture!;
             uint handleBefore = ((OpenGLTexture)before).Handle;
 
             target.Resize(48, 24);
@@ -93,8 +93,8 @@ public sealed class GlRenderTargetTests
             // Identity, not equality: a material that sampled this target holds
             // this exact object. Replacing it on resize is how every editor
             // viewport would end up pointing at a destroyed texture.
-            target.ColorTexture.ShouldBeSameAs(before);
-            ((OpenGLTexture)target.ColorTexture).Handle.ShouldBe(handleBefore);
+            target.ColorTexture!.ShouldBeSameAs(before);
+            ((OpenGLTexture)target.ColorTexture!).Handle.ShouldBe(handleBefore);
 
             before.Width.ShouldBe(48);
             before.Height.ShouldBe(24);
@@ -161,7 +161,7 @@ public sealed class GlRenderTargetTests
             new RenderTargetDesc(8, 8, ColorSpace: TextureColorSpace.Srgb));
         try
         {
-            target.ColorTexture.ColorSpace.ShouldBe(TextureColorSpace.Srgb);
+            target.ColorTexture!.ColorSpace.ShouldBe(TextureColorSpace.Srgb);
 
             renderer.BeginPass(target, PassClear.To(new System.Numerics.Vector4(0.2140f, 0.2140f, 0.2140f, 1f)));
             renderer.EndPass();
@@ -244,10 +244,10 @@ public sealed class GlRenderTargetTests
             new RenderTargetDesc(8, 8, TextureFormat.Rgba16Float));
         try
         {
-            target.ColorTexture.Format.ShouldBe(TextureFormat.Rgba16Float);
+            target.ColorTexture!.Format.ShouldBe(TextureFormat.Rgba16Float);
             // A float format has no sRGB variant, so a request for one resolves
             // to linear rather than throwing.
-            target.ColorTexture.ColorSpace.ShouldBe(TextureColorSpace.Linear);
+            target.ColorTexture!.ColorSpace.ShouldBe(TextureColorSpace.Linear);
 
             renderer.BeginPass(target, PassClear.To(new System.Numerics.Vector4(4f, 2f, 0.5f, 1f)));
             renderer.EndPass();
@@ -483,7 +483,7 @@ public sealed class GlRenderTargetTests
         gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, fbo);
         gl.FramebufferTexture2D(
             FramebufferTarget.ReadFramebuffer, FramebufferAttachment.ColorAttachment0,
-            TextureTarget.Texture2D, ((OpenGLTexture)target.ColorTexture).Handle, 0);
+            TextureTarget.Texture2D, ((OpenGLTexture)target.ColorTexture!).Handle, 0);
 
         var pixel = new float[4];
         fixed (float* p = pixel)
@@ -502,7 +502,7 @@ public sealed class GlRenderTargetTests
         gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, fbo);
         gl.FramebufferTexture2D(
             FramebufferTarget.ReadFramebuffer, FramebufferAttachment.ColorAttachment0,
-            TextureTarget.Texture2D, ((OpenGLTexture)target.ColorTexture).Handle, 0);
+            TextureTarget.Texture2D, ((OpenGLTexture)target.ColorTexture!).Handle, 0);
 
         var pixel = new byte[4];
         fixed (byte* p = pixel)

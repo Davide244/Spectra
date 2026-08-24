@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D.Compilers;
 using Silk.NET.Direct3D12;
@@ -211,6 +211,11 @@ public sealed unsafe class D3D12Renderer : Renderer
     /// frame, so slices cached from an earlier frame must not be rebound.
     /// </summary>
     internal ulong FrameNumber { get; private set; }
+
+    // TEMP-PROBE: redundant-state elimination experiment
+    internal nint ProbeBoundRootSig;
+    internal nint ProbeBoundPso;
+    internal int ProbeBoundTopology = -1;
 
     public D3D12Renderer(ILogger<Renderer> logger, IShaderCompiler shaderCompiler)
         : base(logger, shaderCompiler)
@@ -544,6 +549,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         // Fresh per-frame arenas — safe because the previous frame fully
         // synced on the fence before this one starts.
         FrameNumber++;
+        ProbeBoundRootSig = 0; ProbeBoundPso = 0; ProbeBoundTopology = -1; // TEMP-PROBE
         _uploadRingOffset = 0;
         _srvRingOffset = 0;
         _samplerRingOffset = 0;
@@ -624,6 +630,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         // GPU idle and no list recording: the only safe point to free upload
         // rings the frame outgrew and to swap descriptor rings for bigger ones.
         DisposeRetiredUploadRings();
+        RecycleRetiredMeshBuffers();
         GrowDescriptorRingsIfNeeded();
 
         _frameIndex = _swapChain.GetCurrentBackBufferIndex();
@@ -1232,6 +1239,89 @@ public sealed unsafe class D3D12Renderer : Renderer
         return ComOwnership.Own(heap);
     }
 
+    // ---- mesh buffer pool --------------------------------------------------
+    //
+    // CreateCommittedResource allocates a whole heap per resource and measured
+    // about 480 microseconds per mesh here, against 24 on D3D11's CreateBuffer.
+    // With a world brush animating, the static-world compiler lands new chunk
+    // meshes every frame, so that was 7 ms of a 10 ms frame spent allocating
+    // buffers the previous frame had just freed.
+    //
+    // Freed buffers are therefore kept and handed back out. Sizes are rounded up
+    // to a power of two so a chunk whose vertex count wobbles by a few triangles
+    // still hits the same bucket; the VIEW carries the real byte count, so a
+    // buffer larger than its contents is not a correctness question.
+    private readonly Dictionary<uint, Stack<ComPtr<ID3D12Resource>>> _freeMeshBuffers = [];
+    private readonly List<(uint Capacity, ComPtr<ID3D12Resource> Buffer)> _retiredMeshBuffers = [];
+
+    /// <summary>Buffers currently parked in the pool. Diagnostics.</summary>
+    internal int PooledMeshBufferCount { get; private set; }
+
+    /// <summary>Rounds a request up to its pool bucket. At least 256, D3D12's buffer alignment.</summary>
+    internal static uint MeshBufferBucket(uint sizeBytes)
+    {
+        uint bucket = 256;
+        while (bucket < sizeBytes) bucket <<= 1;
+        return bucket;
+    }
+
+    /// <summary>Takes a buffer of at least <paramref name="capacity"/> bytes, from the pool if one is parked.</summary>
+    internal ComPtr<ID3D12Resource> RentMeshBuffer(uint capacity)
+    {
+        if (_freeMeshBuffers.TryGetValue(capacity, out Stack<ComPtr<ID3D12Resource>>? bucket) && bucket.Count > 0)
+        {
+            PooledMeshBufferCount--;
+            return bucket.Pop();
+        }
+
+        return CreateUploadBuffer(capacity, "MeshBuffer");
+    }
+
+    /// <summary>
+    /// Gives a mesh buffer back. It is NOT reusable until the GPU has finished
+    /// with the frames that referenced it, so it waits on the retired list until
+    /// the next fence wait rather than going straight back into the pool.
+    /// </summary>
+    internal void ReturnMeshBuffer(uint capacity, ComPtr<ID3D12Resource> buffer)
+    {
+        if (buffer.Handle is null) return;
+        _retiredMeshBuffers.Add((capacity, buffer));
+    }
+
+    // Called where the GPU is known idle. Everything freed since the last one is
+    // now safe to hand out again.
+    private void RecycleRetiredMeshBuffers()
+    {
+        if (_retiredMeshBuffers.Count == 0) return;
+
+        foreach ((uint capacity, ComPtr<ID3D12Resource> buffer) in _retiredMeshBuffers)
+        {
+            if (!_freeMeshBuffers.TryGetValue(capacity, out Stack<ComPtr<ID3D12Resource>>? bucket))
+                _freeMeshBuffers[capacity] = bucket = new Stack<ComPtr<ID3D12Resource>>();
+
+            bucket.Push(buffer);
+            PooledMeshBufferCount++;
+        }
+
+        _retiredMeshBuffers.Clear();
+    }
+
+    // Releases the pool for good. Shutdown only.
+    private void ReleaseMeshBufferPool()
+    {
+        RecycleRetiredMeshBuffers();
+        foreach (Stack<ComPtr<ID3D12Resource>> bucket in _freeMeshBuffers.Values)
+        {
+            while (bucket.Count > 0)
+            {
+                ComPtr<ID3D12Resource> buffer = bucket.Pop();
+                ComOwnership.Release(ref buffer);
+            }
+        }
+        _freeMeshBuffers.Clear();
+        PooledMeshBufferCount = 0;
+    }
+
     internal ComPtr<ID3D12Resource> CreateUploadBuffer(uint sizeBytes, string debugName)
     {
         var heapProps = new HeapProperties { Type = HeapType.Upload };
@@ -1361,6 +1451,7 @@ public sealed unsafe class D3D12Renderer : Renderer
 
     public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
     {
+        MeshesCreated++;
         var mesh = new D3D12Mesh(this, vertices, indices, attributes);
         mesh.Unregister = () => _meshes.Remove(mesh);
         _meshes.Add(mesh);
@@ -1540,6 +1631,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         _meshes.Clear();
 
         ReleaseFrameResources();
+        ReleaseMeshBufferPool();
 
         foreach (var target in _renderTargets)
             target.Dispose();
