@@ -924,7 +924,7 @@ public sealed class SceneManager
                     "world: {ChunksVisible} of {ChunksTotal} chunks visible, " +
                     "{BatchesVisible} of {BatchesTotal} material batches; " +
                     "scene: {NodesVisible} of {NodesTotal} mesh nodes, " +
-                    "{PartsVisible} of {PartsTotal} part brush(es); " +
+                    "{PartsVisible} of {PartsTotal} part brush(es){InertParts}; " +
                     "recompiled {Count} times, last touched {DirtyCells} dirty cell(s); " +
                     "physics: {PhysicsBackend}, {PhysicsBodies} body(ies) / {PhysicsShapes} shape(s); " +
                     "editing: {Selected} selected, {GizmoMode} gizmo, {Navigation} navigation, " +
@@ -938,6 +938,9 @@ public sealed class SceneManager
                     renderView.WorldMaterialBatchesVisible, renderView.WorldMaterialBatchesTotal,
                     renderView.VisibleCount, renderView.TotalCount,
                     renderView.PartBrushesVisible, renderView.PartBrushesTotal,
+                    scene.InertPartBrushCount > 0
+                        ? $", {scene.InertPartBrushCount} INERT (subtractive parts carve nothing and draw nothing)"
+                        : string.Empty,
                     scene.StaticWorldCompileCount, scene.LastCompileDirtyCells.Count,
                     Physics.IsSimulating ? Physics.GetType().Name : "none",
                     Physics.BodyCount, Physics.StaticShapeCount,

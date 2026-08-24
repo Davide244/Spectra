@@ -207,7 +207,42 @@ public sealed partial class Scene
             _subtractiveBrushNodes.Add(node);
         else
             _subtractiveBrushNodes.Remove(node);
+
+        // A SUBTRACTIVE PART IS INERT, and nothing else would ever say so.
+        // Part means "not in the placement list", so it carves nothing; and the
+        // additive-only rule above means it draws nothing either. The brush is
+        // therefore excluded from both halves of the engine and does exactly
+        // nothing, which is invisible in every sense: no error, no geometry, no
+        // hole. The two bits are independent by design and this is the one
+        // combination that cancels itself, so it is counted rather than left to
+        // be discovered.
+        if (node.Brush is { Operation: BrushOperation.Subtractive } &&
+            node.BrushKind == BrushKind.Part)
+        {
+            _inertPartBrushNodes.Add(node);
+        }
+        else
+        {
+            _inertPartBrushNodes.Remove(node);
+        }
     }
+
+    private readonly HashSet<SceneNode> _inertPartBrushNodes = [];
+
+    /// <summary>
+    /// Nodes carrying a brush that is both <see cref="BrushKind.Part"/> and
+    /// subtractive, and therefore does nothing at all.
+    /// </summary>
+    /// <remarks>
+    /// <b>Always a mistake, never a configuration.</b> A negative brush's whole
+    /// function is to take part in the carve, and <see cref="BrushKind.Part"/>
+    /// is precisely the declaration that a brush does not. The two cancel, the
+    /// brush disappears from the world and from the draw list, and the author
+    /// sees a hole that never appeared. Reported rather than thrown because the
+    /// editor converts whole selections between kinds in one command, and a
+    /// throw there would refuse the operation for one brush out of a hundred.
+    /// </remarks>
+    public int InertPartBrushCount => _inertPartBrushNodes.Count;
 
     internal void OnNodeSubtreeMoved(SceneNode node)
     {
