@@ -66,6 +66,7 @@ try
         _ => throw new NotSupportedException($"Backend {options.Backend} is not yet implemented; pick opengl, d3d11, or d3d12."),
     };
 
+    SceneManager.ScatterGridOverride = options.ScatterGrid;
     var sceneManager = new SceneManager(loggerFactory.CreateLogger<SceneManager>());
     var assetManager = new AssetManager(loggerFactory.CreateLogger<AssetManager>());
     var audioManager = new AudioManager(loggerFactory.CreateLogger<AudioManager>());

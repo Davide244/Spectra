@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 
 namespace SpectraEngine.Core.Diagnostics;
@@ -125,7 +125,7 @@ public sealed class FrameProfiler
     /// The phases worth naming, as "name ms" pairs, largest first, for a log
     /// line. Allocates: call it on a log cadence, never per frame.
     /// </summary>
-    public string Describe(int top = 4)
+    public string Describe(int top = 6)
     {
         Span<int> order = stackalloc int[PhaseCount];
         for (int i = 0; i < PhaseCount; i++) order[i] = i;

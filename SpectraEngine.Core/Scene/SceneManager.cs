@@ -38,6 +38,18 @@ public sealed class SceneManager
     // jittered within the site so parts never touch each other or the center
     // structures — the initial compile stays mostly-isolated carves, i.e. fast.
     private const int PartGridSites = 14;      // 14x14 sites, 4 skipped at the center
+
+    /// <summary>
+    /// Overrides the scatter grid's side length, for measuring how cost scales
+    /// with content. Null keeps the demo's own <c>14</c>.
+    /// </summary>
+    /// <remarks>
+    /// The area grows with it so the spacing, and therefore the isolation
+    /// between parts, is unchanged: a denser grid would start fusing parts into
+    /// each other and would measure a different CSG problem rather than more of
+    /// the same one.
+    /// </remarks>
+    public static int? ScatterGridOverride { get; set; }
     private const float PartAreaSize = 200f;   // world units per side
 
     // The demo's content, as content-root-relative paths — never asset objects.
@@ -627,14 +639,15 @@ public sealed class SceneManager
     // stay comparable. Returns the number of parts added.
     private static int AddScatteredParts(Scene scene)
     {
+        int sites = ScatterGridOverride ?? PartGridSites;
         const float spacing = PartAreaSize / PartGridSites;
-        const float halfArea = PartAreaSize * 0.5f;
+        float halfArea = sites * spacing * 0.5f;
         ulong state = 0x5CA77E12EDB0B5EDUL;
 
         int count = 0;
-        for (int gx = 0; gx < PartGridSites; gx++)
+        for (int gx = 0; gx < sites; gx++)
         {
-            for (int gz = 0; gz < PartGridSites; gz++)
+            for (int gz = 0; gz < sites; gz++)
             {
                 // Skip sites whose square overlaps the hand-authored center
                 // ([-5,5]^2 in x/z covers the floor, both walls and both

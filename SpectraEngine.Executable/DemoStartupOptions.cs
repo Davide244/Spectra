@@ -60,7 +60,8 @@ internal sealed record DemoStartupOptions(
     bool Profile = false,
     bool? DebugLayer = null,
     string? Adapter = null,
-    (int Width, int Height)? WindowSize = null)
+    (int Width, int Height)? WindowSize = null,
+    int? ScatterGrid = null)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -73,7 +74,7 @@ internal sealed record DemoStartupOptions(
         "Usage: SpectraEngine.Executable [opengl|d3d11|d3d12] [--selftest[=true|false]] " +
         "[--fullscreen-cycle[=seconds]] [--play[=true|false]] [--offscreen-probe[=true|false]] " +
         "[--pipeline=<name>] [--shadows[=true|false]] [--profile[=true|false]] " +
-        "[--debug-layer[=true|false]] [--adapter=<name>] [--size=WxH].";
+        "[--debug-layer[=true|false]] [--adapter=<name>] [--size=WxH] [--parts=<grid>].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -105,6 +106,7 @@ internal sealed record DemoStartupOptions(
         bool? debugLayer = null;
         string? adapter = null;
         (int, int)? windowSize = null;
+        int? scatterGrid = null;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -196,6 +198,12 @@ internal sealed record DemoStartupOptions(
                 case "size" or "resolution":
                     windowSize = ParseSize(value, token);
                     continue;
+
+                // Side length of the demo's scattered-brush grid. The world
+                // grows with it, so this adds content without changing density.
+                case "parts" or "scatter":
+                    scatterGrid = ParseCount(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -210,7 +218,7 @@ internal sealed record DemoStartupOptions(
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
-                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize);
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -218,12 +226,12 @@ internal sealed record DemoStartupOptions(
                 selfTestEnvironmentValue.Trim(), SelfTestEnvironmentVariable);
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
-                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize);
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
-            fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize);
+            fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid);
     }
 
     // A switch that takes a name needs one: a bare --pipeline says nothing
@@ -251,6 +259,14 @@ internal sealed record DemoStartupOptions(
         }
 
         return (width, height);
+    }
+
+    private static int ParseCount(string? value, string origin)
+    {
+        if (!int.TryParse(value, out int count) || count <= 0)
+            throw new ArgumentException($"'{origin}' needs a positive count, e.g. --parts=28. {Usage}");
+
+        return count;
     }
 
     // Aliases mirror the SpectraShade compiler CLI for consistency.
