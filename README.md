@@ -103,7 +103,7 @@ flowchart LR
 
 ### The dependencies that are not linear
 
-Four real constraints cut across the spine, and they are the reason the arcs
+Five real constraints cut across the spine, and they are the reason the arcs
 exist at all:
 
 - **`R3` offscreen render targets was the rendering keystone, and it has
@@ -122,6 +122,13 @@ exist at all:
   animation arc has skeletons, clips and pose blending, all on the CPU;
   `vec4[N]` and `mat4[N]` are settable on all three backends now, so an array of
   bone matrices is no longer the blocker.
+- **Performance is a pillar, not a phase, and it has a measured baseline.**
+  The engine targets low-power integrated GPUs as first-class hardware.
+  [docs/performance.md](docs/performance.md) is the catalogue: what exists,
+  what a frame costs today, and every technique worth adding with what each
+  would buy here. Nothing on that list should be acted on without a
+  measurement first, because the two largest wins found so far were both
+  invisible to reasoning.
 - **A dedicated server waits on headless world compilation.**
   `Scene.RebuildStaticWorld` still needs a `Renderer`, which is the next
   coupling to break before anything can simulate a world without a GPU.
@@ -141,6 +148,7 @@ exist at all:
 | **O** Scripting | [roblox-onboarding](docs/roblox-onboarding.md) | none | O0 Luau gate |
 | **C** Console | [console](docs/console.md) | none | C0 cvar registry |
 | **N** Networking | [networking](docs/networking.md) | none | N0 transport gate |
+| **X** Performance | [performance](docs/performance.md) | frustum culling, chunking, cascades, pooling | G-buffer trim, render scale, chunk BVH |
 | **H** Uno host | [ROADMAP](ROADMAP.md) | none | H1 EngineHost seam |
 
 Arc **A** is new and has no design document yet.
