@@ -389,6 +389,47 @@ a subsystem. **Blocks on:** the cook pipeline.
 
 ---
 
+## 9b. Stop making garbage: allocation and the collector
+
+**The heap size is not the measurement, and looking at it is how this went
+unnoticed.** The demo's managed heap sits between 4 and 20 MB and never grows,
+which reads as healthy in any memory graph. It is flat because gen0 collects as
+fast as the engine fills it, and the actual rate is **320 to 400 MB/s, with 18
+to 23 gen0 collections a second**. A gen0 collection stops every thread,
+including the render thread, so that is a pause roughly every third frame at 60
+fps: exactly the stutter a smoothed average frame time cannot show.
+
+The periodic stats line reports it now, split by where it came from:
+
+```
+memory: 402.1 MB/s allocated (27.2 on the render thread), 22.6/s gen0, 1 gen1, 1 gen2, 4 MB heap
+```
+
+**93% of it is the static-world recompile, and the number per compile is
+stable.** Two samples from one run: 555 compiles/s against 320 MB/s, and 672
+against 402, which is **0.59 MB per incremental recompile** both times. The
+frame loop's own share is 24 to 28 MB/s at about 1,450 fps, so roughly **18 KB
+per frame**.
+
+Two honest caveats before anyone optimises this. The demo is a deliberate
+stress case: `PillarA` bobs as a WORLD brush specifically to force an
+incremental recompile every frame, and the engine's own guidance is that a brush
+which moves under simulation should be a `BrushKind.Part` and recompile nothing.
+A normal scene does not recompile 670 times a second. And the compile runs on
+the thread pool, so its allocation costs a worker rather than the frame, right
+up until the collection it triggers stops the frame anyway.
+
+Where to look first, in order of what the numbers say:
+
+- **`CsgIncrementalCompiler`'s per-compile arrays.** 0.59 MB per edit, and the
+  compile already carries paged copy-on-write state between runs; the temporary
+  buffers are the obvious pooling candidate.
+- **18 KB per frame on the render thread.** Small, but it is the share that
+  cannot be moved off the critical path. Worth attributing with a per-phase
+  allocation counter before guessing.
+- **`GCSettings.LatencyMode` / server GC** change when the pauses happen, not
+  how much garbage there is. Reach for them after the rate, not instead of it.
+
 ## 10. Know which of the above to do: measurement
 
 ### 10.1 GPU timing

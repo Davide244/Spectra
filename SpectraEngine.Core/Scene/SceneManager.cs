@@ -817,6 +817,12 @@ public sealed class SceneManager
         return rate;
     }
 
+    private long _lastAllocatedBytes;
+    private long _lastRenderThreadBytes;
+    private int _lastGen0;
+    private int _lastGen1;
+    private int _lastGen2;
+
     private double MeshCreationRate()
     {
         if (_renderer is null) return 0;
@@ -824,6 +830,51 @@ public sealed class SceneManager
         double rate = (now - _lastMeshesCreated) / CompileLogIntervalSeconds;
         _lastMeshesCreated = now;
         return rate;
+    }
+
+    /// <summary>
+    /// Managed allocation over the last log interval, and what the collector
+    /// did about it.
+    /// </summary>
+    /// <remarks>
+    /// <b>The rate is the number, not the heap size.</b> A frame loop that
+    /// allocates steadily keeps a FLAT heap, because gen0 collects as fast as it
+    /// fills, so "memory is not growing" says nothing at all about whether this
+    /// engine allocates per frame. What it costs instead is a gen0 pause in the
+    /// middle of a frame, which is exactly the stutter a game cannot have and
+    /// exactly what a smoothed average frame time hides. Reported as a rate and
+    /// a collection count so both are visible without a profiler attached.
+    /// Sampled once per interval: two counter reads, not a per-frame cost.
+    /// </remarks>
+    private string DescribeMemory()
+    {
+        long allocated = GC.GetTotalAllocatedBytes(precise: false);
+        int gen0 = GC.CollectionCount(0);
+        int gen1 = GC.CollectionCount(1);
+        int gen2 = GC.CollectionCount(2);
+
+        // This method runs on the render thread, so the second counter is the
+        // frame loop's OWN share. Splitting them is the whole point: garbage
+        // made by a background compile costs a worker's time, garbage made here
+        // costs the frame, and one total cannot tell them apart.
+        long onThisThread = GC.GetAllocatedBytesForCurrentThread();
+
+        double megabytesPerSecond =
+            (allocated - _lastAllocatedBytes) / (1024.0 * 1024.0) / CompileLogIntervalSeconds;
+        double renderMegabytesPerSecond =
+            (onThisThread - _lastRenderThreadBytes) / (1024.0 * 1024.0) / CompileLogIntervalSeconds;
+        string collections =
+            $"{(gen0 - _lastGen0) / CompileLogIntervalSeconds:0.0}/s gen0, " +
+            $"{gen1 - _lastGen1} gen1, {gen2 - _lastGen2} gen2";
+
+        _lastAllocatedBytes = allocated;
+        _lastRenderThreadBytes = onThisThread;
+        _lastGen0 = gen0;
+        _lastGen1 = gen1;
+        _lastGen2 = gen2;
+
+        return $"{megabytesPerSecond:0.0} MB/s allocated ({renderMegabytesPerSecond:0.0} on the render thread), " +
+               $"{collections}, {GC.GetTotalMemory(forceFullCollection: false) / (1024 * 1024)} MB heap";
     }
 
     // One phrase for the shadow state, because "shadows are on" and "shadows
@@ -931,6 +982,7 @@ public sealed class SceneManager
                     "undo {UndoDepth} / redo {RedoDepth}; " +
                     "rendering: {Pipeline} pipeline, {Shadows}, {FrameMs:0.00} ms/frame ({Fps:0} fps) [{Phases}]; " +
                     "churn: {MeshRate:0} mesh(es)/s, {CompileRate:0} compile(s)/s, {Pooled} buffer(s) pooled; " +
+                    "memory: {Memory}; " +
                     "character: {CharacterMode}",
                     assets?.TextureCount ?? 0, assets?.MaterialCount ?? 0,
                     _modelsRequested, _modelsPlaced,
@@ -949,6 +1001,7 @@ public sealed class SceneManager
                     editor?.UndoDepth ?? 0, editor?.RedoDepth ?? 0,
                     _renderer?.CurrentPipelineName ?? "none", DescribeShadows(_renderer), FrameTimeMs, Fps,
                     _renderer?.Profiler.Describe() ?? "not measured", MeshCreationRate(), CompileRate(scene), _renderer?.PooledBufferCount ?? 0,
+                    DescribeMemory(),
                     DescribeCharacter());
             }
 
