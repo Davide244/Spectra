@@ -167,8 +167,8 @@ internal sealed unsafe class D3D12Mesh : Mesh
         var pso = program.GetPso(
             Layout, _renderer.CurrentFillMode, PrimitiveTopologyType.Triangle,
             _renderer.CurrentDepthMode, BlendMode.Opaque, _renderer.CurrentDepthBias, in target);
-        list->SetPipelineState(pso);
-        list->IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+        _renderer.BindPipelineState(list, pso);
+        _renderer.BindTopology(list, D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
         fixed (VertexBufferView* vb = &_vbView)
         {
             list->IASetVertexBuffers(0, 1, vb);

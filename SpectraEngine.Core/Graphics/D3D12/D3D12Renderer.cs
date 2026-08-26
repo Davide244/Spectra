@@ -212,10 +212,69 @@ public sealed unsafe class D3D12Renderer : Renderer
     /// </summary>
     internal ulong FrameNumber { get; private set; }
 
-    // TEMP-PROBE: redundant-state elimination experiment
-    internal nint ProbeBoundRootSig;
-    internal nint ProbeBoundPso;
-    internal int ProbeBoundTopology = -1;
+    // ─── last-bound state, per command list recording ────────────────────────
+    //
+    // The deferred geometry pass draws every item with one program and one PSO,
+    // yet each draw used to re-issue the full block: root signature, PSO,
+    // topology, and a root CBV per cbuffer. All of it is command-list state
+    // that persists across draws, so a draw that repeats the previous one can
+    // skip the calls entirely. Tracked here rather than per program because the
+    // state belongs to the LIST: it survives program switches and dies at the
+    // frame's list reset, where ResetLastBoundState is owed. Every set of these
+    // states must go through the Bind* methods below, or the cache answers for
+    // a bind that never happened, which is the D3D11 bind-cache bug all over.
+    private nint _lastRootSignature;
+    private nint _lastPso;
+    private int _lastTopology = -1;
+
+    // Root CBV GPU addresses by root parameter index, meaningful only under
+    // _lastRootSignature (a root signature CHANGE invalidates root bindings,
+    // so BindRootSignature clears this; a redundant re-set of the same one
+    // leaves bindings intact per the D3D12 spec, and is skipped anyway).
+    private readonly ulong[] _lastRootCbv = new ulong[16];
+
+    internal void BindRootSignature(ID3D12GraphicsCommandList* list, nint rootSignature)
+    {
+        if (_lastRootSignature == rootSignature) return;
+        _lastRootSignature = rootSignature;
+        Array.Clear(_lastRootCbv);
+        list->SetGraphicsRootSignature((ID3D12RootSignature*)rootSignature);
+    }
+
+    internal void BindRootCbv(ID3D12GraphicsCommandList* list, int rootParam, ulong gpuVa)
+    {
+        if ((uint)rootParam < (uint)_lastRootCbv.Length)
+        {
+            if (_lastRootCbv[rootParam] == gpuVa) return;
+            _lastRootCbv[rootParam] = gpuVa;
+        }
+        list->SetGraphicsRootConstantBufferView((uint)rootParam, gpuVa);
+    }
+
+    internal void BindPipelineState(ID3D12GraphicsCommandList* list, ID3D12PipelineState* pso)
+    {
+        if (_lastPso == (nint)pso) return;
+        _lastPso = (nint)pso;
+        list->SetPipelineState(pso);
+    }
+
+    internal void BindTopology(ID3D12GraphicsCommandList* list, D3DPrimitiveTopology topology)
+    {
+        if (_lastTopology == (int)topology) return;
+        _lastTopology = (int)topology;
+        list->IASetPrimitiveTopology(topology);
+    }
+
+    // The list reset drops every binding, and a shader hot-reload earlier in
+    // the frame may have recreated objects at recycled addresses; both are why
+    // this runs at the top of every frame, before anything records.
+    private void ResetLastBoundState()
+    {
+        _lastRootSignature = 0;
+        _lastPso = 0;
+        _lastTopology = -1;
+        Array.Clear(_lastRootCbv);
+    }
 
     public D3D12Renderer(ILogger<Renderer> logger, IShaderCompiler shaderCompiler)
         : base(logger, shaderCompiler)
@@ -339,25 +398,34 @@ public sealed unsafe class D3D12Renderer : Renderer
         SilkMarshal.ThrowHResult(DevicePtr->CreateCommandQueue(&queueDesc, &queueGuid, (void**)&queue));
         _queue = ComOwnership.Own(queue);
 
-        // Ask for the DXGI debug layer first and fall back silently, same shape
-        // as the D3D12 debug layer above: it is what turns a bare
-        // DXGI_ERROR_INVALID_CALL out of ResizeBuffers into a sentence saying
-        // which reference is still outstanding.
+        // The DXGI debug layer is what turns a bare DXGI_ERROR_INVALID_CALL out
+        // of ResizeBuffers into a sentence saying which reference is still
+        // outstanding, but it is validation, and it obeys the same gate as the
+        // device layer above. This request used to be unconditional, which kept
+        // DXGI validating the Present path in every build on any machine with
+        // Graphics Tools, --debug-layer=false included; D3D11 had the gate
+        // right, so "validation off" measured different things per backend.
         IDXGIFactory2* factory = null;
         Guid factoryGuid = IDXGIFactory2.Guid;
-        int factoryHr = _dxgi.CreateDXGIFactory2(
-            DxgiDebugMessages.CreateFactoryDebug, &factoryGuid, (void**)&factory);
-        if (factoryHr >= 0)
+        bool debugFactory = false;
+        if (EnableDebugLayer)
         {
-            _dxgiMessages = DxgiDebugMessages.Acquire(_dxgi);
-            _logger.LogInformation(
-                "DXGI debug layer {State}.", _dxgiMessages.IsAvailable ? "active" : "requested but no info queue");
+            int factoryHr = _dxgi.CreateDXGIFactory2(
+                DxgiDebugMessages.CreateFactoryDebug, &factoryGuid, (void**)&factory);
+            debugFactory = factoryHr >= 0;
+            if (debugFactory)
+            {
+                _dxgiMessages = DxgiDebugMessages.Acquire(_dxgi);
+                _logger.LogInformation(
+                    "DXGI debug layer {State}.", _dxgiMessages.IsAvailable ? "active" : "requested but no info queue");
+            }
+            else
+            {
+                _logger.LogInformation("DXGI debug layer unavailable (hr=0x{Hr:X}); creating the factory without it.", factoryHr);
+            }
         }
-        else
-        {
-            _logger.LogInformation("DXGI debug layer unavailable (hr=0x{Hr:X}); creating the factory without it.", factoryHr);
+        if (!debugFactory)
             SilkMarshal.ThrowHResult(_dxgi.CreateDXGIFactory2(0u, &factoryGuid, (void**)&factory));
-        }
 
         // Flip model is mandatory on D3D12. The per-frame full fence sync means
         // the rotating back buffer is never in flight when we touch it.
@@ -570,7 +638,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         // Fresh per-frame arenas — safe because the previous frame fully
         // synced on the fence before this one starts.
         FrameNumber++;
-        ProbeBoundRootSig = 0; ProbeBoundPso = 0; ProbeBoundTopology = -1; // TEMP-PROBE
+        ResetLastBoundState();
         _uploadRingOffset = 0;
         _srvRingOffset = 0;
         _samplerRingOffset = 0;

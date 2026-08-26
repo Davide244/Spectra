@@ -57,8 +57,8 @@ internal sealed unsafe class D3D12LineBatch : IDisposable
         var pso = _shader.GetPso(
             LineLayout, FillMode.Solid, PrimitiveTopologyType.Line,
             DepthMode.None, BlendMode.Opaque, DepthBias.None, in target);
-        list->SetPipelineState(pso);
-        list->IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
+        _renderer.BindPipelineState(list, pso);
+        _renderer.BindTopology(list, D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
 
         var view = new VertexBufferView
         {

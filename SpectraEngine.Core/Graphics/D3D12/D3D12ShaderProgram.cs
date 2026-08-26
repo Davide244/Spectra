@@ -502,7 +502,7 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
         var list = _renderer.CurrentList;
         if (list is null) return;
 
-        list->SetGraphicsRootSignature((ID3D12RootSignature*)_rootSignature.Handle);
+        _renderer.BindRootSignature(list, (nint)_rootSignature.Handle);
         _renderer.CurrentProgram = this;
 
         // A clean cbuffer rebinds the slice it already uploaded this frame:
@@ -522,7 +522,7 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
                 slot.Dirty = false;
                 slot.LastUploadFrame = frame;
             }
-            list->SetGraphicsRootConstantBufferView((uint)i, slot.GpuVa);
+            _renderer.BindRootCbv(list, i, slot.GpuVa);
         }
 
         if (_srvTableParam >= 0 && _srvCount > 0)
