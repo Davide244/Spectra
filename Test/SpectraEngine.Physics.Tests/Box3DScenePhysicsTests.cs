@@ -228,6 +228,85 @@ public sealed class Box3DScenePhysicsTests
     }
 
     [Fact]
+    public void A_full_compile_optimises_the_static_tree_exactly_once()
+    {
+        // The full rebuild's one intended use: after bulk creation. Load time
+        // and structural edits already pay O(world) for the compile itself, so
+        // the tree optimisation rides along; re-syncing an unchanged world must
+        // not repeat it.
+        RequireNative();
+        var scene = new Scene("Test");
+        AddWorldBrush(scene, "a", Vector3.Zero, new Vector3(2f, 1f, 2f));
+        scene.RebuildStaticWorld(new FakeRenderer());
+
+        using var physics = new Box3DScenePhysics(NullLogger.Instance);
+        physics.SyncStaticWorld(scene);
+        physics.SyncStaticWorld(scene);
+
+        physics.StaticTreeRebuilds.ShouldBe(1);
+    }
+
+    [Fact]
+    public void Incremental_syncs_do_not_rebuild_the_static_tree()
+    {
+        // b3World_RebuildStaticTree is O(world log world) over every static
+        // hull, and the sync runs on the render thread once per landed compile,
+        // which is once per frame while a world brush is dragged. Box3D inserts
+        // and removes static leaves at shape create/destroy time, so skipping
+        // the rebuild loses nothing but tree QUALITY; that is amortised over
+        // accumulated churn instead. This is what keeps physics on the same
+        // world-size-independent footing as the mesh swap, and it is asserted
+        // here because the call that broke it looked like a harmless closing
+        // line (docs/physics.md row: the API's own header says internal testing).
+        RequireNative();
+        var scene = new Scene("Test");
+        SceneNode node = AddWorldBrush(scene, "a", Vector3.Zero, new Vector3(2f, 1f, 2f));
+        var renderer = new FakeRenderer();
+        PumpUntil(scene, renderer, () => scene.StaticWorld is not null, "the initial compile");
+
+        using var physics = new Box3DScenePhysics(NullLogger.Instance);
+        physics.SyncStaticWorld(scene);
+        int rebuildsAfterLoad = physics.StaticTreeRebuilds;
+
+        // 160 in-place edits: enough that GROSS destroy+create churn (2 per
+        // sync) would cross the 256 amortisation floor, so this pins that
+        // in-place cell rebuilds count as NET zero. The movements cycle inside
+        // one cell on purpose; a cell-ownership crossing is a real net change
+        // and may legitimately accrue.
+        for (int i = 1; i <= 160; i++)
+        {
+            node.LocalPosition = new Vector3(0.01f * (i % 8), 0f, 0f);
+            int landed = scene.StaticWorldCompileCount;
+            PumpUntil(scene, renderer,
+                () => scene.StaticWorldCompileCount > landed, "an incremental compile to land");
+            scene.StaticWorld!.DirtyCells.ShouldNotBeNull(
+                "the steady-state edit must reach physics through the incremental branch");
+            physics.SyncStaticWorld(scene);
+        }
+
+        physics.StaticTreeRebuilds.ShouldBe(
+            rebuildsAfterLoad,
+            "an animating brush rebuilds the same cell in place, which is net-zero churn and must never re-arm the rebuild");
+    }
+
+    // Same shape as SceneAsyncCompileTests.PumpUntil: the test thread plays the
+    // render thread and only the CSG compile runs off-thread.
+    private static void PumpUntil(
+        Scene scene, FakeRenderer renderer, Func<bool> condition, string description)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            scene.ProcessStaticWorldCompilation(renderer, NullLogger.Instance);
+            if (condition())
+                return;
+            if (stopwatch.Elapsed > TimeSpan.FromSeconds(30))
+                throw new TimeoutException($"Timed out waiting for {description}.");
+            System.Threading.Thread.Sleep(1);
+        }
+    }
+
+    [Fact]
     public void Disposing_twice_is_safe()
     {
         // The library decrements its global world count BEFORE validating the
