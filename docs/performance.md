@@ -72,6 +72,18 @@ requirements. The open-world pillar rules them out; see `CLAUDE.md`.
 
 From the demo, D3D11, validation off, on an RTX 4070 Ti unless stated.
 
+> **Baseline caveat (2026-08-26):** every D3D11 number in this section was
+> measured while commit 0666406's leftover per-program texture-bind skip cache
+> was live. That cache was never reset when BeginPass or ClearState nulled the
+> context's SRV slots, so from the second frame on, D3D11 passes sampled null
+> SRVs (zeros, with no error and no debug-layer message) instead of textures.
+> The fix moved the cache to the context with a reset at both clear sites
+> (`D3D11BindCache`). CPU-side numbers (per-draw, per-batch) are only mildly
+> distorted; the per-pixel integrated numbers are the suspect ones and should
+> be re-measured on the fixed build before being cited for new decisions.
+> First post-fix sample on the development machine: 0.23 ms/frame for the
+> default deferred demo with shadows, validation off.
+
 **Per draw call:** about **0.85 µs**, linear in visible draws across a 60x
 range. This is the number that decides how many objects can be on screen.
 
@@ -263,6 +275,14 @@ tests assert. **Blocks on:** nothing.
 Draws are submitted in emission order, so the same shader and material can be
 bound repeatedly. Sorting by (shader, material, mesh) collapses redundant binds.
 
+*Partly pre-empted without a sort (2026-08-26):* D3D12 now tracks last-bound
+root signature, PSO, topology and root CBVs on the renderer and skips redundant
+re-sets (`BindRootSignature`/`BindPipelineState`/`BindTopology`/`BindRootCbv`),
+and D3D11 skips redundant SRV/sampler binds through the context-level
+`D3D11BindCache`; draws that repeat the previous state no longer pay it, in
+emission order. A sort still helps by MAKING draws repeat state (and by
+batching texture-table changes, which are still re-staged per draw on D3D12).
+
 **Buys:** modest on D3D11/GL, more on D3D12 where a PSO change is expensive.
 **Costs:** a sort with a stable tie-break, or determinism tests break.
 **Blocks on:** nothing.
@@ -293,15 +313,29 @@ starved in a way discrete cards are not.
 
 ### 7.1 Trim the G-buffer — *do this one first*
 
-36 bytes per pixel across five attachments. **Two of them (emissive, custom) are
-written every frame and read by nothing.** Dropping them is 36 → 20 bytes/px.
+36 bytes per pixel across five attachments. **Only `custom` is dead** (written
+as zeros by the geometry pass, no sampler declared for it in the light pass).
+**`emissive` is NOT: an earlier revision of this section claimed both were
+"read by nothing", and that was never true.** The light pass has sampled
+`uEmissive` at every non-sky pixel since the commit that created the G-buffer
+(3d8ae0e; `DeferredLight.spectrashade`, the `total + uEmissive.Sample(...)`
+line). Executing the old plan as written breaks emissive materials or samples
+an unbound slot.
 
-Measured at 1080p on the UHD 770: deferred costs 3.1 ms more than forward, which
-is almost exactly the round-trip bandwidth of that G-buffer. A 44% cut is worth
-about 1.3 ms.
+So the free cut is `custom` alone: 36 → 28 bytes/px, roughly half the saving
+this section used to promise. Dropping `emissive` too is a real option but a
+FEATURE decision, not a free one: it means either giving up emissive surfaces
+or moving emission out of the G-buffer (e.g. a separate forward pass over
+emissive geometry).
 
-**Buys:** ~1.3 ms at 1080p on integrated. **Costs:** nothing; add them back when
-a shading model needs them. **Blocks on:** nothing.
+Measured at 1080p on the UHD 770: deferred costs 3.1 ms more than forward,
+which is almost exactly the round-trip bandwidth of that G-buffer. Cutting 8 of
+36 bytes/px is worth roughly 0.7 ms; the full 16 (with the emissive feature
+decision made) roughly 1.3 ms.
+
+**Buys:** ~0.7 ms at 1080p on integrated, ~1.3 ms if emissive goes too.
+**Costs:** nothing for `custom`; the emissive feature question for `emissive`.
+**Blocks on:** nothing.
 
 ### 7.2 Pack the G-buffer harder
 
@@ -423,10 +457,21 @@ Where to look first, in order of what the numbers say:
 
 - **`CsgIncrementalCompiler`'s per-compile arrays.** 0.59 MB per edit, and the
   compile already carries paged copy-on-write state between runs; the temporary
-  buffers are the obvious pooling candidate.
-- **18 KB per frame on the render thread.** Small, but it is the share that
-  cannot be moved off the critical path. Worth attributing with a per-phase
-  allocation counter before guessing.
+  buffers are the obvious pooling candidate. A 2026-08 audit found the larger
+  share is not scratch but the identity cascade seeded by re-snapping every
+  resident brush's surfaces per compile (snap results are memoized within one
+  compile and never carried in `CsgWorldCarry`), so carrying snap results is
+  the bigger lever than pooling the containers.
+- **18 KB per frame on the render thread, largely attributed and fixed
+  (2026-08-26).** The largest slice was `CreateMesh` materialising CPU copies
+  (positions/normals/indices) for every rebuilt chunk mesh, which nothing ever
+  read for chunks or part meshes; CPU mirrors are now opt-in per creation
+  (`MeshCpuAccess`) and both hot call sites pass `None`, which also removed a
+  permanent second copy of all world geometry from the managed heap. The next
+  slices are the per-launch `PagedArray` placement-page clone (~17 KB per
+  clone at the demo's 234 brushes, ~74 KB per touched page past 1,024 brushes
+  because pages are 1,024 slots of a 72-byte struct) and small per-launch
+  scratch (Traverse's stack, footprint arrays, the Task.Run closure).
 - **`GCSettings.LatencyMode` / server GC** change when the pauses happen, not
   how much garbage there is. Reach for them after the rate, not instead of it.
 
