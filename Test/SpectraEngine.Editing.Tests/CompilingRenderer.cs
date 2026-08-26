@@ -42,7 +42,8 @@ internal sealed class CompilingRenderer : Renderer
     protected override void SetViewportCore(int x, int y, int width, int height) { }
 
     public override Mesh CreateMesh(
-        ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
+        ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices,
+        ReadOnlySpan<VertexAttribute> attributes, MeshCpuAccess cpuAccess = MeshCpuAccess.Retained)
     {
         CreatedMeshCount++;
         return new EmptyMesh((uint)indices.Length);

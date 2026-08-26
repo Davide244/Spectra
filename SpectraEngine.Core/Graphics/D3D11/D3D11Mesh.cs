@@ -1,9 +1,7 @@
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D11;
 using Silk.NET.DXGI;
-using SpectraEngine.Core.Bsp;
 using System;
-using System.Numerics;
 
 namespace SpectraEngine.Core.Graphics.D3D11;
 
@@ -28,11 +26,7 @@ internal sealed unsafe class D3D11Mesh : Mesh
         ComPtr<ID3D11Buffer> ib,
         ComPtr<ID3D11InputLayout> layout,
         uint stride,
-        uint indexCount,
-        Vector3[] positions,
-        Vector3[] normals,
-        uint[] indices,
-        Aabb localBounds)
+        uint indexCount)
     {
         _context = context;
         _vertexBuffer = vb;
@@ -40,10 +34,6 @@ internal sealed unsafe class D3D11Mesh : Mesh
         _inputLayout = layout;
         _stride = stride;
         IndexCount = indexCount;
-        Positions = positions;
-        Normals = normals;
-        Indices = indices;
-        LocalBounds = localBounds;
     }
 
     internal static D3D11Mesh Create(
@@ -51,7 +41,8 @@ internal sealed unsafe class D3D11Mesh : Mesh
         ReadOnlySpan<float> vertices,
         ReadOnlySpan<uint> indices,
         ReadOnlySpan<VertexAttribute> attributes,
-        ReadOnlyMemory<byte> vsBytecodeForLayout)
+        ReadOnlyMemory<byte> vsBytecodeForLayout,
+        MeshCpuAccess cpuAccess)
     {
         ComPtr<ID3D11Buffer> vb = CreateBuffer(device, vertices, BindFlag.VertexBuffer);
         ComPtr<ID3D11Buffer> ib = CreateBuffer(device, indices, BindFlag.IndexBuffer);
@@ -61,19 +52,15 @@ internal sealed unsafe class D3D11Mesh : Mesh
         for (int i = 0; i < attributes.Length; i++)
             stride += attributes[i].ComponentCount * sizeof(float);
 
-        // Same CPU-side cache as the OpenGL mesh — positions/normals/AABB are
-        // needed for debug visualisations and bounds queries.
-        (Vector3[] positions, Vector3[] normals) = ExtractStreams(vertices, attributes);
-        Aabb localBounds = ComputeBounds(positions);
-
         // GetImmediateContext hands out a counted reference like any Create*
         // call, so it is Own'd (not wrapped) and released by Dispose below.
         ID3D11DeviceContext* ctxPtr = null;
         ((ID3D11Device*)device.Handle)->GetImmediateContext(&ctxPtr);
         var ctx = ComOwnership.Own(ctxPtr);
 
-        return new D3D11Mesh(ctx, vb, ib, layout, stride, (uint)indices.Length,
-            positions, normals, indices.ToArray(), localBounds);
+        var mesh = new D3D11Mesh(ctx, vb, ib, layout, stride, (uint)indices.Length);
+        mesh.InitializeCpuData(vertices, indices, attributes, cpuAccess);
+        return mesh;
     }
 
     private static ComPtr<ID3D11Buffer> CreateBuffer<T>(ComPtr<ID3D11Device> device, ReadOnlySpan<T> data, BindFlag bind) where T : unmanaged
@@ -147,55 +134,6 @@ internal sealed unsafe class D3D11Mesh : Mesh
         4 => Format.FormatR32G32B32A32Float,
         _ => throw new ArgumentOutOfRangeException(nameof(componentCount), $"Unsupported component count {componentCount}"),
     };
-
-    private static (Vector3[] Positions, Vector3[] Normals) ExtractStreams(
-        ReadOnlySpan<float> vertices, ReadOnlySpan<VertexAttribute> attributes)
-    {
-        int stride = 0;
-        int positionOffset = -1;
-        int normalOffset = -1;
-        for (int i = 0; i < attributes.Length; i++)
-        {
-            if (attributes[i].Location == 0) positionOffset = stride;
-            else if (attributes[i].Location == 1) normalOffset = stride;
-            stride += (int)attributes[i].ComponentCount;
-        }
-
-        if (positionOffset < 0 || stride == 0)
-            return ([], []);
-
-        int vertexCount = vertices.Length / stride;
-        var positions = new Vector3[vertexCount];
-        Vector3[] normals = normalOffset >= 0 ? new Vector3[vertexCount] : [];
-
-        for (int i = 0; i < vertexCount; i++)
-        {
-            int b = i * stride;
-            positions[i] = new Vector3(
-                vertices[b + positionOffset],
-                vertices[b + positionOffset + 1],
-                vertices[b + positionOffset + 2]);
-            if (normalOffset >= 0)
-                normals[i] = new Vector3(
-                    vertices[b + normalOffset],
-                    vertices[b + normalOffset + 1],
-                    vertices[b + normalOffset + 2]);
-        }
-        return (positions, normals);
-    }
-
-    private static Aabb ComputeBounds(Vector3[] positions)
-    {
-        if (positions.Length == 0) return new Aabb(Vector3.Zero, Vector3.Zero);
-        var min = new Vector3(float.MaxValue);
-        var max = new Vector3(float.MinValue);
-        for (int i = 0; i < positions.Length; i++)
-        {
-            min = Vector3.Min(min, positions[i]);
-            max = Vector3.Max(max, positions[i]);
-        }
-        return new Aabb(min, max);
-    }
 
     public override void Draw()
     {

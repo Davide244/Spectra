@@ -163,7 +163,10 @@ internal sealed class PartBrushMeshCache
             for (; created < sources.Length; created++)
             {
                 ChunkSubmesh source = sources[created];
-                Mesh gpuMesh = renderer.CreateMesh(source.Vertices, source.Indices, VertexAttribute.StandardLayout);
+                // No CPU copy: a part brush is picked and measured through its
+                // brush planes, never through this mesh (see MeshCpuAccess).
+                Mesh gpuMesh = renderer.CreateMesh(
+                    source.Vertices, source.Indices, VertexAttribute.StandardLayout, MeshCpuAccess.None);
                 submeshes[created] = new BrushSubmesh(
                     source.Material, gpuMesh, resolveMaterial(source.Material));
             }

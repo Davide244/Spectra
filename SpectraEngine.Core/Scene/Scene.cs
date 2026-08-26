@@ -1762,7 +1762,11 @@ public sealed partial class Scene
             for (; created < submeshes.Length; created++)
             {
                 ChunkSubmesh source = sources[created];
-                Mesh gpuMesh = renderer.CreateMesh(source.Vertices, source.Indices, VertexAttribute.StandardLayout);
+                // No CPU copy: chunks are culled by the artifact's render
+                // bounds and queried through the BSP, so a retained mirror is
+                // per-swap garbage nothing reads (see MeshCpuAccess).
+                Mesh gpuMesh = renderer.CreateMesh(
+                    source.Vertices, source.Indices, VertexAttribute.StandardLayout, MeshCpuAccess.None);
                 submeshes[created] = new StaticWorldSubmesh(
                     source, gpuMesh, ResolveWorldMaterial(source.Material));
             }

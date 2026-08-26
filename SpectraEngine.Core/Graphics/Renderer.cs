@@ -506,7 +506,8 @@ public abstract class Renderer
         _fullscreenTriangle ??= CreateMesh(
             FullscreenTriangle.BuildVertices(Backend),
             FullscreenTriangle.Indices,
-            VertexAttribute.StandardLayout);
+            VertexAttribute.StandardLayout,
+            MeshCpuAccess.None);
 
     /// <summary>
     /// Draws <paramref name="source"/> to <paramref name="output"/> through the
@@ -1131,7 +1132,19 @@ public abstract class Renderer
     /// </remarks>
     public abstract bool TrySelectPipeline(string name);
 
-    public abstract Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes);
+    /// <summary>
+    /// Uploads an interleaved vertex/index stream as a GPU mesh.
+    /// <paramref name="cpuAccess"/> decides whether the mesh also keeps CPU
+    /// copies for raycasts, BVH bounds and debug wireframes; pass
+    /// <see cref="MeshCpuAccess.None"/> for meshes nothing reads back (chunk
+    /// meshes, part-brush meshes, full-screen geometry), which the compiler
+    /// churns every frame a world brush moves.
+    /// </summary>
+    public abstract Mesh CreateMesh(
+        ReadOnlySpan<float> vertices,
+        ReadOnlySpan<uint> indices,
+        ReadOnlySpan<VertexAttribute> attributes,
+        MeshCpuAccess cpuAccess = MeshCpuAccess.Retained);
 
     /// <summary>
     /// Disposes a mesh created by <see cref="CreateMesh"/> and drops it from the

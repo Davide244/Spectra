@@ -455,10 +455,11 @@ public class OpenGLRenderer : Renderer
         _logger.LogInformation("Renderer shut down (OpenGL)");
     }
 
-    public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
+    public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices,
+        ReadOnlySpan<VertexAttribute> attributes, MeshCpuAccess cpuAccess = MeshCpuAccess.Retained)
     {
         MeshesCreated++;
-        var mesh = OpenGLMesh.Create(_gl!, vertices, indices, attributes);
+        var mesh = OpenGLMesh.Create(_gl!, vertices, indices, attributes, cpuAccess);
         mesh.Unregister = () => _meshes.Remove(mesh);
         _meshes.Add(mesh);
         return mesh;

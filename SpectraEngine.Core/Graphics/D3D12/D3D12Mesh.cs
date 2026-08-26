@@ -1,9 +1,7 @@
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
-using SpectraEngine.Core.Bsp;
 using System;
-using System.Numerics;
 
 namespace SpectraEngine.Core.Graphics.D3D12;
 
@@ -34,7 +32,8 @@ internal sealed unsafe class D3D12Mesh : Mesh
         D3D12Renderer renderer,
         ReadOnlySpan<float> vertices,
         ReadOnlySpan<uint> indices,
-        ReadOnlySpan<VertexAttribute> attributes)
+        ReadOnlySpan<VertexAttribute> attributes,
+        MeshCpuAccess cpuAccess)
     {
         _renderer = renderer;
 
@@ -76,11 +75,7 @@ internal sealed unsafe class D3D12Mesh : Mesh
         };
 
         IndexCount = (uint)indices.Length;
-        (Vector3[] positions, Vector3[] normals) = ExtractStreams(vertices, attributes);
-        Positions = positions;
-        Normals = normals;
-        Indices = indices.ToArray();
-        LocalBounds = ComputeBounds(positions);
+        InitializeCpuData(vertices, indices, attributes, cpuAccess);
     }
 
     private static void CopyInto<T>(ComPtr<ID3D12Resource> buffer, ReadOnlySpan<T> data, uint byteSize) where T : unmanaged
@@ -104,55 +99,6 @@ internal sealed unsafe class D3D12Mesh : Mesh
         4 => Format.FormatR32G32B32A32Float,
         _ => throw new ArgumentOutOfRangeException(nameof(componentCount), $"Unsupported component count {componentCount}"),
     };
-
-    private static (Vector3[] Positions, Vector3[] Normals) ExtractStreams(
-        ReadOnlySpan<float> vertices, ReadOnlySpan<VertexAttribute> attributes)
-    {
-        int stride = 0;
-        int positionOffset = -1;
-        int normalOffset = -1;
-        for (int i = 0; i < attributes.Length; i++)
-        {
-            if (attributes[i].Location == 0) positionOffset = stride;
-            else if (attributes[i].Location == 1) normalOffset = stride;
-            stride += (int)attributes[i].ComponentCount;
-        }
-
-        if (positionOffset < 0 || stride == 0)
-            return ([], []);
-
-        int vertexCount = vertices.Length / stride;
-        var positions = new Vector3[vertexCount];
-        Vector3[] normals = normalOffset >= 0 ? new Vector3[vertexCount] : [];
-
-        for (int i = 0; i < vertexCount; i++)
-        {
-            int b = i * stride;
-            positions[i] = new Vector3(
-                vertices[b + positionOffset],
-                vertices[b + positionOffset + 1],
-                vertices[b + positionOffset + 2]);
-            if (normalOffset >= 0)
-                normals[i] = new Vector3(
-                    vertices[b + normalOffset],
-                    vertices[b + normalOffset + 1],
-                    vertices[b + normalOffset + 2]);
-        }
-        return (positions, normals);
-    }
-
-    private static Aabb ComputeBounds(Vector3[] positions)
-    {
-        if (positions.Length == 0) return new Aabb(Vector3.Zero, Vector3.Zero);
-        var min = new Vector3(float.MaxValue);
-        var max = new Vector3(float.MinValue);
-        for (int i = 0; i < positions.Length; i++)
-        {
-            min = Vector3.Min(min, positions[i]);
-            max = Vector3.Max(max, positions[i]);
-        }
-        return new Aabb(min, max);
-    }
 
     public override void Draw()
     {

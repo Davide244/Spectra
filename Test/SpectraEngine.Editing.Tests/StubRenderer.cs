@@ -33,7 +33,8 @@ internal sealed class StubRenderer : Renderer
     // No rasteriser, so no viewport. Present because the shadow atlas needs one.
     protected override void SetViewportCore(int x, int y, int width, int height) { }
 
-    public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
+    public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices,
+        ReadOnlySpan<VertexAttribute> attributes, MeshCpuAccess cpuAccess = MeshCpuAccess.Retained)
         => throw new NotSupportedException("StubRenderer creates no GPU resources.");
 
     public override Texture CreateTexture(

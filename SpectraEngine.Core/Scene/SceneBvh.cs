@@ -73,9 +73,13 @@ internal sealed class SceneBvh
 
     private const int Null = -1;
 
-    // A mesh created without CPU-side positions has a meaningless (default)
-    // LocalBounds, so such nodes fall back to a unit box around the node
-    // origin — documented on Scene.Raycast/QueryFrustum.
+    // A mesh whose LocalBounds describes nothing (no position stream at all)
+    // falls back to a unit box around the node origin, documented on
+    // Scene.Raycast/QueryFrustum. Validity comes from Mesh.HasLocalBounds, NOT
+    // from Positions: a MeshCpuAccess.None mesh has empty arrays and perfectly
+    // good bounds, and gating on the arrays would cull it against this box.
+    // The Positions check stays as a fallback for meshes populated without
+    // InitializeCpuData (test doubles), whose bounds arrive with their arrays.
     private static readonly Aabb UnitFallbackBox = new(new Vector3(-0.5f), new Vector3(0.5f));
 
     // One tree node. Internal nodes own the union of their children's fat
@@ -296,7 +300,7 @@ internal sealed class SceneBvh
     }
 
     private static Aabb MeshLocalBounds(Mesh mesh) =>
-        mesh.Positions.Count > 0 ? mesh.LocalBounds : UnitFallbackBox;
+        mesh.HasLocalBounds || mesh.Positions.Count > 0 ? mesh.LocalBounds : UnitFallbackBox;
 
     // --- Node pool -----------------------------------------------------------
 

@@ -1538,10 +1538,11 @@ public sealed unsafe class D3D12Renderer : Renderer
 
     // ─── Renderer factory overrides ──────────────────────────
 
-    public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
+    public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices,
+        ReadOnlySpan<VertexAttribute> attributes, MeshCpuAccess cpuAccess = MeshCpuAccess.Retained)
     {
         MeshesCreated++;
-        var mesh = new D3D12Mesh(this, vertices, indices, attributes);
+        var mesh = new D3D12Mesh(this, vertices, indices, attributes, cpuAccess);
         mesh.Unregister = () => _meshes.Remove(mesh);
         _meshes.Add(mesh);
         return mesh;

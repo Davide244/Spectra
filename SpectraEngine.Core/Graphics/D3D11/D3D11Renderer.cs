@@ -484,12 +484,13 @@ public sealed unsafe class D3D11Renderer : Renderer
         ctx->OMSetDepthStencilState((ID3D11DepthStencilState*)_defaultDepth.Handle, 0);
     }
 
-    public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
+    public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices,
+        ReadOnlySpan<VertexAttribute> attributes, MeshCpuAccess cpuAccess = MeshCpuAccess.Retained)
     {
         MeshesCreated++;
         var litShader = (D3D11ShaderProgram?)DefaultShader
             ?? throw new InvalidOperationException("Default shader must be created before meshes.");
-        var mesh = D3D11Mesh.Create(_device, vertices, indices, attributes, litShader.VertexBytecode);
+        var mesh = D3D11Mesh.Create(_device, vertices, indices, attributes, litShader.VertexBytecode, cpuAccess);
         mesh.Unregister = () => _meshes.Remove(mesh);
         _meshes.Add(mesh);
         return mesh;

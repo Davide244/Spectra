@@ -133,14 +133,15 @@ internal sealed class FakeRenderer : Renderer
     // No rasteriser, so no viewport. Present because the shadow atlas needs one.
     protected override void SetViewportCore(int x, int y, int width, int height) { }
 
-    public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<VertexAttribute> attributes)
+    public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices,
+        ReadOnlySpan<VertexAttribute> attributes, MeshCpuAccess cpuAccess = MeshCpuAccess.Retained)
     {
         if (CreateMeshBudget <= 0)
             throw new InvalidOperationException("Simulated CreateMesh failure (CreateMeshBudget exhausted).");
         if (CreateMeshBudget != int.MaxValue)
             CreateMeshBudget--;
 
-        var mesh = new FakeMesh(vertices.ToArray(), indices.ToArray(), attributes);
+        var mesh = new FakeMesh(vertices.ToArray(), indices.ToArray(), attributes, cpuAccess);
         // Same wiring CreateTexture uses, so DestroyMesh removes it from the
         // live list exactly once.
         mesh.Unregister = () => LiveMeshes.Remove(mesh);
@@ -205,60 +206,24 @@ internal sealed class FakeMesh : Mesh
     public bool Disposed { get; private set; }
 
     public FakeMesh(float[] vertices, uint[] indices)
-        : this(vertices, indices, VertexAttribute.StandardLayout)
+        : this(vertices, indices, VertexAttribute.StandardLayout, MeshCpuAccess.Retained)
     {
     }
 
-    public FakeMesh(float[] vertices, uint[] indices, ReadOnlySpan<VertexAttribute> attributes)
+    public FakeMesh(
+        float[] vertices, uint[] indices, ReadOnlySpan<VertexAttribute> attributes, MeshCpuAccess cpuAccess)
     {
         VertexData = vertices;
         IndexData = indices;
         IndexCount = (uint)indices.Length;
-        Indices = indices;
 
-        (Vector3[] positions, Vector3[] normals) = ExtractStreams(vertices, attributes);
-        Positions = positions;
-        Normals = normals;
-        LocalBounds = positions.Length == 0
-            ? new Aabb(Vector3.Zero, Vector3.Zero)
-            : Aabb.FromPoints(positions);
-    }
-
-    // Mirrors the backends' de-interleaving: attribute location 0 is position,
-    // location 1 is normal, everything else is ignored.
-    private static (Vector3[] Positions, Vector3[] Normals) ExtractStreams(
-        float[] vertices, ReadOnlySpan<VertexAttribute> attributes)
-    {
-        int stride = 0;
-        int positionOffset = -1;
-        int normalOffset = -1;
-        for (int i = 0; i < attributes.Length; i++)
-        {
-            if (attributes[i].Location == 0) positionOffset = stride;
-            else if (attributes[i].Location == 1) normalOffset = stride;
-            stride += (int)attributes[i].ComponentCount;
-        }
-
-        if (positionOffset < 0 || stride == 0)
-            return ([], []);
-
-        int vertexCount = vertices.Length / stride;
-        var positions = new Vector3[vertexCount];
-        Vector3[] normals = normalOffset >= 0 ? new Vector3[vertexCount] : [];
-        for (int i = 0; i < vertexCount; i++)
-        {
-            int b = i * stride;
-            positions[i] = new Vector3(
-                vertices[b + positionOffset],
-                vertices[b + positionOffset + 1],
-                vertices[b + positionOffset + 2]);
-            if (normalOffset >= 0)
-                normals[i] = new Vector3(
-                    vertices[b + normalOffset],
-                    vertices[b + normalOffset + 1],
-                    vertices[b + normalOffset + 2]);
-        }
-        return (positions, normals);
+        // The shared base helper, deliberately: the fake must starve
+        // Positions/Normals/Indices for a GPU-only mesh exactly as the real
+        // backends do, or the headless suites cannot catch a consumer reading
+        // arrays a MeshCpuAccess.None mesh no longer has. VertexData/IndexData
+        // above stay populated either way; they are this fake's own upload
+        // oracle, not the engine's CPU mirror.
+        InitializeCpuData(vertices, indices, attributes, cpuAccess);
     }
 
     public override void Draw()
