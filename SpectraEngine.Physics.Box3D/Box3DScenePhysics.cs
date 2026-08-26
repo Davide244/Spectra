@@ -152,6 +152,10 @@ public sealed class Box3DScenePhysics : IScenePhysics
         if (world is null)
         {
             DestroyAllChunkBodies();
+            // An empty tree has nothing left to optimise, so churn accrued
+            // toward the amortised rebuild is meaningless now and must not
+            // leak into the next world's accounting.
+            _staticShapeChurnSinceRebuild = 0;
             _syncedWorld = null;
             return;
         }
@@ -168,23 +172,54 @@ public sealed class Box3DScenePhysics : IScenePhysics
                 CutBrushesWithoutCollision = 0;
                 foreach (WorldChunk chunk in world.Chunks.OrderedChunks)
                     BuildChunkBody(world, chunk);
+
+                // The one intended use of the full rebuild: optimise the tree
+                // once after bulk creation. Its cost is O(world log world),
+                // which is exactly what a load or a structural edit already
+                // paid for the compile itself.
+                RebuildStaticTree();
             }
             else
             {
                 // An incremental compile: only the dirty cells can differ, so
                 // only they are rebuilt. This is what keeps physics on the same
-                // world-size-independent footing as the mesh swap.
+                // world-size-independent footing as the mesh swap, and it is
+                // why there is NO tree rebuild down here. Box3D inserts and
+                // removes static leaves at shape create/destroy time (see
+                // b3CreateShapeProxy), so the tree stays correct without one;
+                // a rebuild only restores QUALITY, and calling it per sync was
+                // an O(world log world) pass on the render thread every frame
+                // a world brush moved, which falsified the sentence above.
+                // (docs/physics.md also records the API's own header calling
+                // it internal testing, i.e. not the knob for chunk churn.)
                 for (int i = 0; i < dirty.Count; i++)
                 {
                     ChunkCoord coord = dirty[i];
-                    DestroyChunkBody(coord);
+                    int destroyed = DestroyChunkBody(coord);
+                    int created = 0;
                     if (world.Chunks.TryGet(coord, out WorldChunk chunk))
-                        BuildChunkBody(world, chunk);
-                }
-            }
+                        created = BuildChunkBody(world, chunk);
 
-            // Once per sync, never per shape.
-            B3.World_RebuildStaticTree(_world);
+                    // Only the NET change counts as tree-quality churn. The
+                    // steady state of an animating world brush is this exact
+                    // loop rebuilding the SAME cell every landed compile:
+                    // leaves removed, near-identical AABBs re-inserted, tree
+                    // quality essentially untouched. Counting gross
+                    // destroy+create would cross the threshold every few
+                    // hundred frames and re-arm a world-sized rebuild forever,
+                    // which is the cost this policy exists to remove. Growth
+                    // and shrinkage are what actually drift the tree.
+                    _staticShapeChurnSinceRebuild += Math.Abs(created - destroyed);
+                }
+
+                // Net inserts degrade tree quality gradually, so the rebuild
+                // is amortised: once per quarter of the world's shapes changed
+                // (floor for small worlds), the per-edit cost stays
+                // world-size independent while the tree never drifts far from
+                // optimal.
+                if (_staticShapeChurnSinceRebuild > Math.Max(RebuildChurnFloor, StaticShapeCount / 4))
+                    RebuildStaticTree();
+            }
         }
         finally
         {
@@ -192,6 +227,26 @@ public sealed class Box3DScenePhysics : IScenePhysics
         }
 
         _syncedWorld = world;
+    }
+
+    // Amortisation floor: below this much accumulated churn the tree is never
+    // rebuilt, because a few hundred inserted leaves cannot degrade a query
+    // measurably. Above it, see the quarter-of-the-world rule at the call site.
+    private const int RebuildChurnFloor = 256;
+
+    private int _staticShapeChurnSinceRebuild;
+
+    /// <summary>
+    /// Full static-tree rebuilds performed, for tests and diagnostics: the
+    /// count must track loads and amortisation thresholds, never every sync.
+    /// </summary>
+    internal int StaticTreeRebuilds { get; private set; }
+
+    private void RebuildStaticTree()
+    {
+        B3.World_RebuildStaticTree(_world);
+        _staticShapeChurnSinceRebuild = 0;
+        StaticTreeRebuilds++;
     }
 
     /// <inheritdoc/>
@@ -256,11 +311,13 @@ public sealed class Box3DScenePhysics : IScenePhysics
     // measured here yet.
     private const int SubStepCount = 4;
 
-    private void BuildChunkBody(CsgWorld world, WorldChunk chunk)
+    // Returns the number of shapes created, which is what the amortised
+    // static-tree rebuild counts as churn.
+    private int BuildChunkBody(CsgWorld world, WorldChunk chunk)
     {
         IReadOnlyList<int> owned = chunk.OwnedBrushIndices;
         if (owned.Count == 0)
-            return;
+            return 0;
 
         // The body sits at the cell's corner and every hull is placed relative
         // to it, so no coordinate the solver sees exceeds the cell size however
@@ -275,7 +332,7 @@ public sealed class Box3DScenePhysics : IScenePhysics
         if (body.Index1 == 0)
         {
             _logger.LogError("Box3D refused a static body for chunk {Coord}.", chunk.Coord);
-            return;
+            return 0;
         }
 
         B3ShapeDef shapeDef = B3.DefaultShapeDef();
@@ -327,11 +384,12 @@ public sealed class Box3DScenePhysics : IScenePhysics
             // A body with no shapes collides with nothing and costs a broadphase
             // entry, so it is not kept.
             B3.DestroyBody(body);
-            return;
+            return 0;
         }
 
         _chunkBodies[chunk.Coord] = new ChunkBody(body, shapes);
         StaticShapeCount += shapes;
+        return shapes;
     }
 
     // Whether any subtractive brush resident in this cell overlaps the given
@@ -382,14 +440,16 @@ public sealed class Box3DScenePhysics : IScenePhysics
         _syncHulls.Clear();
     }
 
-    private void DestroyChunkBody(ChunkCoord coord)
+    // Returns the number of shapes destroyed, counted as churn like creation.
+    private int DestroyChunkBody(ChunkCoord coord)
     {
         if (!_chunkBodies.Remove(coord, out ChunkBody entry))
-            return;
+            return 0;
 
         // Destroying a body destroys its shapes with it.
         B3.DestroyBody(entry.Body);
         StaticShapeCount -= entry.ShapeCount;
+        return entry.ShapeCount;
     }
 
     private void DestroyAllChunkBodies()
