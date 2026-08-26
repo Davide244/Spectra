@@ -37,8 +37,9 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
     // SamplerState at the same register index, so one number serves both.
     private Dictionary<string, uint> _textureSlots = new(StringComparer.Ordinal);
 
-    // TEMP-PROBE: last SRV/sampler bound per register, to skip redundant sets.
-    private readonly Dictionary<uint, (nint srv, nint samp)> _boundSrv = new();
+    // Shared with the renderer, which resets it wherever the context's SRV
+    // slots are cleared. See D3D11BindCache for why it must not live here.
+    private readonly D3D11BindCache _bindCache;
 
     private bool _disposed;
 
@@ -49,6 +50,7 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
         D3DCompiler compiler,
         ComPtr<ID3D11Device> device,
         ComPtr<ID3D11DeviceContext> context,
+        D3D11BindCache bindCache,
         ComPtr<ID3D11VertexShader> vs,
         ComPtr<ID3D11PixelShader> ps,
         byte[] vsBytecode,
@@ -57,6 +59,7 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
         _compiler = compiler;
         _device = device;
         _context = context;
+        _bindCache = bindCache;
         _vs = vs;
         _ps = ps;
         _vsBytecode = vsBytecode;
@@ -67,6 +70,7 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
         D3DCompiler compiler,
         ComPtr<ID3D11Device> device,
         ComPtr<ID3D11DeviceContext> context,
+        D3D11BindCache bindCache,
         string vertexSource,
         string fragmentSource)
     {
@@ -83,7 +87,7 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
             SilkMarshal.ThrowHResult(dev->CreatePixelShader(pPs, (nuint)psBlob.Length, null, &psPtr));
         }
 
-        return new D3D11ShaderProgram(compiler, device, context,
+        return new D3D11ShaderProgram(compiler, device, context, bindCache,
             ComOwnership.Own(vsPtr),
             ComOwnership.Own(psPtr),
             vsBlob, psBlob);
@@ -343,7 +347,6 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
                 }
                 ctx->Unmap((ID3D11Resource*)slot.Buffer.Handle, 0);
                 slot.Dirty = false;
-                ProbeMaps++; // TEMP-PROBE
             }
         }
 
@@ -421,17 +424,18 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
         WriteBytes(loc, bytes[..copyLen]);
     }
 
+    // Skipping an identical write is what keeps a cbuffer clean across draws,
+    // which is what lets Use() skip the Map/Unmap: pipelines re-set the view
+    // and projection on every draw of a pass, and most draws actually change
+    // only the model matrix.
     private void WriteBytes(UniformLocation loc, ReadOnlySpan<byte> bytes)
     {
         ref var slot = ref _cbuffers[loc.CBufferIndex];
         var target = slot.Shadow.AsSpan((int)loc.Offset, bytes.Length);
-        if (bytes.SequenceEqual(target)) { ProbeSkippedWrites++; return; }
+        if (bytes.SequenceEqual(target)) return;
         bytes.CopyTo(target);
         slot.Dirty = true;
     }
-
-    // TEMP-PROBE
-    internal static long ProbeSkippedWrites, ProbeMaps, ProbeTexSkips, ProbeTexBinds;
 
     public override void SetTexture(string name, int unit, Texture texture)
     {
@@ -439,16 +443,12 @@ internal sealed unsafe class D3D11ShaderProgram : ShaderProgram
             throw new ArgumentException($"Texture must be D3D11Texture, got {texture.GetType().Name}", nameof(texture));
         if (!_textureSlots.TryGetValue(name, out uint slot)) return;
 
-        var ctx = (ID3D11DeviceContext*)_context.Handle;
         ID3D11ShaderResourceView* srv = (ID3D11ShaderResourceView*)d3dTex.Srv.Handle;
         ID3D11SamplerState* samp = (ID3D11SamplerState*)d3dTex.Sampler.Handle;
-        if (_boundSrv.TryGetValue(slot, out var bound) && bound.srv == (nint)srv && bound.samp == (nint)samp)
-        {
-            ProbeTexSkips++; // TEMP-PROBE
+        if (!_bindCache.MustBind(slot, (nint)srv, (nint)samp))
             return;
-        }
-        _boundSrv[slot] = ((nint)srv, (nint)samp);
-        ProbeTexBinds++; // TEMP-PROBE
+
+        var ctx = (ID3D11DeviceContext*)_context.Handle;
         ctx->PSSetShaderResources(slot, 1, &srv);
         ctx->PSSetSamplers(slot, 1, &samp);
     }

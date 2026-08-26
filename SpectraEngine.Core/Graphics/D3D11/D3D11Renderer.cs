@@ -59,6 +59,11 @@ public sealed unsafe class D3D11Renderer : Renderer
     private readonly List<RenderTarget> _renderTargets = [];
     private int _pipelineIndex;
 
+    // One skip cache for the one immediate context, shared by every program and
+    // reset by every site that clears the context's SRV slots. Context-level on
+    // purpose; see D3D11BindCache for the failure a per-program cache was.
+    private readonly D3D11BindCache _bindCache = new();
+
     // Size the swap chain currently has. Render() compares it against the
     // engine-fed base-class framebuffer latch each frame and reruns the resize
     // path when the window has changed; the immediate context belongs to this
@@ -439,11 +444,16 @@ public sealed unsafe class D3D11Renderer : Renderer
     // the runtime to notice it.
     private void UnbindPixelShaderResources()
     {
-        const int Slots = 8;
+        const int Slots = D3D11BindCache.TrackedSlots;
         var ctx = (ID3D11DeviceContext*)_context.Handle;
         ID3D11ShaderResourceView** none = stackalloc ID3D11ShaderResourceView*[Slots];
         for (int i = 0; i < Slots; i++) none[i] = null;
         ctx->PSSetShaderResources(0, Slots, none);
+
+        // The slots just changed under every program's feet, so the skip cache
+        // must forget them, or SetTexture skips a rebind the context needs and
+        // the next pass silently samples null. See D3D11BindCache.
+        _bindCache.Reset();
     }
 
     public override RenderTarget CreateRenderTarget(in RenderTargetDesc desc)
@@ -497,7 +507,7 @@ public sealed unsafe class D3D11Renderer : Renderer
 
     public override ShaderProgram CreateShader(string vertexSource, string fragmentSource)
     {
-        var shader = D3D11ShaderProgram.Create(_d3dCompiler, _device, _context, vertexSource, fragmentSource);
+        var shader = D3D11ShaderProgram.Create(_d3dCompiler, _device, _context, _bindCache, vertexSource, fragmentSource);
         _shaders.Add(shader);
         return shader;
     }
@@ -856,6 +866,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         var ctx = (ID3D11DeviceContext*)_context.Handle;
         ctx->ClearState();
         ctx->Flush();
+        _bindCache.Reset();
 
         ReleaseBackBufferViews();
 
