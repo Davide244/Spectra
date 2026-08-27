@@ -4,13 +4,15 @@
 > Sizes are relative (**S / M / L**), not calendar estimates. Every milestone is independently shippable and independently verifiable.
 > Read `CLAUDE.md` first — it holds the architecture decisions and the pillars this roadmap must never break.
 >
-> **Companion documents — nine, and this is the whole set.** Six own an arc of milestone ids that interleaves with the arcs below and is referenced here by id rather than restated; the other three are a survey, a mapping and a rule set, and own no milestones. **Start with the first one.**
+> **Companion documents — eleven, and this is the whole set.** Six own an arc of milestone ids that interleaves with the arcs below and is referenced here by id rather than restated; the other five are a survey, a product thesis, a mapping, a guardrail catalogue and a rule set, and own no milestones. **Start with the first one.**
 >
 > | Document | What it owns | Arc |
 > | --- | --- | --- |
 > | [`docs/data-model.md`](docs/data-model.md) | **The orientation page — read it first.** What `SceneNode`, `Scene` and the payloads actually are today, with a `file:line` on every row, and one table separating what exists from what is only designed. It is the counting authority for the payload set. | — (survey) |
+> | [`docs/positioning.md`](docs/positioning.md) | The product thesis: who the engine is for (world-builders: graduating Roblox developers and Hammer mappers), what "easy" means operationally, the genre ladder that earns general appeal, the subsystem arcs the ladder forces, and the open license decision. Sequencing here inherits it. | none (thesis) |
 > | [`docs/roblox-onboarding.md`](docs/roblox-onboarding.md) | The scripting decision (Luau), the script payload, attributes, tags, signals, Play/Stop. | `O0`–`O9` |
 > | [`docs/roblox-to-spectra.md`](docs/roblox-to-spectra.md) | The concept mapping written for a Roblox developer, marked row by row with what exists. | — (mapping) |
+> | [`docs/roblox-pitfalls.md`](docs/roblox-pitfalls.md) | The guardrail catalogue: what professionals reject about Roblox (researched, sourced, recency-checked) and the Spectra stance that avoids each, distilled into three laws and an avoid-list. | none (guardrails) |
 > | [`docs/formats-and-pipeline.md`](docs/formats-and-pipeline.md) | Every file format and the cook: `.spack`, `.smap`/`.scmap`, `.smodel`, `.simage`, `.saudio`, `.sentdef`, `game.spectraproj`, and the `scook` rules. | `D0`–`D22` |
 > | [`docs/console.md`](docs/console.md) | The console as the engine's control surface: typed cvars, commands, binds, cfg files. | `C*` |
 > | [`docs/networking.md`](docs/networking.md) | Server-authoritative replication, the fixed tick, interest management, prediction — plus collaborative editing. | `N*`, `T*` |
