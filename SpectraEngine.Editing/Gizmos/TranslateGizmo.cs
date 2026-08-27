@@ -27,8 +27,8 @@ namespace SpectraEngine.Editing.Gizmos;
 /// brushes or the static world, and that is the point.
 /// </para>
 /// <para>
-/// <b>Snapping quantises the DISPLACEMENT by default</b> — "move exactly two
-/// units along x", with the selection's sub-grid offsets preserved — which is
+/// <b>Snapping quantises the DISPLACEMENT by default</b>: "move exactly two
+/// units along x", with the selection's sub-grid offsets preserved, which is
 /// what both Roblox Studio and Blender do (see <see cref="TranslateSnapMode"/>;
 /// an earlier revision snapped the absolute destination and mis-cited Studio
 /// for it). The screen handle snaps its displacement along its own frozen
@@ -72,7 +72,7 @@ public sealed class TranslateGizmo : GizmoTool
     private Vector3 _screenUp;
 
     // Where AbsoluteGrid snapping anchors: the reference node's captured world
-    // start. The pivot AVERAGE is the wrong anchor for a multi-selection —
+    // start. The pivot AVERAGE is the wrong anchor for a multi-selection:
     // rounding around it lands every node off-grid (each keeps its offset from
     // a point that is itself off-grid), while anchoring on the node the user
     // grabbed lands that node on exact grid multiples and the rest keep their
@@ -138,7 +138,7 @@ public sealed class TranslateGizmo : GizmoTool
     // The reference node's captured world start, for AbsoluteGrid snapping.
     // Falls back to the last captured target when the reference node itself
     // was skipped at capture (a selected ancestor carries it), and to the grab
-    // pivot when nothing was captured at all — the anchor must always be
+    // pivot when nothing was captured at all; the anchor must always be
     // finite, and for a single selection all three answers coincide.
     private Vector3 ResolveAbsoluteAnchor()
     {
@@ -224,7 +224,7 @@ public sealed class TranslateGizmo : GizmoTool
         // Frozen at the grab rather than tracked live: a camera that moved
         // mid-drag would otherwise swing the constraint plane out from under the
         // cursor and drag the selection with it. The screen basis freezes with
-        // the normal for the same reason — it is the snap frame of the plane
+        // the normal for the same reason: it is the snap frame of the plane
         // the normal defines.
         _constraintNormal = geometry.PlaneNormal(handle);
         _screenRight = geometry.ViewRight;
@@ -255,7 +255,7 @@ public sealed class TranslateGizmo : GizmoTool
     // Delta mode quantises the displacement (the default; see the type
     // remarks); AbsoluteGrid quantises the reference node's destination onto
     // the world grid. Local orientation always snaps the displacement along
-    // each free frame axis — a local frame has no absolute grid to land on.
+    // each free frame axis; a local frame has no absolute grid to land on.
     private Vector3 SnapDelta(Vector3 delta)
     {
         // The screen handle's constraint plane is not axis-aligned in ANY
@@ -263,7 +263,7 @@ public sealed class TranslateGizmo : GizmoTool
         // drag steps ruler-like across the camera plane and never leaves it.
         // Snapping the three world components instead (the old behavior) let
         // the result sit up to half a grid step off the plane the cursor was
-        // tracked in — with snapping on by default, every free-drag popped in
+        // tracked in; with snapping on by default, every free-drag popped in
         // x, y and z at once. AbsoluteGrid keeps the world rounding: there the
         // user asked for an absolute grid position, and the plane was only
         // ever the input mapping.

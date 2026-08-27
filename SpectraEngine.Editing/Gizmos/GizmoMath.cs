@@ -250,7 +250,7 @@ public static class GizmoMath
         // dot(u,u)·dot(v,v) − dot(u,v)² with both unit: 1 − cos² = sin² of the
         // angle between ray and line, so the epsilon is an angle threshold.
         // Negated >= rather than <, so a NaN ray is refused instead of passing
-        // every comparison — see the same note on TryRayPlane.
+        // every comparison; see the same note on TryRayPlane.
         float denominator = 1f - uv * uv;
         if (!(denominator >= ParallelSineSquaredEpsilon))
         {

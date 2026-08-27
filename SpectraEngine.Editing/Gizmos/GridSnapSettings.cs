@@ -5,8 +5,8 @@ namespace SpectraEngine.Editing.Gizmos;
 
 /// <summary>
 /// World-grid snapping for a translate drag: how big the grid step is, what a
-/// snapped drag quantises (<see cref="Mode"/>), and — through
-/// <see cref="SnapSettings"/> — whether snapping is on and which modifier
+/// snapped drag quantises (<see cref="Mode"/>), and, through
+/// <see cref="SnapSettings"/>, whether snapping is on and which modifier
 /// inverts it.
 /// </summary>
 /// <remarks>
@@ -16,7 +16,7 @@ namespace SpectraEngine.Editing.Gizmos;
 /// notch lands at 4.7 with its sub-grid offset intact; Blender's incremental
 /// snap does the same. Rounding the absolute destination is Hammer's model and
 /// Blender's opt-in "Absolute Grid Snap", kept here as
-/// <see cref="TranslateSnapMode.AbsoluteGrid"/> — see
+/// <see cref="TranslateSnapMode.AbsoluteGrid"/>; see
 /// <see cref="TranslateSnapMode"/> for the full story, including why the
 /// absolute mode anchors on the reference node rather than the pivot average.
 /// <para>

@@ -139,7 +139,7 @@ public sealed class GizmoSnappingTests
         // This is the test that distinguishes snapping the DELTA from snapping
         // the RESULT. A node at 0.3 dragged by 3.9 lands at 4.2 unsnapped; the
         // default delta rule rounds the movement to 4.0 and lands the node at
-        // 4.3, its sub-grid offset intact — which is what Studio and Blender
+        // 4.3, its sub-grid offset intact, which is what Studio and Blender
         // both do, and what an earlier revision of this tool got wrong while
         // citing Studio for the opposite.
         var harness = GizmoHarness.ThreeQuarterView();
@@ -197,7 +197,7 @@ public sealed class GizmoSnappingTests
     {
         // The rounding must anchor on the node the user is looking at (the
         // reference node, last selected), never on the invisible pivot
-        // average: anchored there, NO node lands on the grid — the defect the
+        // average: anchored there, NO node lands on the grid, the defect the
         // anchor exists to prevent. Here the reference starts at 1.5 and the
         // drag asks for ~1.2, so the reference lands on 3.0 exactly and the
         // other node keeps its relative offset.

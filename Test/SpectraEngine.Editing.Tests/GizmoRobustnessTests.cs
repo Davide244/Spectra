@@ -58,7 +58,7 @@ public sealed class GizmoRobustnessTests
     {
         // Every comparison with NaN is false, so a guard written `< epsilon`
         // waves NaN through as success. The guards are written negated so a
-        // NaN denominator refuses — this is what keeps the drag path's
+        // NaN denominator refuses, which is what keeps the drag path's
         // "hold the last value" contract meaningful when a ray goes bad.
         var nanRay = new Ray3(new Vector3(float.NaN), new Vector3(float.NaN));
 
@@ -101,7 +101,7 @@ public sealed class GizmoRobustnessTests
 
     // A camera sighting almost straight down the +X axis (about 0.9 degrees
     // off, inside the ~1.8 degree parallel refusal), with the pick ray aimed
-    // at the arrow's midpoint — the exact spot where the arrow's foreshortened
+    // at the arrow's midpoint: the exact spot where the arrow's foreshortened
     // silhouette used to pass the proximity test while the grab then refused.
     private static (GizmoGeometry Geometry, Ray3 Ray) EndOnAxisView()
     {

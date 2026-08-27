@@ -26,7 +26,7 @@ public enum TranslateSnapMode
     /// <summary>
     /// Quantise the reference node's absolute destination onto the world grid;
     /// the other nodes keep their offsets relative to it. Hammer's model, and
-    /// Blender's "Absolute Grid Snap". World orientation only — a local frame
+    /// Blender's "Absolute Grid Snap". World orientation only: a local frame
     /// has no absolute grid, so local drags always snap the displacement.
     /// </summary>
     AbsoluteGrid,

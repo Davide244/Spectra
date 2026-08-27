@@ -579,7 +579,7 @@ public abstract class GizmoTool
         // A zero-size viewport mid-drag (a minimized window, a pane that lost
         // its layout) cannot yield a cursor ray: ScreenPointToRay divides by
         // the viewport size and the result is NaN throughout. Hold the drag
-        // exactly as a failed projection frame does — the hover path already
+        // exactly as a failed projection frame does; the hover path already
         // refuses this state in TryBuildGeometry, and this is the drag path
         // owing the same refusal. The invariant must live HERE, not in the
         // host: the demo host happens to reset the viewport when minimized,
