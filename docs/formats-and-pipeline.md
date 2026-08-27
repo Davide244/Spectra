@@ -212,6 +212,16 @@ This also settles `ROADMAP.md` §13's open question — *"does `.spectramat` key
 
 `P2`'s pin is confirmed, not overturned: a scene-graph editor's authored artifact is reviewed, diffed, merged and grepped, and the map contains **zero derived data**.
 
+**Amendment (2026-08-27, user directive): a map is a FOLDER bundle, not a single file.** A game is made of multiple maps (something Roblox barely has), and the authored map gains room to be one. `MyMap.smap` is a **directory** carrying the `.smap` suffix, and its v1 contents are:
+
+- **`map.json`**: exactly the document this section specifies, grammar unchanged. One scene document in v1; `map.json` is also the manifest, so a later version may list multiple scene documents (split by subtree, under merge pressure) without a format break. All canonical-encoding rules below apply to every JSON document in the bundle.
+- **`scripts/*.luau`**: script payloads as **real Luau files**, referenced from `map.json` script records via the already-specified `path` member, bundle-relative (`"path": "scripts/door_logic.luau"`). The inline `source` array stays legal for one-liners, but the editor authors `path` by default. This is the Rojo lesson from `roblox-pitfalls.md` made native: scripts are files first, so git, external editors, `luau-lsp` and `--!strict` work with no sync layer, and the editor watches the bundle so an external edit hot-applies like any other content file.
+- **Anything else is an unknown FILE and is preserved**: the save never deletes or rewrites a file it does not reference, the directory-level sibling of unknown-member preservation. The inverse rule bounds it: a file the map *previously referenced* and no longer does is deleted by the save that unreferences it (the referenced set is the owned set; git holds the history).
+
+Rules that keep the bundle deterministic. **Byte identity is per file**: save, load, save yields byte-identical bytes for every document and script the edit did not touch, and a save writes only the files whose content changed (temp file plus rename per file, so a crashed save never leaves a half-written document). **Script file naming is a creation-time choice, stored thereafter**: the editor derives the name from the node name (sanitised to a portable subset), resolves collisions with a short id suffix, and from then on the `path` stored in `map.json` is the identity; renaming the node does not silently rename the file. **The `.gitattributes` entry becomes `*.smap/** text eol=lf`**, covering every text file in every bundle.
+
+Two consequences elsewhere. `.scmap`'s `SourceMapDigest` (§2.7) becomes the hash of the bundle's canonical enumeration: sorted bundle-relative paths, each path's UTF-8 bytes then its file bytes, so the digest is stable across platforms and file-system orderings. And `game.spectraproj` (§3.3) lists maps as bundle paths; **maps are plural and first-class**: one `.smap` bundle cooks to one `.scmap`, a shipped game carries several, and runtime map switching is an engine verb (owned by the entity/runtime arcs, not this document). The compiled side needs no amendment at all: `.scmap` is already the single binary artifact with baked geometry, entity data and compiled scripts that a multi-map game wants to load per map.
+
 **Canonical encoding.** UTF-8, **no BOM**, `\n` line endings, 2-space indent. Writer options: `Indented = true`, `IndentCharacter = ' '`, `IndentSize = 2`, and — load-bearing — `Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping`. The default `JavaScriptEncoder` escapes `+ < > &` and all non-ASCII to `\uXXXX`, which would turn every inline Luau script and every non-ASCII node name into unmergeable noise. All floats via `Utf8JsonWriter.WriteNumberValue(float)` and `Utf8JsonReader.GetSingle()` (shortest round-trip); GUIDs as lowercase `"D"` format. Ship a `.gitattributes` entry (`*.smap text eol=lf`) with the format, or a Windows checkout with `core.autocrlf=true` rewrites the file under you and turns a no-op save into a whole-file diff.
 
 **Structure.** Fixed top-level member order: `spectramap`, `minimumReadableVersion`, `engine`, `scene`, `editor`, `nodes`. Hierarchy is **nesting** (`children` arrays), not a flat list with `parentId` — because sibling order is load-bearing: traversal order → `BrushPlacement` order → carve order → the bit-identical determinism oracles. `E6` already derived this for `InsertChild`; it binds the file format identically. A JSON array expresses that order exactly and cannot lose it, and a moved subtree is one diff hunk instead of N scattered edits.
@@ -291,7 +301,11 @@ Header — 64 bytes, offset 0
 0x08  u32    Flags                 bit0 HasBrushSource   bit1 HasScriptSource
                                    bit2 HasDebugInfo     bit3 Streamable
 0x0C  u32    SectionCount
-0x10  u128   SourceMapDigest       XxHash128 of the .smap bytes cooked from
+0x10  u128   SourceMapDigest       XxHash128 of the .smap bundle's canonical
+                                   enumeration (see the §2.6 folder amendment:
+                                   sorted relative paths, path bytes then file
+                                   bytes), so one digest covers map.json and
+                                   every script the map references
 0x20  u32    GeometryFormatVersion see §4.4 — a mismatch REFUSES the load
 0x24  u32    MapFormatVersion      from the source map
 0x28  u32    VertexLayoutId        FNV-1a over (semantic, componentCount) pairs
