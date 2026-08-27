@@ -232,7 +232,7 @@ Two consequences elsewhere. `.scmap`'s `SourceMapDigest` (§2.7) becomes the has
   "minimumReadableVersion": 1,
   "engine": "1.0.0",
   "scene": { "name": "Testmap", "spawn": { "p": [0, 64, 0], "r": [0,0,0,1] } },
-  "editor": { "viewport": { "p": [-120, 90, -120], "yaw": 0.78, "pitch": -0.35 }, "grid": 1.0 },
+  "editor": { "grid": 1.0 },
   "nodes": [
     {
       "id": "3f2a1c88-4b6d-4a19-9d0e-77c1f0a2b3e4",
@@ -281,7 +281,7 @@ Rules that make byte identity deterministic rather than hopeful: `transform.p` i
 
 **Scripts: exactly one of `source` or `path`.** `source` is a **JSON array of one string per line** — a JSON string with embedded `\n` is one unmergeable diff line, while an array of lines diffs exactly like the source file. `path` points at a real `.luau` file for `luau-lsp` and `--!strict`. Both cook to the same thing, so the runtime has one path.
 
-**Editor metadata is confined to one key name, `"editor"`, at top level and per node, and the cook never reads it.** A structural rule beats a list. The subtle part is the split it forces: an *editor viewport* camera is `editor.viewport`; a *gameplay spawn* is `scene.spawn`. `P2` currently says the map holds "camera" without distinguishing, and conflating them is how a shipped game spawns wherever the level designer last parked the viewport.
+**Editor metadata is confined to one key name, `"editor"`, at top level and per node, and the cook never reads it.** A structural rule beats a list. The subtle part is the split it forces: an *editor viewport* camera is editor state; a *gameplay spawn* is `scene.spawn`. `P2` currently says the map holds "camera" without distinguishing, and conflating them is how a shipped game spawns wherever the level designer last parked the viewport. **Amended by §3.3's project-layout rules: the `editor` key holds only SHARED, deliberate editor settings (the grid size); per-user state such as the viewport camera lives in the bundle's `editor.user.json` sidecar, gitignored and never load-bearing.** The example above shows `grid` under `editor` for exactly that reason and no longer shows a viewport there.
 
 **The RESERVED-KEY list lives here and nowhere else.** It is exactly `"editor"`, `"realm"`, `"state"` and `"kind"`. These four names are **never captured by unknown-member preservation** and never round-tripped as opaque text: `"editor"` because the cook must be free to ignore it wholesale, `"realm"`/`"state"` because a misspelling that survives as a preserved unknown member would load as no declaration at all — the node falls through to `Shared`/`Active`, which is a data leak rather than a lost setting (`realms.md` §2.5) — and `"kind"` for the same mechanism with a worse consequence: a preserved-and-ignored `"kind"` falls through to `World` and **re-admits a part brush to the carve**, changing world topology on load (`negative-brushes.md` §2.5). Any document that needs the list **references this paragraph rather than restating it**; a second copy is how the two fall out of step. Growing the list is a format decision made here, in the same change that teaches the reader the new key.
 
@@ -531,6 +531,29 @@ Keyvalue record — 32 bytes + a variable choice list
 Deliberately **not** a binary format: it is ~40 lines read exactly once, and a binary encoding would save microseconds while costing git-diffability on the one file a user most needs to hand-edit and merge. Authored JSON, hand-rolled `Utf8JsonReader` codec in the `P2` house style, unknown members skipped on read and re-emitted verbatim on save. Copied verbatim into the boot pack as a `Kind=Raw` entry.
 
 Fields: `formatVersion` + `minimumReadableVersion` + `cookedWithEngineVersion`; `name`; `id` (Guid — save-folder and pack namespace); **`packs` (an ORDERED array; later entries win — that is the mod and patch story, free)**; `startupMap`; `defaultBackend` + `allowedBackends`; `display { mode, width, height, vsync }`; `input { actionName → bindings }` so Luau reads action names and never scancodes; `settings` (unknown keys warn and are preserved, matching `.spectramat`'s existing forward-compatibility rule); `bootScript`; `entityDefinitions` glob.
+
+**Amendment (2026-08-27, user directive): the project has a CANONICAL layout, shaped like a Visual Studio solution, and every authored artifact in it is text.** A game is one folder; opening it in the Spectra editor and opening it in VS Code are both first-class, because there is nothing in it an external editor cannot read:
+
+```
+MyGame/
+  MyGame.spectraproj        ← the project file above; the double-clickable identity
+  Assets/                   ← the existing content root, unchanged
+    Textures/  Materials/  Models/  Sounds/  Shaders/
+  Maps/
+    Lobby.smap/             ← map bundles (§2.6 amendment): map.json + scripts/*.luau
+    Arena.smap/
+  Scripts/                  ← project-level shared Luau modules (maps reference them)
+  spectra.d.luau            ← generated API definitions (O5); regenerated, never hand-edited
+  .vscode/                  ← shipped by the project template: luau-lsp wired to spectra.d.luau
+  .gitignore  .gitattributes ← shipped by the template (cook output, *.user.json, eol rules)
+  cooked/                   ← scook output; derived, gitignored, never authored
+```
+
+Three rules this layout binds:
+
+1. **No authored artifact is ever binary, and editor state is never load-bearing.** Studio's binary place file is the named counter-example (`roblox-pitfalls.md` §1): it is why that platform needed Rojo. Here the project file, the map bundles, the materials, the scripts and the shader sources are all text; binary exists only in `cooked/` as derived output. This is `roblox-pitfalls.md` law 3 applied to the project as a whole.
+2. **Per-user editor state lives in `*.user.json` sidecars, gitignored, exactly Visual Studio's `.csproj.user` convention.** The editor's viewport camera, selection, expanded-tree state and window layout go to `<bundle>/editor.user.json` (per map) and `MyGame.spectraproj.user` (per project); losing one loses nothing but a camera position. Shared, deliberate editor settings (the map's grid size) stay in `map.json`'s reserved `editor` key. The split exists because a per-user camera in a shared file is merge noise on every save, which is a small copy of the Team Create lesson.
+3. **VS Code is the blessed external editor, and the loop closes without the Spectra editor in the middle.** The template's `.vscode/` wires `luau-lsp` to the generated `spectra.d.luau`, scripts are real `.luau` files inside bundles (§2.6), and the running editor watches the project tree, so an edit saved from VS Code hot-applies exactly as a texture edit already does through the existing watcher path. A second editor is not a sync product here; it is a text editor pointed at a folder.
 
 ### 3.4 Boot path of a shipped game, process start to first frame
 
