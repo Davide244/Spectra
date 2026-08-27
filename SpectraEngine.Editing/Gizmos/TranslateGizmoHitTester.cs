@@ -123,6 +123,17 @@ public static class TranslateGizmoHitTester
             if (!geometry.TryGetAxisSegment(handle, out Vector3 start, out Vector3 end))
                 continue;
 
+            // Pick only what the drag will accept: an axis viewed within the
+            // parallel guard's ~1.8° of end-on still passes the screen-space
+            // proximity test below, but TryPrepareDrag projects through this
+            // very function and will refuse the grab — the arrow would
+            // highlight, promise Manipulate, and then swallow the press (or
+            // hand it to a selection-replacing marquee). The rotate tester
+            // pioneered this pick/drag agreement; this is the translate tool
+            // holding to the same rule.
+            if (!GizmoMath.TryClosestPointOnLine(in ray, geometry.Pivot, geometry.Axis(handle), out _))
+                continue;
+
             // World gap → pixels through the same scale that sized the gizmo,
             // so the tolerance means what it says on screen.
             float pixels = GizmoHitTesting.SegmentPixelDistance(

@@ -52,6 +52,14 @@ public static class ScaleGizmoHitTester
             if (!geometry.TryGetHandleBox(handle, out Vector3 boxCentre, out float boxRadius))
                 continue;
 
+            // Pick only what the drag will accept: the resize drag measures
+            // cursor travel along this axis through TryClosestPointOnLine, so
+            // an axis the projection refuses (viewed near end-on) must not be
+            // offered by cube or shaft — same pick/drag agreement as the
+            // rotate tester and, now, the translate arrows.
+            if (!GizmoMath.TryClosestPointOnLine(in ray, geometry.Pivot, geometry.Axis(handle), out _))
+                continue;
+
             // The cube: exact, and reported at zero pixel distance so it always
             // beats a shaft that merely came close.
             if (GizmoHitTesting.TryRayHandleBox(in geometry, in ray, boxCentre, boxRadius, out float boxDistance) &&

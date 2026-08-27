@@ -151,15 +151,22 @@ public static class GizmoMath
         // and the plane, so squaring it puts this guard on exactly the same
         // scale — and therefore at exactly the same angle — as the line guard
         // in TryClosestPointOnLine.
+        //
+        // Written as a NEGATED >= rather than a <, deliberately: every
+        // comparison with NaN is false, so `< epsilon` would wave a NaN ray
+        // (a zero-size viewport, a lost cursor) through as success and the
+        // "projection" would write NaN into whatever the drag applies it to.
+        // The negated form refuses non-finite input for free and is identical
+        // for every finite value.
         float denominator = Vector3.Dot(ray.Direction, planeNormal);
-        if (denominator * denominator < ParallelSineSquaredEpsilon)
+        if (!(denominator * denominator >= ParallelSineSquaredEpsilon))
         {
             rayDistance = 0f;
             return false;
         }
 
         float distance = Vector3.Dot(planePoint - ray.Origin, planeNormal) / denominator;
-        if (distance < 0f)
+        if (!(distance >= 0f))
         {
             rayDistance = 0f;
             return false;
@@ -242,8 +249,10 @@ public static class GizmoMath
         float uv = Vector3.Dot(u, lineDirection);
         // dot(u,u)·dot(v,v) − dot(u,v)² with both unit: 1 − cos² = sin² of the
         // angle between ray and line, so the epsilon is an angle threshold.
+        // Negated >= rather than <, so a NaN ray is refused instead of passing
+        // every comparison — see the same note on TryRayPlane.
         float denominator = 1f - uv * uv;
-        if (denominator < ParallelSineSquaredEpsilon)
+        if (!(denominator >= ParallelSineSquaredEpsilon))
         {
             point = linePoint;
             return false;

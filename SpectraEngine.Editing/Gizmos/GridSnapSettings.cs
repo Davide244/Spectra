@@ -4,18 +4,21 @@ using System.Numerics;
 namespace SpectraEngine.Editing.Gizmos;
 
 /// <summary>
-/// World-grid snapping for a translate drag: how big the grid step is, and —
-/// through <see cref="SnapSettings"/> — whether snapping is on and which
-/// modifier inverts it.
+/// World-grid snapping for a translate drag: how big the grid step is, what a
+/// snapped drag quantises (<see cref="Mode"/>), and — through
+/// <see cref="SnapSettings"/> — whether snapping is on and which modifier
+/// inverts it.
 /// </summary>
 /// <remarks>
-/// <b>The result is snapped, never the delta.</b> Rounding the movement would
-/// only preserve whatever sub-grid offset the object already had — drag a brush
-/// sitting at x = 3.7 by a snapped one unit and it lands on 4.7, still off the
-/// grid, forever. Rounding the resulting position instead makes the first
-/// snapped drag pull the object <em>onto</em> absolute grid coordinates and
-/// keep it there, which is what "snap to grid" means to anyone who has used
-/// Hammer or Roblox Studio.
+/// <b>The DELTA is snapped by default, and the earlier claim here that Studio
+/// rounds the result was wrong.</b> Studio's handle drags quantise the
+/// movement relative to the grab, so a part at x = 3.7 dragged one 1-unit
+/// notch lands at 4.7 with its sub-grid offset intact; Blender's incremental
+/// snap does the same. Rounding the absolute destination is Hammer's model and
+/// Blender's opt-in "Absolute Grid Snap", kept here as
+/// <see cref="TranslateSnapMode.AbsoluteGrid"/> — see
+/// <see cref="TranslateSnapMode"/> for the full story, including why the
+/// absolute mode anchors on the reference node rather than the pivot average.
 /// <para>
 /// <b>The default step is one world unit</b> — the engine's working scale, and
 /// the same size as a Roblox stud, so a value typed into a property panel and a
@@ -28,6 +31,12 @@ public sealed class GridSnapSettings : SnapSettings
 {
     /// <summary>The default grid step, in world units.</summary>
     public const float DefaultIncrement = 1f;
+
+    /// <summary>
+    /// What a snapped drag quantises: the displacement (default) or the
+    /// reference node's absolute destination. See <see cref="TranslateSnapMode"/>.
+    /// </summary>
+    public TranslateSnapMode Mode { get; set; } = TranslateSnapMode.Delta;
 
     // Halving and doubling around the default: fine enough for trim work,
     // coarse enough to lay out a room quickly.
