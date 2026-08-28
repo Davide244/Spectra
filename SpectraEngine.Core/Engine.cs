@@ -5,11 +5,14 @@ using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Audio;
 using SpectraEngine.Core.Diagnostics;
 using SpectraEngine.Core.Graphics;
+using SpectraEngine.Core.Hosting;
 using SpectraEngine.Core.Physics;
 using SpectraEngine.Core.Physics.Character;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Core.Windowing;
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 
@@ -98,7 +101,101 @@ public sealed class Engine
         _audioManager = audioManager;
         _inputManager = inputManager;
         _windowModeLatch = new WindowModeLatch(logger);
+        Host = new EngineHost(logger);
     }
+
+    // Reused across publishes so a steady state with an unchanging selection
+    // allocates nothing for it: the list is only rebuilt when the selection
+    // actually differs from what the previous snapshot carried.
+    private readonly List<Guid> _snapshotSelection = [];
+    private Guid[] _publishedSelection = [];
+
+    /// <summary>
+    /// Builds and publishes this frame's snapshot, if one is due. Render thread
+    /// only, and the only place engine state is read for a UI.
+    /// </summary>
+    private void PublishHostFrame(TimeSpan elapsed)
+    {
+        Host.PublishFrame(elapsed, builder =>
+        {
+            ISceneEditor? editor = _sceneManager.Editor;
+
+            return new FrameSnapshot
+            {
+                FrameNumber = builder.FrameNumber,
+                Changes = builder.Changes,
+                ChangesOverflowed = builder.ChangesOverflowed,
+                FrameTimeMs = _fpsCounter.FrameTimeMs,
+                Fps = _fpsCounter.Fps,
+                SelectedIds = CaptureSelection(),
+                GizmoModeName = editor?.GizmoModeName,
+                NavigationModeName = editor?.NavigationModeName,
+                UndoDepth = editor?.UndoDepth ?? 0,
+                RedoDepth = editor?.RedoDepth ?? 0,
+                StaticWorldCompileCount = _sceneManager.ActiveScene?.StaticWorldCompileCount ?? 0,
+            };
+        });
+    }
+
+    // One last snapshot as the loop ends, so a shell sees the engine stop
+    // rather than simply stop hearing from it.
+    private void HostShutdownPublish(TimeSpan elapsed)
+    {
+        Host.SnapshotInterval = TimeSpan.Zero;
+        PublishHostFrame(elapsed);
+    }
+
+    /// <summary>
+    /// The selected ids as an immutable array, reusing the previous one when the
+    /// selection has not changed.
+    /// </summary>
+    /// <remarks>
+    /// A snapshot goes out about thirty times a second whether or not anything
+    /// was selected, and the overwhelmingly common case is that the selection is
+    /// identical to last time. Comparing before allocating keeps the steady
+    /// state free, which matters because this runs on the render thread.
+    /// </remarks>
+    private IReadOnlyList<Guid> CaptureSelection()
+    {
+        if (_sceneManager.ActiveScene is not { } scene)
+            return _publishedSelection = [];
+
+        IReadOnlyList<SceneNode> items = scene.Selection.Items;
+
+        _snapshotSelection.Clear();
+        for (int i = 0; i < items.Count; i++)
+            _snapshotSelection.Add(items[i].Id);
+
+        if (_publishedSelection.Length == _snapshotSelection.Count)
+        {
+            bool same = true;
+            for (int i = 0; i < _snapshotSelection.Count; i++)
+            {
+                if (_publishedSelection[i] != _snapshotSelection[i])
+                {
+                    same = false;
+                    break;
+                }
+            }
+
+            if (same)
+                return _publishedSelection;
+        }
+
+        return _publishedSelection = [.. _snapshotSelection];
+    }
+
+    /// <summary>
+    /// The surface a UI thread drives this engine through: queue work, ask it to
+    /// stop, and hear about finished frames. See <see cref="EngineHost"/>.
+    /// </summary>
+    /// <remarks>
+    /// Present whether or not anything is listening, because the standalone path
+    /// costs nothing for it: commands nobody queues drain in a single failed
+    /// dequeue, and a snapshot nobody subscribes to is still built at the
+    /// publish interval so a shell attaching mid-run has something to bind to.
+    /// </remarks>
+    public EngineHost Host { get; }
 
     /// <summary>
     /// Windowed / borderless-fullscreen, as a request latch. Callable from any
@@ -404,6 +501,11 @@ public sealed class Engine
             if (RunOffscreenProbe)
                 _offscreenProbe = new OffscreenProbe(_logger);
 
+            // The change log follows whichever scene is live, so a shell's tree
+            // view hears about structure from the frame the scene loads rather
+            // than from the first edit after it.
+            Host.ObserveScene(_sceneManager.ActiveScene);
+
             if (_sceneManager.ActiveScene is { } activeScene)
             {
                 _cameraController = new FlyCameraController(activeScene.Camera, _inputManager);
@@ -434,7 +536,10 @@ public sealed class Engine
             var clock = Stopwatch.StartNew();
             double previous = clock.Elapsed.TotalSeconds;
 
-            while (!_closeRequested)
+            // A shell's RequestShutdown ends the render loop exactly as the
+            // window's close button does; the main thread then leaves its pump
+            // because the render thread has exited.
+            while (!_closeRequested && !Host.ShutdownRequested)
             {
                 double now = clock.Elapsed.TotalSeconds;
                 double rawDelta = now - previous;
@@ -534,6 +639,13 @@ public sealed class Engine
                         _character!.Tick(_physicsTicks.FixedDeltaTime);
                 }
                 // ─── end tick loop ─────────────────────────────────────
+
+                // Host commands run HERE, immediately before the compile pump,
+                // so an edit posted from a UI thread and the static-world
+                // recompile it causes land in the same frame rather than a
+                // frame apart. Any later and a shell's delete would be visible
+                // in the tree one frame before it was visible in the viewport.
+                Host.DrainCommands(_sceneManager.ActiveScene);
 
                 using (Profiler.Measure(FramePhase.WorldSwap))
                     _sceneManager.ActiveScene?.ProcessStaticWorldCompilation(_renderer, _logger);
@@ -655,8 +767,15 @@ public sealed class Engine
                 using (Profiler.Measure(FramePhase.Present))
                     _renderer.Present(surface);
 
+                // After Present, so a snapshot describes a frame that is
+                // genuinely finished, and the handler's cost lands where it can
+                // only delay the NEXT frame rather than this one's presentation.
+                PublishHostFrame(clock.Elapsed);
+
                 Profiler.EndFrame();
             }
+
+            HostShutdownPublish(clock.Elapsed);
 
             // Asset-owned textures are destroyed through the renderer, so they
             // have to go before it shuts down — and on this thread. Part-brush

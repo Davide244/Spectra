@@ -1,0 +1,222 @@
+using Microsoft.Extensions.Logging;
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Threading;
+
+namespace SpectraEngine.Core.Hosting;
+
+/// <summary>
+/// The entire surface a UI thread gets onto a running engine: enqueue work,
+/// ask it to stop, and hear about finished frames.
+/// </summary>
+/// <remarks>
+/// <b>Embedded mode is engine-driven, and this is the shape of that decision.</b>
+/// The render thread already owns the graphics context, every scene mutation and
+/// all GPU resource creation, including the chunk-mesh swaps inside the compile
+/// pump. Keeping that ownership means the async CSG pipeline, the spatial index,
+/// the selection set and the undo stack all keep their existing single-threaded
+/// proofs verbatim, and it decouples the viewport from a UI framework's layout
+/// stalls. So a shell does not call into the engine; it posts work and reads
+/// results.
+/// <para>
+/// <b>Three members, not four.</b> The milestone's original list included
+/// <c>SubmitInput</c>. It is deliberately absent: routing input needs a
+/// backend-neutral event vocabulary, and designing one with no real host to
+/// shape it against is how a seam ends up fitting nothing. The Avalonia input
+/// source in <c>H2</c> is what will define it, and until then the standalone
+/// window feeds <c>InputManager</c> exactly as it always has.
+/// </para>
+/// <para>
+/// <b>Everything here is thread-safe by construction, not by convention.</b>
+/// <see cref="EnqueueCommand"/> and <see cref="RequestShutdown"/> are called
+/// from a UI thread and consumed on the render thread through a concurrent queue
+/// and a volatile flag; <see cref="FrameCompleted"/> is raised ON the render
+/// thread and its payload is immutable, so a handler may hold it but must
+/// marshal to its own thread before touching UI.
+/// </para>
+/// </remarks>
+public sealed class EngineHost
+{
+    private readonly ConcurrentQueue<Action<Scene.Scene>> _commands = new();
+    private readonly SceneChangeLog _changeLog = new();
+    private readonly ILogger _logger;
+
+    private volatile bool _shutdownRequested;
+    private long _frameNumber;
+
+    /// <summary>Creates a host that logs the things a shell cannot see.</summary>
+    public EngineHost(ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// Raised on the RENDER thread once per published frame, carrying an
+    /// immutable description of it.
+    /// </summary>
+    /// <remarks>
+    /// <b>A handler runs inside the engine's frame and must not block.</b>
+    /// Anything a shell does here delays the next frame directly. The intended
+    /// shape is to stash the snapshot and post to the UI thread; the snapshot is
+    /// immutable precisely so that stashing it is safe.
+    /// <para>
+    /// Not raised every frame. See <see cref="SnapshotInterval"/>.
+    /// </para>
+    /// </remarks>
+    public event Action<FrameSnapshot>? FrameCompleted;
+
+    /// <summary>
+    /// How often a snapshot is published. Defaults to about thirty a second.
+    /// </summary>
+    /// <remarks>
+    /// <b>Publishing per frame would be the wrong trade in both directions.</b>
+    /// The engine runs at several hundred frames a second in an empty scene, and
+    /// no panel refreshes that fast; each snapshot allocates, so per-frame
+    /// publishing would put real garbage on the render thread to feed a UI that
+    /// throws most of it away. Structural CHANGES are never dropped by this: they
+    /// accumulate continuously in the change log and every one of them rides the
+    /// next snapshot out, which is the entire reason the log exists.
+    /// </remarks>
+    public TimeSpan SnapshotInterval { get; set; } = TimeSpan.FromMilliseconds(33);
+
+    /// <summary>The most recently published snapshot, or <see cref="FrameSnapshot.Empty"/>.</summary>
+    /// <remarks>
+    /// For a shell that wants to poll rather than subscribe, and for one that
+    /// starts up mid-run and needs something to bind to immediately. Reads are
+    /// atomic because the reference is replaced, never mutated.
+    /// </remarks>
+    public FrameSnapshot LastSnapshot { get; private set; } = FrameSnapshot.Empty;
+
+    /// <summary>True once <see cref="RequestShutdown"/> has been called.</summary>
+    public bool ShutdownRequested => _shutdownRequested;
+
+    /// <summary>How many commands are waiting to run.</summary>
+    public int PendingCommandCount => _commands.Count;
+
+    /// <summary>
+    /// Queues work to run on the render thread, at a defined point in the next
+    /// frame. Safe to call from any thread.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is how a shell edits anything.</b> A menu item, a toolbar button,
+    /// a property field and a tree drag all end up here, because the scene may
+    /// only be touched by the thread that owns it.
+    /// <para>
+    /// <b>The active scene is passed in rather than captured</b>, so a command
+    /// queued before a scene swap runs against the scene that is actually live
+    /// when it executes. A command queued while NO scene is active is held, not
+    /// dropped: work a user asked for must not evaporate because it arrived
+    /// during a load.
+    /// </para>
+    /// <para>
+    /// Exceptions are caught and logged rather than allowed to escape: one bad
+    /// command from a shell must not take down the render thread and with it the
+    /// whole editor.
+    /// </para>
+    /// </remarks>
+    public void EnqueueCommand(Action<Scene.Scene> command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        _commands.Enqueue(command);
+    }
+
+    /// <summary>
+    /// Asks the engine to stop after the current frame. Safe to call from any
+    /// thread, and idempotent.
+    /// </summary>
+    public void RequestShutdown() => _shutdownRequested = true;
+
+    // --- Render-thread side --------------------------------------------------
+
+    /// <summary>
+    /// Runs every queued command against the active scene. Called on the render
+    /// thread once per frame, before the static-world compile pump, so an edit
+    /// and the recompile it causes land in the same frame.
+    /// </summary>
+    /// <remarks>
+    /// Drains a bounded number per call so a flood of commands cannot starve
+    /// rendering outright; the remainder run next frame.
+    /// </remarks>
+    public void DrainCommands(Scene.Scene? scene, int maxPerFrame = 256)
+    {
+        // Held, not dropped: see EnqueueCommand.
+        if (scene is null)
+            return;
+
+        for (int i = 0; i < maxPerFrame && _commands.TryDequeue(out Action<Scene.Scene>? command); i++)
+        {
+            try
+            {
+                command(scene);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "A host command threw; the frame continues");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Points the change log at the scene whose structure should be reported.
+    /// Called on the render thread whenever the active scene changes.
+    /// </summary>
+    public void ObserveScene(Scene.Scene? scene) => _changeLog.Observe(scene);
+
+    /// <summary>
+    /// Publishes a snapshot if enough time has passed, or if there is structural
+    /// news that should not wait. Called on the render thread at the end of a
+    /// frame.
+    /// </summary>
+    /// <param name="elapsed">The engine's total elapsed time, for interval timing.</param>
+    /// <param name="build">
+    /// Produces the frame's values. Invoked only when a snapshot is actually
+    /// going out, so a host that nobody is listening to pays almost nothing.
+    /// </param>
+    /// <returns>The snapshot that was published, or null when none was due.</returns>
+    public FrameSnapshot? PublishFrame(TimeSpan elapsed, Func<FrameSnapshotBuilder, FrameSnapshot> build)
+    {
+        ArgumentNullException.ThrowIfNull(build);
+
+        _frameNumber++;
+
+        // Nobody listening and nobody polling anything but the last value: the
+        // interval still governs, so LastSnapshot stays fresh for a shell that
+        // attaches later without the engine paying per frame for one that never
+        // does.
+        // Nullable rather than a sentinel: a TimeSpan.MinValue sentinel makes
+        // the very first subtraction overflow, which is a throw on frame one
+        // rather than the "publish immediately" it looks like.
+        bool due = _lastPublished is not { } last || elapsed - last >= SnapshotInterval;
+
+        // Structural news goes out on the next frame regardless of the clock: a
+        // tree view lagging a third of a second behind a delete is exactly the
+        // kind of thing that reads as a broken editor.
+        if (!due && _changeLog.Count == 0 && !_changeLog.Overflowed)
+            return null;
+
+        _lastPublished = elapsed;
+
+        (IReadOnlyList<SceneChange> changes, bool overflowed) = _changeLog.Drain();
+        FrameSnapshot snapshot = build(new FrameSnapshotBuilder(_frameNumber, changes, overflowed));
+
+        LastSnapshot = snapshot;
+        FrameCompleted?.Invoke(snapshot);
+        return snapshot;
+    }
+
+    private TimeSpan? _lastPublished;
+}
+
+/// <summary>
+/// The parts of a <see cref="FrameSnapshot"/> the host already knows, handed to
+/// the engine so it only has to add what it alone can read.
+/// </summary>
+/// <param name="FrameNumber">How many frames have completed.</param>
+/// <param name="Changes">The structural changes since the previous snapshot.</param>
+/// <param name="ChangesOverflowed">Whether that list is complete.</param>
+public readonly record struct FrameSnapshotBuilder(
+    long FrameNumber,
+    IReadOnlyList<SceneChange> Changes,
+    bool ChangesOverflowed);

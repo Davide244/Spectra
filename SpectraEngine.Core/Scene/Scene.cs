@@ -117,6 +117,32 @@ public sealed partial class Scene
     /// </summary>
     public event Action<SceneNode>? NodeTransformChanged;
 
+    /// <summary>
+    /// Raised when an owned subtree moves to a different parent, or to a
+    /// different position under the same one, without leaving this scene.
+    /// Raised ONCE for the moved subtree's root, not per node: the descendants
+    /// did not move relative to it.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is the one structural change the membership events cannot
+    /// report, by construction.</b> A reparent within one scene raises neither
+    /// <see cref="NodeAdded"/> nor <see cref="NodeRemoved"/>, because nothing
+    /// entered or left; the graph is genuinely the same set of nodes in a
+    /// different shape. An observer rebuilding a view of the hierarchy, a scene
+    /// tree above all, needs to hear about exactly that, and before this event
+    /// existed it could only have found out by re-walking the graph.
+    /// <para>
+    /// It fires for a re-ordering under the same parent too, because sibling
+    /// index is load-bearing here: it is traversal order, which is the static
+    /// world's placement-slot order.
+    /// </para>
+    /// <para>
+    /// Render thread only; handlers must not mutate the graph (see the
+    /// re-entrancy rule above).
+    /// </para>
+    /// </remarks>
+    public event Action<SceneNode>? NodeReparented;
+
     // Raise helpers for SceneNode: the graph notifies its owning scene through
     // these instead of exposing public raise entry points. Membership and
     // reparent notifications also bump the graph-structure version — the
@@ -293,6 +319,7 @@ public sealed partial class Scene
     {
         _graphStructureVersion++;
         Bvh.OnSubtreeMoved(node);
+        NodeReparented?.Invoke(node);
     }
 
     // --- Node identity index ------------------------------------------------
