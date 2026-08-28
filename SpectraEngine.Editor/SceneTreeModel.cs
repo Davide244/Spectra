@@ -5,28 +5,90 @@ using SpectraEngine.Core.Scene;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using SpectraEngine.Editor.Shell;
 
 namespace SpectraEngine.Editor;
+
+/// <summary>How a node stands against the tree's current filter.</summary>
+public enum SceneTreeMatch
+{
+    /// <summary>The node itself matches, or there is no filter.</summary>
+    Match,
+
+    /// <summary>The node does not match but something under it does.</summary>
+    Ancestor,
+
+    /// <summary>Neither the node nor anything under it matches.</summary>
+    None,
+}
 
 /// <summary>One node in the shell's tree view.</summary>
 /// <remarks>
 /// A value copied out of the graph, never a live <see cref="SceneNode"/>: the
 /// real node belongs to the render thread and is mutated again the instant the
 /// frame ends.
+/// <para>
+/// <b>It raises change notification, and that is a fix rather than a
+/// feature.</b> Without it a binding reads each property exactly once, so the
+/// two paths that legitimately rewrite a node in place — a reparent, and a
+/// re-add under the same id when a delete is undone — left the tree showing a
+/// name that was no longer the node's. Nothing reported it, because the tree
+/// was structurally correct and only the text was stale.
+/// </para>
 /// </remarks>
-public sealed class SceneTreeNode(Guid id, string name)
+public sealed class SceneTreeNode(Guid id, string name) : ObservableObject
 {
+    private string _name = name;
+    private bool _isSelected;
+    private SceneNodeKind _kind;
+    private SceneTreeMatch _match = SceneTreeMatch.Match;
+
     /// <summary>The node's stable identity, and how the engine is addressed about it.</summary>
     public Guid Id { get; } = id;
 
     /// <summary>The node's name at the last change that mentioned it.</summary>
-    public string Name { get; set; } = name;
+    public string Name
+    {
+        get => _name;
+        set => Set(ref _name, value);
+    }
+
+    /// <summary>What the node is, for the row's icon.</summary>
+    public SceneNodeKind Kind
+    {
+        get => _kind;
+        set => Set(ref _kind, value);
+    }
 
     /// <summary>The node's children, in the graph's own sibling order.</summary>
     public ObservableCollection<SceneTreeNode> Children { get; } = [];
 
     /// <summary>Whether the engine reports this node as selected.</summary>
-    public bool IsSelected { get; set; }
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => Set(ref _isSelected, value);
+    }
+
+    /// <summary>How this node stands against the filter.</summary>
+    public SceneTreeMatch Match
+    {
+        get => _match;
+        set
+        {
+            if (!Set(ref _match, value))
+                return;
+
+            Raise(nameof(IsDimmed));
+            Raise(nameof(IsContext));
+        }
+    }
+
+    /// <summary>Whether the filter excludes this node. Bound as a style class.</summary>
+    public bool IsDimmed => _match == SceneTreeMatch.None;
+
+    /// <summary>Whether this node is only present to hold a match below it.</summary>
+    public bool IsContext => _match == SceneTreeMatch.Ancestor;
 
     /// <inheritdoc/>
     public override string ToString() => Name;
@@ -70,6 +132,19 @@ public sealed class SceneTreeModel
     // The last frame whose changes were applied, so a snapshot seen twice is
     // replayed zero times.
     private long _appliedFrame = -1;
+
+    // The ids currently flagged selected, and the scratch set the next
+    // selection is read into. Swapped rather than copied.
+    private HashSet<Guid> _selectedIds = [];
+    private HashSet<Guid> _incoming = [];
+
+    // The live filter. Empty means everything matches.
+    private string _filter = string.Empty;
+
+    // Scratch parent map, rebuilt inside a filter pass. Not kept between calls:
+    // a second index of the structure is a second thing that can disagree with
+    // the first, and rebuilding it costs one walk of a dictionary.
+    private readonly Dictionary<SceneTreeNode, SceneTreeNode> _parents = [];
 
     /// <summary>Creates a tree fed by <paramref name="host"/>.</summary>
     public SceneTreeModel(EngineHost host, ILogger logger)
@@ -118,6 +193,13 @@ public sealed class SceneTreeModel
 
         for (int i = 0; i < snapshot.Changes.Count; i++)
             ApplyChange(snapshot.Changes[i]);
+
+        // A node added under a live filter starts out matching, because that is
+        // the only sane default for an unfiltered tree. Re-running the filter is
+        // what stops a duplicate appearing at full strength beside the dimmed
+        // row it was copied from.
+        if (snapshot.Changes.Count > 0 && _filter.Length > 0)
+            ApplyFilter(_filter);
     }
 
     /// <summary>
@@ -137,6 +219,113 @@ public sealed class SceneTreeModel
         ArgumentNullException.ThrowIfNull(selected);
         ApplySelectionCore(selected);
     }
+
+    /// <summary>How many nodes pass the current filter. Equals <see cref="Count"/> when there is none.</summary>
+    public int MatchCount { get; private set; }
+
+    /// <summary>
+    /// Narrows the tree to nodes whose name contains <paramref name="text"/>,
+    /// or to a kind with a <c>t:</c> prefix (<c>t:light</c>, <c>t:part</c>).
+    /// Empty text clears the filter. UI thread.
+    /// </summary>
+    /// <remarks>
+    /// <b>Non-matching rows are DIMMED, not removed</b>, and that is a
+    /// deliberate choice rather than a shortcut. Hiding rows collapses the
+    /// hierarchy around every match, so the one thing a user has after two
+    /// hundred nodes — a spatial memory of where things live — is destroyed on
+    /// the first keystroke and rebuilt differently on the second. Dimming keeps
+    /// the shape still and lets the eye do the work.
+    /// <para>
+    /// <b>Nothing is rebuilt.</b> The filter walks the flat index setting a
+    /// per-node flag; <see cref="Roots"/> and every <c>Children</c> collection
+    /// are untouched. Rebuilding an observable collection on each keystroke is
+    /// the documented way to make a tree this size stutter, and it would also
+    /// discard the user's expansion state while they typed.
+    /// </para>
+    /// </remarks>
+    public void ApplyFilter(string? text)
+    {
+        string query = (text ?? string.Empty).Trim();
+        _filter = query;
+
+        if (query.Length == 0)
+        {
+            foreach (SceneTreeNode node in _index.Values)
+                node.Match = SceneTreeMatch.Match;
+            MatchCount = _index.Count;
+            return;
+        }
+
+        SceneNodeKind? kindQuery = null;
+        if (query.StartsWith("t:", StringComparison.OrdinalIgnoreCase))
+        {
+            kindQuery = ParseKind(query[2..]);
+            query = string.Empty;
+        }
+
+        int matches = 0;
+        foreach (SceneTreeNode node in _index.Values)
+        {
+            bool hit = kindQuery is { } wanted
+                ? node.Kind == wanted
+                : node.Name.Contains(query, StringComparison.OrdinalIgnoreCase);
+
+            node.Match = hit ? SceneTreeMatch.Match : SceneTreeMatch.None;
+            if (hit)
+                matches++;
+        }
+
+        MatchCount = matches;
+
+        // A match buried three levels down is invisible if its parents are
+        // dimmed to nothing, so the chain above every hit is promoted to
+        // context: present, legible, and visibly not itself a result.
+        //
+        // The parent map is built in ONE pass rather than searched per match:
+        // the tree stores parentage implicitly in each node's Children, and
+        // walking that per ancestor per hit is the product of two large numbers
+        // on a keystroke.
+        _parents.Clear();
+        foreach (SceneTreeNode node in _index.Values)
+        {
+            for (int i = 0; i < node.Children.Count; i++)
+                _parents[node.Children[i]] = node;
+        }
+
+        foreach (SceneTreeNode node in _index.Values)
+        {
+            if (node.Match != SceneTreeMatch.Match)
+                continue;
+
+            SceneTreeNode current = node;
+            while (_parents.TryGetValue(current, out SceneTreeNode? parent))
+            {
+                // Somebody else already promoted this chain, so the rest of it
+                // is done too.
+                if (parent.Match != SceneTreeMatch.None)
+                    break;
+
+                parent.Match = SceneTreeMatch.Ancestor;
+                current = parent;
+            }
+        }
+    }
+
+    // A kind name, matched loosely enough that "light", "Light" and "lights"
+    // all work: a filter that silently returns nothing because the user typed a
+    // plural is worse than no filter.
+    private static SceneNodeKind? ParseKind(string text)
+    {
+        string wanted = text.Trim().TrimEnd('s');
+        foreach (SceneNodeKind kind in Enum.GetValues<SceneNodeKind>())
+        {
+            if (kind.ToString().Contains(wanted, StringComparison.OrdinalIgnoreCase))
+                return kind;
+        }
+
+        return null;
+    }
+
 
     private void ApplyChange(in SceneChange change)
     {
@@ -160,6 +349,7 @@ public sealed class SceneTreeModel
                     RemoveFromParent(moved);
                     Insert(moved, change.ParentId, change.SiblingIndex);
                     moved.Name = change.Name;
+                    moved.Kind = change.NodeKind;
                 }
                 else
                 {
@@ -177,12 +367,13 @@ public sealed class SceneTreeModel
             // the node back under the same id, which is the point of commands
             // addressing nodes by id rather than by reference.
             existing.Name = change.Name;
+            existing.Kind = change.NodeKind;
             RemoveFromParent(existing);
             Insert(existing, change.ParentId, change.SiblingIndex);
             return;
         }
 
-        var node = new SceneTreeNode(change.NodeId, change.Name);
+        var node = new SceneTreeNode(change.NodeId, change.Name) { Kind = change.NodeKind };
         _index[change.NodeId] = node;
         Insert(node, change.ParentId, change.SiblingIndex);
     }
@@ -232,14 +423,30 @@ public sealed class SceneTreeModel
 
     private void ApplySelectionCore(IReadOnlyList<Guid> selected)
     {
-        foreach (SceneTreeNode node in _index.Values)
-            node.IsSelected = false;
-
+        // Only what CHANGED. A snapshot publishes about thirty times a second
+        // and the selection is almost always identical to last time, so the
+        // obvious "clear every flag, then set the selected ones" walks the
+        // whole index twice per publish. Against this engine's own documented
+        // ceiling of ~25,000 nodes that is a real UI-thread cost for nothing,
+        // and it becomes a notification storm the moment the nodes start
+        // raising property changes.
+        _incoming.Clear();
         for (int i = 0; i < selected.Count; i++)
+            _incoming.Add(selected[i]);
+
+        foreach (Guid id in _selectedIds)
         {
-            if (_index.TryGetValue(selected[i], out SceneTreeNode? node))
-                node.IsSelected = true;
+            if (!_incoming.Contains(id) && _index.TryGetValue(id, out SceneTreeNode? gone))
+                gone.IsSelected = false;
         }
+
+        foreach (Guid id in _incoming)
+        {
+            if (!_selectedIds.Contains(id) && _index.TryGetValue(id, out SceneTreeNode? added))
+                added.IsSelected = true;
+        }
+
+        (_selectedIds, _incoming) = (_incoming, _selectedIds);
     }
 
     private void RequestRebuild()
@@ -289,7 +496,8 @@ public sealed class SceneTreeModel
             node.Id,
             node.Parent?.Id ?? Guid.Empty,
             node.Name,
-            node.IndexInParent));
+            node.IndexInParent,
+            SceneNodeClassifier.Classify(node)));
 
         IReadOnlyList<SceneNode> children = node.Children;
         for (int i = 0; i < children.Count; i++)

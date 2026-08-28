@@ -1,3 +1,4 @@
+﻿using SpectraEngine.Core.Scene;
 using System;
 
 namespace SpectraEngine.Core.Hosting;
@@ -49,9 +50,15 @@ public enum SceneChangeKind
 /// it has no parent. A tree view needs this to insert in the right place, and
 /// the engine needs it because sibling index is traversal order.
 /// </param>
+/// <param name="NodeKind">
+/// What the node is, derived from its payloads at the moment of the change.
+/// A list of names cannot tell a light from a wall, and a UI holding ids across
+/// a thread boundary has no way to ask.
+/// </param>
 public readonly record struct SceneChange(
     SceneChangeKind Kind,
     Guid NodeId,
     Guid ParentId,
     string Name,
-    int SiblingIndex);
+    int SiblingIndex,
+    SceneNodeKind NodeKind = SceneNodeKind.Empty);

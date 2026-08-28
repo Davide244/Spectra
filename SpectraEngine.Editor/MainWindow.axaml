@@ -2,65 +2,326 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:viewport="clr-namespace:SpectraEngine.Editor.Viewport"
         xmlns:local="clr-namespace:SpectraEngine.Editor"
+        xmlns:shell="clr-namespace:SpectraEngine.Editor.Shell"
         x:Class="SpectraEngine.Editor.MainWindow"
+        x:DataType="shell:ShellModel"
         Title="Spectra Editor"
         Width="1440" Height="900"
-        MinWidth="640" MinHeight="400">
+        MinWidth="960" MinHeight="600"
+        Background="{StaticResource SpectraBgApp}">
 
-  <Grid RowDefinitions="Auto,*,Auto">
+  <!--
+    Every row is its OWN grid cell and none of them overlap the viewport.
 
-    <Menu Grid.Row="0">
-      <MenuItem Header="_File">
-        <MenuItem Header="E_xit" Click="OnExitClicked" />
-      </MenuItem>
-      <MenuItem Header="_View">
-        <MenuItem Header="_Focus viewport" Click="OnFocusViewportClicked" />
-      </MenuItem>
-    </Menu>
+    That is a hard constraint, not a layout preference: the viewport is a native
+    child window that always composites above anything Avalonia draws, so a
+    floating toolbar, an overlay, a drop shadow or a popup that extended over
+    it would simply be invisible there. Docked strips are what this shell can
+    have, so they are what it has.
+  -->
 
-    <Grid Grid.Row="1" ColumnDefinitions="280,4,*">
+  <Window.Resources>
+    <shell:SceneNodeKindIconConverter x:Key="KindIcon" />
+    <shell:SceneNodeKindBrushConverter x:Key="KindTint" />
+  </Window.Resources>
 
-      <!--
-        The scene tree is fed entirely by FrameSnapshot: ids and names copied
-        out of the graph, never a live SceneNode. It is here as much to prove
-        that boundary works as to be useful.
-      -->
-      <DockPanel Grid.Column="0" Margin="8,8,0,8">
-        <TextBlock DockPanel.Dock="Top"
-                   Text="Scene"
-                   FontWeight="SemiBold"
-                   Margin="4,0,0,6" />
-        <TextBlock DockPanel.Dock="Bottom"
-                   x:Name="TreeStatus"
-                   Margin="4,6,0,0"
-                   Opacity="0.6"
-                   FontSize="11" />
-        <TreeView x:Name="SceneTree">
+  <Window.Styles>
+    <!-- Tree rows. Selection and hover are drawn here, from model state and
+         the pointer, because Fluent's own row highlight is a different shape
+         and would sit underneath this one. -->
+    <Style Selector="Border.row">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+      <Setter Property="Height" Value="{StaticResource SpectraTreeRowHeight}" />
+    </Style>
+    <Style Selector="Border.row:pointerover">
+      <Setter Property="Background" Value="{StaticResource SpectraRowHover}" />
+    </Style>
+    <Style Selector="Border.row.selected">
+      <Setter Property="Background" Value="{StaticResource SpectraRowSelected}" />
+    </Style>
+
+    <!-- The 2px accent bar is what makes a selected row unmistakable at a
+         glance down a long list; the fill alone is too quiet at 16% and too
+         loud above it. -->
+    <Style Selector="Border.selbar">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Border.row.selected Border.selbar">
+      <Setter Property="Background" Value="{StaticResource SpectraAccent}" />
+    </Style>
+
+    <Style Selector="TextBlock.rowname">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontBase}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+    <Style Selector="Border.row.selected TextBlock.rowname">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+    </Style>
+    <!-- Filtered out, not hidden: removing rows collapses the hierarchy around
+         every match and destroys the only thing a user has after two hundred
+         nodes, which is knowing where things live. -->
+    <Style Selector="Border.row.dim TextBlock.rowname">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextDisabled}" />
+    </Style>
+    <Style Selector="Border.row.dim Path">
+      <Setter Property="Opacity" Value="0.25" />
+    </Style>
+    <Style Selector="Border.row.context TextBlock.rowname">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+    </Style>
+
+    <Style Selector="TextBlock.value">
+      <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.label">
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.sep">
+      <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraBorderStrong}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Margin" Value="10,0" />
+      <Setter Property="Text" Value="│" />
+    </Style>
+    <Style Selector="TextBlock.overbudget">
+      <Setter Property="Foreground" Value="{StaticResource SpectraAccent}" />
+    </Style>
+    <Style Selector="TextBlock.errormsg">
+      <Setter Property="Foreground" Value="{StaticResource SpectraAccent}" />
+    </Style>
+
+    <!-- A 1px vertical rule between toolbar groups. Solid hex, never alpha:
+         an alpha hairline resolves differently over each surface it crosses. -->
+    <Style Selector="Border.groupsep">
+      <Setter Property="Width" Value="1" />
+      <Setter Property="Height" Value="18" />
+      <Setter Property="Background" Value="{StaticResource SpectraBorderStrong}" />
+      <Setter Property="Margin" Value="8,0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,Auto,*,Auto">
+
+    <!-- ═══ Menu ═════════════════════════════════════════ -->
+    <Border Grid.Row="0" Background="{StaticResource SpectraBgPanel}">
+      <Menu VerticalAlignment="Center">
+        <MenuItem Header="_File">
+          <MenuItem Header="E_xit" Click="OnExitClicked" />
+        </MenuItem>
+        <MenuItem Header="_Edit">
+          <MenuItem Header="_Undo" InputGesture="Ctrl+Z" Click="OnUndoClicked" IsEnabled="{Binding CanUndo}" />
+          <MenuItem Header="_Redo" InputGesture="Ctrl+Y" Click="OnRedoClicked" IsEnabled="{Binding CanRedo}" />
+          <Separator />
+          <MenuItem Header="_Duplicate" InputGesture="Ctrl+D" Click="OnDuplicateClicked" IsEnabled="{Binding HasSelection}" />
+          <MenuItem Header="De_lete" InputGesture="Delete" Click="OnDeleteClicked" IsEnabled="{Binding HasSelection}" />
+          <Separator />
+          <MenuItem Header="_Group" InputGesture="Ctrl+G" Click="OnGroupClicked" IsEnabled="{Binding HasSelection}" />
+          <MenuItem Header="U_ngroup" InputGesture="Ctrl+Shift+G" Click="OnUngroupClicked" IsEnabled="{Binding HasSelection}" />
+          <Separator />
+          <MenuItem Header="Convert brush kind" InputGesture="Ctrl+T" Click="OnToggleBrushKindClicked" IsEnabled="{Binding HasSelection}" />
+        </MenuItem>
+        <MenuItem Header="_View">
+          <MenuItem Header="_Frame selection" InputGesture="F" Click="OnFrameClicked" IsEnabled="{Binding HasSelection}" />
+          <MenuItem Header="Toggle _navigation model" InputGesture="F7" Click="OnToggleNavigationClicked" />
+          <Separator />
+          <MenuItem Header="Focus _viewport" Click="OnFocusViewportClicked" />
+        </MenuItem>
+      </Menu>
+    </Border>
+
+    <!-- ═══ Toolbar ══════════════════════════════════════
+         Fourteen controls is the ceiling; nothing goes in without something
+         coming out. Space and style stay permanently visible because they are
+         silent modifiers: they change what the NEXT drag does with no other
+         signal, which makes them the top two sources of "why did it move like
+         that". -->
+    <Border Grid.Row="1"
+            Height="{StaticResource SpectraToolbarHeight}"
+            Background="{StaticResource SpectraBgPanel}"
+            BorderBrush="{StaticResource SpectraBorderStrong}"
+            BorderThickness="0,1">
+      <Grid ColumnDefinitions="Auto,*,Auto" Margin="8,0">
+
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+          <Button Classes="tool" Classes.active="{Binding IsMoveActive}" Click="OnMoveClicked" ToolTip.Tip="Move  (2)">
+            <Path Data="{StaticResource IconMove}" />
+          </Button>
+          <Button Classes="tool" Classes.active="{Binding IsRotateActive}" Click="OnRotateClicked" ToolTip.Tip="Rotate  (4)">
+            <Path Data="{StaticResource IconRotate}" />
+          </Button>
+          <Button Classes="tool" Classes.active="{Binding IsResizeActive}" Click="OnResizeClicked" ToolTip.Tip="Resize  (3)">
+            <Path Data="{StaticResource IconResize}" />
+          </Button>
+
+          <Border Classes="groupsep" />
+
+          <Button Classes="chip" Content="{Binding Orientation}" Click="OnOrientationClicked"
+                  ToolTip.Tip="Axis frame drags resolve against  (X)" />
+          <Button Classes="chip" Content="{Binding GizmoStyle}" Click="OnStyleClicked"
+                  ToolTip.Tip="Handle roster and what a resize holds still  (Y)" />
+
+          <Border Classes="groupsep" />
+
+          <Button Classes="tool" Classes.active="{Binding SnapEnabled}" Click="OnSnapClicked"
+                  ToolTip.Tip="Snap  (G),  finer / coarser with [ and ]">
+            <Path Data="{StaticResource IconSnap}" />
+          </Button>
+          <TextBlock Classes="value" Text="{Binding SnapLabel}" Margin="2,0,0,0" MinWidth="86"
+                     Foreground="{StaticResource SpectraTextMuted}" />
+
+          <Border Classes="groupsep" />
+
+          <Button Classes="tool" Click="OnUndoClicked" IsEnabled="{Binding CanUndo}" ToolTip.Tip="Undo  (Ctrl+Z)">
+            <Path Data="{StaticResource IconUndo}" />
+          </Button>
+          <Button Classes="tool" Click="OnRedoClicked" IsEnabled="{Binding CanRedo}" ToolTip.Tip="Redo  (Ctrl+Y)">
+            <Path Data="{StaticResource IconRedo}" />
+          </Button>
+
+          <Border Classes="groupsep" />
+
+          <Button Classes="tool" Click="OnDuplicateClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Duplicate  (Ctrl+D)">
+            <Path Data="{StaticResource IconDuplicate}" />
+          </Button>
+          <Button Classes="tool" Click="OnGroupClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Group  (Ctrl+G)">
+            <Path Data="{StaticResource IconGroupNodes}" />
+          </Button>
+          <Button Classes="tool" Click="OnUngroupClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Ungroup  (Ctrl+Shift+G)">
+            <Path Data="{StaticResource IconUngroupNodes}" />
+          </Button>
+          <Button Classes="tool" Click="OnDeleteClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Delete  (Del)">
+            <Path Data="{StaticResource IconDelete}" />
+          </Button>
+        </StackPanel>
+
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Classes="value" Text="{Binding Navigation}" Foreground="{StaticResource SpectraTextMuted}" Margin="0,0,8,0" />
+          <Button Classes="tool" Click="OnFrameClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Frame selection  (F)">
+            <Path Data="{StaticResource IconFrame}" />
+          </Button>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ═══ Scene panel | splitter | viewport ════════════ -->
+    <Grid Grid.Row="2" ColumnDefinitions="280,1,*">
+
+      <DockPanel Grid.Column="0" Background="{StaticResource SpectraBgPanel}">
+
+        <!-- The panel header carries the site's motif honestly: a category
+             chip and a monospace name that refers to something real. No
+             minimise/maximise/close glyphs — a dead close button teaches
+             within one session that this app's controls are decorative, and
+             making them true is a docking feature, not a paint job. -->
+        <Border DockPanel.Dock="Top"
+                Height="{StaticResource SpectraPanelHeaderHeight}"
+                BorderBrush="{StaticResource SpectraBorderStrong}"
+                BorderThickness="0,0,0,1"
+                Padding="10,0">
+          <Grid ColumnDefinitions="Auto,*,Auto">
+            <Border Grid.Column="0" Width="9" Height="9" CornerRadius="2"
+                    Background="{StaticResource SpectraAccent}" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Text="scene.tree" Margin="8,0,0,0"
+                       FontFamily="{StaticResource SpectraFontMono}"
+                       FontSize="{StaticResource SpectraFontSecondary}"
+                       Foreground="{StaticResource SpectraTextBody}"
+                       VerticalAlignment="Center" />
+            <TextBlock Grid.Column="2" Classes="value" Text="{Binding TreeCountLabel}"
+                       Foreground="{StaticResource SpectraTextMuted}" />
+          </Grid>
+        </Border>
+
+        <Grid DockPanel.Dock="Top" Margin="8,8,8,6" ColumnDefinitions="*,Auto">
+          <TextBox Grid.Column="0" Classes="filter"
+                   Text="{Binding FilterText, Mode=TwoWay}"
+                   Watermark="Filter, or t:light"
+                   KeyDown="OnFilterKeyDown" />
+          <Button Grid.Column="1" Classes="tool" Width="24" Height="24" Margin="4,0,0,0"
+                  Click="OnClearFilterClicked" IsVisible="{Binding HasFilter}"
+                  ToolTip.Tip="Clear filter  (Esc)">
+            <Path Data="{StaticResource IconClear}" Width="11" Height="11" />
+          </Button>
+        </Grid>
+
+        <TreeView x:Name="SceneTree"
+                  SelectionChanged="OnTreeSelectionChanged"
+                  Margin="4,0,0,4">
           <TreeView.ItemTemplate>
             <TreeDataTemplate x:DataType="local:SceneTreeNode" ItemsSource="{Binding Children}">
-              <TextBlock Text="{Binding Name}" />
+              <Border Classes="row"
+                      Classes.selected="{Binding IsSelected}"
+                      Classes.dim="{Binding IsDimmed}"
+                      Classes.context="{Binding IsContext}">
+                <Grid ColumnDefinitions="2,Auto,*">
+                  <Border Grid.Column="0" Classes="selbar" Margin="0,3" CornerRadius="1" />
+                  <Path Grid.Column="1"
+                        Data="{Binding Kind, Converter={StaticResource KindIcon}}"
+                        Stroke="{Binding Kind, Converter={StaticResource KindTint}}"
+                        StrokeThickness="1.2" StrokeLineCap="Round" StrokeJoin="Round"
+                        Fill="Transparent" Width="14" Height="14" Stretch="Uniform"
+                        Margin="6,0,0,0" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="2" Classes="rowname" Text="{Binding Name}" Margin="6,0,4,0" />
+                </Grid>
+              </Border>
             </TreeDataTemplate>
           </TreeView.ItemTemplate>
         </TreeView>
       </DockPanel>
 
-      <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="Transparent" />
+      <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
 
-      <!--
-        A native child window with the engine's own swap chain behind it. It
-        sits above the XAML rather than inside it, so nothing may be drawn over
-        this cell; that airspace is v1's accepted cost.
-      -->
-      <Border Grid.Column="2" Margin="0,8,8,8">
+      <!-- MinWidth is not cosmetic: dragging the splitter to zero can leave
+           the swap chain unable to recover. -->
+      <Border Grid.Column="2" MinWidth="360"
+              Background="{StaticResource SpectraBgApp}">
         <viewport:EngineViewport x:Name="Viewport" />
       </Border>
     </Grid>
 
-    <Border Grid.Row="2" Padding="10,4" Background="#20000000">
-      <TextBlock x:Name="StatusText"
-                 FontFamily="Consolas,Menlo,monospace"
-                 FontSize="12"
-                 Text="Starting..." />
+    <!-- ═══ Status bar ═══════════════════════════════════
+         Left is the message zone, which the pump never overwrites. Right is
+         the continuous cluster, each field fixed-width so nothing jitters, and
+         ordered with the fastest-changing values leftmost so the eye does not
+         have to scan to the window edge. -->
+    <Border Grid.Row="3"
+            Height="{StaticResource SpectraStatusBarHeight}"
+            Background="{StaticResource SpectraBgPanel}"
+            BorderBrush="{StaticResource SpectraBorderStrong}"
+            BorderThickness="0,1,0,0"
+            Padding="10,0">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0" Classes="value"
+                   Classes.errormsg="{Binding IsError}"
+                   Text="{Binding Message}"
+                   TextTrimming="CharacterEllipsis" />
+
+        <StackPanel Grid.Column="1" Orientation="Horizontal">
+          <TextBlock Classes="value" Text="{Binding SelectionLabel}" MinWidth="112" />
+          <TextBlock Classes="sep" />
+          <TextBlock Classes="value" Text="{Binding GizmoMode}" MinWidth="46" />
+          <TextBlock Classes="value" Text="{Binding GizmoStyle}" Foreground="{StaticResource SpectraTextMuted}" MinWidth="52" />
+          <TextBlock Classes="value" Text="{Binding Orientation}" Foreground="{StaticResource SpectraTextMuted}" MinWidth="42" />
+          <TextBlock Classes="sep" />
+          <TextBlock Classes="value" Text="{Binding SnapLabel}" MinWidth="86" />
+          <TextBlock Classes="sep" />
+          <TextBlock Classes="value" Text="{Binding ViewportLabel}" Foreground="{StaticResource SpectraTextMuted}" MinWidth="76" />
+          <TextBlock Classes="sep" />
+          <TextBlock Classes="value" Text="{Binding FpsLabel}" Foreground="{StaticResource SpectraTextMuted}" MinWidth="58" />
+          <TextBlock Classes="value" Classes.overbudget="{Binding FrameTimeOverBudget}"
+                     Text="{Binding FrameTimeLabel}" Foreground="{StaticResource SpectraTextMuted}" MinWidth="66" />
+        </StackPanel>
+      </Grid>
     </Border>
   </Grid>
 </Window>

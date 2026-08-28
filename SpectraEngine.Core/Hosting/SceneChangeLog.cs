@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Scene;
+﻿using SpectraEngine.Core.Scene;
 using System;
 using System.Collections.Generic;
 
@@ -156,6 +156,7 @@ public sealed class SceneChangeLog
             node.Id,
             node.Parent?.Id ?? Guid.Empty,
             node.Name,
-            node.IndexInParent));
+            node.IndexInParent,
+            SceneNodeClassifier.Classify(node)));
     }
 }

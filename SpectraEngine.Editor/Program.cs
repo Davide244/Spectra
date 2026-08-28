@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Serilog;
 using System;
 
@@ -47,5 +47,10 @@ internal static class Program
     public static AppBuilder BuildAvaloniaApp() =>
         AppBuilder.Configure<App>()
             .UsePlatformDetect()
+            // Embedded rather than a system face: the shell's type scale is
+            // tuned at 11, 12 and 13px, where Segoe UI's hinting and Inter's
+            // are noticeably different, and a tool that renders differently on
+            // two machines is a tool nobody can tune.
+            .WithInterFont()
             .LogToTrace();
 }

@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using SpectraEngine.Core;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Audio;
@@ -8,6 +8,8 @@ using SpectraEngine.Core.Graphics.D3D12;
 using SpectraEngine.Core.Hosting;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
+using SpectraEngine.Editing.Cameras;
+using SpectraEngine.Editing.Gizmos;
 using SpectraEngine.Editing.Hosting;
 using SpectraEngine.Physics.Box3D;
 using SpectraShade.Compiler;
@@ -107,6 +109,45 @@ public sealed class EditorSession : IDisposable
         _engine.Start(surface);
         _logger.LogInformation("Editor session started on {Backend}", _renderer.GetType().Name);
     }
+
+    // --- Driving the editor from the UI thread -------------------------------
+    //
+    // Every one of these marshals onto the render thread through the host's
+    // command queue, and every one reaches the editor through the SAME verbs a
+    // key chord uses. The alternative — synthesising key presses at the engine
+    // — is a second input path free to drift from the real one, and it would
+    // not even work: the letter-row bindings deliberately stand down while a
+    // camera is driving, so a toolbar built on them would go inert exactly
+    // while somebody was navigating.
+    //
+    // The cast happens INSIDE the queued command, on the render thread, because
+    // that is the only thread allowed to read SceneManager.Editor at all. It
+    // also means there is no editor instance to capture and publish across a
+    // thread boundary: the factory builds one later, on that thread, and this
+    // simply asks for whatever is installed when the command runs.
+
+    /// <summary>Runs one host verb: history, a structural edit, a mode toggle.</summary>
+    public void Post(EditorHostCommand command) =>
+        Host.EnqueueCommand(_ => Editor?.Apply(command));
+
+    /// <summary>Runs one manipulator verb: pick a tool, flip a mode, drive snap.</summary>
+    public void Post(GizmoCommand command) =>
+        Host.EnqueueCommand(_ => Editor?.Apply(command));
+
+    /// <summary>Runs one camera verb, such as framing the selection.</summary>
+    public void Post(EditorCameraCommand command) =>
+        Host.EnqueueCommand(_ => Editor?.Apply(command));
+
+    /// <summary>
+    /// Selects the node with this id. An id the scene no longer has is
+    /// ordinary: a UI's view of the graph is a frame or two behind.
+    /// </summary>
+    public void Select(Guid nodeId, SelectionUpdate mode = SelectionUpdate.Replace) =>
+        Host.EnqueueCommand(_ => Editor?.SelectById(nodeId, mode));
+
+    // Render thread only. Null before the scene has loaded, and null for a host
+    // that installed no editing layer at all.
+    private SceneEditorHost? Editor => SceneManager.Editor as SceneEditorHost;
 
     /// <summary>
     /// Stops the engine and waits for the render thread. Safe to call twice.

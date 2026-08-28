@@ -25,6 +25,7 @@
     <PackageVersion Include="Avalonia" Version="12.1.1" />
     <PackageVersion Include="Avalonia.Desktop" Version="12.1.1" />
     <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+    <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.1.1" />
 
     <!-- Language Server -->
     <PackageVersion Include="OmniSharp.Extensions.LanguageServer" Version="0.19.9" />

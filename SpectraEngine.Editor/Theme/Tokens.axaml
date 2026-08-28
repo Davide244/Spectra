@@ -1,0 +1,138 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!--
+    The shell's whole vocabulary. Nothing outside this file may write a literal
+    colour, size or radius.
+
+    Two rules the values encode, both learned the hard way in dark tool UIs:
+
+    1. STRUCTURAL LINES ARE SOLID HEX, NEVER ALPHA. A white-at-8% hairline
+       resolves to a different rendered colour over each surface it crosses, so
+       one border reads as two. Alpha is reserved for hover and selection
+       FILLS, which are transient and sit on a known background.
+
+    2. TEXT COLOUR IS A COLOUR, NEVER AN OPACITY. Opacity on a white brush
+       breaks Windows subpixel rendering and gamma, which shows up as fringed,
+       slightly bolder text that nobody can point at.
+  -->
+
+  <!-- ─── Surfaces ─────────────────────────────────────────
+       Four steps, deliberately close together. #0A0708 to #121011 is 1.06:1,
+       so these separate almost nothing on their own: the 1px borders below are
+       what make the layout readable, and dropping them "for cleanliness" makes
+       the whole window read as one flat plane. Never #000000 as a surface. -->
+  <Color x:Key="SpectraBgAppColor">#0A0708</Color>
+  <Color x:Key="SpectraBgPanelColor">#121011</Color>
+  <Color x:Key="SpectraBgRaisedColor">#191617</Color>
+  <Color x:Key="SpectraBgInputColor">#201C1D</Color>
+
+  <SolidColorBrush x:Key="SpectraBgApp" Color="{StaticResource SpectraBgAppColor}" />
+  <SolidColorBrush x:Key="SpectraBgPanel" Color="{StaticResource SpectraBgPanelColor}" />
+  <SolidColorBrush x:Key="SpectraBgRaised" Color="{StaticResource SpectraBgRaisedColor}" />
+  <SolidColorBrush x:Key="SpectraBgInput" Color="{StaticResource SpectraBgInputColor}" />
+
+  <!-- ─── Borders ──────────────────────────────────────────
+       Load-bearing, not decoration. See the surface note above. -->
+  <Color x:Key="SpectraBorderStrongColor">#2E2829</Color>
+  <Color x:Key="SpectraBorderSoftColor">#241F20</Color>
+  <SolidColorBrush x:Key="SpectraBorderStrong" Color="{StaticResource SpectraBorderStrongColor}" />
+  <SolidColorBrush x:Key="SpectraBorderSoft" Color="{StaticResource SpectraBorderSoftColor}" />
+
+  <!-- ─── Text ─────────────────────────────────────────────
+       Contrast against #0A0708: emphasis 16.8:1, body 8.0:1, muted 3.6:1.
+       Muted is for 11px chrome labels only and never for a value the user has
+       to read. -->
+  <Color x:Key="SpectraTextEmphasisColor">#EDEAEA</Color>
+  <Color x:Key="SpectraTextBodyColor">#A9A2A3</Color>
+  <Color x:Key="SpectraTextMutedColor">#6E6668</Color>
+  <Color x:Key="SpectraTextDisabledColor">#4A4243</Color>
+
+  <SolidColorBrush x:Key="SpectraTextEmphasis" Color="{StaticResource SpectraTextEmphasisColor}" />
+  <SolidColorBrush x:Key="SpectraTextBody" Color="{StaticResource SpectraTextBodyColor}" />
+  <SolidColorBrush x:Key="SpectraTextMuted" Color="{StaticResource SpectraTextMutedColor}" />
+  <SolidColorBrush x:Key="SpectraTextDisabled" Color="{StaticResource SpectraTextDisabledColor}" />
+
+  <!-- ─── Accent ───────────────────────────────────────────
+       Budget: under 5% of on-screen pixels. Selection fill, focus ring, the
+       active-tool bar, one primary button, threshold states. Never a panel or
+       a toolbar fill.
+
+       SpectraAccentRest is the fill for anything carrying white text: white on
+       #E33A3A is 4.3:1 and fails AA at 13px, on #C82F30 it is 5.4:1. The
+       brighter red is that button's hover, not its resting state. -->
+  <Color x:Key="SpectraAccentColor">#E33A3A</Color>
+  <Color x:Key="SpectraAccentRestColor">#C82F30</Color>
+  <SolidColorBrush x:Key="SpectraAccent" Color="{StaticResource SpectraAccentColor}" />
+  <SolidColorBrush x:Key="SpectraAccentRest" Color="{StaticResource SpectraAccentRestColor}" />
+
+  <!-- ─── Transient state fills ────────────────────────────
+       Alpha is correct here: these are localised and sit on a known surface. -->
+  <SolidColorBrush x:Key="SpectraRowHover" Color="#FFFFFF" Opacity="0.045" />
+  <SolidColorBrush x:Key="SpectraRowSelected" Color="{StaticResource SpectraAccentColor}" Opacity="0.16" />
+  <SolidColorBrush x:Key="SpectraControlHover" Color="#FFFFFF" Opacity="0.06" />
+  <SolidColorBrush x:Key="SpectraControlPressed" Color="#FFFFFF" Opacity="0.10" />
+  <SolidColorBrush x:Key="SpectraControlChecked" Color="{StaticResource SpectraAccentColor}" Opacity="0.18" />
+
+  <!-- ─── Node-kind tints ──────────────────────────────────
+       A tree of two hundred identical rows is a list of names; the tint plus
+       the glyph is what makes it a scene. Deliberately desaturated except the
+       two that matter most at a glance: a light, and a subtractive brush that
+       renders nothing at all and can only be found here. -->
+  <SolidColorBrush x:Key="SpectraKindGroup" Color="#6E6668" />
+  <SolidColorBrush x:Key="SpectraKindMesh" Color="#A9A2A3" />
+  <SolidColorBrush x:Key="SpectraKindBrushWorld" Color="#7FA7D9" />
+  <SolidColorBrush x:Key="SpectraKindBrushPart" Color="#4FC2C2" />
+  <SolidColorBrush x:Key="SpectraKindBrushSubtractive" Color="#C77FD9" />
+  <SolidColorBrush x:Key="SpectraKindLight" Color="#E3C13A" />
+
+  <!-- ─── Semantic ─────────────────────────────────────────
+       The brand accent IS red, so destructive actions must not be filled red
+       or "delete" and "selected" look identical. Filled red always means
+       primary-and-safe; destructive is a ghost with a red border. -->
+  <SolidColorBrush x:Key="SpectraWarning" Color="#E3B23A" />
+  <SolidColorBrush x:Key="SpectraSuccess" Color="#4FA96A" />
+
+  <!-- ─── Fonts ────────────────────────────────────────────
+       $Default is Avalonia's terminal fallback. There is no CSS-style
+       "monospace" or "sans-serif" generic: naming one resolves to nothing and
+       fails silently, which is what the old Consolas,Menlo,monospace stack was
+       doing on this machine.
+
+       Mono renders one px smaller than adjacent sans, because mono faces carry
+       a larger x-height for the same nominal size and otherwise read bigger. -->
+  <FontFamily x:Key="SpectraFontUi">avares://Avalonia.Fonts.Inter/Assets#Inter, Segoe UI Variable Text, Segoe UI, $Default</FontFamily>
+  <FontFamily x:Key="SpectraFontMono">Cascadia Mono, Consolas, $Default</FontFamily>
+
+  <!-- ─── Type scale ───────────────────────────────────────
+       13px is the base, which is where every professional tool lives (VS Code
+       13, Unity 12, Blender 11). Never 700 weight at 13px on dark: it blooms. -->
+  <x:Double x:Key="SpectraFontMicro">10</x:Double>
+  <x:Double x:Key="SpectraFontSmall">11</x:Double>
+  <x:Double x:Key="SpectraFontSecondary">12</x:Double>
+  <x:Double x:Key="SpectraFontBase">13</x:Double>
+  <x:Double x:Key="SpectraFontTitle">15</x:Double>
+
+  <!-- ─── Fixed heights ────────────────────────────────────
+       Values, not padding-derived, so rows stack cleanly at 125% and 150% DPI. -->
+  <x:Double x:Key="SpectraTreeRowHeight">22</x:Double>
+  <x:Double x:Key="SpectraControlHeight">24</x:Double>
+  <x:Double x:Key="SpectraToolbarButtonSize">28</x:Double>
+  <x:Double x:Key="SpectraPanelHeaderHeight">32</x:Double>
+  <x:Double x:Key="SpectraToolbarHeight">40</x:Double>
+  <x:Double x:Key="SpectraStatusBarHeight">24</x:Double>
+
+  <!-- ─── Radii ────────────────────────────────────────────
+       Three values, no more. 0 for the frame and docked edges, 2 for controls
+       and chips, 4 for anything that floats. -->
+  <CornerRadius x:Key="SpectraRadius0">0</CornerRadius>
+  <CornerRadius x:Key="SpectraRadius2">2</CornerRadius>
+  <CornerRadius x:Key="SpectraRadius4">4</CornerRadius>
+
+  <!-- ─── Spacing ──────────────────────────────────────────
+       4-based with a 2px half-step. -->
+  <Thickness x:Key="SpectraPadTight">6,2</Thickness>
+  <Thickness x:Key="SpectraPadControl">8,4</Thickness>
+  <Thickness x:Key="SpectraPadPanel">8</Thickness>
+
+</ResourceDictionary>

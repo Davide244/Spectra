@@ -1,12 +1,16 @@
-﻿using Avalonia.Controls;
+using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
-
 using Avalonia.Threading;
 using Microsoft.Extensions.Logging;
 using Serilog.Extensions.Logging;
 using Silk.NET.Maths;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Hosting;
+using SpectraEngine.Editing.Cameras;
+using SpectraEngine.Editing.Gizmos;
+using SpectraEngine.Editing.Hosting;
+using SpectraEngine.Editor.Shell;
 using SpectraEngine.Editor.Viewport;
 using System;
 using System.Collections.Concurrent;
@@ -15,8 +19,8 @@ using System.Threading;
 namespace SpectraEngine.Editor;
 
 /// <summary>
-/// The shell window: a scene tree, a viewport with the engine live inside it,
-/// and a status line.
+/// The shell window: a menu, a toolbar, a scene tree, the viewport, and a
+/// status bar.
 /// </summary>
 /// <remarks>
 /// <b>Everything crossing between the two threads crosses here, and only in two
@@ -36,6 +40,7 @@ public partial class MainWindow : Window
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<MainWindow> _logger;
     private readonly DispatcherTimer _pump;
+    private readonly ShellModel _shell = new();
 
     // Every published snapshot, not just the newest. The engine's contract is
     // that a structural change rides the NEXT snapshot out and is then gone, so
@@ -55,18 +60,23 @@ public partial class MainWindow : Window
 
     private EditorSession? _session;
     private SceneTreeModel? _tree;
+    private IRenderSurface? _surface;
     private FrameSnapshot _latest = FrameSnapshot.Empty;
     private bool _stopping;
 
-    // The viewport's own pixel size, which is NOT the window's: the engine
-    // renders into a pane, and every per-pixel cost in the frame is measured
-    // against this rather than against whatever the shell is.
-    private Vector2D<int> _viewportSize;
+    // Guards tree -> engine -> tree. Without it a click sets the engine's
+    // selection, the next snapshot writes it back into the tree, and the tree
+    // reports that as a fresh user selection. The symptom is not a hang: it is
+    // a selection that collapses to a single node, which reads like a broken
+    // keyboard rather than a loop.
+    private bool _syncingSelection;
 
     /// <summary>Creates the window and wires the viewport's lifetime to the engine's.</summary>
     public MainWindow()
     {
         InitializeComponent();
+
+        DataContext = _shell;
 
         _loggerFactory = new SerilogLoggerFactory(Serilog.Log.Logger, dispose: false);
         _logger = _loggerFactory.CreateLogger<MainWindow>();
@@ -77,10 +87,17 @@ public partial class MainWindow : Window
         _pump = new DispatcherTimer(
             TimeSpan.FromMilliseconds(16), DispatcherPriority.Normal, OnPump);
 
+        // The one frame customisation this shell makes: paint the OS caption to
+        // match the window instead of the user's accent colour. It is a DWM
+        // attribute rather than a custom title bar, so it costs nothing in
+        // hit-testing, keeps Aero Snap and the maximise flyout, and simply does
+        // nothing on Windows versions that do not know the attribute.
+        Opened += (_, _) => DarkCaption.Apply(this, _logger);
+
         if (!EngineViewport.IsSupported)
         {
-            StatusText.Text =
-                "This platform cannot host the viewport yet: the embedded surface is Windows-only in v1.";
+            _shell.SetError(
+                "This platform cannot host the viewport yet: the embedded surface is Windows-only in v1.");
         }
     }
 
@@ -99,19 +116,23 @@ public partial class MainWindow : Window
             session.Host.FrameCompleted += OnFrameCompleted;
 
             _tree = new SceneTreeModel(session.Host, _loggerFactory.CreateLogger<SceneTreeModel>());
+            _shell.Tree = _tree;
             SceneTree.ItemsSource = _tree.Roots;
 
-            _viewportSize = surface.PixelSize;
+            _surface = surface;
+            _shell.SetViewportSize(surface.PixelSize.X, surface.PixelSize.Y);
             surface.Resized += OnViewportResized;
 
             session.Start(surface);
             _session = session;
             _pump.Start();
+
+            _shell.SetMessage("Ready.");
         }
         catch (Exception ex)
         {
             _logger.LogCritical(ex, "The editor session could not start");
-            StatusText.Text = $"The engine could not start: {ex.Message}";
+            _shell.SetError($"The engine could not start: {ex.Message}");
         }
     }
 
@@ -138,6 +159,15 @@ public partial class MainWindow : Window
         _pump.Stop();
         Viewport.Host = null;
 
+        // Detached, not merely ignored: the surface outlives this subscription
+        // by exactly as long as the window takes to tear down, and a resize
+        // arriving in that gap would reach a shell that has stopped.
+        if (_surface is { } surface)
+        {
+            surface.Resized -= OnViewportResized;
+            _surface = null;
+        }
+
         _session.Host.FrameCompleted -= OnFrameCompleted;
         _session.Stop();
         _session.Dispose();
@@ -152,7 +182,7 @@ public partial class MainWindow : Window
     // UI reads it from its own pump, which is the shape the host documents.
     private void OnFrameCompleted(FrameSnapshot snapshot)
     {
-        // The newest one always wins for the status line, which wants current
+        // The newest one always wins for the readouts, which want current
         // values rather than a history.
         _latest = snapshot;
 
@@ -194,33 +224,67 @@ public partial class MainWindow : Window
             return;
 
         // Selection is a state rather than a history, so it is applied once
-        // from the newest snapshot instead of once per drained one: the walk is
-        // over every node in the tree.
+        // from the newest snapshot instead of once per drained one.
+        _syncingSelection = true;
         _tree?.ApplySelection(snapshot.SelectedIds);
-        UpdateStatus(snapshot);
+        _syncingSelection = false;
+
+        _shell.ApplySnapshot(snapshot);
     }
 
     // Raised on the UI thread by the viewport's own window procedure, beside
     // the renderer's size latch rather than instead of it.
     private void OnViewportResized(Vector2D<int> size)
     {
-        _viewportSize = size;
+        _shell.SetViewportSize(size.X, size.Y);
         _logger.LogDebug("Viewport resized to {Width}x{Height}", size.X, size.Y);
     }
 
-    private void UpdateStatus(FrameSnapshot snapshot)
-    {
-        StatusText.Text =
-            $"{snapshot.Fps,5:0} fps  {snapshot.FrameTimeMs,6:0.00} ms   |   " +
-            $"{_viewportSize.X}x{_viewportSize.Y}   |   " +
-            $"{snapshot.SelectedIds.Count} selected   |   " +
-            $"{snapshot.GizmoModeName ?? "no"} gizmo, {snapshot.NavigationModeName ?? "no"} navigation   |   " +
-            $"undo {snapshot.UndoDepth} / redo {snapshot.RedoDepth}   |   " +
-            $"{snapshot.StaticWorldCompileCount} world compiles";
+    // --- Driving the editor --------------------------------------------------
 
-        if (_tree is { } tree)
-            TreeStatus.Text = $"{tree.Count} node(s), frame {snapshot.FrameNumber}";
+    private void OnMoveClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.UseTranslate);
+    private void OnRotateClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.UseRotate);
+    private void OnResizeClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.UseScale);
+    private void OnOrientationClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.ToggleOrientation);
+    private void OnStyleClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.ToggleStyle);
+    private void OnSnapClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.ToggleSnap);
+
+    private void OnUndoClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.Undo);
+    private void OnRedoClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.Redo);
+    private void OnDuplicateClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.Duplicate);
+    private void OnDeleteClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.Delete);
+    private void OnGroupClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.Group);
+    private void OnUngroupClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.Ungroup);
+    private void OnToggleBrushKindClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.ToggleBrushKind);
+    private void OnToggleNavigationClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.ToggleNavigation);
+
+    private void OnFrameClicked(object? sender, RoutedEventArgs e) =>
+        _session?.Post(EditorCameraCommand.FrameSelection);
+
+    // --- Tree ----------------------------------------------------------------
+
+    private void OnTreeSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        // The pump is writing the model's selection flags right now; what the
+        // control is reporting is the engine's own answer coming back, not a
+        // user's click.
+        if (_syncingSelection)
+            return;
+
+        if (SceneTree.SelectedItem is SceneTreeNode node)
+            _session?.Select(node.Id);
     }
+
+    private void OnFilterKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape)
+            return;
+
+        _shell.ClearFilter();
+        e.Handled = true;
+    }
+
+    private void OnClearFilterClicked(object? sender, RoutedEventArgs e) => _shell.ClearFilter();
 
     // --- Menu ----------------------------------------------------------------
 
