@@ -68,6 +68,17 @@ shader DeferredLight {
         // pixel coordinate from uv and dither its tap rotation with it.
         vec2 uTargetSize;
 
+        // The G-BUFFER's pixel size, which is NOT uTargetSize: the G-buffer is
+        // sized to the window and this pass may be running into a target of some
+        // other size (an offscreen probe, a preview). See FragmentMain.
+        vec2 uGBufferSize;
+
+        // uv to clip-space xy for this backend, as (scale.xy, bias.xy). The two
+        // differ by a V flip that FullscreenTriangle bakes into its vertices, so
+        // the mapping cannot be assumed here - deriving ndc from uv with the
+        // wrong sign renders one backend upside down and reports nothing.
+        vec4 uUvToNdc;
+
         // Which light in the array the shadow map was rendered for, or -1 when
         // nothing casts this frame. One caster today; an index rather than a
         // flag because the second one costs a second map and not a rewrite.
@@ -130,7 +141,28 @@ shader DeferredLight {
 
     [Fragment] [Target(0)]
     vec4 FragmentMain(FragmentInput input) {
-        float depth = uDepth.Sample(input.uv).r;
+        // ONE G-BUFFER SAMPLE PER PIXEL, AND ITS OWN NDC WITH IT.
+        //
+        // The G-buffer is sized to the window and deliberately never follows the
+        // frame target, so this pass can be wider or narrower than the surfaces
+        // it reads. When it is, several pixels fall on one depth texel: each
+        // brought its own interpolated clip-space xy, and reconstructing with
+        // that against a depth measured somewhere else puts the world position
+        // on THIS pixel's ray at THAT pixel's distance. The point slides along
+        // the surface, which is invisible on anything facing the camera and
+        // several times the real error on anything grazing - it made a lone
+        // sphere self-shadow by 369 of 765 at a 96 probe against a 64 G-buffer,
+        // where a matched pair reads 45.
+        //
+        // Snapping to the texel centre makes the depth and the ray describe the
+        // same sample again. It is exactly a no-op when the sizes match, since
+        // uv is then already (i + 0.5) / size, which is why the matched path
+        // cannot be disturbed by this.
+        vec2 texel = Math.Floor(input.uv * uGBufferSize) + vec2(0.5, 0.5);
+        vec2 uv = texel / uGBufferSize;
+        vec2 ndc = uv * uUvToNdc.xy + uUvToNdc.zw;
+
+        float depth = uDepth.Sample(uv).r;
 
         // Nothing was drawn here. Shading it would read a zeroed normal against
         // a zeroed albedo, which is black rather than sky.
@@ -138,9 +170,9 @@ shader DeferredLight {
             return vec4(uSkyColor, 1.0);
         }
 
-        vec4 albedoAo = uAlbedoAo.Sample(input.uv);
-        vec4 normalRoughness = uNormalRoughness.Sample(input.uv);
-        vec4 materialData = uMaterialData.Sample(input.uv);
+        vec4 albedoAo = uAlbedoAo.Sample(uv);
+        vec4 normalRoughness = uNormalRoughness.Sample(uv);
+        vec4 materialData = uMaterialData.Sample(uv);
 
         vec3 albedo = albedoAo.rgb;
         float ao = albedoAo.a;
@@ -152,7 +184,7 @@ shader DeferredLight {
         float roughness = Math.Max(normalRoughness.a, 0.04);
         float metallic = materialData.r;
 
-        vec3 worldPosition = ReconstructWorldPosition(input.ndc, depth);
+        vec3 worldPosition = ReconstructWorldPosition(ndc, depth);
         vec3 v = Math.Normalize(uCameraPosition - worldPosition);
 
         // Dielectrics reflect about 4% at normal incidence; metals have no
@@ -194,7 +226,7 @@ shader DeferredLight {
 
         // Emissive is added after shading, never lit: a surface that emits does
         // not also receive its own light.
-        return vec4(total + uEmissive.Sample(input.uv).rgb, 1.0);
+        return vec4(total + uEmissive.Sample(uv).rgb, 1.0);
     }
 
     // One texel of the chosen cascade, compared. Clamped inside the cascade

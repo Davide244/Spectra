@@ -14,17 +14,19 @@ namespace SpectraEngine.Graphics.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>THE PROBE MUST BE THE SAME SIZE AS THE G-BUFFER, and an earlier version of
-/// this file got that wrong and measured itself.</b> The G-buffer is sized to the
-/// WINDOW and deliberately never follows the frame target (following it resizes
-/// the G-buffer mid-command-list, which on D3D12 releases a resource the open
-/// list still references). A deferred render into a differently sized probe
-/// therefore reconstructs world position from a depth buffer at one resolution
-/// while the light pass runs at another, and that produces false self-shadowing
-/// several times larger than the real defect: <b>369 at a 96 probe, 207 at 128,
-/// 420 at 256 and 489 at 512, all against a 64x64 G-buffer</b>. Every conclusion
-/// drawn from those numbers was about a condition the demo does not have. The
-/// tests here drive the framebuffer latch instead, so the G-buffer follows.
+/// <b>An earlier version of this file measured ITSELF, and the defect it found
+/// that way turned out to be a real one.</b> The G-buffer is sized to the WINDOW
+/// and deliberately never follows the frame target (following it resizes the
+/// G-buffer mid-command-list, which on D3D12 releases a resource the open list
+/// still references). A deferred render into a differently sized target
+/// therefore read a depth measured at one sample position while reconstructing
+/// along the ray of another, which slid the world position along the surface and
+/// produced false self-shadowing of <b>369 at a 96 probe, 207 at 128, 420 at 256
+/// and 489 at 512, all against a 64x64 G-buffer</b>, where a matched pair read
+/// 45. The light pass now snaps its G-buffer reads to a texel centre and derives
+/// clip-space xy from that same point, which is exactly a no-op when the sizes
+/// match; both sizes now measure 0. The tests still drive the framebuffer latch,
+/// because a measurement that lets the two drift is not measuring the renderer.
 /// </para>
 /// <para>
 /// <b>The defect this was written for, measured with the two matched.</b> Worst
@@ -180,10 +182,7 @@ public sealed class ShadowCurvedReceiverGlTests
         }
     }
 
-    [Fact(Skip = "Reproduces an OPEN defect: a deferred frame rendered into a target that is not " +
-                "the G-buffer's size falsely self-shadows, by up to 5x what it does at matched " +
-                "size. --offscreen-probe runs exactly this path and reads only debug-layer error " +
-                "counts, so nothing in the repo can currently see it.")]
+    [Fact]
     public void A_deferred_frame_does_not_depend_on_the_target_size()
     {
         OpenGLRenderer renderer = _fixture.Renderer;

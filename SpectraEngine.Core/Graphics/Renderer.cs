@@ -1158,6 +1158,19 @@ public abstract class Renderer
             .SetUniform("uShadowDepthBias", map?.CompareBias ?? 0f)
             .SetUniform("uShadowFilterRadius", map?.FilterRadius ?? 1f)
             .SetUniform("uTargetSize", new Vector2(PassSize.X, PassSize.Y))
+            // NOT PassSize: the G-buffer follows the window and this pass may be
+            // running into a target of some other size, in which case the shader
+            // has to snap its reads to a texel centre so the depth it samples and
+            // the ray it reconstructs along describe the same point. See
+            // DeferredLight.FragmentMain.
+            .SetUniform("uGBufferSize", new Vector2(gbuffer.Width, gbuffer.Height))
+            // uv to clip-space xy, matching the V flip FullscreenTriangle bakes
+            // into its vertices for this backend. Sent rather than assumed: the
+            // wrong sign here is an upside-down reconstruction that throws
+            // nothing and logs nothing.
+            .SetUniform("uUvToNdc", TargetOriginIsTopLeft
+                ? new Vector4(2f, -2f, -1f, 1f)
+                : new Vector4(2f, 2f, -1f, -1f))
             .SetTexture("uShadowMap", 5, map?.Depth ?? gbuffer.Depth);
 
         // The arrays must be written whole and must be the length the shader

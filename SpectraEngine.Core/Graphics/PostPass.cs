@@ -36,6 +36,7 @@ public sealed class PostPass
     private readonly Dictionary<string, int> _ints = [];
     private readonly Dictionary<string, Vector2> _vec2 = [];
     private readonly Dictionary<string, Vector3> _vec3 = [];
+    private readonly Dictionary<string, Vector4> _vec4 = [];
     private readonly Dictionary<string, Matrix4x4> _matrices = [];
     private readonly Dictionary<string, Vector4[]> _vec4Arrays = [];
     private readonly Dictionary<string, Matrix4x4[]> _matrixArrays = [];
@@ -74,6 +75,13 @@ public sealed class PostPass
     public PostPass SetUniform(string name, Vector3 value)
     {
         _vec3[name] = value;
+        return this;
+    }
+
+    /// <summary>Stages a 4-vector uniform.</summary>
+    public PostPass SetUniform(string name, Vector4 value)
+    {
+        _vec4[name] = value;
         return this;
     }
 
@@ -136,6 +144,8 @@ public sealed class PostPass
         foreach ((string name, Vector2 value) in _vec2)
             shader.SetUniform(name, value);
         foreach ((string name, Vector3 value) in _vec3)
+            shader.SetUniform(name, value);
+        foreach ((string name, Vector4 value) in _vec4)
             shader.SetUniform(name, value);
         foreach ((string name, Matrix4x4 value) in _matrices)
             shader.SetUniform(name, value);
