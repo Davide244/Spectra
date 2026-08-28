@@ -107,6 +107,32 @@ Scaling measured directly, not extrapolated:
 
 **5 km² and 25,000 objects at 118 fps is what this engine is good for today.**
 
+### 3a. Hosting changes the number, and D3D12 in the editor is capped
+
+Measured 2026-08-28, same demo scene, same machine:
+
+| host | backend | frame |
+|---|---|---|
+| standalone window | D3D12 | 1.42 ms (703 fps) |
+| Avalonia viewport | D3D12 | **16.69 ms (60 fps)** |
+| Avalonia viewport | D3D11 | 0.58 ms (1,715 fps) |
+
+**The editor's D3D12 viewport is pinned to the refresh interval, and it is not
+the engine's own work.** The chain is `FlipDiscard` presented with
+`Present(0, 0)` and no `ALLOW_TEARING` flag; presenting a flip-model chain into
+a child window that DWM composites honours the refresh rate regardless of the
+sync interval. D3D11 is not affected because its chain is bitblt. 16.7 ms with
+sub-millisecond work in it is exactly the shape of the vsync bug this repo has
+already paid for once (§1), so it is written down rather than left to be
+rediscovered.
+
+**Not fixed, deliberately.** Sixty frames a second in an editor viewport is
+arguably what you want, and uncapping it means `DXGI_FEATURE_PRESENT_ALLOW_TEARING`
+support detection plus the flag on the swap chain, on `ResizeBuffers` and on
+every present, in the one backend path with a history of resize failures. What
+matters today is that **no D3D12 measurement taken in the editor means
+anything** until that is decided: measure D3D12 in the standalone demo.
+
 ---
 
 ## 4. Don't submit it: culling
