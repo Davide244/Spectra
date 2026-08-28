@@ -89,7 +89,7 @@ namespace SpectraEngine.Editing.Gizmos;
 /// </para>
 /// <para>
 /// <b>A node with no measurable size is the one proportional case left.</b> An
-/// empty group, or a mesh whose CPU-side positions were never kept, has no world
+/// empty group, or a mesh that reports no bounds of its own, has no world
 /// size to add an increment to; those targets fall back to the old proportional
 /// mapping (one gizmo length of travel doubles them, snapped on a
 /// <see cref="ProportionalFactorIncrement"/> factor ladder). It is reported
@@ -171,16 +171,17 @@ public sealed class ScaleGizmo : GizmoTool
     // are null for a node this tool declines to resize, whose slot exists only to
     // keep the list index-aligned with Targets.
     //
-    // LocalBounds carries BOTH corners because either face can be the anchored
-    // one: a drag on a positive handle plants the minimum face and a drag on a
-    // negative handle plants the maximum, and which it is is not known until the
-    // handle is grabbed.
+    // LocalAnchor is the corner a face-anchored resize plants, resolved ONCE at
+    // the grab: which of the two corners it is depends both on which end of the
+    // axis was grabbed and on whether this node's own axis points the same way
+    // the handle does. LocalCentre is what a symmetric resize holds instead.
     private readonly record struct ResizeTarget(
         SetLocalTransformCommand? Transform,
         SetBrushCommand? Brush,
         Brush? StartBrush,
         Vector3 StartSize,
-        Aabb LocalBounds);
+        Vector3 LocalAnchor,
+        Vector3 LocalCentre);
 
     private readonly List<ResizeTarget> _resizeTargets = [];
 
@@ -376,7 +377,9 @@ public sealed class ScaleGizmo : GizmoTool
                 Undo.Record(brushCommand);
             }
 
-            _resizeTargets.Add(new ResizeTarget(transform, brushCommand, node.Brush, size, bounds));
+            _resizeTargets.Add(new ResizeTarget(
+                transform, brushCommand, node.Brush, size,
+                ResolveAnchor(node, in bounds), (bounds.Min + bounds.Max) * 0.5f));
         }
     }
 
@@ -558,7 +561,11 @@ public sealed class ScaleGizmo : GizmoTool
 
             Transform start = targets[i].StartLocal;
             Vector3 factor = SolveFactor(in target, sizeChange, proportionalFactor);
-            Vector3 shift = symmetric ? Vector3.Zero : SolveAnchorShift(in target, start.Scale, factor);
+
+            // The uniform handle drags no single face, so it is symmetric by
+            // construction whatever the style's default is for the axis handles.
+            Vector3 shift = SolveAnchorShift(
+                in target, start.Scale, factor, symmetric || ActiveHandle == GizmoHandle.Screen);
 
             if (target.Brush is { } brushCommand)
             {
@@ -629,23 +636,57 @@ public sealed class ScaleGizmo : GizmoTool
     /// where it was. Zero for the uniform handle, which drags no single face, and
     /// zero on every axis the handle does not drive.
     /// </summary>
-    private Vector3 SolveAnchorShift(in ResizeTarget target, Vector3 localScale, Vector3 factor)
+    private static Vector3 SolveAnchorShift(
+        in ResizeTarget target, Vector3 localScale, Vector3 factor, bool symmetric)
     {
-        if (ActiveHandle == GizmoHandle.Screen)
-            return Vector3.Zero;
-
-        // The planted face is the one OPPOSITE the handle being dragged, which is
-        // the whole content of "you moved this face". Reading the minimum
-        // whichever handle was grabbed is what confined a face-anchored resize to
-        // the positive faces of every object.
-        Vector3 anchor = GizmoHandles.IsNegativeAxis(ActiveHandle)
-            ? target.LocalBounds.Max
-            : target.LocalBounds.Min;
+        // A symmetric resize holds the object's own CENTRE, not its origin. The
+        // two coincide for the centred bounds a box brush has, and for anything
+        // else scaling about the origin moves the two faces by different amounts:
+        // the size still lands on the increment, but the face under the cursor
+        // does not move by half of it, so the handle drifts away from the
+        // pointer. Holding the centre is also what makes the drag's doubled
+        // travel exactly right rather than right-for-centred-geometry.
+        Vector3 anchor = symmetric ? target.LocalCentre : target.LocalAnchor;
 
         return new Vector3(
             ResizeMath.AnchorShift(anchor.X, localScale.X, factor.X),
             ResizeMath.AnchorShift(anchor.Y, localScale.Y, factor.Y),
             ResizeMath.AnchorShift(anchor.Z, localScale.Z, factor.Z));
+    }
+
+    /// <summary>
+    /// The local corner a face-anchored drag plants for one node: the face
+    /// opposite the handle, expressed in that node's own frame.
+    /// </summary>
+    /// <remarks>
+    /// <b>The handle's sign is a fact about the GIZMO's frame and the anchor is a
+    /// coordinate in the NODE's</b>, so the two have to be reconciled per node
+    /// rather than assumed equal. Each node is resized along its own axes (see
+    /// the type remarks), and a selection member turned more than a right angle
+    /// away from the gizmo's frame has its local +x pointing the way the handle
+    /// does not. Reading the handle's sign straight would then plant the face on
+    /// the side the user is dragging TOWARD, so one member of the selection would
+    /// grow left while the rest grew right, from one drag of one handle.
+    /// <para>
+    /// Resolved once per gesture, at the grab: the node's rotation relative to
+    /// the frozen constraint cannot change during a resize, and doing it per
+    /// frame would be three dot products per node per frame for an answer that
+    /// never moves.
+    /// </para>
+    /// </remarks>
+    private Vector3 ResolveAnchor(SceneNode node, in Aabb bounds)
+    {
+        Matrix4x4 world = node.WorldMatrix;
+        return new Vector3(
+            AnchorOn(new Vector3(world.M11, world.M12, world.M13), bounds.Min.X, bounds.Max.X),
+            AnchorOn(new Vector3(world.M21, world.M22, world.M23), bounds.Min.Y, bounds.Max.Y),
+            AnchorOn(new Vector3(world.M31, world.M32, world.M33), bounds.Min.Z, bounds.Max.Z));
+
+        // The constraint already carries the handle's direction, so this one test
+        // answers both questions at once: which end was grabbed, and which way
+        // this node's own axis points.
+        float AnchorOn(Vector3 nodeAxis, float min, float max) =>
+            Vector3.Dot(nodeAxis, _constraintAxis) >= 0f ? min : max;
     }
 
     /// <summary>

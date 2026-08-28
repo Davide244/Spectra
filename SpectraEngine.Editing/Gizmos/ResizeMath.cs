@@ -22,7 +22,7 @@ namespace SpectraEngine.Editing.Gizmos;
 /// bounds; a mesh node's is its mesh bounds times the node's world scale. Both
 /// are world units, so the same increment means the same thing for both — the
 /// claim the whole fixed-increment design rests on. A node with neither (an
-/// empty group, a mesh whose CPU positions were never kept) has no size to
+/// empty group, a mesh that reports no bounds) has no size to
 /// resize, and <see cref="TryMeasure"/> says so rather than inventing one; the
 /// tool falls back to a proportional drag there and says so out loud.
 /// </para>
