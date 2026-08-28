@@ -406,6 +406,42 @@ Vulkan-flavoured GLSL (`#version 450`, real `std140` UBO blocks replacing loose 
 
 Order is forced: `F3 → R1 → R2 → R3` before any feature, because `R3` is the keystone and `R1`/`R2` are its prerequisites. **All three have landed**, so the arc is open at `R4` (post/tone mapping) and `R5` (array uniforms, which is what blocks GPU skinning).
 
+### The visual target: *Stray*-class fidelity *(set 2026-08-28)*
+
+**The bar is the LOOK of a good late-UE4 game, named concretely as *Stray*, and not a feature list.** That distinction is the whole reason this target is reachable: every technique behind that look is documented, bounded, 2014-to-2020 deferred rendering. None of it needs GPU-driven submission, bindless resources, or a visibility buffer, so none of it fights the architecture. It fills the architecture in.
+
+**What already stands, and it is the expensive half.** Cook-Torrance GGX with height-correlated Smith and Schlick Fresnel; linear light end to end with every conversion done by hardware; an HDR half-float scene target; a real ACES resolve with exposure; four shadow cascades in one atlas with a rotated PCF kernel. Those are the parts that are miserable to retrofit and they are done. Getting them wrong early poisons everything downstream, and they are not wrong.
+
+**The single most damaging gap is one line** in `DeferredLight.spectrashade`: `total = diffuseColor * uAmbient * ao`. Ambient is a flat scalar, so everything out of direct light gets the same grey from every direction. That is the difference between "lit by a place" and "lit by a lamp plus a constant", and it is most of why a scene reads as a tech demo rather than a location. The shader's own comment concedes the term is crude.
+
+**Recommended order, by what moves the picture rather than by dependency.** The arc's numbering is dependency order; this is the sequence to actually work in:
+
+1. **`R9` normal mapping.** Without it every surface is flat plastic. The largest single fidelity gap, and the BRDF half is already shipped.
+2. **`R14` the post stack** (bloom first). Bloom on emissive IS the neon aesthetic, emissive is already in the G-buffer, and the post spine already exists. Highest payoff per day of work in the whole arc.
+3. **`R15` an ambient with direction.** Fixes the line above. Even a sky-ground hemisphere is a step change; an irradiance cubemap is the real answer.
+4. **`R16` temporal AA.** *Stray* is visually CLEAN, and that cleanliness is TAA. Without it every specular highlight and shadow edge shimmers.
+5. **`R13` compute dispatch**, because `R17` and `R19` both want it and it is infrastructure rather than a look.
+6. **`R17` screen-space AO.** Contact darkening; objects stop floating.
+7. **`R10` transparency**, which gates glass, particles and fog cards.
+8. **`R21` particles**, then **`R18` reflections** (the wet-street look), then **`R19` volumetrics** (the light shafts, and the most *Stray*-specific item here), then **`R20` decals**.
+9. **`R11`** and **`R12`** last: TAA supersedes FXAA for the game view, MSAA is still wanted for the editor viewport, and instancing is throughput rather than fidelity.
+
+**The honest caveat, and it is not a small one: the renderer is the easier half.** *Stray* is roughly seven years of work by a team with excellent artists, and its look is as much set dressing, material authoring and palette discipline as it is shading. An engine with all of the above and programmer-art content will look worse than one with half of it and good content. Content-pipeline quality is part of visual fidelity, not something separate from it. See [`asset-first`](docs/positioning.md): the mesh/asset lane is where this is won.
+
+### Beyond the target: the horizon past *Stray* *(not planned work, deliberately)*
+
+Recorded so the ceiling is known rather than assumed, and kept explicitly out of the numbered arc because **none of it should start before the engine has shipped something.**
+
+- **GPU-driven rendering is the gate on all of it**: indirect draws, bindless resources, compute-side culling. Everything below is cheap-to-moderate once it exists and impossible before. The renderer today submits per draw from the CPU, and `D3D12Renderer.Present` still calls `WaitForGpu()` every frame, so the CPU and GPU do not even overlap yet. **That serialisation is the true first step toward every item here**, and it is worth doing on its own merits long before any of them.
+- **Real-time global illumination**, on a ladder rather than as one jump: irradiance probes (DDGI) first, then signed-distance-field or voxel cone tracing, then hardware ray tracing. A credible dynamic GI reaches most of the perceived quality of a Lumen; full Lumen is a department, not a feature.
+- **Virtual shadow maps.** The cascade-plus-atlas structure already here is the right starting shape, so this generalises rather than replaces.
+- **Virtual texturing**, which is what lets texel density stop being a memory decision.
+- **Hardware ray tracing** for reflections and shadows, once a DXR/Vulkan-RT path exists at all.
+- **Virtualized geometry (Nanite-class).** The honest long shot: cluster building offline, a visibility buffer, and a software rasteriser in compute. A rewrite of the renderer's core rather than an addition to it. Not foreclosed by anything in the architecture, which is the part that matters.
+- **A learned or FSR-class upscaler**, once TAA and motion vectors exist to feed it.
+
+**One genuinely encouraging finding from the audit that set this target:** SpectraShade already has a compute stage, with `[Compute]`, `[NumThreads]` and the invocation-ID built-ins. The gap is `R13`, a dispatch path in the renderer, not a language project. Half the hard part of modern rendering is already built.
+
 ### R1 — Complete the D3D12 PSO key
 Extend `PsoKey` from (layout, fill, topology) to (+ RTV format, NumRenderTargets, DSV format, sample count, depth mode, blend mode), threaded from a per-draw target state. Convert the per-program `DepthTestEnabled` flag (currently, deliberately, outside the key) into a per-draw depth mode `{TestWrite, TestNoWrite, None}`, preserving the debug-line always-on-top behaviour exactly.
 - **Why now:** five downstream items each need one of those fields to vary per draw (sRGB RTVs, offscreen formats, depth-only shadow targets, MSAA, blending). **Zero visual change**, which makes it the one milestone verifiable purely by "nothing changed" plus a PSO-cache-count assertion.
@@ -505,6 +541,51 @@ FXAA is one shader and zero backend state work once `R4` exists. MSAA costs work
 ### R12 — Instancing
 `VertexAttribute` gains `InputSlot` + `InputRate` (optional ctor params, source-compatible with the two existing call sites; both D3D backends already have the hardcoded per-vertex fields to flip, and D3D12's structural `PsoKey` picks instanced layouts up for free), plus a `(Mesh, Material)` batching pass in `BuildRenderView`.
 - **Last on purpose.** The obvious beneficiary — thousands of Roblox-style parts — is already served by a completely different mechanism: brushes are merged into per-chunk static-world meshes by CSG, so they were never per-instance draws. The real beneficiary is high-count prop/model nodes, which do not exist in volume until model import lands. The awkward part is neither layouts nor buffers: it is that batching must preserve the deterministic emission order the `RenderView` tests assert. **Size** — **M.**
+
+### R13 — Compute dispatch
+`Renderer.Dispatch(program, groupsX, groupsY, groupsZ)` plus the resource kinds a compute pass needs and the engine has none of today: unordered-access views on textures, structured buffers, and the barriers between write and read. **The language half already exists** (`[Compute]`, `[NumThreads]`, `GlobalInvocationID`), so this is renderer plumbing rather than a compiler project; a repo-wide search finds no `Dispatch`, no UAV and no structured buffer anywhere in `Graphics/`.
+- **Infrastructure, not a look**, sequenced only because `R17` and `R19` are far cheaper on top of it. GL 4.3 compute, D3D11 `CSSetShader`/`Dispatch`, D3D12 a compute PSO and root signature.
+- **Depends on** — `R1` (the PSO key already varies structurally). **Risk** — **MEDIUM**: three backends, and D3D12's resource-state tracking gains a fourth state to get wrong. **Size** — **M.**
+
+### R14 — The post stack: bloom, grading, and the lens
+Bloom as a mip-chain downsample/upsample fed by the HDR target (emissive is already a G-buffer attachment the light pass reads), a colour-grading LUT, and the cheap lens effects that read as "cinematic": vignette, film grain, chromatic aberration, and depth of field last. All of it lands in the resolve chain `R4` already established, in front of the ACES curve for bloom and behind it for grain.
+- **The highest payoff per day of work in this arc.** Bloom on emissive is the entire neon aesthetic, and a LUT is the main authorial lever over mood for near-zero engine cost.
+- **Depends on** — `R4`. **Risk** — **LOW.** **Size** — **M**, and shippable in pieces.
+
+### R15 — An ambient that has direction
+Replace the flat `uAmbient` scalar. Ladder: a sky-ground hemisphere term first (one extra colour, immediate step change), then a prefiltered irradiance cubemap plus a split-sum specular probe for real image-based lighting, then per-region probes once a level is big enough to need more than one.
+- **This is the correctness gap, not a polish item.** Every surface out of direct light currently receives the same grey from every direction, which is most of what makes a scene read as a demo. `R8`'s own leftovers already name IBL.
+- **Depends on** — `R2`, `R8`. **Risk** — **MEDIUM**: prefiltering wants either compute (`R13`) or an offline bake, and the split-sum approximation has a well-known set of ways to be subtly wrong. **Size** — **M–L.**
+
+### R16 — Temporal AA and motion vectors
+A velocity attachment, a history buffer, reprojection with neighbourhood clamping, and a jittered projection matrix. **The G-buffer has a `custom` attachment written every frame and read by nothing** (`docs/performance.md` §7.1 already flags it as the first thing to cut for low-power hardware), so the velocity slot exists without widening the layout.
+- **Why it matters more than it sounds:** *Stray* looks clean, and that cleanliness is TAA. Without it every specular highlight, shadow edge and thin geometry shimmers in motion, which reads as "cheap" no matter how correct the shading is. It is also the prerequisite for any future upscaler.
+- **Depends on** — `R4`, `R8`. **Risk** — **MEDIUM–HIGH.** Ghosting and disocclusion are where every TAA implementation spends its time, and the editor viewport's thin high-contrast lines are exactly the pathological case (see `R11`'s honest tension, which applies here too). **Size** — **M–L.**
+
+### R17 — Screen-space ambient occlusion
+GTAO or its horizon-based predecessor, from the depth and normal attachments the G-buffer already carries, multiplied into the ambient term rather than into direct light.
+- **Contact darkening is what stops objects floating**, and it is the cheapest large gain once `R15` gives the ambient something worth occluding. Note the G-buffer's existing AO channel is *material* AO from a texture, which is a different thing and does not substitute.
+- **Depends on** — `R8`, `R15`; far cheaper with `R13`. **Risk** — **LOW–MEDIUM.** **Size** — **M.**
+
+### R18 — Screen-space reflections
+Depth-buffer ray marching with roughness-aware blur, falling back to the `R15` probe where a ray leaves the screen.
+- **The wet-surface look specifically.** *Stray*'s alleys are reflective almost everywhere, and SSR plus a decent roughness map is most of that.
+- **Depends on** — `R8`, `R15`. **Risk** — **MEDIUM.** The failure modes (screen-edge fade, disocclusion smear) are cosmetic and well-understood. **Size** — **M–L.**
+
+### R19 — Volumetric fog and light shafts
+A froxel grid: scatter lights into a view-aligned 3D volume, integrate front to back, composite against depth. Shadow-mapped participating media gives the god rays.
+- **The most *Stray*-specific item in the arc**, and the one that most turns a lit scene into an atmosphere. Also the largest.
+- **Depends on** — `R13` (this is compute-shaped work), `R6`/`R7` for shafts. **Risk** — **MEDIUM–HIGH.** **Size** — **L.**
+
+### R20 — Decals
+Deferred decals projected into the G-buffer before the light pass, with per-decal albedo/normal/roughness contribution and angle fade.
+- **Set-dressing density is a huge part of why a *Stray* environment reads as a real place**, and none of it is modelled geometry. Deferred is the right shape here precisely because the G-buffer already exists.
+- **Depends on** — `R8`, `R10` (blend state). **Risk** — **MEDIUM.** **Size** — **M.**
+
+### R21 — Particles
+A CPU-simulated emitter with a GPU-instanced quad path, soft-depth fade against the depth buffer, and additive plus alpha blending.
+- **Dust motes, steam, sparks and rain.** Atmosphere that costs almost nothing and that no amount of shading quality substitutes for.
+- **Depends on** — `R10`, `R12`. **Risk** — **LOW–MEDIUM.** **Size** — **M–L.**
 
 ---
 
