@@ -505,9 +505,15 @@ FXAA is one shader and zero backend state work once `R4` exists. MSAA costs work
 
 ---
 
-## 10. Arc H — Hosting the editor in Uno
+## 10. Arc H — Hosting the editor in Avalonia
 
 **Ruling R‑10 applies: none of this blocks building a level.** The editing layer works in the existing Silk window first.
+
+**SETTLED 2026-08-28: the shell is Avalonia, and it hosts the engine IN-PROCESS.** Both halves were signed off together because they answer each other.
+
+*Avalonia over Uno,* on the researched gap: Uno has no real docking story (one partial community library), and a level editor without dockable panes is not a level editor. Avalonia has two (Dock, MIT; Actipro, commercial), ships documented NativeAOT support, has two independent precedents for embedding a GPU renderer (Ryujinx through `NativeControlHost`, PixiEditor through composition GPU interop), and Stride made the same choice for the same reasons. It also runs everywhere the engine runs, which is the deciding property: the engine targets Windows and Linux, and a shell that only runs on one of them makes the other a second-class target for authoring rather than only for playing.
+
+*In-process over separate-process,* because it is both the easier and the faster answer and there is no third consideration close enough to outweigh them. Easier: shell and engine are both .NET, so the shell references Core and Editing directly, and the entire document model, the JSON entity-schema export and the IPC layer that a separate process would force simply do not get written. Faster: a separate process cannot share GPU resources, so every frame crosses a process boundary as a copy, and every selection change becomes a message. The engine is also already shaped for it: `ISceneEditor` is an in-process seam, `EditorInputFrame` is a by-reference value struct, and the undo stack addresses live `SceneNode`s by `Guid` inside a live `Scene`. The cost is crash isolation, which is paid back by Luau running sandboxed in-process anyway and by play mode being a diff-restore (§11.5) rather than a second world.
 
 ### H1 — `EngineHost` + `IRenderSurface`
 Replace `IWindow` in `Renderer.Initialize/AcquireContext/ReleaseContext/Present` with an `IRenderSurface` (kind, native handle, pixel size, resized event, make/clear current, present); `WindowRenderSurface` keeps the standalone path byte-for-byte equivalent. `EngineHost` owns the render thread and exposes exactly four things to a UI thread: `SubmitInput`, `EnqueueCommand`, `RequestShutdown`, and a `FrameCompleted` event delivering **immutable** per-frame snapshots (selection ids, inspector values, compile/culling stats, and a batched scene-change list derived from the existing node events so a TreeView updates incrementally).
@@ -515,21 +521,20 @@ Replace `IWindow` in `Renderer.Initialize/AcquireContext/ReleaseContext/Present`
 - **Consequence to design for, not discover:** the UI is eventually consistent — an inspector text box shows local state and reconciles a frame later.
 - **Depends on** — `E1`. **Risk** — **MEDIUM.** **Size** — **M–L.**
 
-### H2 — Windows viewport: composition swapchain
-Both D3D backends switch from `CreateSwapChainForHwnd` to `CreateSwapChainForComposition` plus `ISwapChainPanelNative::SetSwapChain` via hand-declared COM interop (no CsWinRT reflection — AOT). Panel size × composition scale feeds the **existing** `Renderer.SetFramebufferSize` latch, which is already exactly the right shape; only the resize *source* changes.
-- **`ISwapChainPanelNative` availability and AOT behaviour under the chosen Uno flavour is unverified and is the single biggest unknown in this arc — spike it before committing.**
-- **Embedded OpenGL on Windows is not supported.** There is no composition path for WGL; supporting it means `WGL_NV_DX_interop` or a per-frame copy, for a configuration nobody needs since D3D is available there. **Sign-off §9.3.** **Size** — **L.**
+### H2 — Viewport v1: `NativeControlHost`, both platforms at once
+Avalonia's `NativeControlHost` embeds a real native child window (HWND on Windows, X11 on Linux) inside the visual tree, and the engine keeps its own surface and its own swap chain behind it. `IRenderSurface` reports that handle; the host's size change feeds the **existing** `Renderer.SetFramebufferSize` latch, so only the resize *source* changes. **This is the same mechanism Ryujinx shipped for years** with a real GL/Vulkan renderer inside an Avalonia shell, on both platforms, which is why this replaces both the old Uno `H2` and the old Uno `H3`.
+- **What it costs:** a native child window is an airspace island. It sits above the XAML, so Avalonia UI cannot be drawn over it, it cannot be rotated or given opacity, and popups near it need care. For a docked viewport pane that is an acceptable v1 and it is what most .NET editors ship.
+- **Depends on** — `H1`. **Risk** — **LOW–MEDIUM**, and far below the old Uno path's, which is the concrete dividend of choosing Avalonia. **Size** — **M.**
 
-### H3 — Linux viewport
-**Ship the readback fallback first** (render offscreen, `glReadPixels`, hand to Skia as a raster image) so Linux editing works from day one, slowly. Then, as an optimisation, zero-copy: create the engine's GL context in the GTK/Skia share group, render to an offscreen texture, fence, import as a `GRBackendTexture`, double-buffered.
-- **Depends on** — `R3`, `H1`.
-- **Risk** — **HIGH, the highest in the roadmap.** Whether Uno's Skia/GTK head exposes its GL context for share-group creation is unverified; if it does not, zero-copy is off the table permanently. Cross-context sharing plus fences is a classic source of driver-specific tearing. Sequencing the fallback first is the mitigation. **Size** — readback **M**, sharing **L and highly uncertain.**
+### H3 — Viewport v2: composition GPU interop
+Replace the native child window with a shared texture handed to Avalonia's compositor (`ICompositionImportedGpuImage`, keyed-mutex shared texture on D3D, the same path PixiEditor uses). This removes the airspace island: UI can overlay the viewport, and the pane composites like any other control. Needs `R3` because the engine has to render to an offscreen target rather than a swap chain.
+- **Depends on** — `R3`, `H2`. **Risk** — **MEDIUM.** Cross-API sharing plus fences is a classic source of driver-specific tearing, and the GL backend needs its own import path or accepts a copy. Sequencing v1 first is the mitigation, and v1 is genuinely shippable rather than a stopgap. **Size** — **L.**
 
 ---
 
 ## 11. Decisions that need sign-off before anything is built on them
 
-1. **Does the Uno editor host the engine in-process, or run as a separate process reading `.spectramap`?** In-process gives a live graph, instant undo and no schema export; separate-process is more robust but forces a document model, a JSON entity-schema export, and no shared GPU resources — and it changes `H1`, `P5` and undo simultaneously. *(This is the highest-leverage unanswered question in the whole plan.)*
+1. **SETTLED 2026-08-28 — the editor is Avalonia, hosting the engine IN-PROCESS.** See §10 for the reasoning on both halves. The consequences to build on: `H1`'s `EngineHost` is a direct reference rather than an IPC boundary, `P5`'s schema export is no longer needed for the editor (only for external tooling, if ever), and undo keeps addressing live `SceneNode`s by `Guid` in a live `Scene`. *(Was: does the Uno editor host the engine in-process, or run as a separate process reading `.spectramap`? Preserved because it was called the highest-leverage unanswered question in the plan, and the answer is what unblocked the whole H arc.)*
 2. **SETTLED AND BUILT — the editing layer is its own assembly.** *(Was: a new `SpectraEngine.Editing` assembly, or in Core?)* `SpectraEngine.Editing` exists in the tree, references Core and nothing else, and a test asserts the boundary (no Silk.NET type, no `IWindow`); the executable is the only project that references it, which is what keeps gizmo/undo/tool code out of a shipped AOT game binary. `CLAUDE.md` carries the rule. Nothing may re-open this by adding editor code to Core.
 3. **Is D3D-only embedding on Windows acceptable (no embedded OpenGL viewport)?** Accepting it makes `H2` a contained change; rejecting it means `WGL_NV_DX_interop` or a per-frame copy for a configuration D3D already covers.
 4. **Is CPU readback an acceptable *shipping* path for the Linux viewport until GL sharing is proven?** Accepting unblocks Linux immediately at ~8 MB and a pipeline stall per 1080p frame; rejecting makes `H3` a research task that could stall indefinitely.
