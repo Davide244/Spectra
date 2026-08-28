@@ -106,7 +106,7 @@ internal sealed class TestMesh : Mesh
         // Nothing to draw without a GPU.
     }
 
-    public override void DrawInstanced(InstanceBuffer instances, int instanceCount)
+    public override void DrawInstanced(InstanceBuffer instances, int instanceCount, int firstInstance = 0)
     {
     }
 

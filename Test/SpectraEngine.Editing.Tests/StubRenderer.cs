@@ -38,7 +38,7 @@ internal sealed class StubRenderer : Renderer
         => throw new NotSupportedException("StubRenderer creates no GPU resources.");
 
     public override InstanceBuffer CreateInstanceBuffer(
-        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes)
+        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes, ShaderProgram program)
         => throw new NotSupportedException("StubRenderer creates no GPU resources.");
 
     public override Texture CreateTexture(

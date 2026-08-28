@@ -50,7 +50,7 @@ internal sealed class CompilingRenderer : Renderer
     }
 
     public override InstanceBuffer CreateInstanceBuffer(
-        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes)
+        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes, ShaderProgram program)
         => throw new NotSupportedException("This renderer creates no GPU resources.");
 
     public override Texture CreateTexture(
@@ -100,7 +100,7 @@ internal sealed class CompilingRenderer : Renderer
         {
         }
 
-        public override void DrawInstanced(InstanceBuffer instances, int instanceCount)
+        public override void DrawInstanced(InstanceBuffer instances, int instanceCount, int firstInstance = 0)
         {
         }
 

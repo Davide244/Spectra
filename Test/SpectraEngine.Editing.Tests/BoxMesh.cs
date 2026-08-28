@@ -68,7 +68,7 @@ internal sealed class BoxMesh : Mesh
     {
     }
 
-    public override void DrawInstanced(InstanceBuffer instances, int instanceCount)
+    public override void DrawInstanced(InstanceBuffer instances, int instanceCount, int firstInstance = 0)
     {
     }
 
