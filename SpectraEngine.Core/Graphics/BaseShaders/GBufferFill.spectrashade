@@ -1,4 +1,4 @@
-// GBufferFill.spectrashade — the deferred geometry pass.
+﻿// GBufferFill.spectrashade — the deferred geometry pass.
 //
 // Writes surface properties, never light. Nothing here knows how many lights
 // exist or where they are; that is the light pass's problem, and separating the
@@ -39,7 +39,16 @@ struct GBufferOutput {
 
 shader GBufferFill {
     [Binding(0)] cbuffer Transforms {
-        mat4 uModel;
+        // [PerInstance] leaves THIS stage byte-for-byte unchanged and makes the
+        // compiler emit a second one beside it, taking the matrix per instance
+        // so a batch of identical props is one draw. A single draw still binds
+        // the uniform and pays nothing for the variant existing.
+        //
+        // Note uModel is read TWICE below, for the position and for the normal
+        // basis. The variant binds the name with a leading local rather than
+        // rewriting references, so both keep working and this file needs no
+        // instanced twin; see InstancedVariant.
+        [PerInstance] mat4 uModel;
         mat4 uView;
         mat4 uProjection;
     }
