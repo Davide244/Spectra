@@ -40,6 +40,7 @@ public sealed class SceneTreeNode(Guid id, string name) : ObservableObject
 {
     private string _name = name;
     private bool _isSelected;
+    private bool _isExpanded;
     private SceneNodeKind _kind;
     private SceneTreeMatch _match = SceneTreeMatch.Match;
 
@@ -82,6 +83,23 @@ public sealed class SceneTreeNode(Guid id, string name) : ObservableObject
             Raise(nameof(IsDimmed));
             Raise(nameof(IsContext));
         }
+    }
+
+    /// <summary>
+    /// Whether this node's children are shown. Bound two-way to the row's
+    /// expander, so the user and the engine write the same flag.
+    /// </summary>
+    /// <remarks>
+    /// <b>It lives on the model rather than on the container so that revealing
+    /// a node is possible at all.</b> A container that does not exist yet has
+    /// no <c>IsExpanded</c> to set, and the containers under a collapsed parent
+    /// are exactly the ones that do not exist; expanding the chain has to be
+    /// something the data can express before any of it is realised.
+    /// </remarks>
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set => Set(ref _isExpanded, value);
     }
 
     /// <summary>Whether the filter excludes this node. Bound as a style class.</summary>
@@ -141,9 +159,14 @@ public sealed class SceneTreeModel
     // The live filter. Empty means everything matches.
     private string _filter = string.Empty;
 
-    // Scratch parent map, rebuilt inside a filter pass. Not kept between calls:
-    // a second index of the structure is a second thing that can disagree with
-    // the first, and rebuilding it costs one walk of a dictionary.
+    // Child to parent, maintained at the two sites that can change parentage
+    // (Insert and RemoveFromParent) rather than derived on demand.
+    //
+    // It earns its keep three times over: detaching a node was a walk of the
+    // whole index, the filter needs the chain above every match, and revealing
+    // a node picked in the viewport needs the chain above THAT. A tree stores
+    // parentage implicitly in each node's Children, which is fine to read one
+    // way and hopeless to read the other.
     private readonly Dictionary<SceneTreeNode, SceneTreeNode> _parents = [];
 
     /// <summary>Creates a tree fed by <paramref name="host"/>.</summary>
@@ -220,6 +243,49 @@ public sealed class SceneTreeModel
         ApplySelectionCore(selected);
     }
 
+    /// <summary>
+    /// Expands whatever is needed for the node with this id to be visible, and
+    /// hands back the node so a caller can scroll to it. Returns false when the
+    /// tree has never heard of the id.
+    /// </summary>
+    /// <remarks>
+    /// <b>Expanding is all this does.</b> It never collapses anything, because
+    /// the expansion set is the user's, and a reveal that tidied the tree on
+    /// its way past would undo their work every time they clicked something in
+    /// the viewport.
+    /// <para>
+    /// <b>The node itself is deliberately not expanded either.</b> Picking a
+    /// group in the viewport means "show me this", not "show me everything
+    /// inside it", and a group with two hundred children would push its own row
+    /// off the screen it was just scrolled onto.
+    /// </para>
+    /// <para>
+    /// <b>An id the tree does not have is ordinary.</b> A viewport selection
+    /// can name a node whose Added change has not been drained yet, which is a
+    /// frame of ordinary lag rather than a fault; the reveal is simply skipped
+    /// and the next selection snapshot retries it.
+    /// </para>
+    /// </remarks>
+    public bool TryReveal(Guid nodeId, out SceneTreeNode node)
+    {
+        if (!_index.TryGetValue(nodeId, out SceneTreeNode? found))
+        {
+            node = null!;
+            return false;
+        }
+
+        node = found;
+
+        SceneTreeNode current = found;
+        while (_parents.TryGetValue(current, out SceneTreeNode? parent))
+        {
+            parent.IsExpanded = true;
+            current = parent;
+        }
+
+        return true;
+    }
+
     /// <summary>How many nodes pass the current filter. Equals <see cref="Count"/> when there is none.</summary>
     public int MatchCount { get; private set; }
 
@@ -281,17 +347,9 @@ public sealed class SceneTreeModel
         // dimmed to nothing, so the chain above every hit is promoted to
         // context: present, legible, and visibly not itself a result.
         //
-        // The parent map is built in ONE pass rather than searched per match:
-        // the tree stores parentage implicitly in each node's Children, and
-        // walking that per ancestor per hit is the product of two large numbers
-        // on a keystroke.
-        _parents.Clear();
-        foreach (SceneTreeNode node in _index.Values)
-        {
-            for (int i = 0; i < node.Children.Count; i++)
-                _parents[node.Children[i]] = node;
-        }
-
+        // The parent map is maintained rather than searched: walking every
+        // node's Children per ancestor per hit is the product of two large
+        // numbers on a keystroke.
         foreach (SceneTreeNode node in _index.Values)
         {
             if (node.Match != SceneTreeMatch.Match)
@@ -380,16 +438,18 @@ public sealed class SceneTreeModel
 
     private void Insert(SceneTreeNode node, Guid parentId, int siblingIndex)
     {
-        ObservableCollection<SceneTreeNode> siblings =
-            parentId != Guid.Empty && _index.TryGetValue(parentId, out SceneTreeNode? parent)
-                ? parent.Children
-                : Roots;
+        SceneTreeNode? parent = null;
+        bool hasParent = parentId != Guid.Empty && _index.TryGetValue(parentId, out parent);
+        ObservableCollection<SceneTreeNode> siblings = hasParent ? parent!.Children : Roots;
 
         // Clamped rather than trusted: a parent's add can legitimately arrive
         // in the same batch as a child's, and a child reported at index 3 of a
         // list the tree has only two of is a batch mid-replay, not a bug.
         int index = siblingIndex < 0 || siblingIndex > siblings.Count ? siblings.Count : siblingIndex;
         siblings.Insert(index, node);
+
+        if (hasParent) _parents[node] = parent!;
+        else _parents.Remove(node);
     }
 
     private void Detach(Guid nodeId)
@@ -403,19 +463,24 @@ public sealed class SceneTreeModel
 
     private void RemoveFromParent(SceneTreeNode node)
     {
-        if (Roots.Remove(node))
-            return;
-
-        foreach (SceneTreeNode candidate in _index.Values)
+        // Straight to the parent rather than a scan of every node in the tree.
+        // The map is maintained at the two sites that can change parentage, so
+        // it cannot disagree with the collections; before it existed, detaching
+        // one node walked the whole index.
+        if (_parents.TryGetValue(node, out SceneTreeNode? parent))
         {
-            if (candidate.Children.Remove(node))
-                return;
+            parent.Children.Remove(node);
+            _parents.Remove(node);
+            return;
         }
+
+        Roots.Remove(node);
     }
 
     private void Forget(SceneTreeNode node)
     {
         _index.Remove(node.Id);
+        _parents.Remove(node);
         for (int i = 0; i < node.Children.Count; i++)
             Forget(node.Children[i]);
         node.Children.Clear();

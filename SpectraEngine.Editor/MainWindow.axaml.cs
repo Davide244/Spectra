@@ -1,7 +1,9 @@
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Microsoft.Extensions.Logging;
 using Serilog.Extensions.Logging;
 using Silk.NET.Maths;
@@ -14,6 +16,7 @@ using SpectraEngine.Editor.Shell;
 using SpectraEngine.Editor.Viewport;
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Threading;
 
 namespace SpectraEngine.Editor;
@@ -70,6 +73,12 @@ public partial class MainWindow : Window
     // a selection that collapses to a single node, which reads like a broken
     // keyboard rather than a loop.
     private bool _syncingSelection;
+
+    // The node the reveal last scrolled to, and the one the TREE last asked
+    // for. Together they answer "did this selection come from the viewport, and
+    // is it new?", which is the whole gate on scrolling the panel.
+    private Guid _revealedId;
+    private Guid _treeRequestedId;
 
     /// <summary>Creates the window and wires the viewport's lifetime to the engine's.</summary>
     public MainWindow()
@@ -229,7 +238,144 @@ public partial class MainWindow : Window
         _tree?.ApplySelection(snapshot.SelectedIds);
         _syncingSelection = false;
 
+        RevealSelection(snapshot.SelectedIds);
+
         _shell.ApplySnapshot(snapshot);
+    }
+
+    /// <summary>
+    /// Scrolls the tree to whatever was just picked in the viewport, expanding
+    /// the collapsed parents in its way.
+    /// </summary>
+    /// <remarks>
+    /// <b>Three gates, and each of them is a way this feature becomes
+    /// annoying.</b> It reveals only when the selection actually CHANGED, or
+    /// every pump tick would re-scroll a panel the user is trying to browse.
+    /// It reveals only when the change did not come from the tree itself, since
+    /// a row somebody just clicked is already on screen and yanking the
+    /// viewport under them is pure noise. And it stands down while the filter
+    /// box has focus, because scrolling the list out from under someone
+    /// mid-search is the single most-complained-about behaviour in editors that
+    /// ship this.
+    /// <para>
+    /// <b>The LAST id, not the first.</b> They arrive in selection order, so
+    /// the last is the most recently added and the one the user just acted on;
+    /// revealing the first would mean a marquee over fifty objects scrolls to
+    /// whichever happened to be picked up earliest.
+    /// </para>
+    /// </remarks>
+    private void RevealSelection(IReadOnlyList<Guid> selected)
+    {
+        if (_tree is not { } tree)
+            return;
+
+        if (selected.Count == 0)
+        {
+            _revealedId = Guid.Empty;
+            return;
+        }
+
+        Guid target = selected[^1];
+        if (target == _revealedId)
+            return;
+
+        _revealedId = target;
+
+        // The tree already knows about this one: it is the echo of a row the
+        // user clicked, coming back a frame later.
+        if (target == _treeRequestedId)
+            return;
+
+        if (FilterBox.IsFocused)
+            return;
+
+        if (!tree.TryReveal(target, out SceneTreeNode node))
+        {
+            // Not in the tree yet, so nothing to scroll to. Forgetting that we
+            // "revealed" it lets the next tick try again once its Added change
+            // has drained.
+            _revealedId = Guid.Empty;
+            return;
+        }
+
+        // Posted rather than done here: expanding a parent is a change to the
+        // MODEL, and the containers it brings into existence do not exist until
+        // the layout pass that follows. Setting the control's selection now
+        // would be aiming at a row that has not been built.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_tree is null || !ReferenceEquals(_tree, tree))
+                return;
+
+            // Avalonia scrolls the selected item into view on its own; what it
+            // must not do is treat this as the user selecting something and
+            // post it straight back to the engine.
+            _syncingSelection = true;
+            SceneTree.SelectedItem = node;
+            _syncingSelection = false;
+
+            // A second hop, and not one to skip. Selecting an item starts the
+            // framework's own scroll, which does not take effect until the
+            // layout pass after this callback; measuring the row here would
+            // read its pre-scroll position and nudge it by an offset that has
+            // already been applied, sending it off the other end of the panel.
+            // Measured: the row landed a few positions above the visible range.
+            Dispatcher.UIThread.Post(() => ScrollWithContext(node), DispatcherPriority.Loaded);
+        }, DispatcherPriority.Loaded);
+    }
+
+    // Where a revealed row should sit in the panel, as a fraction of the way
+    // down it. A third leaves roughly twice as much hierarchy visible below the
+    // node as above, which is the direction a tree is usually read.
+    private const double RevealRestingFraction = 1.0 / 3.0;
+
+    /// <summary>
+    /// Places a revealed row a third of the way down the panel instead of flush
+    /// against whichever edge it was scrolled past.
+    /// </summary>
+    /// <remarks>
+    /// <b>Minimal scrolling is technically "in view" and practically
+    /// useless.</b> What a user wants after picking an object is to see what is
+    /// AROUND it in the hierarchy, and a row on the last pixel of the panel has
+    /// neighbours on one side only.
+    /// <para>
+    /// <b>The scroll offset is set directly, and the obvious alternative does
+    /// not work.</b> Asking the row to bring a deliberately oversized rectangle
+    /// into view is the tidy version of this and it does nothing: the rect is
+    /// clamped to the control, so it behaves exactly like a plain
+    /// <c>BringIntoView</c>. Measured both ways, with the row landing on the
+    /// top edge one time and the bottom edge the next.
+    /// </para>
+    /// <para>
+    /// Best-effort by design: with no realised row or no scroller there is
+    /// nothing to place, and the framework's own scroll stands.
+    /// </para>
+    /// </remarks>
+    private void ScrollWithContext(SceneTreeNode node)
+    {
+        if (SceneTree.TreeContainerFromItem(node) is not Control container)
+        {
+            _logger.LogDebug("Revealed {Node}, but its row is not realised; leaving the scroll alone", node.Name);
+            return;
+        }
+
+        if (SceneTree.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault() is not { } scroller)
+            return;
+
+        if (container.TranslatePoint(default, scroller) is not { } position)
+            return;
+
+        // Screen position plus the current offset is the row's place in the
+        // scrolled content, which is the only frame a target offset means
+        // anything in.
+        double rowInContent = position.Y + scroller.Offset.Y;
+        double resting = (scroller.Viewport.Height - container.Bounds.Height) * RevealRestingFraction;
+        double target = Math.Clamp(
+            rowInContent - resting,
+            0,
+            Math.Max(0, scroller.Extent.Height - scroller.Viewport.Height));
+
+        scroller.Offset = scroller.Offset.WithY(target);
     }
 
     // Raised on the UI thread by the viewport's own window procedure, beside
@@ -271,8 +417,14 @@ public partial class MainWindow : Window
         if (_syncingSelection)
             return;
 
-        if (SceneTree.SelectedItem is SceneTreeNode node)
-            _session?.Select(node.Id);
+        if (SceneTree.SelectedItem is not SceneTreeNode node)
+            return;
+
+        // Remembered so the echo of this selection, arriving from the engine a
+        // frame later, does not scroll the panel to a row that is already under
+        // the user's cursor.
+        _treeRequestedId = node.Id;
+        _session?.Select(node.Id);
     }
 
     private void OnFilterKeyDown(object? sender, KeyEventArgs e)

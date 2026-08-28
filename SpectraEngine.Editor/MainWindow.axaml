@@ -51,6 +51,14 @@
       <Setter Property="Background" Value="{StaticResource SpectraAccent}" />
     </Style>
 
+    <!-- Expansion is MODEL state, bound two-way. The containers under a
+         collapsed parent do not exist, so revealing a node picked in the
+         viewport has to be something the data can express before any of them
+         is realised; the user's own chevron clicks write the same flag. -->
+    <Style Selector="TreeViewItem" x:DataType="local:SceneTreeNode">
+      <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+    </Style>
+
     <Style Selector="TextBlock.rowname">
       <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
       <Setter Property="FontSize" Value="{StaticResource SpectraFontBase}" />
@@ -243,7 +251,7 @@
         </Border>
 
         <Grid DockPanel.Dock="Top" Margin="8,8,8,6" ColumnDefinitions="*,Auto">
-          <TextBox Grid.Column="0" Classes="filter"
+          <TextBox Grid.Column="0" x:Name="FilterBox" Classes="filter"
                    Text="{Binding FilterText, Mode=TwoWay}"
                    Watermark="Filter, or t:light"
                    KeyDown="OnFilterKeyDown" />
