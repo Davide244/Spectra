@@ -48,7 +48,7 @@ internal sealed class GizmoHarness
     /// stand on the selection's own box, so those aim points would land on
     /// nothing. A test that means the shipping default says
     /// <see cref="GizmoStyle.Studio"/> and asks <see cref="GrabPointFor"/> where
-    /// the handle actually is; <c>StudioGizmoStyleTests</c> is that suite.
+    /// the handle actually is; <see cref="GizmoStyleTests"/> is that suite.
     /// </remarks>
     public GizmoHarness(
         Vector3 cameraPosition,

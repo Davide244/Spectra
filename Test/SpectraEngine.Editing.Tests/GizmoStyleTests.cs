@@ -175,6 +175,59 @@ public sealed class GizmoStyleTests
         node.LocalPosition.X.ShouldBe(3f, Tolerance);
     }
 
+    [Fact]
+    public void Every_member_of_a_selection_grows_the_way_the_handle_points()
+    {
+        // The handle's sign is a fact about the GIZMO's frame; the anchor is a
+        // coordinate in the NODE's. A member turned half a turn away has its
+        // local +x pointing where the handle does not, so reading the sign
+        // straight plants the face on the side the user is dragging toward and
+        // that one object grows backwards out of the same drag.
+        var harness = GizmoHarness.ThreeQuarterView(GizmoStyle.Studio);
+        SceneNode flipped = harness.AddSelectedBrushNode(new Vector3(-4f, 0f, 0f), 1f, "Flipped");
+        flipped.LocalRotation = Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI);
+        SceneNode plain = harness.AddSelectedBrushNode(new Vector3(4f, 0f, 0f), 1f, "Plain");
+        ScaleGizmoDragTests.Scale(harness).Snap.Enabled = false;
+
+        ScaleGizmoDragTests.DragAxisBy(harness, GizmoHandle.AxisX, 2f);
+
+        // Both started two units across and both are now four, and both grew
+        // toward +x: each planted the face on its own −x side, whichever of its
+        // local faces that happens to be.
+        (float Min, float Max) flippedSpan = WorldSpanX(flipped);
+        flippedSpan.Min.ShouldBe(-5f, Tolerance);
+        flippedSpan.Max.ShouldBe(-1f, Tolerance);
+
+        (float Min, float Max) plainSpan = WorldSpanX(plain);
+        plainSpan.Min.ShouldBe(3f, Tolerance);
+        plainSpan.Max.ShouldBe(7f, Tolerance);
+    }
+
+    [Fact]
+    public void A_symmetric_resize_holds_the_object_s_centre_not_its_origin()
+    {
+        // Off-centre geometry: the mesh spans 0..2 in x, so its centre is a whole
+        // unit from the node's origin. Scaling about the origin would move the
+        // near face by nothing and the far face by the whole size change, which
+        // leaves the handle under the cursor only for centred objects.
+        var harness = GizmoHarness.ThreeQuarterView(GizmoStyle.Classic);
+        SceneNode node = harness.AddNode(Vector3.Zero, "Offset");
+        node.MeshRenderer = new MeshRenderer(
+            BoxMesh.Spanning(new Vector3(0f, -0.5f, -0.5f), new Vector3(2f, 0.5f, 0.5f)),
+            new Material(null));
+        harness.Scene.Selection.Add(node);
+        ScaleGizmoDragTests.Scale(harness).Snap.Enabled = false;
+
+        // Classic is symmetric by default: one unit of travel makes it two units
+        // bigger, one on each side of its own centre.
+        ScaleGizmoDragTests.DragAxisBy(harness, GizmoHandle.AxisX, 1f);
+
+        node.LocalScale.X.ShouldBe(2f, Tolerance);
+        // The centre stayed at x = 1 and the object grew to span −1..3.
+        (node.LocalPosition.X + 0f * node.LocalScale.X).ShouldBe(-1f, Tolerance);
+        (node.LocalPosition.X + 2f * node.LocalScale.X).ShouldBe(3f, Tolerance);
+    }
+
     // --- Classic's half of the pairing ---------------------------------------
 
     [Fact]
@@ -455,6 +508,31 @@ public sealed class GizmoStyleTests
     }
 
     // --- Helpers -------------------------------------------------------------
+
+    // A brush node's extent along world x, taken through its world matrix so a
+    // rotated node reports where its geometry actually is rather than what its
+    // local bounds say.
+    private static (float Min, float Max) WorldSpanX(SceneNode node)
+    {
+        Aabb bounds = node.Brush!.LocalBounds;
+        Matrix4x4 world = node.WorldMatrix;
+        float min = float.MaxValue;
+        float max = float.MinValue;
+
+        for (int corner = 0; corner < 8; corner++)
+        {
+            var local = new Vector3(
+                (corner & 1) == 0 ? bounds.Min.X : bounds.Max.X,
+                (corner & 2) == 0 ? bounds.Min.Y : bounds.Max.Y,
+                (corner & 4) == 0 ? bounds.Min.Z : bounds.Max.Z);
+
+            float x = Vector3.Transform(local, world).X;
+            min = MathF.Min(min, x);
+            max = MathF.Max(max, x);
+        }
+
+        return (min, max);
+    }
 
     private static GizmoStyle StyleFor(GizmoStyleKind kind) =>
         kind == GizmoStyleKind.Studio ? GizmoStyle.Studio : GizmoStyle.Classic;

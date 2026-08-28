@@ -167,7 +167,12 @@ public sealed class ScaleGizmoDragTests
         harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
 
         node.LocalScale.ShouldBe(Vector3.One);
-        node.LocalPosition.ShouldBe(Vector3.Zero);
+        // Close to, not exactly, zero: a symmetric resize holds the object's own
+        // CENTRE, and this brush's bounds are derived from its planes, so their
+        // centre is a few tens of nanometres off the origin rather than bit-zero.
+        // Anchoring on the origin instead would return an exact zero here and be
+        // wrong for any object whose geometry really is off-centre.
+        node.LocalPosition.ShouldBeCloseTo(Vector3.Zero, Tolerance);
         node.Brush!.LocalBounds.Max.ShouldBeCloseTo(new Vector3(1f), Tolerance * 10f);
     }
 
@@ -293,7 +298,7 @@ public sealed class ScaleGizmoDragTests
     /// <b>Face anchoring is a property of the style, not of the tool.</b>
     /// <see cref="GizmoStyle.Classic"/> resizes about the pivot instead, both
     /// faces moving by half the increment, which is what makes three handles
-    /// enough there; <c>ClassicGizmoStyleTests</c> pins that half. Everything in
+    /// enough there; <see cref="GizmoStyleTests"/> pins that half. Everything in
     /// this suite and in <see cref="ResizeIncrementTests"/> is about the anchored
     /// reading, so it says which style it means rather than inheriting the
     /// harness default (which is Classic, for the aiming reason
