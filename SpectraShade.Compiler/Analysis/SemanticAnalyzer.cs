@@ -1,4 +1,5 @@
-﻿using SpectraShade.Compiler.Syntax;
+﻿using SpectraEngine.Core.Graphics.Shaders;
+using SpectraShade.Compiler.Syntax;
 
 namespace SpectraShade.Compiler.Analysis;
 
@@ -22,6 +23,7 @@ public sealed class SemanticAnalyzer
         ValidatePositionAssignment(shader, allStructs);
         ValidateRenderTargets(shader, allStructs);
         ValidateDepthHints(shader);
+        ValidateVertexInputs(shader, allStructs);
         return !_diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
     }
 
@@ -177,6 +179,122 @@ public sealed class SemanticAnalyzer
                             field.Span));
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Checks the vertex input struct's locations and rates.
+    /// </summary>
+    /// <remarks>
+    /// <b>Everything here fails silently at runtime if it is not caught here.</b>
+    /// Overlapping locations link and draw, and simply feed one attribute the
+    /// other's bytes. A <c>[PerInstance]</c> on a fragment output is ignored by
+    /// both generators. A matrix taking its location from the field index leaves
+    /// the next three fields sitting inside it. None of these produce a
+    /// compiler error, a linker error or a debug-layer message on any of the
+    /// three backends, which is the entire argument for validating them.
+    /// </remarks>
+    private void ValidateVertexInputs(ShaderDeclaration shader, List<StructDeclaration> allStructs)
+    {
+        var vertexFuncs = shader.Members
+            .OfType<FunctionDeclaration>()
+            .Where(f => f.HasAttribute("Vertex"))
+            .ToList();
+
+        var inputStructs = new HashSet<StructDeclaration>();
+        foreach (var func in vertexFuncs)
+        {
+            if (func.Parameters.Count == 0)
+                continue;
+            var inputStruct = allStructs.FirstOrDefault(s => s.Name == func.Parameters[0].Type.Name);
+            if (inputStruct is not null)
+                inputStructs.Add(inputStruct);
+        }
+
+        foreach (var inputStruct in inputStructs)
+            ValidateVertexInputStruct(inputStruct);
+
+        // [PerInstance] anywhere that is not a vertex input is a
+        // misunderstanding worth naming, because both generators ignore it and
+        // the author is left believing they asked for something.
+        foreach (var s in allStructs)
+        {
+            if (inputStructs.Contains(s))
+                continue;
+
+            foreach (var field in s.Fields)
+            {
+                if (VertexInputLayout.IsPerInstance(field))
+                    _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                        $"[PerInstance] is only valid on a vertex input field; '{s.Name}.{field.Name}' is not one",
+                        field.Span));
+            }
+        }
+    }
+
+    private void ValidateVertexInputStruct(StructDeclaration inputStruct)
+    {
+        var claimed = new List<(VertexInputElement Element, FieldDeclaration Field)>();
+
+        for (int i = 0; i < inputStruct.Fields.Count; i++)
+        {
+            FieldDeclaration field = inputStruct.Fields[i];
+
+            if (!VertexInputLayout.TryDescribeType(field.Type.Name, out uint components, out uint span))
+            {
+                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                    $"'{field.Type.Name}' cannot be a vertex input ('{inputStruct.Name}.{field.Name}')",
+                    field.Span));
+                continue;
+            }
+
+            bool perInstance = VertexInputLayout.IsPerInstance(field);
+            bool explicitLocation = VertexInputLayout.HasExplicitLocation(field);
+
+            // A multi-location type taking the field-index fallback is an
+            // overlap by construction: a mat4 at index 1 owns 1 through 4 while
+            // the next field believes it owns 2.
+            if (span > 1 && !explicitLocation)
+            {
+                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                    $"'{inputStruct.Name}.{field.Name}' is a {field.Type.Name} and occupies {span} locations, " +
+                    "so it needs an explicit [Location(N)]",
+                    field.Span));
+                continue;
+            }
+
+            // Per-instance data lives in its own buffer and its locations are
+            // chosen to sit past the per-vertex ones. Defaulting to the field
+            // index would put it on top of them.
+            if (perInstance && !explicitLocation)
+            {
+                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                    $"[PerInstance] field '{inputStruct.Name}.{field.Name}' needs an explicit [Location(N)]",
+                    field.Span));
+                continue;
+            }
+
+            var element = new VertexInputElement(
+                field.Name,
+                VertexInputLayout.ResolveLocation(field, i),
+                span,
+                components,
+                perInstance ? VertexInputRate.PerInstance : VertexInputRate.PerVertex);
+
+            foreach ((VertexInputElement other, FieldDeclaration otherField) in claimed)
+            {
+                if (!element.Overlaps(other))
+                    continue;
+
+                _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                    $"'{inputStruct.Name}.{field.Name}' claims location {element.Location}" +
+                    (element.LocationSpan > 1 ? $"..{element.LocationEnd - 1}" : "") +
+                    $", which overlaps '{otherField.Name}'",
+                    field.Span));
+                break;
+            }
+
+            claimed.Add((element, field));
         }
     }
 

@@ -2,6 +2,7 @@
 using System.Text;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.Shaders;
+using SpectraShade.Compiler.Analysis;
 using SpectraShade.Compiler.Lexing;
 using SpectraShade.Compiler.Syntax;
 
@@ -200,6 +201,9 @@ public sealed class GlslGenerator : ICodeGenerator
             FragmentData = fragmentData,
             GeometryData = geometryData,
             ComputeData = computeData,
+            // Reported from the same resolver the emission above used, so the
+            // declared layout and the reported layout cannot disagree.
+            VertexInputs = VertexInputLayout.DescribeFor(vertexFunc, allStructs),
         };
     }
 
@@ -245,10 +249,13 @@ public sealed class GlslGenerator : ICodeGenerator
             {
                 var field = inputStruct.Fields[i];
                 // A [Location] without a literal argument falls back to the field
-                // index (same recovery as HlslGenerator.GetIntArg) — the argument
-                // list must never be indexed unguarded.
+                // index — the argument list must never be indexed unguarded.
+                // Resolved through VertexInputLayout, which is also what the
+                // reported signature and the HLSL semantics come from: three
+                // copies of this rule is how a shader ends up declaring one
+                // layout and reporting another.
                 string layout = GetAttribute(field.Attributes, "Location") is not null
-                    ? $"layout(location = {GetIntArg(field.Attributes, "Location", i)}) "
+                    ? $"layout(location = {VertexInputLayout.ResolveLocation(field, i)}) "
                     : "";
                 sb.AppendLine($"{layout}in {GlslType(field.Type.Name)} a_{field.Name};");
             }

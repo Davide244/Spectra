@@ -101,6 +101,7 @@ Attributes use C# bracket syntax and attach to the declaration that immediately 
 | `[Geometry]` | function | Geometry stage entry point (return void, take array param) |
 | `[Compute]` | function | Compute stage entry point (return void) |
 | `[Location(N)]` | struct field / parameter | Vertex input location / varying slot |
+| `[PerInstance]` | vertex input field | Advances once per instance, not per vertex |
 | `[Binding(N)]` | `cbuffer`, sampler | Descriptor binding index |
 | `[Target(N)]` | struct field | Fragment output render-target index (for MRT) |
 | `[NumThreads(x,y,z)]` | `[Compute]` function | Compute workgroup dimensions |
@@ -160,6 +161,36 @@ vec4 FragmentMain(FragmentInput input) { ... }
   are matched to the fragment input struct by name.
 - **Fragment output** is either a single `vec4`, or a struct whose fields each carry
   `[Target(N)]` for multiple render targets (MRT). Target indices must be unique.
+
+#### Per-instance inputs
+
+A vertex input marked `[PerInstance]` advances once per draw instance instead of once per
+vertex. It is how one mesh is drawn N times with N transforms:
+
+```
+struct VertexInput {
+    [Location(0)] vec3 position;
+    [Location(1)] vec3 normal;
+    [Location(2)] vec2 uv;
+
+    [Location(3)][PerInstance] mat4 model;
+    [Location(7)][PerInstance] vec4 tint;
+}
+```
+
+Two rules, both enforced, because breaking either produces a shader that compiles and links
+on every backend and simply draws the wrong thing:
+
+- **A matrix occupies several consecutive locations**, one per row: `mat4` takes four, `mat3`
+  three, `mat2` two. So `model` above owns locations 3 to 6 and the next free one is **7, not
+  4**. Any type spanning more than one location must therefore carry an explicit
+  `[Location(N)]`, and so must every `[PerInstance]` field; the field-index fallback cannot
+  express either. Overlapping locations are an error.
+- **The rate is not in the generated code, and it is not supposed to be.** Neither target
+  expresses it in shader text: OpenGL sets it with `glVertexAttribDivisor` and D3D with
+  `InputSlotClass`/`InstanceDataStepRate` on the input element. The compiled output reports
+  it instead, per input, alongside the location and the span, so the renderer builds the
+  layout from the shader rather than by agreement with it.
 
 ### Geometry stage
 

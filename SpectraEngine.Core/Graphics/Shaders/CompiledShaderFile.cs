@@ -56,4 +56,23 @@ public sealed class PipelineBlob
 
     /// <summary>Compute stage data. Null if this stage wasn't compiled.</summary>
     public byte[]? ComputeData { get; init; }
+
+    /// <summary>
+    /// The vertex inputs the shader declares, in the order its input struct
+    /// declares them. Empty for a shader with no vertex stage.
+    /// </summary>
+    /// <remarks>
+    /// <b>Reported rather than agreed.</b> Before this existed, the only record
+    /// of a shader's vertex layout was a comment in the HLSL generator and a
+    /// matching comment in <c>D3D11Mesh.CreateInputLayout</c>. That held while
+    /// the engine had exactly one layout; per-instance inputs end it, because
+    /// the rate and the multi-location span of a matrix are facts about the
+    /// shader that no mesh knows. See <see cref="VertexInputElement"/>.
+    /// <para>
+    /// It is identical across backends, since it describes the source rather
+    /// than the target, and is carried per blob anyway because the blob is what
+    /// a renderer is handed.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<VertexInputElement> VertexInputs { get; init; } = [];
 }

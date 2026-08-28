@@ -2,6 +2,7 @@
 using System.Text;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.Shaders;
+using SpectraShade.Compiler.Analysis;
 using SpectraShade.Compiler.Lexing;
 using SpectraShade.Compiler.Syntax;
 
@@ -106,6 +107,10 @@ public sealed class HlslGenerator : ICodeGenerator
             FragmentData = fragmentData,
             GeometryData = geometryData,
             ComputeData = computeData,
+            // Reported from the same resolver the TEXCOORD semantics above came
+            // from, so the declared layout and the reported layout cannot
+            // disagree.
+            VertexInputs = VertexInputLayout.DescribeFor(vertexFunc, _structs),
         };
     }
 
@@ -353,8 +358,11 @@ public sealed class HlslGenerator : ICodeGenerator
             string arr = EmitArraySuffix(f.Type);
             string semantic = kind switch
             {
+                // Same resolver as the GLSL layout qualifier and the reported
+                // signature. A float4x4 here takes TEXCOORDn through
+                // TEXCOORDn+3, which is why the span travels with the element.
                 InterfaceKind.VertexInput
-                    => $" : TEXCOORD{GetIntArg(f.Attributes, "Location", i)}",
+                    => $" : TEXCOORD{VertexInputLayout.ResolveLocation(f, i)}",
                 InterfaceKind.Varying when HasAttr(f.Attributes, "Position")
                     => " : SV_Position",
                 InterfaceKind.Varying
