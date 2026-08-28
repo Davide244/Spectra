@@ -1,4 +1,6 @@
+﻿using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.Shaders;
+using SpectraShade.Compiler;
 
 namespace SpectraEngine.Graphics.Tests;
 
@@ -37,6 +39,25 @@ public sealed class BaseShaderGlCompilationTests
         // functions and an early return.
         _fixture.Renderer.CreateShaderFromSource(BaseShaders.GBufferFill).ShouldNotBeNull();
         _fixture.Renderer.CreateShaderFromSource(BaseShaders.DeferredLight).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void The_generated_instanced_stages_compile_in_opengl()
+    {
+        // Every base shader that marks a [PerInstance] uniform gets a second
+        // vertex stage nobody wrote. A rewrite producing invalid GLSL would
+        // otherwise be found by a driver at run time, in whichever pass first
+        // drew a batch.
+        foreach (string source in new[] { BaseShaders.ShadowDepth, BaseShaders.GBufferFill })
+        {
+            CompiledShaderFile compiled = new SpectraShadeCompiler()
+                .Compile(source, [GraphicsBackend.OpenGL]);
+            PipelineBlob blob = compiled.GetPipeline(GraphicsBackend.OpenGL).ShouldNotBeNull();
+
+            blob.InstancedVertexData.ShouldNotBeNull();
+            _fixture.Renderer.CreateShaderFromSource(source).ShouldNotBeNull();
+            _fixture.Renderer.TryCreateInstancedShaderFromSource(source).ShouldNotBeNull();
+        }
     }
 
     [Fact]

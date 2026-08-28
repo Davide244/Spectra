@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Silk.NET.Core.Native;
@@ -61,6 +61,13 @@ public sealed unsafe class BaseShaderHlslCompilationTests
 
         Compile(compiler, Encoding.ASCII.GetString(blob.VertexData), "vs_5_0", shaderName);
         Compile(compiler, Encoding.ASCII.GetString(blob.FragmentData), "ps_5_0", shaderName);
+
+        // The compiler-generated instanced stage, where the shader declares one.
+        // Nobody authored it, so nothing else would ever compile it, and a
+        // rewrite that produced invalid HLSL would first be noticed by a driver
+        // at run time in whichever pass happened to use batches.
+        if (blob.InstancedVertexData is { } instanced)
+            Compile(compiler, Encoding.ASCII.GetString(instanced), "vs_5_0", shaderName + " (instanced)");
     }
 
     private static void Compile(D3DCompiler compiler, string hlsl, string profile, string label)

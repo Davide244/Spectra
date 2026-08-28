@@ -1,4 +1,4 @@
-using Silk.NET.OpenGL;
+﻿using Silk.NET.OpenGL;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.OpenGL;
 using SpectraEngine.Core.Graphics.Shaders;
@@ -97,7 +97,7 @@ public sealed class InstancedDrawGlTests
 
         ShaderProgram shader = renderer.CreateShaderFromSource(Source);
         Mesh mesh = renderer.CreateMesh(QuadVertices, QuadIndices, VertexAttribute.StandardLayout);
-        InstanceBuffer instances = renderer.CreateInstanceBuffer(Instances, perInstance);
+        InstanceBuffer instances = renderer.CreateInstanceBuffer(Instances, perInstance, shader);
         RenderTarget output = renderer.CreateRenderTarget(new RenderTargetDesc(Width, Height));
 
         try
@@ -139,9 +139,10 @@ public sealed class InstancedDrawGlTests
         // A batch can be culled to empty between being formed and being
         // submitted, and making every caller guard is how one site forgets.
         OpenGLRenderer renderer = _fixture.Renderer;
+        ShaderProgram shader = renderer.CreateShaderFromSource(Source);
         Mesh mesh = renderer.CreateMesh(QuadVertices, QuadIndices, VertexAttribute.StandardLayout);
         InstanceBuffer instances = renderer.CreateInstanceBuffer(
-            Instances, VertexAttribute.StandardInstanceLayout);
+            Instances, VertexAttribute.StandardInstanceLayout, shader);
         RenderTarget output = renderer.CreateRenderTarget(new RenderTargetDesc(Width, Height));
 
         try
@@ -157,6 +158,7 @@ public sealed class InstancedDrawGlTests
             renderer.DestroyRenderTarget(output);
             instances.Dispose();
             renderer.DestroyMesh(mesh);
+            shader.Dispose();
         }
     }
 
@@ -167,15 +169,24 @@ public sealed class InstancedDrawGlTests
     {
         // Bound to the instance buffer, a per-vertex attribute reads one element
         // per INSTANCE, which renders as garbage with nothing reporting why.
-        Should.Throw<ArgumentException>(() =>
-            _fixture.Renderer.CreateInstanceBuffer(4, VertexAttribute.StandardLayout));
+        ShaderProgram shader = _fixture.Renderer.CreateShaderFromSource(Source);
+        try
+        {
+            Should.Throw<ArgumentException>(() =>
+                _fixture.Renderer.CreateInstanceBuffer(4, VertexAttribute.StandardLayout, shader));
+        }
+        finally
+        {
+            shader.Dispose();
+        }
     }
 
     [Fact]
     public void An_update_that_does_not_match_the_count_is_refused()
     {
+        ShaderProgram shader = _fixture.Renderer.CreateShaderFromSource(Source);
         InstanceBuffer instances = _fixture.Renderer.CreateInstanceBuffer(
-            4, VertexAttribute.StandardInstanceLayout);
+            4, VertexAttribute.StandardInstanceLayout, shader);
         try
         {
             // Short by one matrix. Drawn rather than refused, this reads past
@@ -188,6 +199,7 @@ public sealed class InstancedDrawGlTests
         finally
         {
             instances.Dispose();
+            shader.Dispose();
         }
     }
 
