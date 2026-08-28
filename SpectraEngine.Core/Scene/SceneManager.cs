@@ -52,6 +52,35 @@ public sealed class SceneManager
     public static int? ScatterGridOverride { get; set; }
     private const float PartAreaSize = 200f;   // world units per side
 
+    /// <summary>
+    /// How many shared-brush "props" to scatter, for measuring what
+    /// <em>repeated</em> content costs. Null or zero places none, which is the
+    /// ordinary demo.
+    /// </summary>
+    /// <remarks>
+    /// <b>Every prop shares ONE <see cref="Bsp.Brush"/> instance</b>, which is
+    /// the whole reason this scenario is worth having.
+    /// <c>PartBrushMeshCache</c> keys on brush reference identity, so N nodes
+    /// resolve to one GPU mesh and the draw list carries N items with the
+    /// <em>same</em> mesh and material and N different world matrices. That is
+    /// one instancing batch, already expressed in the data the engine builds
+    /// today, and it is the shape of content this engine is aimed at: a level
+    /// dressed with a thousand copies of one crate.
+    /// <para>
+    /// <b>The scattered parts deliberately do NOT do this</b> — see
+    /// <see cref="ScatterGridOverride"/>, where every brush gets its own
+    /// randomized extents and therefore shares nothing. That scenario measures
+    /// CSG and culling against world <em>size</em>; this one measures draw
+    /// throughput against <em>repetition</em>. They are different questions,
+    /// and until this existed only the first one had a fixture, which is why
+    /// no measurement of the engine had ever had a duplicate draw in it.
+    /// </para>
+    /// </remarks>
+    public static int? PropCountOverride { get; set; }
+    private const float PropHalfExtent = 0.4f;   // a crate, near enough
+    private const float PropSpacing = 3f;        // world units between grid sites
+    private const float PropStackHeight = 6f;    // vertical jitter, so it reads as a cloud
+
     // The demo's content, as content-root-relative paths — never asset objects.
     // Brush faces carry interned MaterialRefs and only the render thread turns
     // one into a material (see Scene.Assets), and the model paths are handed to
@@ -529,6 +558,21 @@ public sealed class SceneManager
             .WithFaceMaterial(BoxFacePlusZ, accentMaterial);
 
         int partCount = AddScatteredParts(scene);
+        int propCount = AddSharedProps(scene, accentMaterial);
+        if (propCount > 0)
+        {
+            // Said out loud because the number that matters is not the node
+            // count but how few meshes it resolves to: one, and the gap between
+            // the two is exactly what instancing would collapse.
+            // One placeholder per argument, and NEVER the same name twice: a
+            // repeated name with a single argument binds nothing and the whole
+            // line is dropped, with no exception and no warning anywhere. That
+            // is how this one spent its first run invisible.
+            _logger.LogInformation(
+                "Props: {Nodes} part-brush node(s) sharing 1 brush instance -> " +
+                "1 GPU mesh and {Draws} draw(s) differing only in world matrix",
+                propCount, propCount);
+        }
 
         // Initial build stays synchronous: the sanity checks below need the
         // compiled world immediately, and load time may block. Frame-to-frame
@@ -677,6 +721,66 @@ public sealed class SceneManager
         }
 
         return count;
+    }
+
+    // Scatters PropCountOverride part-brush nodes that ALL SHARE ONE brush
+    // instance — see PropCountOverride for why that sharing is the point.
+    // Deterministic like AddScatteredParts, and for the same reason: a
+    // throughput measurement that moved between runs would measure the LCG.
+    // Returns the number placed.
+    private static int AddSharedProps(Scene scene, MaterialRef material)
+    {
+        int count = PropCountOverride ?? 0;
+        if (count <= 0)
+            return 0;
+
+        // One brush, N nodes. PartBrushMeshCache keys on reference identity,
+        // so this stays one GPU mesh however large count gets — which is what
+        // makes the draw list's N entries a batch rather than N unrelated
+        // draws that merely look alike.
+        Brush shared = Brush.CreateBox(
+            new Vector3(-PropHalfExtent), new Vector3(PropHalfExtent), material);
+
+        // A square grid sized to the count, with the SPACING fixed rather than
+        // the area: doubling the count has to measure twice the content, not
+        // the same content packed tighter into the same frustum.
+        int side = (int)Math.Ceiling(Math.Sqrt(count));
+        float half = (side - 1) * PropSpacing * 0.5f;
+        ulong state = 0x9E3779B97F4A7C15UL;
+
+        // Under one parent, so the scene tree stays legible at a thousand of
+        // them and the whole scenario is one collapsed row.
+        SceneNode props = scene.Root.CreateChild("Props");
+
+        int placed = 0;
+        for (int gx = 0; gx < side && placed < count; gx++)
+        {
+            for (int gz = 0; gz < side && placed < count; gz++)
+            {
+                float x = -half + gx * PropSpacing;
+                float z = -half + gz * PropSpacing;
+
+                // Clear of the hand-authored room, whose sanity probes raycast
+                // through this space and would otherwise hit a prop.
+                if (MathF.Abs(x) < 8f && MathF.Abs(z) < 8f)
+                    continue;
+
+                SceneNode node = props.CreateChild($"Prop{placed}");
+                node.LocalPosition = new Vector3(
+                    x, 0.5f + NextFloat01(ref state) * PropStackHeight, z);
+                node.LocalRotation = Quaternion.CreateFromYawPitchRoll(
+                    NextFloat01(ref state) * MathF.Tau, 0f, 0f);
+
+                // Kind BEFORE brush: the brush setter dirties the static world
+                // through the node's scene, and a part must never be admitted
+                // to the placement list even for the one frame in between.
+                node.BrushKind = BrushKind.Part;
+                node.Brush = shared;
+                placed++;
+            }
+        }
+
+        return placed;
     }
 
     // Minimal 64-bit LCG (Knuth MMIX constants), uniform float in [0, 1) from

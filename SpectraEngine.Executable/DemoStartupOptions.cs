@@ -61,7 +61,8 @@ internal sealed record DemoStartupOptions(
     bool? DebugLayer = null,
     string? Adapter = null,
     (int Width, int Height)? WindowSize = null,
-    int? ScatterGrid = null)
+    int? ScatterGrid = null,
+    int? PropCount = null)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -74,7 +75,8 @@ internal sealed record DemoStartupOptions(
         "Usage: SpectraEngine.Executable [opengl|d3d11|d3d12] [--selftest[=true|false]] " +
         "[--fullscreen-cycle[=seconds]] [--play[=true|false]] [--offscreen-probe[=true|false]] " +
         "[--pipeline=<name>] [--shadows[=true|false]] [--profile[=true|false]] " +
-        "[--debug-layer[=true|false]] [--adapter=<name>] [--size=WxH] [--parts=<grid>].";
+        "[--debug-layer[=true|false]] [--adapter=<name>] [--size=WxH] [--parts=<grid>] " +
+        "[--props=<count>].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -107,6 +109,7 @@ internal sealed record DemoStartupOptions(
         string? adapter = null;
         (int, int)? windowSize = null;
         int? scatterGrid = null;
+        int? propCount = null;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -204,6 +207,13 @@ internal sealed record DemoStartupOptions(
                 case "parts" or "scatter":
                     scatterGrid = ParseCount(value, token);
                     continue;
+
+                // How many shared-brush props to scatter. A COUNT, not a grid
+                // side, because the question this one answers is "what do N
+                // repeats of one thing cost" and N is the axis.
+                case "props":
+                    propCount = ParseCount(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -218,7 +228,7 @@ internal sealed record DemoStartupOptions(
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
-                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid);
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -226,12 +236,12 @@ internal sealed record DemoStartupOptions(
                 selfTestEnvironmentValue.Trim(), SelfTestEnvironmentVariable);
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
-                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid);
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
-            fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid);
+            fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount);
     }
 
     // A switch that takes a name needs one: a bare --pipeline says nothing

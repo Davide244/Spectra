@@ -29,6 +29,7 @@ dotnet run --project SpectraEngine.Executable -- d3d11 --profile --debug-layer=f
 | `--adapter=<name>` | Which GPU. `--adapter=UHD` is a low-power test rig on most desktops |
 | `--size=WxH` | Window size, for separating CPU cost from per-pixel cost |
 | `--parts=<grid>` | Scales the demo world, for measuring cost against content |
+| `--props=<count>` | Scatters N part brushes **sharing one brush instance**, for measuring cost against *repetition* |
 | `--shadows=false` | Isolates what shadows cost |
 | `--pipeline=<name>` | `deferred` or `forward`, for the A/B |
 
@@ -291,10 +292,43 @@ distant moving casters. **Blocks on:** nothing.
 Roadmap `R12`. Every (chunk, material) pair and every mesh node is its own draw.
 A world with a thousand identical crates issues a thousand draws.
 
-**Buys:** at 0.85 µs a draw, collapsing 1,000 draws into 1 saves 0.85 ms.
-**Costs:** `VertexAttribute` gains an input rate; a batching pass in
-`BuildRenderView` that must preserve the deterministic emission order the view
-tests assert. **Blocks on:** nothing.
+**Measured 2026-08-28, and the headline is that it was worth measuring**, because
+the arithmetic this entry used to carry (`0.85 µs × 1,000 = 0.85 ms`) understated
+it by more than four times. Every earlier measurement of this engine contained
+**no duplicate draws at all**: the static world's chunk meshes are unique
+geometry by construction, and `--parts` gives every scattered brush its own
+randomized extents, so nothing repeated a mesh and there was nothing to collapse.
+`--props=<count>` is the fixture that fixes that: N part brushes sharing **one**
+`Brush` instance, which `PartBrushMeshCache` resolves to one GPU mesh, so the
+draw list carries N items differing only in world matrix.
+
+D3D11, validation off, 1080p, RTX 4070 Ti:
+
+| props | visible | frame | Geometry | Shadows | ViewBuild | casters |
+|---|---|---|---|---|---|---|
+| 0 | 1 | 0.30 ms | 0.04 | 0.06 | — | 150 |
+| 500 | 151 | 0.96 ms | 0.15 | 0.35 | — | 862 |
+| 2,000 | 562 | 2.25 ms | 0.45 | 1.00 | 0.15 | 2,141 |
+| 8,000 | 2,134 | **5.24 ms** | **1.53** | **2.26** | 0.52 | 3,362 |
+
+**Buys: 3.7 ms of a 5.24 ms frame** at 8,000 props, being Geometry plus Shadows
+against a 0.10 ms baseline for both. It is worth more in the shadow pass than in
+the geometry pass, because a caster is redrawn per cascade and 2,134 visible
+props became 3,362 caster draws.
+
+**What it does NOT buy: `ViewBuild` (0.52 ms).** Culling still visits every node,
+and a batching pass adds to that rather than replacing it. Instancing removes
+draw *submission*, not draw *selection*; §4.1 is the entry that attacks the other
+one.
+
+**Costs, which the roadmap entry also understated (see `R12`).** The missing
+dependency is the shader language: `uModel` is a `cbuffer` uniform that every
+draw rewrites, SpectraShade has **no** per-instance vertex input and no
+`InstanceId` (a repo-wide search finds zero occurrences of either), and all three
+backends hardcode `InputSlot = 0, PerVertexData`. So this is a compiler feature
+plus a codegen change in both `GlslGenerator` and `HlslGenerator`, *then* the
+renderer work. **Blocks on:** nothing, but it is not the small change it reads
+as.
 
 ### 6.2 Sorting by pipeline state
 

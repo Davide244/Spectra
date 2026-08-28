@@ -314,7 +314,7 @@
         <Grid DockPanel.Dock="Top" Margin="8,8,8,6" ColumnDefinitions="*,Auto">
           <TextBox Grid.Column="0" x:Name="FilterBox" Classes="filter"
                    Text="{Binding FilterText, Mode=TwoWay}"
-                   Watermark="Filter, or t:light"
+                   PlaceholderText="Filter, or t:light"
                    KeyDown="OnFilterKeyDown" />
           <Button Grid.Column="1" Classes="tool" Width="24" Height="24" Margin="4,0,0,0"
                   Click="OnClearFilterClicked" IsVisible="{Binding HasFilter}"
