@@ -1,0 +1,56 @@
+// A vertex stage whose model matrix arrives per instance rather than from a
+// cbuffer, which is the shape every instanced draw wants: one mesh, one
+// material, N transforms streamed from a second vertex buffer.
+//
+// The mat4 is the interesting part. It is one field here and FOUR consecutive
+// locations in both targets - GLSL assigns 4, 5 and 6 implicitly, HLSL gives
+// the rows TEXCOORD3 through TEXCOORD6 - so the next free location is 7, not 4.
+
+struct VertexInput {
+    [Location(0)] vec3 position;
+    [Location(1)] vec3 normal;
+    [Location(2)] vec2 uv;
+
+    // Per instance, so it advances once per draw instance instead of once per
+    // vertex. Neither target says so in shader text: GL sets it with
+    // glVertexAttribDivisor and D3D with InputSlotClass, which is exactly why
+    // the compiled output has to report it.
+    [Location(3)][PerInstance] mat4 model;
+
+    // Past the matrix, to prove the span is accounted for rather than assumed.
+    [Location(7)][PerInstance] vec4 tint;
+}
+
+struct VertexOutput {
+    [Position] vec4 position;
+    vec3 normal;
+    vec2 uv;
+    vec4 tint;
+}
+
+struct FragmentInput {
+    vec3 normal;
+    vec2 uv;
+    vec4 tint;
+}
+
+shader InstancedVertex {
+    [Binding(0)] cbuffer Camera {
+        mat4 viewProjection;
+    }
+
+    [Vertex]
+    VertexOutput VertexMain(VertexInput input) {
+        var output = new VertexOutput();
+        output.position = viewProjection * input.model * vec4(input.position, 1.0);
+        output.normal = input.normal;
+        output.uv = input.uv;
+        output.tint = input.tint;
+        return output;
+    }
+
+    [Fragment] [Target(0)]
+    vec4 FragmentMain(FragmentInput input) {
+        return input.tint;
+    }
+}

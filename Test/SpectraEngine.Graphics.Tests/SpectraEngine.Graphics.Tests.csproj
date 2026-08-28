@@ -12,4 +12,15 @@
     <ProjectReference Include="..\..\SpectraShade.Compiler\SpectraShade.Compiler.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Linked, not copied: the compiler suite asserts what this source
+         GENERATES and this suite asserts that the generated code actually
+         compiles on a driver. Two copies of the fixture would let those two
+         claims drift apart, which is the one thing the pair exists to rule
+         out. -->
+    <None Include="..\SpectraShade.Compiler.Tests\Fixtures\InstancedVertex.spectrashade"
+          Link="Fixtures\InstancedVertex.spectrashade"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
