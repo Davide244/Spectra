@@ -339,9 +339,28 @@ Three things sit inside those phases that instancing cannot touch:
 - **How cheap a shadow draw already was.** `DrawShadowCasters` binds no material
   and writes two uniforms, so it never cost the 0.85 µs a shaded draw does.
 
-**Geometry is not batched yet** (1.55 → 1.68 ms is noise), so its share is
-untouched. That is a deliberate stop rather than an omission: see `R12` for why
-the G-buffer pass was left alone.
+#### The geometry pass, batched 2026-08-28, and this is where it paid
+
+The prediction two paragraphs below this one turned out to be the right one: a
+geometry draw binds a material and a texture table, so removing one is worth far
+more than removing a depth-only shadow draw.
+
+Measured, D3D11, validation off, `--props=2000`, 560 of 562 visible props
+collapsing to 2 draws:
+
+| | Geometry phase | frame |
+|---|---|---|
+| unbatched | 1.80 - 2.62 ms | 3.94 - 3.96 ms |
+| batched | **0.21 - 0.24 ms** | **3.15 - 3.23 ms** |
+
+About **nine times on the phase** and roughly **0.8 ms on the frame**, against
+the 0.3 ms the whole shadow pass gave for six times as many removed draws. The
+difference is entirely what a draw costs: `DrawShadowCasters` binds no material
+and writes two uniforms, while every geometry draw it replaces was writing the
+view, the projection and a full PBR parameter set.
+
+The frame improves by less than the phase does, which is the same lesson in the
+other direction: a phase total is not the frame.
 
 **What it does NOT buy: `ViewBuild` (0.52 → 0.72 ms).** Culling still visits every
 node, and the batching pass *adds* to it. Instancing removes draw *submission*,

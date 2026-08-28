@@ -279,6 +279,11 @@ public sealed unsafe class D3D11Renderer : Renderer
         DrainPendingResize();
         HotReloader.PumpPendingReloads();
 
+        // Once per FRAME, and deliberately not once per pipeline execution:
+        // a frame with ProbeTarget set runs the pipeline twice into one
+        // command list. See Renderer.BeginFrameInstanceBuffers.
+        BeginFrameInstanceBuffers();
+
         if (_pipelines.Count == 0 || _surface is null) return;
 
         var ctx = new D3D11RenderContext

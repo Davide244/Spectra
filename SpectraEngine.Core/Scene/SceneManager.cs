@@ -1004,6 +1004,15 @@ public sealed class SceneManager
                $"{map.CoarsestWorldTexelSize:0.000} far, {map.Distance:0} sunit range)";
     }
 
+    // Reported separately from the shadow pass's saving, and for the same
+    // reason: the two collapse different draw lists (the shadow pass batches
+    // per cascade, the geometry pass once for the camera), so one number
+    // covering both would hide either of them stopping.
+    private static string DescribeGeometryBatching(Renderer? renderer) =>
+        renderer is { GeometryDrawsSaved: > 0 }
+            ? $", {renderer.GeometryDrawsSaved} geometry draw(s) saved by instancing"
+            : string.Empty;
+
     // The tool and its handle style, composed. The editor reports them
     // separately now because a toolbar has to know which of three buttons is lit
     // and splitting a string to find out is a contract nobody wrote down; this
@@ -1099,7 +1108,7 @@ public sealed class SceneManager
                     "physics: {PhysicsBackend}, {PhysicsBodies} body(ies) / {PhysicsShapes} shape(s); " +
                     "editing: {Selected} selected, {GizmoMode} gizmo, {Navigation} navigation, " +
                     "undo {UndoDepth} / redo {RedoDepth}; " +
-                    "rendering: {Pipeline} pipeline, {Shadows}, {FrameMs:0.00} ms/frame ({Fps:0} fps) [{Phases}]; " +
+                    "rendering: {Pipeline} pipeline, {Shadows}{GeometryBatching}, {FrameMs:0.00} ms/frame ({Fps:0} fps) [{Phases}]; " +
                     "churn: {MeshRate:0} mesh(es)/s, {CompileRate:0} compile(s)/s, {Pooled} buffer(s) pooled; " +
                     "memory: {Memory}; " +
                     "character: {CharacterMode}",
@@ -1118,7 +1127,8 @@ public sealed class SceneManager
                     editor?.SelectionCount ?? 0, DescribeGizmo(editor),
                     editor?.NavigationModeName ?? "none",
                     editor?.UndoDepth ?? 0, editor?.RedoDepth ?? 0,
-                    _renderer?.CurrentPipelineName ?? "none", DescribeShadows(_renderer), FrameTimeMs, Fps,
+                    _renderer?.CurrentPipelineName ?? "none", DescribeShadows(_renderer),
+                    DescribeGeometryBatching(_renderer), FrameTimeMs, Fps,
                     _renderer?.Profiler.Describe() ?? "not measured", MeshCreationRate(), CompileRate(scene), _renderer?.PooledBufferCount ?? 0,
                     DescribeMemory(),
                     DescribeCharacter());

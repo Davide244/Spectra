@@ -621,6 +621,12 @@ public abstract class Renderer
         _shadowInstanceCapacity = 0;
         _shadowInstanceHighWater = 0;
 
+        _gbufferInstancedShader = null;
+        _geometryInstances?.Dispose();
+        _geometryInstances = null;
+        _geometryInstanceCapacity = 0;
+        _geometryInstanceHighWater = 0;
+
         _fullscreenTriangle = null;
         _resolveShader = null;
         _resolvePass = null;
@@ -693,6 +699,28 @@ public abstract class Renderer
     // Cleared when the compiler produced no instanced stage, so the frame draws
     // every caster the ordinary way instead of silently dropping batches.
     private bool _shadowBatchingAvailable = true;
+
+    // The geometry pass's own set, deliberately a SECOND buffer rather than a
+    // share of the shadow one: the two passes want different capacities (the
+    // shadow buffer holds every cascade's demand summed) and a shared buffer
+    // would make either pass's growth a hazard for the other's open draws.
+    private ShaderProgram? _gbufferInstancedShader;
+    private InstanceBuffer? _geometryInstances;
+    private int _geometryInstanceCapacity;
+    private int _geometryInstanceHighWater;
+    private int _geometryInstanceDemand;
+    private bool _geometryBatchingAvailable = true;
+
+    /// <summary>
+    /// Geometry-pass draws that batching removed this frame. Zero in a scene
+    /// with nothing repeated, which is most of them.
+    /// </summary>
+    /// <remarks>
+    /// Reported for the same reason <see cref="ShadowDrawsSaved"/> is: a broken
+    /// batch path and a scene with nothing to batch look identical from the
+    /// outside, and only a number tells them apart.
+    /// </remarks>
+    public int GeometryDrawsSaved { get; private set; }
 
     /// <summary>
     /// Shadow-caster draws that batching removed this frame. Reported so a
@@ -802,10 +830,10 @@ public abstract class Renderer
         if (_shadowInstancedShader is null)
             _shadowBatchingAvailable = false;
 
-        // Before BeginPass, never between cascades: see EnsureShadowInstanceCapacity.
-        EnsureShadowInstanceCapacity();
-        _shadowInstanceDemand = 0;
-        _shadowInstances?.BeginFrame();
+        // Sizing and the cursor reset both live in BeginFrameInstanceBuffers,
+        // at the top of the frame: this method runs once per pipeline execution
+        // and a frame can execute the pipeline more than once (the offscreen
+        // probe does), all into one command list on D3D12.
 
         // Culled against the LIGHT, not the camera. See Scene.BuildShadowView
         // for why reusing the camera's list makes shadows flicker as you turn.
@@ -958,6 +986,41 @@ public abstract class Renderer
     }
 
     /// <summary>
+    /// Sizes both instance buffers and rewinds them. Called once at the top of
+    /// a frame, by every backend's <c>Render</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Once per FRAME, not once per pipeline execution, and the difference is
+    /// visible only on D3D12.</b> A frame can run the pipeline more than once -
+    /// with <c>ProbeTarget</c> set it renders the scene into the probe and then
+    /// again into the window - and on that backend the whole frame is one
+    /// command list submitted at the end. Rewinding between the two would put
+    /// the second run's transforms under the first run's already-recorded draws.
+    /// It happens to be harmless today because both runs draw the same scene,
+    /// which is luck rather than design.
+    /// </para>
+    /// <para>
+    /// <b>Growth happens HERE and nowhere else</b>, for the same reason the
+    /// shadow cascades never grow between themselves: freeing a buffer the open
+    /// list references removes the device. A run that then finds too little room
+    /// left draws its batches unbatched, which is correct and self-corrects next
+    /// frame once the high-water mark is applied.
+    /// </para>
+    /// </remarks>
+    protected void BeginFrameInstanceBuffers()
+    {
+        EnsureShadowInstanceCapacity();
+        EnsureGeometryInstanceCapacity();
+
+        _shadowInstanceDemand = 0;
+        _geometryInstanceDemand = 0;
+        GeometryDrawsSaved = 0;
+        _shadowInstances?.BeginFrame();
+        _geometryInstances?.BeginFrame();
+    }
+
+    /// <summary>
     /// Sizes the shadow instance buffer to the largest batch total any cascade
     /// needed last frame. Called BEFORE the shadow pass opens.
     /// </summary>
@@ -1090,6 +1153,197 @@ public abstract class Renderer
         _gbufferShader ??= BaseShaders.GBufferFillPath is { } path
             ? CreateShaderFromFile(path)
             : CreateShaderFromSource(BaseShaders.GBufferFill);
+
+    /// <summary>
+    /// The instanced twin of the G-buffer program, generated from the same
+    /// source because <c>GBufferFill</c> marks <c>uModel</c> as
+    /// <c>[PerInstance]</c>. Null when this backend's toolchain did not produce
+    /// one, which disables batching rather than the pass.
+    /// </summary>
+    private ShaderProgram? EnsureGBufferInstancedShader()
+    {
+        if (_gbufferInstancedShader is not null || !_geometryBatchingAvailable)
+            return _gbufferInstancedShader;
+
+        _gbufferInstancedShader = TryCreateInstancedShaderFromSource(
+            BaseShaders.GBufferFillPath is { } path
+                ? File.ReadAllText(path)
+                : BaseShaders.GBufferFill);
+
+        // Asked for once. Retrying every frame would recompile a shader that
+        // has already said no, in the frame loop.
+        if (_gbufferInstancedShader is null)
+            _geometryBatchingAvailable = false;
+
+        return _gbufferInstancedShader;
+    }
+
+    /// <summary>
+    /// Everything a deferred geometry pass draws: repeated meshes as one
+    /// instanced draw each, then whatever no batch claimed, then the static
+    /// world's chunks.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Shared by all three backends rather than written once per pipeline.</b>
+    /// The two things that genuinely differ are which side of the uniform writes
+    /// the program is bound on (<see cref="BindsProgramBeforeUniforms"/>) and the
+    /// clip-space z convention (<see cref="ClipZCorrection"/>), and both are
+    /// already stated once. Three copies of this loop is three places for the
+    /// batch path to be adopted differently.
+    /// </para>
+    /// <para>
+    /// <b>Call <see cref="PrepareGeometryInstancing"/> before opening the pass.</b>
+    /// </para>
+    /// </remarks>
+    internal void DrawGeometry(RenderView view, Scene.Camera camera, ShaderProgram shader)
+    {
+        Matrix4x4 projection = camera.Projection * ClipZCorrection;
+
+        DrawGeometryBatches(view, camera, projection, shader);
+
+        // What no batch claimed. Batches and SingleItems together are exactly
+        // Items, so drawing Items as well would double every surface.
+        DrawGeometryItems(view.SingleItems, camera, projection, shader);
+
+        // World chunks are never batched and cannot be: each chunk is unique
+        // geometry drawn once at identity, so there is nothing repeated to
+        // collapse.
+        DrawGeometryItems(view.WorldItems, camera, projection, shader);
+    }
+
+    /// <summary>
+    /// Compiles the instanced G-buffer program if this is the first frame that
+    /// wanted it. Must run OUTSIDE the geometry pass.
+    /// </summary>
+    internal void PrepareGeometryInstancing() => EnsureGBufferInstancedShader();
+
+    private void DrawGeometryBatches(
+        RenderView view, Scene.Camera camera, in Matrix4x4 projection, ShaderProgram fallback)
+    {
+        if (view.Batches.Count == 0)
+            return;
+
+        ReadOnlySpan<Matrix4x4> transforms = view.InstanceTransforms;
+        _geometryInstanceDemand += transforms.Length;
+        _geometryInstanceHighWater = Math.Max(_geometryInstanceHighWater, _geometryInstanceDemand);
+
+        if (_gbufferInstancedShader is null || _geometryInstances is null
+            || _geometryInstances.Remaining < transforms.Length)
+        {
+            DrawGeometryBatchesUnbatched(view, camera, projection, fallback);
+            return;
+        }
+
+        int baseInstance = _geometryInstances.Append(
+            MemoryMarshal.Cast<Matrix4x4, float>(transforms), transforms.Length);
+
+        ShaderProgram shader = _gbufferInstancedShader;
+        int saved = 0;
+
+        for (int i = 0; i < view.Batches.Count; i++)
+        {
+            RenderBatch batch = view.Batches[i];
+
+            // Skipped exactly as the item loops skip it: a material is what
+            // supplies the parameters this pass writes, and a batch without one
+            // has nothing to say.
+            if (batch.Material is not { } material)
+                continue;
+
+            // PER BATCH, AND INSIDE THE LOOP. Hoisting the view and projection
+            // above it looks like an obvious saving and is wrong: on the D3D
+            // backends the writes are staged into a constant shadow that Use()
+            // flushes, so every batch after the first would draw with the
+            // previous batch's material. On OpenGL it would appear to work,
+            // which is the worse half.
+            if (BindsProgramBeforeUniforms) shader.Use();
+            shader.SetUniform("uView", camera.View);
+            shader.SetUniform("uProjection", projection);
+            material.ApplyTo(shader);
+            if (!BindsProgramBeforeUniforms) shader.Use();
+
+            // No uModel: it arrives per instance through the vertex input the
+            // generated stage declares, which is the whole point of the variant.
+            batch.Mesh.DrawInstanced(_geometryInstances, batch.Count, baseInstance + batch.Offset);
+            saved += batch.Count - 1;
+        }
+
+        // Counted from what was actually drawn rather than from view.DrawsSaved,
+        // which does not know about the skip above.
+        GeometryDrawsSaved += saved;
+    }
+
+    // The batches this frame could not batch, drawn one instance at a time.
+    // Their items are not in SingleItems, so without this they would simply not
+    // be drawn.
+    private void DrawGeometryBatchesUnbatched(
+        RenderView view, Scene.Camera camera, in Matrix4x4 projection, ShaderProgram shader)
+    {
+        ReadOnlySpan<Matrix4x4> transforms = view.InstanceTransforms;
+
+        for (int i = 0; i < view.Batches.Count; i++)
+        {
+            RenderBatch batch = view.Batches[i];
+            if (batch.Material is not { } material)
+                continue;
+
+            for (int n = 0; n < batch.Count; n++)
+                DrawGeometryOne(batch.Mesh, material, transforms[batch.Offset + n], camera, projection, shader);
+        }
+    }
+
+    private void DrawGeometryItems(
+        System.Collections.Generic.IReadOnlyList<RenderItem> items,
+        Scene.Camera camera, in Matrix4x4 projection, ShaderProgram shader)
+    {
+        for (int i = 0; i < items.Count; i++)
+        {
+            RenderItem item = items[i];
+            if (item.Material is { } material)
+                DrawGeometryOne(item.Mesh, material, item.World, camera, projection, shader);
+        }
+    }
+
+    private void DrawGeometryOne(
+        Mesh mesh, Material material, in Matrix4x4 model,
+        Scene.Camera camera, in Matrix4x4 projection, ShaderProgram shader)
+    {
+        // Unlike the forward path there is nothing to skip on: a material with
+        // no program of its own is still a perfectly good parameter set, and the
+        // program being filled is the pass's.
+        if (BindsProgramBeforeUniforms) shader.Use();
+        shader.SetUniform("uModel", model);
+        shader.SetUniform("uView", camera.View);
+        shader.SetUniform("uProjection", projection);
+        material.ApplyTo(shader);
+        if (!BindsProgramBeforeUniforms) shader.Use();
+
+        mesh.Draw();
+    }
+
+    /// <summary>
+    /// Sizes the geometry instance buffer to last frame's high-water mark.
+    /// Frame boundary only; see <see cref="BeginFrameInstanceBuffers"/>.
+    /// </summary>
+    private void EnsureGeometryInstanceCapacity()
+    {
+        int needed = _geometryInstanceHighWater;
+        if (needed <= 0 || _gbufferInstancedShader is null
+            || (_geometryInstances is not null && _geometryInstanceCapacity >= needed))
+        {
+            return;
+        }
+
+        int capacity = Math.Max(64, _geometryInstanceCapacity);
+        while (capacity < needed)
+            capacity *= 2;
+
+        _geometryInstances?.Dispose();
+        _geometryInstances = CreateInstanceBuffer(
+            capacity, VertexAttribute.StandardInstanceLayout, _gbufferInstancedShader);
+        _geometryInstanceCapacity = capacity;
+    }
 
     /// <summary>
     /// Shades the whole G-buffer into <see cref="FrameTarget"/> in one

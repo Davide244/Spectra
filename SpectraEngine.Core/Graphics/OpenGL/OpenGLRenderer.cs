@@ -225,6 +225,11 @@ public class OpenGLRenderer : Renderer
         // frame. We're on the render thread here, so GL calls are safe.
         HotReloader.PumpPendingReloads();
 
+        // Once per FRAME, and deliberately not once per pipeline execution:
+        // a frame with ProbeTarget set runs the pipeline twice into one
+        // command list. See Renderer.BeginFrameInstanceBuffers.
+        BeginFrameInstanceBuffers();
+
         if (_pipelines.Count == 0 || _gl is null || _surface is null)
             return;
 
