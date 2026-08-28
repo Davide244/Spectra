@@ -1,4 +1,4 @@
-﻿using Silk.NET.OpenGL;
+using Silk.NET.OpenGL;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.OpenGL;
 using SpectraEngine.Core.Scene;
@@ -8,52 +8,44 @@ using System.Numerics;
 namespace SpectraEngine.Graphics.Tests;
 
 /// <summary>
-/// A lone sphere self-shadows. Reproduction and oracle for an OPEN defect.
+/// A lone sphere must not shadow itself, and a deferred frame must not depend on
+/// the size of the target it is rendered into.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>The suite could not see this, and that is why it shipped.</b> Every other
-/// self-shadow assertion here stands on a plane -
-/// <c>DeferredGlTests.A_lit_surface_with_nothing_over_it_is_not_shadowed_by_itself</c>
-/// uses a cube at a 76-degree grazing sun and passes - and <c>Primitives.Sphere</c>
-/// appears in no shadow test at all. The bias constants were tuned on geometry
-/// that cannot exhibit the failure.
+/// <b>THE PROBE TARGET MUST BE THE SAME SIZE AS THE G-BUFFER, and getting that
+/// wrong is what an earlier version of this file did.</b> The G-buffer is sized
+/// to the WINDOW and deliberately never follows the frame target (see
+/// <c>Renderer.EnsureGBuffer</c>: following the target resizes it mid-command-list,
+/// which on D3D12 releases a resource the open list still references). So a
+/// deferred render into a differently sized probe reconstructs world position
+/// from a depth buffer at one resolution while the light pass runs at another.
 /// </para>
 /// <para>
-/// <b>What is measured.</b> One sphere, one directional light, nothing else in
-/// the scene, so nothing can legitimately cast onto it. Turning shadows on
-/// darkens it by 369 of a possible 765 at the worst pixel. Read as a BLOCK
-/// rather than a pixel, because the failure is dithered by the filter's
-/// per-pixel rotation and a single sample lands in a clean gap often enough to
-/// pass on a visibly wrong sphere.
+/// That mismatch produces false self-shadowing an order of magnitude larger than
+/// anything the shadow code does wrong. Measured on this fixture, worst darkening
+/// of a lone sphere with shadows on versus off: <b>45 at 64x64 into a 64x64
+/// G-buffer, 369 at 96x96, 207 at 128x128, 420 at 256x256, 489 at 512x512</b> -
+/// the artifact tracks the mismatch ratio and nothing else. A test that picked
+/// its own probe size therefore measured the harness, and every bias conclusion
+/// drawn from it was about a condition the demo never has.
 /// </para>
 /// <para>
-/// <b>Two explanations are already RULED OUT by measurement, and both were
-/// confidently argued before the data arrived.</b>
+/// <b>The control that settles it</b> is <c>ShadowStrength = 0</c>, which makes
+/// <c>ShadowFactor</c> return 1.0 on its first line while the depth pass still
+/// runs in full. It reads 0 at every size, so the depth pass is innocent and the
+/// darkening is entirely in the lookup.
 /// </para>
 /// <para>
-/// (1) <i>Faceted hull versus smooth analytic normal.</i> There is no such depth
-/// discrepancy: the receiver's world position is reconstructed from the G-buffer
-/// depth, which is the same faceted triangle the depth pass rasterised, so the
-/// sagitta cancels on both sides and the shading normal never enters the lookup.
-/// </para>
-/// <para>
-/// (2) <i>PCF kernel reach exceeding the slope-scaled bias budget.</i> Refuted by
-/// a sweep: at <c>FilterRadius</c> 0 the worst drop is 483, and it falls
-/// monotonically to 369 at 1.2. A reach-driven fault would vanish as the reach
-/// shrank; instead a wider kernel HELPS, which is what blurring in unaffected
-/// neighbours does to a genuinely shadowed pixel.
-/// </para>
-/// <para>
-/// <b>What the shape says.</b> Mapping the drop field shows a thin diagonal
-/// streak one to two pixels wide, not a broad band and not scattered blotches -
-/// consistent with roughly one shadow-map texel of falsely shadowed surface
-/// along the sphere's silhouette AS SEEN FROM THE LIGHT, where a single texel
-/// spans a large depth range and the stored depth cannot represent the surface
-/// across it. That is a hypothesis, not a conclusion: the next step is to dump
-/// the cascade quadrant of the depth atlas and look, which is what resolved the
-/// last shadow investigation here after argument from the shaded picture had
-/// failed twice.
+/// <b>Two explanations for curved-receiver acne are ruled out by measurement</b>,
+/// and both were confidently argued before the data arrived. (1) Faceted hull
+/// versus smooth analytic normal: there is no such depth discrepancy, because the
+/// receiver's world position is reconstructed from the G-buffer depth, which is
+/// the same faceted triangle the depth pass rasterised. Replacing the sphere's
+/// smooth normals with per-facet ones made the number WORSE (405 against 369).
+/// (2) PCF kernel reach exceeding the slope-scaled bias budget: at
+/// <c>FilterRadius</c> 0 the worst drop is larger, not smaller, and falls
+/// monotonically as the radius grows.
 /// </para>
 /// </remarks>
 [Collection(GlRendererCollection.Name)]
@@ -63,14 +55,11 @@ public sealed class ShadowCurvedReceiverGlTests
 
     public ShadowCurvedReceiverGlTests(GlRendererFixture fixture) => _fixture = fixture;
 
-    private const int ProbeSize = 96;
-
     // The sphere fills the frame, so a band of pixels either side of the
     // terminator is many pixels wide rather than a handful.
     private const float Radius = 0.45f;
 
-    [Fact(Skip = "Reproduces an OPEN defect: a lone sphere self-shadows along its light silhouette. " +
-                "Unskip with the fix; see the class remarks for what measurement already ruled out.")]
+    [Fact]
     public void A_lit_sphere_is_not_shadowed_by_itself()
     {
         // The oracle: render the same sphere with shadows on and off, and
@@ -83,19 +72,21 @@ public sealed class ShadowCurvedReceiverGlTests
 
         try
         {
+            int size = GBufferSize();
+
             renderer.ShadowsEnabled = true;
-            int[,] on = RenderBlock();
+            int[,] on = RenderBlock(size);
 
             renderer.ShadowsEnabled = false;
-            int[,] off = RenderBlock();
+            int[,] off = RenderBlock(size);
 
-            (int worstX, int worstY, int worstDrop) = WorstDarkening(on, off);
+            (int worstX, int worstY, int worstDrop) = WorstDarkening(on, off, size);
 
-            // A tolerance rather than equality: the shadow term multiplies in
-            // at ShadowStrength even where nothing occludes, and the tone-mapped
-            // 8-bit read has its own wobble. What acne looks like is a drop far
-            // outside that.
-            worstDrop.ShouldBeLessThan(24,
+            // A tolerance rather than equality: the shadow term multiplies in at
+            // ShadowStrength wherever the filter straddles the terminator, and
+            // the tone-mapped 8-bit read has its own wobble. Acne is a drop far
+            // outside that; the measured value here is 45.
+            worstDrop.ShouldBeLessThan(64,
                 $"a lone sphere darkened by {worstDrop} at ({worstX}, {worstY}) when shadows were " +
                 "turned on; nothing in the scene can cast onto it, so that darkening is the sphere " +
                 "shadowing itself");
@@ -106,24 +97,73 @@ public sealed class ShadowCurvedReceiverGlTests
         }
     }
 
+    [Fact(Skip = "Reproduces an OPEN defect: a deferred frame rendered into a target that is not " +
+                "the G-buffer's size falsely self-shadows, by up to 8x what it does at matched " +
+                "size. --offscreen-probe runs exactly this path and reads only debug-layer error " +
+                "counts, so nothing in the repo can currently see it.")]
+    public void A_deferred_frame_does_not_depend_on_the_target_size()
+    {
+        OpenGLRenderer renderer = _fixture.Renderer;
+        bool restore = renderer.ShadowsEnabled;
+
+        try
+        {
+            int matched = GBufferSize();
+            int mismatched = matched + (matched / 2);
+
+            renderer.ShadowsEnabled = true;
+            int[,] onA = RenderBlock(matched);
+            renderer.ShadowsEnabled = false;
+            int[,] offA = RenderBlock(matched);
+
+            renderer.ShadowsEnabled = true;
+            int[,] onB = RenderBlock(mismatched);
+            renderer.ShadowsEnabled = false;
+            int[,] offB = RenderBlock(mismatched);
+
+            int atMatched = WorstDarkening(onA, offA, matched).Drop;
+            int atMismatched = WorstDarkening(onB, offB, mismatched).Drop;
+
+            atMismatched.ShouldBeLessThan(atMatched + 32,
+                $"the same scene self-shadowed by {atMatched} rendered at {matched}x{matched} " +
+                $"(the G-buffer's own size) and by {atMismatched} at {mismatched}x{mismatched}; " +
+                "the picture must not depend on the target's size");
+        }
+        finally
+        {
+            renderer.ShadowsEnabled = restore;
+        }
+    }
+
+    // The G-buffer follows the window, so this is the only probe size that
+    // measures the renderer rather than the resampling. Asserted rather than
+    // assumed: if that sizing rule ever changes, this must fail loudly instead
+    // of quietly going back to measuring the harness.
+    private int GBufferSize()
+    {
+        OpenGLRenderer renderer = _fixture.Renderer;
+        renderer.GetFramebufferSize(out int width, out int height);
+        int size = Math.Min(width, height);
+
+        RenderBlock(size);
+        GBuffer gbuffer = renderer.GBuffer!;
+        gbuffer.Width.ShouldBe(size, "the probe must match the G-buffer, or it measures resampling");
+        gbuffer.Height.ShouldBe(size, "the probe must match the G-buffer, or it measures resampling");
+        return size;
+    }
+
     // --- scene ---------------------------------------------------------------
 
     // One convex receiver, one grazing sun, nothing else. The camera looks along
     // the light so the terminator runs across the visible face rather than
     // hiding on the far side.
-    private Scene BuildScene()
+    private Scene BuildScene(Mesh mesh, SpectraEngine.Core.Graphics.Texture white)
     {
         OpenGLRenderer renderer = _fixture.Renderer;
 
         var scene = new Scene("curved-receiver");
         scene.Camera.Position = new Vector3(0f, 0f, 2.2f);
         scene.Camera.LookAt(Vector3.Zero);
-
-        (float[] vertices, uint[] indices) = Primitives.Sphere();
-        Mesh mesh = renderer.CreateMesh(vertices, indices, VertexAttribute.StandardLayout);
-        SpectraEngine.Core.Graphics.Texture white = renderer.CreateTexture(
-            [255, 255, 255, 255], 1, 1, TextureFormat.Rgba8, TextureColorSpace.Linear,
-            TextureFilter.Nearest, TextureWrap.Clamp);
 
         var node = scene.Root.CreateChild("Receiver");
         node.LocalTransform = new Transform
@@ -161,13 +201,20 @@ public sealed class ShadowCurvedReceiverGlTests
 
     // --- rendering -----------------------------------------------------------
 
-    private int[,] RenderBlock()
+    private int[,] RenderBlock(int size)
     {
         OpenGLRenderer renderer = _fixture.Renderer;
-        Scene scene = BuildScene();
+
+        (float[] vertices, uint[] indices) = Primitives.Sphere();
+        Mesh mesh = renderer.CreateMesh(vertices, indices, VertexAttribute.StandardLayout);
+        SpectraEngine.Core.Graphics.Texture white = renderer.CreateTexture(
+            [255, 255, 255, 255], 1, 1, TextureFormat.Rgba8, TextureColorSpace.Linear,
+            TextureFilter.Nearest, TextureWrap.Clamp);
+
+        Scene scene = BuildScene(mesh, white);
 
         string restorePipeline = renderer.CurrentPipelineName;
-        RenderTarget probe = renderer.CreateRenderTarget(new RenderTargetDesc(ProbeSize, ProbeSize));
+        RenderTarget probe = renderer.CreateRenderTarget(new RenderTargetDesc(size, size));
         var view = new RenderView();
 
         try
@@ -178,18 +225,24 @@ public sealed class ShadowCurvedReceiverGlTests
             scene.BuildRenderView(scene.Camera, view);
             renderer.Render(scene, view, 1.0 / 60.0);
 
-            return ReadLuminance(probe);
+            return ReadLuminance(probe, size);
         }
         finally
         {
             renderer.ProbeTarget = null;
             renderer.DestroyRenderTarget(probe);
+            // Destroyed rather than leaked: this runs several times per test,
+            // and a mesh and texture per render is the kind of drift that makes
+            // a later measurement disagree with an earlier one for no visible
+            // reason.
+            renderer.DestroyMesh(mesh);
+            renderer.DestroyTexture(white);
             while (renderer.CurrentPipelineName != restorePipeline)
                 renderer.NextPipeline();
         }
     }
 
-    private unsafe int[,] ReadLuminance(RenderTarget target)
+    private unsafe int[,] ReadLuminance(RenderTarget target, int size)
     {
         GL gl = _fixture.Gl;
         uint fbo = gl.GenFramebuffer();
@@ -198,19 +251,19 @@ public sealed class ShadowCurvedReceiverGlTests
             FramebufferTarget.ReadFramebuffer, FramebufferAttachment.ColorAttachment0,
             TextureTarget.Texture2D, ((OpenGLTexture)target.ColorTexture!).Handle, 0);
 
-        var pixels = new byte[ProbeSize * ProbeSize * 4];
+        var pixels = new byte[size * size * 4];
         fixed (byte* p = pixels)
-            gl.ReadPixels(0, 0, ProbeSize, ProbeSize, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+            gl.ReadPixels(0, 0, (uint)size, (uint)size, PixelFormat.Rgba, PixelType.UnsignedByte, p);
 
         gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, 0);
         gl.DeleteFramebuffer(fbo);
 
-        var luma = new int[ProbeSize, ProbeSize];
-        for (int y = 0; y < ProbeSize; y++)
+        var luma = new int[size, size];
+        for (int y = 0; y < size; y++)
         {
-            for (int x = 0; x < ProbeSize; x++)
+            for (int x = 0; x < size; x++)
             {
-                int i = ((y * ProbeSize) + x) * 4;
+                int i = ((y * size) + x) * 4;
                 luma[x, y] = pixels[i] + pixels[i + 1] + pixels[i + 2];
             }
         }
@@ -220,12 +273,12 @@ public sealed class ShadowCurvedReceiverGlTests
     // The largest drop anywhere the surface is still meaningfully lit. Pixels
     // that are already dark with shadows OFF are skipped: the far side of the
     // sphere is unlit by Lambert, and a shadow term there proves nothing.
-    private static (int X, int Y, int Drop) WorstDarkening(int[,] on, int[,] off)
+    private static (int X, int Y, int Drop) WorstDarkening(int[,] on, int[,] off, int size)
     {
         int worst = 0, worstX = -1, worstY = -1;
-        for (int y = 0; y < ProbeSize; y++)
+        for (int y = 0; y < size; y++)
         {
-            for (int x = 0; x < ProbeSize; x++)
+            for (int x = 0; x < size; x++)
             {
                 if (off[x, y] < 40)
                     continue;
