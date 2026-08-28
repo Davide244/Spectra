@@ -1,5 +1,5 @@
-using System.Numerics;
-using Silk.NET.Input;
+﻿using System.Numerics;
+using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Input;
 
 namespace SpectraEngine.Core.Scene;
@@ -33,7 +33,7 @@ public sealed class FlyCameraController
     {
         float dt = (float)deltaTime;
 
-        bool looking = _input.IsMouseButtonDown(MouseButton.Right);
+        bool looking = _input.IsMouseButtonDown(PointerButtons.Right);
 
         // Apply mouse look only when the button was already held last frame —
         // skipping the press-frame avoids any delta that accumulated before the
@@ -47,17 +47,17 @@ public sealed class FlyCameraController
         _wasLookingLastFrame = looking;
 
         Vector3 move = Vector3.Zero;
-        if (_input.IsKeyDown(Key.W)) move += _camera.Forward;
-        if (_input.IsKeyDown(Key.S)) move -= _camera.Forward;
-        if (_input.IsKeyDown(Key.D)) move += _camera.Right;
-        if (_input.IsKeyDown(Key.A)) move -= _camera.Right;
-        if (_input.IsKeyDown(Key.Space)) move += Vector3.UnitY;
-        if (_input.IsKeyDown(Key.ControlLeft)) move -= Vector3.UnitY;
+        if (_input.IsKeyDown(InputKey.W)) move += _camera.Forward;
+        if (_input.IsKeyDown(InputKey.S)) move -= _camera.Forward;
+        if (_input.IsKeyDown(InputKey.D)) move += _camera.Right;
+        if (_input.IsKeyDown(InputKey.A)) move -= _camera.Right;
+        if (_input.IsKeyDown(InputKey.Space)) move += Vector3.UnitY;
+        if (_input.IsKeyDown(InputKey.ControlLeft)) move -= Vector3.UnitY;
 
         if (move.LengthSquared() > 0f)
         {
             move = Vector3.Normalize(move);
-            float speed = _input.IsKeyDown(Key.ShiftLeft) ? MoveSpeed * SprintMultiplier : MoveSpeed;
+            float speed = _input.IsKeyDown(InputKey.ShiftLeft) ? MoveSpeed * SprintMultiplier : MoveSpeed;
             _camera.Position += move * speed * dt;
         }
     }

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using SpectraEngine.Core.Input;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -20,12 +21,15 @@ namespace SpectraEngine.Core.Hosting;
 /// stalls. So a shell does not call into the engine; it posts work and reads
 /// results.
 /// <para>
-/// <b>Three members, not four.</b> The milestone's original list included
-/// <c>SubmitInput</c>. It is deliberately absent: routing input needs a
-/// backend-neutral event vocabulary, and designing one with no real host to
-/// shape it against is how a seam ends up fitting nothing. The Avalonia input
-/// source in <c>H2</c> is what will define it, and until then the standalone
-/// window feeds <c>InputManager</c> exactly as it always has.
+/// <b><see cref="SubmitInput"/> is the fourth member, and it arrived a
+/// milestone late on purpose.</b> Routing input needed a backend-neutral event
+/// vocabulary, and designing one with no real host to shape it against is how a
+/// seam ends up fitting nothing. With a shell in hand the shape settled at
+/// <see cref="InputEvent"/>: engine-named keys, a flag set of pointer buttons,
+/// and an absolute pointer position kept distinct from a raw delta because a
+/// captured cursor only has the second. The standalone window's own device
+/// callbacks now go through the same submission path, so the two hosts cannot
+/// drift in how a press or a drag behaves.
 /// </para>
 /// <para>
 /// <b>Everything here is thread-safe by construction, not by convention.</b>
@@ -51,6 +55,55 @@ public sealed class EngineHost
         ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
     }
+
+    // The engine's input state machine, attached at construction. Nullable only
+    // so a host can be built and exercised without one.
+    private InputManager? _input;
+
+    /// <summary>Points this host's input surface at the engine's input state.</summary>
+    internal void AttachInput(InputManager input) => _input = input;
+
+    /// <summary>
+    /// Feeds one piece of input to the engine, in its own vocabulary. Safe to
+    /// call from the thread that owns the window.
+    /// </summary>
+    /// <remarks>
+    /// <b>Applied immediately rather than queued</b>, because the engine's input
+    /// state is already a lock-guarded state machine written from the OS-event
+    /// thread and read from the render thread — a host's UI thread is exactly
+    /// the position the standalone window's own device callbacks are in.
+    /// Queueing would add a frame of latency to a mouse move for no safety that
+    /// is not already there.
+    /// <para>
+    /// <b>An embedded engine gets input no other way.</b> A host-supplied
+    /// surface has no devices the engine could enumerate, so with nothing
+    /// submitting, the engine runs with every key up: a correct resting state,
+    /// and the reason a viewport that renders but does not respond is a wiring
+    /// bug rather than a crash.
+    /// </para>
+    /// </remarks>
+    public void SubmitInput(in InputEvent input) => _input?.Submit(in input);
+
+    /// <summary>
+    /// The cursor mode the engine is asking for, whether or not it has been
+    /// applied. See <see cref="ApplyPendingCursorMode"/>.
+    /// </summary>
+    public CursorMode RequestedCursorMode => _input?.RequestedCursorMode ?? CursorMode.Normal;
+
+    /// <summary>
+    /// Acknowledges the requested cursor mode, after the caller has performed
+    /// whatever platform capture it implies.
+    /// </summary>
+    /// <remarks>
+    /// <b>The cursor belongs to whoever owns the window, and that is the whole
+    /// shape of this pair.</b> The engine's editor camera asks for a locked
+    /// cursor from the render thread; the standalone path applies that to a Silk
+    /// mouse in its own event pump. An embedded host has no such device — it
+    /// owns the real one — so it polls <see cref="RequestedCursorMode"/>, hides
+    /// and captures the pointer itself, then calls this to close the engine's
+    /// state machine. Calling it when nothing changed is free.
+    /// </remarks>
+    public void ApplyPendingCursorMode() => _input?.ApplyPendingCursorMode();
 
     /// <summary>
     /// Raised on the RENDER thread once per published frame, carrying an

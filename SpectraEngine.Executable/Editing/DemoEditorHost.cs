@@ -1,5 +1,4 @@
 ﻿using Microsoft.Extensions.Logging;
-using Silk.NET.Input;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
@@ -24,13 +23,18 @@ namespace SpectraEngine.Executable.Editing;
 /// </summary>
 /// <remarks>
 /// <b>This class is the whole of the host seam.</b> It is the only type in the
-/// process that names both <c>Silk.NET.Input.Key</c> and
-/// <c>SpectraEngine.Editing</c>: the editing assembly carries no keyboard
-/// vocabulary at all (see <see cref="GizmoShortcuts"/>), so somebody has to
-/// resolve a physical key into a <see cref="GizmoCommand"/>, and that somebody
-/// is the host. Re-hosting the viewport in an Uno editor means writing a sibling
-/// of this class against WinUI's input stack — the tools, the history and the
-/// arbitration below the seam are untouched.
+/// process that names both a keyboard and <c>SpectraEngine.Editing</c>: the
+/// editing assembly carries no keyboard vocabulary at all (see
+/// <see cref="GizmoShortcuts"/>), so somebody has to resolve a physical key into
+/// a <see cref="GizmoCommand"/>, and that somebody is the host. Re-hosting the
+/// viewport in the Avalonia shell means writing a sibling of this class — the
+/// tools, the history and the arbitration below the seam are untouched.
+/// <para>
+/// The keys it names are <see cref="InputKey"/>, the engine's own vocabulary,
+/// so this host no longer references a windowing backend either: the shell
+/// translates its own key events into the same enum and every binding here
+/// works unchanged behind it.
+/// </para>
 /// <para>
 /// <b>Two navigation models, one toggle.</b> The default is the editor's own
 /// Roblox-Studio-shaped navigation: hold the right mouse button and the cursor
@@ -71,12 +75,12 @@ namespace SpectraEngine.Executable.Editing;
 internal sealed class DemoEditorHost : ISceneEditor
 {
     /// <summary>Toggles between the editor's freelook camera and the engine's fly camera.</summary>
-    private const Key NavigationToggleKey = Key.F7;
+    private const InputKey NavigationToggleKey = InputKey.F7;
 
     // Ctrl+T, echoing Hammer's Ctrl+T (tie to entity) — the nearest thing in
     // that editor to "change what this brush fundamentally is". A Control chord
     // deliberately, so the bare letter row stays free for tool switching.
-    private const Key BrushKindToggleKey = Key.T;
+    private const InputKey BrushKindToggleKey = InputKey.T;
 
     // Interned labels for ISceneEditor.NavigationModeName — the stats line that
     // reads it is otherwise allocation-free, so this must never be a formatted
@@ -87,20 +91,20 @@ internal sealed class DemoEditorHost : ISceneEditor
     // Candidate manipulator keys, offered to the editing layer's own default
     // table. Anything it does not recognise is silently dropped, so this list
     // can stay a superset of whatever the defaults happen to bind today.
-    private static readonly Key[] GizmoKeyCandidates =
+    private static readonly InputKey[] GizmoKeyCandidates =
     [
-        Key.W, Key.E, Key.R,
-        Key.Number2, Key.Number3, Key.Number4,
-        Key.X, Key.Y, Key.G, Key.LeftBracket, Key.RightBracket,
+        InputKey.W, InputKey.E, InputKey.R,
+        InputKey.Number2, InputKey.Number3, InputKey.Number4,
+        InputKey.X, InputKey.Y, InputKey.G, InputKey.LeftBracket, InputKey.RightBracket,
     ];
 
     // Keys a camera owns while it is driving. Only the overlap with
     // GizmoKeyCandidates matters (today: W and E), but listing the whole set
     // keeps the conflict rule honest if either table grows.
-    private static readonly Key[] CameraKeys =
+    private static readonly InputKey[] CameraKeys =
     [
-        Key.W, Key.A, Key.S, Key.D, Key.Q, Key.E,
-        Key.Space, Key.ControlLeft, Key.ShiftLeft,
+        InputKey.W, InputKey.A, InputKey.S, InputKey.D, InputKey.Q, InputKey.E,
+        InputKey.Space, InputKey.ControlLeft, InputKey.ShiftLeft,
     ];
 
     private readonly ILogger<DemoEditorHost> _logger;
@@ -278,7 +282,7 @@ internal sealed class DemoEditorHost : ISceneEditor
         // Escape arrives as the cancel flag rather than as a GizmoCommand: it
         // has to reach the marquee as well as the manipulator, and Update is the
         // one call that routes it to whichever owns the pointer.
-        _viewport.Update(in frame, _input.WasKeyPressed(Key.Escape));
+        _viewport.Update(in frame, _input.WasKeyPressed(InputKey.Escape));
 
         return _editorNavigation;
     }
@@ -326,13 +330,13 @@ internal sealed class DemoEditorHost : ISceneEditor
             return default;
 
         return EditorNavigationInput.FromKeys(
-            forward: _input.IsKeyDown(Key.W),
-            back: _input.IsKeyDown(Key.S),
-            left: _input.IsKeyDown(Key.A),
-            right: _input.IsKeyDown(Key.D),
-            up: _input.IsKeyDown(Key.E) || _input.IsKeyDown(Key.Space),
-            down: _input.IsKeyDown(Key.Q) || _input.IsKeyDown(Key.ControlLeft),
-            boost: _input.IsKeyDown(Key.ShiftLeft) || _input.IsKeyDown(Key.ShiftRight));
+            forward: _input.IsKeyDown(InputKey.W),
+            back: _input.IsKeyDown(InputKey.S),
+            left: _input.IsKeyDown(InputKey.A),
+            right: _input.IsKeyDown(InputKey.D),
+            up: _input.IsKeyDown(InputKey.E) || _input.IsKeyDown(InputKey.Space),
+            down: _input.IsKeyDown(InputKey.Q) || _input.IsKeyDown(InputKey.ControlLeft),
+            boost: _input.IsKeyDown(InputKey.ShiftLeft) || _input.IsKeyDown(InputKey.ShiftRight));
     }
 
     // The one place this host maps the camera's look button back onto a physical
@@ -356,12 +360,12 @@ internal sealed class DemoEditorHost : ISceneEditor
         if ((modifiers & KeyModifiers.Control) != 0)
         {
             bool shift = (modifiers & KeyModifiers.Shift) != 0;
-            if (_input.WasKeyPressed(Key.Z))
+            if (_input.WasKeyPressed(InputKey.Z))
             {
                 if (shift) Redo();
                 else Undo();
             }
-            else if (_input.WasKeyPressed(Key.Y))
+            else if (_input.WasKeyPressed(InputKey.Y))
             {
                 Redo();
             }
@@ -369,11 +373,11 @@ internal sealed class DemoEditorHost : ISceneEditor
             {
                 ToggleSelectionBrushKind();
             }
-            else if (_input.WasKeyPressed(Key.D))
+            else if (_input.WasKeyPressed(InputKey.D))
             {
                 RunStructuralEdit("Duplicate", StructuralEditor.TryDuplicate);
             }
-            else if (_input.WasKeyPressed(Key.G))
+            else if (_input.WasKeyPressed(InputKey.G))
             {
                 if (shift) RunStructuralEdit("Ungroup", StructuralEditor.TryUngroup);
                 else RunStructuralEdit("Group", (s, u, n) => StructuralEditor.TryGroup(s, u, n));
@@ -381,7 +385,7 @@ internal sealed class DemoEditorHost : ISceneEditor
             return;
         }
 
-        if (_input.WasKeyPressed(Key.Delete))
+        if (_input.WasKeyPressed(InputKey.Delete))
             RunStructuralEdit("Delete", StructuralEditor.TryDelete);
 
         for (int i = 0; i < _gizmoBindings.Length; i++)
@@ -402,7 +406,7 @@ internal sealed class DemoEditorHost : ISceneEditor
         // The camera verbs are a table of one, so asking by the literal name
         // costs nothing and keeps the binding where the editing layer documents
         // it rather than duplicated here.
-        if (_input.WasKeyPressed(Key.F) &&
+        if (_input.WasKeyPressed(InputKey.F) &&
             EditorCameraShortcuts.TryResolve("F", modifiers, out EditorCameraCommand cameraCommand))
         {
             _camera.Apply(cameraCommand);
@@ -550,7 +554,7 @@ internal sealed class DemoEditorHost : ISceneEditor
     private static GizmoBinding[] BuildGizmoBindings()
     {
         var bindings = new List<GizmoBinding>(GizmoKeyCandidates.Length);
-        foreach (Key key in GizmoKeyCandidates)
+        foreach (InputKey key in GizmoKeyCandidates)
         {
             if (!GizmoShortcuts.TryResolve(key.ToString(), out GizmoCommand command))
                 continue;
@@ -564,5 +568,5 @@ internal sealed class DemoEditorHost : ISceneEditor
     // One pre-resolved keyboard binding. ConflictsWithCamera marks the keys a
     // camera claims while it is driving, which must therefore stop meaning
     // "switch tool" for as long as it does.
-    private readonly record struct GizmoBinding(Key Key, GizmoCommand Command, bool ConflictsWithCamera);
+    private readonly record struct GizmoBinding(InputKey Key, GizmoCommand Command, bool ConflictsWithCamera);
 }

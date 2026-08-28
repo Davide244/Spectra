@@ -43,8 +43,14 @@ public sealed class Engine
     private readonly InputManager _inputManager;
     private readonly WindowModeLatch _windowModeLatch;
 
+    // Null in embedded mode, where a shell owns the window and hands the engine
+    // nothing but a surface. Everything that reads it is window OWNERSHIP work
+    // (title, cursor, event pump, fullscreen), which is exactly what an embedded
+    // host keeps for itself.
     private IWindow? _window;
-    private WindowRenderSurface? _surface;
+
+    private IRenderSurface? _surface;
+    private Thread? _renderThread;
     private FlyCameraController? _cameraController;
     private FirstPersonController? _character;
     private DebugVisualization _debugFlags = DebugVisualization.None;
@@ -102,6 +108,7 @@ public sealed class Engine
         _inputManager = inputManager;
         _windowModeLatch = new WindowModeLatch(logger);
         Host = new EngineHost(logger);
+        Host.AttachInput(inputManager);
     }
 
     // Reused across publishes so a steady state with an unchanging selection
@@ -270,10 +277,10 @@ public sealed class Engine
     public (int Width, int Height)? WindowSize { get; set; }
 
     /// <summary>The key that enters and leaves play mode.</summary>
-    public const Key PlayModeKey = Key.F8;
+    public const InputKey PlayModeKey = InputKey.F8;
 
     /// <summary>The key that toggles the character capsule overlay.</summary>
-    public const Key CharacterOverlayKey = Key.F9;
+    public const InputKey CharacterOverlayKey = InputKey.F9;
 
     /// <summary>
     /// Creates the window, runs the render thread, and pumps OS events until
@@ -289,6 +296,7 @@ public sealed class Engine
         // discovers its GLFW backends by reflection, which a NativeAOT publish
         // trims away — see SilkPlatform for the full story.
         SilkPlatform.EnsureRegistered();
+
 
         var options = WindowOptions.Default with
         {
@@ -315,24 +323,18 @@ public sealed class Engine
         _window.VSync = false;
 
         // Subsystems that touch no GPU state are set up on this (OS-event) thread.
-        _assetManager.Initialize();
-        _sceneManager.Initialize();
-        _audioManager.Initialize();
+        InitializeSubsystems();
+
+        // The one subsystem that IS window-shaped: Silk's input devices belong
+        // to the window this path created. An embedded engine has no devices at
+        // all and is fed through EngineHost instead.
         _inputManager.Initialize(_window.CreateInput());
 
         // The renderer is handed a SURFACE, not a window: a handle, a context
         // and a size, with none of the ownership (title, cursor, event pump,
         // lifetime) that stays here. An embedded host supplies its own
         // implementation of the same three things and needs to touch no backend.
-        _surface = new WindowRenderSurface(_window);
-
-        // Seed the renderer's framebuffer-size latch while we are still the
-        // only thread, then keep it fresh from the resize event (which fires
-        // during DoEvents on this thread). GLFW gives no thread-safety
-        // guarantee for size queries, so the render side only ever reads the
-        // latch and never touches the surface's own size.
-        _renderer.SetFramebufferSize(_surface.PixelSize);
-        _surface.Resized += _renderer.SetFramebufferSize;
+        AttachSurface(new WindowRenderSurface(_window));
 
         // Focus changes fire during DoEvents, i.e. on this thread — which is
         // the only thread allowed to touch the cursor. A focus loss has to
@@ -342,15 +344,7 @@ public sealed class Engine
         // frame later.
         _window.FocusChanged += _inputManager.OnWindowFocusChanged;
 
-        // Release any thread-affine context (OpenGL) here so the render thread
-        // can take ownership. Backends without one (D3D, Vulkan) no-op.
-        _renderer.ReleaseContext(_surface);
-
-        var renderThread = new Thread(RenderLoop)
-        {
-            Name = "Spectra Render",
-        };
-        renderThread.Start();
+        StartRenderThread();
 
         // The window-mode latch drives the window through this adapter — the
         // one object in the fullscreen path that names a windowing backend.
@@ -407,19 +401,176 @@ public sealed class Engine
 
         // Whatever ended the pump (close request or render-thread death), the
         // render loop only watches this flag — raise it before joining.
+        JoinRenderThread();
+        ShutdownSubsystems();
+
+        // Dispose already destroys the window; a preceding Reset would be redundant.
+        _window.Dispose();
+        _window = null;
+
+        _logger.LogInformation("Spectra Engine shut down");
+        return !_renderThreadFaulted;
+    }
+
+    // --- Embedded lifetime ---------------------------------------------------
+    //
+    // The same engine, minus the window: a shell already has one, already pumps
+    // its events and already owns the title, the cursor and the fullscreen
+    // state, so all it can hand over is a surface. What it gets back is the
+    // render thread running against that surface, driven through EngineHost.
+    //
+    // Deliberately NOT the same call as Run. Run BLOCKS until the window closes
+    // because that is what owning the process's main loop means; a shell calls
+    // Start from its UI thread and must get it back immediately, and collapsing
+    // the two would give one of the callers the wrong answer.
+
+    /// <summary>
+    /// Whether the render thread is running. False before <see cref="Start"/>
+    /// and after <see cref="Stop"/>.
+    /// </summary>
+    public bool IsRunning => _renderThread is not null;
+
+    /// <summary>
+    /// Whether the render thread ended on an exception. Already logged; a shell
+    /// reads this to decide whether the session died or merely finished.
+    /// </summary>
+    public bool Faulted => _renderThreadFaulted;
+
+    /// <summary>
+    /// Starts the engine against a surface the caller owns, creating no window
+    /// and pumping no OS events. Returns as soon as the render thread is
+    /// running. Call <see cref="Stop"/> to shut it down.
+    /// </summary>
+    /// <remarks>
+    /// <b>Everything the standalone path does with its window stays with the
+    /// caller.</b> The title, the cursor, the event pump, the close button and
+    /// the fullscreen transition are all things a shell already owns and would
+    /// have to be asked for back; the engine only ever needed a handle, a
+    /// context and a size, which is what <see cref="IRenderSurface"/> is.
+    /// <para>
+    /// <b>No input devices are attached</b>, because a host-supplied surface has
+    /// none the engine could enumerate: the shell's own windowing layer is
+    /// already receiving the keyboard and the mouse. Input arrives through
+    /// <see cref="EngineHost"/> instead, and until something submits any, the
+    /// engine renders and simulates with every key up — which is a correct
+    /// resting state, not a broken one.
+    /// </para>
+    /// <para>
+    /// <b>Fullscreen is not silently dropped either.</b> <see cref="WindowMode"/>
+    /// stays a request latch, and the request is now the shell's to apply to its
+    /// own window: it polls <see cref="IWindowModeLatch.RequestedWindowMode"/>
+    /// exactly as <see cref="Run"/>'s pump does. That was already the shape of
+    /// the latch, which is why nothing about it changes here.
+    /// </para>
+    /// </remarks>
+    public void Start(IRenderSurface surface)
+    {
+        ArgumentNullException.ThrowIfNull(surface);
+
+        if (_renderThread is not null)
+            throw new InvalidOperationException("The engine is already running.");
+
+        _logger.LogInformation(
+            "Spectra Engine {Version} starting (embedded, {Kind} surface)",
+            EngineInfo.VersionString, surface.Kind);
+
+        InitializeSubsystems();
+        AttachSurface(surface);
+        StartRenderThread();
+    }
+
+    /// <summary>
+    /// Stops the render thread and shuts the subsystems down. Returns
+    /// <c>true</c> on a clean shutdown and <c>false</c> when the render thread
+    /// had died on an exception (already logged). Idempotent.
+    /// </summary>
+    /// <remarks>
+    /// Blocks until the render thread has finished, which is not optional: it
+    /// owns the graphics context and every GPU resource in the process, and a
+    /// shell that tore its window down while that thread was still presenting
+    /// into it would be handing the driver a destroyed surface.
+    /// </remarks>
+    public bool Stop()
+    {
+        if (_renderThread is null)
+            return !_renderThreadFaulted;
+
+        JoinRenderThread();
+        ShutdownSubsystems();
+
+        _logger.LogInformation("Spectra Engine shut down");
+        return !_renderThreadFaulted;
+    }
+
+    // --- Shared lifetime steps -----------------------------------------------
+
+    private void InitializeSubsystems()
+    {
+        _assetManager.Initialize();
+        _sceneManager.Initialize();
+        _audioManager.Initialize();
+    }
+
+    private void AttachSurface(IRenderSurface surface)
+    {
+        _surface = surface;
+
+        // Seed the renderer's framebuffer-size latch while we are still the
+        // only thread, then keep it fresh from the resize event (which fires on
+        // whichever thread owns the surface). No windowing backend promises
+        // thread-safe size queries, so the render side only ever reads the
+        // latch and never touches the surface's own size.
+        _renderer.SetFramebufferSize(surface.PixelSize);
+        surface.Resized += _renderer.SetFramebufferSize;
+
+        // Release any thread-affine context (OpenGL) here so the render thread
+        // can take ownership. Backends without one (D3D, Vulkan) no-op.
+        _renderer.ReleaseContext(surface);
+    }
+
+    private void StartRenderThread()
+    {
+        // Cleared here rather than at the end of a run, so Stop's return value
+        // and Faulted still describe the session that just ended. A restart is
+        // a fresh session and must not inherit the previous one's exit flags,
+        // or its render loop would see _closeRequested already raised and exit
+        // before its first frame.
+        _closeRequested = false;
+        _renderThreadExited = false;
+        _renderThreadFaulted = false;
+
+        _renderThread = new Thread(RenderLoop)
+        {
+            Name = "Spectra Render",
+        };
+        _renderThread.Start();
+    }
+
+    private void JoinRenderThread()
+    {
+        if (_renderThread is not { } thread)
+            return;
+
         _closeRequested = true;
-        renderThread.Join();
+        thread.Join();
+        _renderThread = null;
+    }
+
+    private void ShutdownSubsystems()
+    {
+        // Detached before the managers go, so a resize arriving from a shell
+        // that has not yet torn its own surface down cannot reach a renderer
+        // that is already shutting down.
+        if (_surface is { } surface)
+        {
+            surface.Resized -= _renderer.SetFramebufferSize;
+            _surface = null;
+        }
 
         _inputManager.Shutdown();
         _audioManager.Shutdown();
         _sceneManager.Shutdown();
         _assetManager.Shutdown();
-
-        // Dispose already destroys the window; a preceding Reset would be redundant.
-        _window.Dispose();
-
-        _logger.LogInformation("Spectra Engine shut down");
-        return !_renderThreadFaulted;
     }
 
     // --- Play mode -----------------------------------------------------------
@@ -561,7 +712,7 @@ public sealed class Engine
                 // Escape.
                 if (_inputManager.WasKeyPressed(PlayModeKey))
                     TogglePlayMode();
-                else if (_character is { Active: true } && _inputManager.WasKeyPressed(Key.Escape))
+                else if (_character is { Active: true } && _inputManager.WasKeyPressed(InputKey.Escape))
                     ExitPlayMode();
 
                 if (_inputManager.WasKeyPressed(CharacterOverlayKey))
@@ -685,14 +836,14 @@ public sealed class Engine
                     _character!.UpdateView(deltaTime, _physicsTicks.Alpha);
 
                 // F1–F5 toggle debug visualisations on/off.
-                if (_inputManager.WasKeyPressed(Key.F1)) _debugFlags ^= DebugVisualization.Wireframe;
-                if (_inputManager.WasKeyPressed(Key.F2)) _debugFlags ^= DebugVisualization.Vertices;
-                if (_inputManager.WasKeyPressed(Key.F3)) _debugFlags ^= DebugVisualization.Aabbs;
-                if (_inputManager.WasKeyPressed(Key.F4)) _debugFlags ^= DebugVisualization.Normals;
-                if (_inputManager.WasKeyPressed(Key.F5)) _debugFlags ^= DebugVisualization.SceneGraph;
+                if (_inputManager.WasKeyPressed(InputKey.F1)) _debugFlags ^= DebugVisualization.Wireframe;
+                if (_inputManager.WasKeyPressed(InputKey.F2)) _debugFlags ^= DebugVisualization.Vertices;
+                if (_inputManager.WasKeyPressed(InputKey.F3)) _debugFlags ^= DebugVisualization.Aabbs;
+                if (_inputManager.WasKeyPressed(InputKey.F4)) _debugFlags ^= DebugVisualization.Normals;
+                if (_inputManager.WasKeyPressed(InputKey.F5)) _debugFlags ^= DebugVisualization.SceneGraph;
 
                 // F6 cycles render pipelines (Forward, Wireframe, ...).
-                if (_inputManager.WasKeyPressed(Key.F6))
+                if (_inputManager.WasKeyPressed(InputKey.F6))
                     _renderer.NextPipeline();
 
                 // F11 toggles borderless fullscreen. Only the REQUEST happens
@@ -700,7 +851,7 @@ public sealed class Engine
                 // Run's pump, because window calls belong to the thread that
                 // created the window. Same key on all three backends: nothing
                 // about this touches a graphics API.
-                if (_inputManager.WasKeyPressed(Key.F11))
+                if (_inputManager.WasKeyPressed(InputKey.F11))
                     _windowModeLatch.ToggleFullscreen();
 
                 _renderer.DebugDraw.Clear();

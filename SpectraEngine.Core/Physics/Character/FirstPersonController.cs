@@ -1,7 +1,7 @@
-using System;
+﻿using System;
 using System.Numerics;
 using Microsoft.Extensions.Logging;
-using Silk.NET.Input;
+
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
@@ -228,17 +228,17 @@ public sealed class FirstPersonController
         }
 
         var buttons = CharacterButtons.None;
-        if (_input.IsKeyDown(Key.Space))
+        if (_input.IsKeyDown(InputKey.Space))
             buttons |= CharacterButtons.Jump;
-        if (_input.IsKeyDown(Key.ShiftLeft) || _input.IsKeyDown(Key.ShiftRight))
+        if (_input.IsKeyDown(InputKey.ShiftLeft) || _input.IsKeyDown(InputKey.ShiftRight))
             buttons |= CharacterButtons.Sprint;
 
         // Crouch is deliberately unbound: CharacterButtons carries the flag but
         // the mover does nothing with it yet, and a key that visibly does
         // nothing is worse than a key that is documented as absent.
 
-        float forward = (_input.IsKeyDown(Key.W) ? 1f : 0f) - (_input.IsKeyDown(Key.S) ? 1f : 0f);
-        float strafe = (_input.IsKeyDown(Key.D) ? 1f : 0f) - (_input.IsKeyDown(Key.A) ? 1f : 0f);
+        float forward = (_input.IsKeyDown(InputKey.W) ? 1f : 0f) - (_input.IsKeyDown(InputKey.S) ? 1f : 0f);
+        float strafe = (_input.IsKeyDown(InputKey.D) ? 1f : 0f) - (_input.IsKeyDown(InputKey.A) ? 1f : 0f);
 
         _command = new CharacterCommand
         {

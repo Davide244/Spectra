@@ -24,18 +24,22 @@ namespace SpectraEngine.Core.Input;
 /// <c>SilkCursorMode</c>.
 /// </para>
 /// </remarks>
-public sealed class InputManager : ICursorLock
+public sealed class InputManager : ICursorLock, IInputSink
 {
     private readonly ILogger<InputManager> _logger;
     private readonly object _stateLock = new();
-    private readonly HashSet<Key> _keysDown = [];
-    private readonly HashSet<Key> _pendingPressed = [];
-    private readonly HashSet<Key> _pressedThisFrame = [];
-    private readonly HashSet<MouseButton> _mouseButtonsDown = [];
-    private readonly HashSet<MouseButton> _pendingMousePressed = [];
-    private readonly HashSet<MouseButton> _mousePressedThisFrame = [];
-    private readonly HashSet<MouseButton> _pendingMouseReleased = [];
-    private readonly HashSet<MouseButton> _mouseReleasedThisFrame = [];
+    private readonly HashSet<InputKey> _keysDown = [];
+    private readonly HashSet<InputKey> _pendingPressed = [];
+    private readonly HashSet<InputKey> _pressedThisFrame = [];
+
+    // Buttons are a flag set rather than a HashSet: there are three of them,
+    // every query is a mask test, and the neutral vocabulary they are reported
+    // in is already a flags enum.
+    private PointerButtons _buttonsDown;
+    private PointerButtons _pendingPressedButtons;
+    private PointerButtons _pressedButtonsThisFrame;
+    private PointerButtons _pendingReleasedButtons;
+    private PointerButtons _releasedButtonsThisFrame;
 
     private IInputContext? _inputContext;
     private Vector2 _accumulatedMouseDelta;
@@ -126,7 +130,7 @@ public sealed class InputManager : ICursorLock
     /// </summary>
     public PointerButtons PointerButtonsDown
     {
-        get { lock (_stateLock) return ToPointerButtons(_mouseButtonsDown); }
+        get { lock (_stateLock) return _buttonsDown; }
     }
 
     /// <summary>
@@ -135,7 +139,7 @@ public sealed class InputManager : ICursorLock
     /// </summary>
     public PointerButtons PointerButtonsPressed
     {
-        get { lock (_stateLock) return ToPointerButtons(_mousePressedThisFrame); }
+        get { lock (_stateLock) return _pressedButtonsThisFrame; }
     }
 
     /// <summary>
@@ -145,7 +149,7 @@ public sealed class InputManager : ICursorLock
     /// </summary>
     public PointerButtons PointerButtonsReleased
     {
-        get { lock (_stateLock) return ToPointerButtons(_mouseReleasedThisFrame); }
+        get { lock (_stateLock) return _releasedButtonsThisFrame; }
     }
 
     /// <summary>
@@ -159,13 +163,13 @@ public sealed class InputManager : ICursorLock
             lock (_stateLock)
             {
                 KeyModifiers modifiers = KeyModifiers.None;
-                if (_keysDown.Contains(Key.ShiftLeft) || _keysDown.Contains(Key.ShiftRight))
+                if (_keysDown.Contains(InputKey.ShiftLeft) || _keysDown.Contains(InputKey.ShiftRight))
                     modifiers |= KeyModifiers.Shift;
-                if (_keysDown.Contains(Key.ControlLeft) || _keysDown.Contains(Key.ControlRight))
+                if (_keysDown.Contains(InputKey.ControlLeft) || _keysDown.Contains(InputKey.ControlRight))
                     modifiers |= KeyModifiers.Control;
-                if (_keysDown.Contains(Key.AltLeft) || _keysDown.Contains(Key.AltRight))
+                if (_keysDown.Contains(InputKey.AltLeft) || _keysDown.Contains(InputKey.AltRight))
                     modifiers |= KeyModifiers.Alt;
-                if (_keysDown.Contains(Key.SuperLeft) || _keysDown.Contains(Key.SuperRight))
+                if (_keysDown.Contains(InputKey.SuperLeft) || _keysDown.Contains(InputKey.SuperRight))
                     modifiers |= KeyModifiers.Super;
                 return modifiers;
             }
@@ -191,6 +195,23 @@ public sealed class InputManager : ICursorLock
     public bool IsCursorLocked
     {
         get { lock (_stateLock) return _appliedCursorMode == CursorMode.Locked; }
+    }
+
+    /// <summary>
+    /// The cursor mode last asked for, whether or not it has been applied.
+    /// </summary>
+    /// <remarks>
+    /// <b>For an embedded host, which owns the cursor the engine cannot
+    /// touch.</b> The standalone path's <see cref="ApplyPendingCursorMode"/>
+    /// drives a Silk mouse device; behind a host-supplied surface there is no
+    /// device to drive, so a shell polls this, performs its own platform
+    /// capture, and calls <see cref="ApplyPendingCursorMode"/> to close the
+    /// state machine. The bookkeeping half of that method runs with or without
+    /// a device, which is exactly what makes the split work.
+    /// </remarks>
+    public CursorMode RequestedCursorMode
+    {
+        get { lock (_stateLock) return _requestedCursorMode; }
     }
 
     /// <summary>
@@ -288,28 +309,28 @@ public sealed class InputManager : ICursorLock
     /// </remarks>
     public void OnWindowFocusChanged(bool focused)
     {
-        if (focused)
-            return;
+        if (!focused)
+            Submit(InputEvent.FocusLost());
+    }
 
-        lock (_stateLock)
-        {
-            _requestedCursorMode = CursorMode.Normal;
+    // Caller must hold _stateLock. Shared by the window's focus event and by a
+    // host's FocusLost submission, because losing focus means the same thing
+    // however the engine hears about it.
+    private void ReleaseEverything()
+    {
+        _requestedCursorMode = CursorMode.Normal;
 
-            _keysDown.Clear();
-            _pendingPressed.Clear();
+        _keysDown.Clear();
+        _pendingPressed.Clear();
 
-            // Held buttons become release edges rather than vanishing, so a
-            // gesture watching for its own release edge still gets one.
-            foreach (MouseButton button in _mouseButtonsDown)
-                _pendingMouseReleased.Add(button);
-            _mouseButtonsDown.Clear();
-            _pendingMousePressed.Clear();
+        // Held buttons become release edges rather than vanishing, so a
+        // gesture watching for its own release edge still gets one.
+        _pendingReleasedButtons |= _buttonsDown;
+        _buttonsDown = PointerButtons.None;
+        _pendingPressedButtons = PointerButtons.None;
 
-            _accumulatedMouseDelta = Vector2.Zero;
-            _accumulatedScrollDelta = Vector2.Zero;
-        }
-
-        ApplyPendingCursorMode();
+        _accumulatedMouseDelta = Vector2.Zero;
+        _accumulatedScrollDelta = Vector2.Zero;
     }
 
     // The device cursor requests are applied to. Silk exposes one cursor per
@@ -318,20 +339,6 @@ public sealed class InputManager : ICursorLock
     {
         IInputContext? context = _inputContext;
         return context is not null && context.Mice.Count > 0 ? context.Mice[0] : null;
-    }
-
-    // Caller must hold _stateLock. Three membership probes, no enumeration and
-    // no allocation — this runs once per editor frame per edge set.
-    private static PointerButtons ToPointerButtons(HashSet<MouseButton> buttons)
-    {
-        PointerButtons result = PointerButtons.None;
-        if (buttons.Contains(MouseButton.Left))
-            result |= PointerButtons.Left;
-        if (buttons.Contains(MouseButton.Right))
-            result |= PointerButtons.Right;
-        if (buttons.Contains(MouseButton.Middle))
-            result |= PointerButtons.Middle;
-        return result;
     }
 
     public void Initialize(IInputContext inputContext)
@@ -381,46 +388,46 @@ public sealed class InputManager : ICursorLock
             _accumulatedScrollDelta = Vector2.Zero;
 
             _pressedThisFrame.Clear();
-            foreach (Key k in _pendingPressed)
+            foreach (InputKey k in _pendingPressed)
                 _pressedThisFrame.Add(k);
             _pendingPressed.Clear();
 
-            _mousePressedThisFrame.Clear();
-            foreach (MouseButton b in _pendingMousePressed)
-                _mousePressedThisFrame.Add(b);
-            _pendingMousePressed.Clear();
+            _pressedButtonsThisFrame = _pendingPressedButtons;
+            _pendingPressedButtons = PointerButtons.None;
 
-            _mouseReleasedThisFrame.Clear();
-            foreach (MouseButton b in _pendingMouseReleased)
-                _mouseReleasedThisFrame.Add(b);
-            _pendingMouseReleased.Clear();
+            _releasedButtonsThisFrame = _pendingReleasedButtons;
+            _pendingReleasedButtons = PointerButtons.None;
         }
     }
 
-    public bool IsKeyDown(Key key)
+    public bool IsKeyDown(InputKey key)
     {
         lock (_stateLock)
             return _keysDown.Contains(key);
     }
 
     /// <summary>True for the single tick on which <paramref name="key"/> went from up to down.</summary>
-    public bool WasKeyPressed(Key key)
+    public bool WasKeyPressed(InputKey key)
     {
         lock (_stateLock)
             return _pressedThisFrame.Contains(key);
     }
 
-    public bool IsMouseButtonDown(MouseButton button)
+    /// <summary>
+    /// True while every button in <paramref name="button"/> is held. A single
+    /// flag is the ordinary case; a combination asks for all of them.
+    /// </summary>
+    public bool IsMouseButtonDown(PointerButtons button)
     {
         lock (_stateLock)
-            return _mouseButtonsDown.Contains(button);
+            return (_buttonsDown & button) == button;
     }
 
     /// <summary>True for the single tick on which <paramref name="button"/> went from up to down.</summary>
-    public bool WasMouseButtonPressed(MouseButton button)
+    public bool WasMouseButtonPressed(PointerButtons button)
     {
         lock (_stateLock)
-            return _mousePressedThisFrame.Contains(button);
+            return (_pressedButtonsThisFrame & button) == button;
     }
 
     /// <summary>
@@ -429,10 +436,10 @@ public sealed class InputManager : ICursorLock
     /// exactly like the press edge rather than inferred from a state change the
     /// caller might miss between ticks.
     /// </summary>
-    public bool WasMouseButtonReleased(MouseButton button)
+    public bool WasMouseButtonReleased(PointerButtons button)
     {
         lock (_stateLock)
-            return _mouseReleasedThisFrame.Contains(button);
+            return (_releasedButtonsThisFrame & button) == button;
     }
 
     public void Shutdown()
@@ -477,57 +484,106 @@ public sealed class InputManager : ICursorLock
     // input device. The device parameter is part of Silk.NET's event signature
     // and is unused, so a test may pass null for it.
 
-    internal void OnKeyDown(IKeyboard keyboard, Key key, int keyCode)
+    internal void OnKeyDown(IKeyboard keyboard, Key key, int keyCode) =>
+        Submit(InputEvent.KeyDown(SilkInputKeys.ToInputKey(key)));
+
+    internal void OnKeyUp(IKeyboard keyboard, Key key, int keyCode) =>
+        Submit(InputEvent.KeyUp(SilkInputKeys.ToInputKey(key)));
+
+    internal void OnMouseDown(IMouse mouse, MouseButton button) =>
+        Submit(InputEvent.PointerDown(SilkInputKeys.ToPointerButton(button)));
+
+    internal void OnMouseUp(IMouse mouse, MouseButton button) =>
+        Submit(InputEvent.PointerUp(SilkInputKeys.ToPointerButton(button)));
+
+    internal void OnScroll(IMouse mouse, ScrollWheel wheel) =>
+        Submit(InputEvent.Scroll(new Vector2(wheel.X, wheel.Y)));
+
+    internal void OnMouseMove(IMouse mouse, Vector2 position) =>
+        Submit(InputEvent.PointerMove(position));
+
+    // ─── Submitted input (IInputSink) ────────────────────────
+
+    /// <summary>
+    /// Applies one event to the input state. Called by the standalone window's
+    /// own device handlers above and by an embedded host through
+    /// <c>EngineHost.SubmitInput</c>.
+    /// </summary>
+    /// <remarks>
+    /// <b>Both paths land here, which is the point.</b> Edge detection, the
+    /// auto-repeat filter, the delta accumulator and the focus-loss release are
+    /// one implementation, so an embedded viewport cannot drift from the
+    /// standalone window in how a press or a drag behaves — and the headless
+    /// tests that pin those rules cover both.
+    /// </remarks>
+    public void Submit(in InputEvent input)
     {
+        bool focusLost = false;
+
         lock (_stateLock)
         {
-            // HashSet.Add returns false on auto-repeat — only true presses count.
-            if (_keysDown.Add(key))
-                _pendingPressed.Add(key);
+            switch (input.Kind)
+            {
+                case InputEventKind.KeyDown:
+                    // A key the source could not name matches no binding, so it
+                    // must not enter the held set either: it would collide with
+                    // every other unnameable key and one release would clear
+                    // them all.
+                    if (input.Key is not InputKey.Unknown && _keysDown.Add(input.Key))
+                        _pendingPressed.Add(input.Key);
+                    break;
+
+                case InputEventKind.KeyUp:
+                    _keysDown.Remove(input.Key);
+                    break;
+
+                case InputEventKind.PointerDown:
+                    // Same edge rule as the keyboard: only buttons that were
+                    // not already held arm the press edge.
+                    PointerButtons pressed = input.Button & ~_buttonsDown;
+                    _buttonsDown |= input.Button;
+                    _pendingPressedButtons |= pressed;
+                    break;
+
+                case InputEventKind.PointerUp:
+                    // Only a real down-to-up transition arms the release edge,
+                    // so a stray release for a button never seen to go down
+                    // reports nothing.
+                    PointerButtons released = input.Button & _buttonsDown;
+                    _buttonsDown &= ~input.Button;
+                    _pendingReleasedButtons |= released;
+                    break;
+
+                case InputEventKind.PointerMove:
+                    if (_lastMousePosition.HasValue)
+                        _accumulatedMouseDelta += input.Value - _lastMousePosition.Value;
+                    _lastMousePosition = input.Value;
+                    break;
+
+                case InputEventKind.PointerDelta:
+                    // No position to update: a captured cursor has none, and
+                    // writing one would corrupt the restore point the lock is
+                    // holding on the caller's behalf.
+                    _accumulatedMouseDelta += input.Value;
+                    break;
+
+                case InputEventKind.Scroll:
+                    _accumulatedScrollDelta += input.Value;
+                    break;
+
+                case InputEventKind.FocusLost:
+                    ReleaseEverything();
+                    focusLost = true;
+                    break;
+            }
         }
-    }
 
-    internal void OnKeyUp(IKeyboard keyboard, Key key, int keyCode)
-    {
-        lock (_stateLock)
-            _keysDown.Remove(key);
-    }
-
-    internal void OnMouseDown(IMouse mouse, MouseButton button)
-    {
-        lock (_stateLock)
-        {
-            // Same edge rule as the keyboard: Add returns false while the
-            // button is already down, so only true presses arm the edge.
-            if (_mouseButtonsDown.Add(button))
-                _pendingMousePressed.Add(button);
-        }
-    }
-
-    internal void OnMouseUp(IMouse mouse, MouseButton button)
-    {
-        lock (_stateLock)
-        {
-            // Only a real down→up transition arms the release edge, so a stray
-            // MouseUp for a button we never saw go down reports nothing.
-            if (_mouseButtonsDown.Remove(button))
-                _pendingMouseReleased.Add(button);
-        }
-    }
-
-    internal void OnScroll(IMouse mouse, ScrollWheel wheel)
-    {
-        lock (_stateLock)
-            _accumulatedScrollDelta += new Vector2(wheel.X, wheel.Y);
-    }
-
-    internal void OnMouseMove(IMouse mouse, Vector2 position)
-    {
-        lock (_stateLock)
-        {
-            if (_lastMousePosition.HasValue)
-                _accumulatedMouseDelta += position - _lastMousePosition.Value;
-            _lastMousePosition = position;
-        }
+        // Outside the lock, and only on the one event that needs it: a focus
+        // loss must give the cursor back immediately rather than a frame later,
+        // or alt-tabbing out of a freelook strands the user with an invisible,
+        // trapped pointer over a window that is no longer even in front. Costs
+        // nothing on every other event.
+        if (focusLost)
+            ApplyPendingCursorMode();
     }
 }
