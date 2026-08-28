@@ -1,6 +1,5 @@
 ﻿using System.Numerics;
 using SpectraEngine.Core.Input;
-using SpectraEngine.Core.Input;
 
 namespace SpectraEngine.Core.Scene;
 

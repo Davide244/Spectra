@@ -16,6 +16,16 @@
     <PackageVersion Include="Serilog.Sinks.Debug" Version="3.0.0" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
 
+    <!--
+      Editor shell. Avalonia over Uno on the docking story (a level editor
+      without dockable panes is not a level editor) and because it runs
+      everywhere the engine runs. NativeControlHost is what embeds the engine's
+      own surface; see ROADMAP §10.
+    -->
+    <PackageVersion Include="Avalonia" Version="12.1.1" />
+    <PackageVersion Include="Avalonia.Desktop" Version="12.1.1" />
+    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+
     <!-- Language Server -->
     <PackageVersion Include="OmniSharp.Extensions.LanguageServer" Version="0.19.9" />
 

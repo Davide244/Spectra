@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="SpectraEngine.Editor" />
+
+  <!--
+    Required, not decoration: Avalonia refuses to create the native child window
+    a NativeControlHost needs unless the process declares a supported OS list,
+    because without one Windows reports itself as 6.2 and the shell APIs behind
+    that window take their legacy paths. The failure is an InvalidOperationException
+    at the first layout pass, which reads as an Avalonia bug rather than a
+    missing manifest.
+  -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 and 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+      <!-- Windows 8.1 -->
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}" />
+      <!-- Windows 8 -->
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}" />
+      <!-- Windows 7 -->
+      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}" />
+    </application>
+  </compatibility>
+
+  <!--
+    Per-monitor DPI awareness, declared here rather than left to the default.
+    Without it Windows scales the whole window bitmap on a high-DPI display,
+    which for a native child window hosting a real swap chain means the engine
+    renders at one resolution and the OS stretches it to another: a soft
+    viewport whose pixels do not line up with the picking rays cast into it.
+  -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">permonitorv2,permonitor</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>

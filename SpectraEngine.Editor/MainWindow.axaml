@@ -1,0 +1,66 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:viewport="clr-namespace:SpectraEngine.Editor.Viewport"
+        xmlns:local="clr-namespace:SpectraEngine.Editor"
+        x:Class="SpectraEngine.Editor.MainWindow"
+        Title="Spectra Editor"
+        Width="1440" Height="900"
+        MinWidth="640" MinHeight="400">
+
+  <Grid RowDefinitions="Auto,*,Auto">
+
+    <Menu Grid.Row="0">
+      <MenuItem Header="_File">
+        <MenuItem Header="E_xit" Click="OnExitClicked" />
+      </MenuItem>
+      <MenuItem Header="_View">
+        <MenuItem Header="_Focus viewport" Click="OnFocusViewportClicked" />
+      </MenuItem>
+    </Menu>
+
+    <Grid Grid.Row="1" ColumnDefinitions="280,4,*">
+
+      <!--
+        The scene tree is fed entirely by FrameSnapshot: ids and names copied
+        out of the graph, never a live SceneNode. It is here as much to prove
+        that boundary works as to be useful.
+      -->
+      <DockPanel Grid.Column="0" Margin="8,8,0,8">
+        <TextBlock DockPanel.Dock="Top"
+                   Text="Scene"
+                   FontWeight="SemiBold"
+                   Margin="4,0,0,6" />
+        <TextBlock DockPanel.Dock="Bottom"
+                   x:Name="TreeStatus"
+                   Margin="4,6,0,0"
+                   Opacity="0.6"
+                   FontSize="11" />
+        <TreeView x:Name="SceneTree">
+          <TreeView.ItemTemplate>
+            <TreeDataTemplate x:DataType="local:SceneTreeNode" ItemsSource="{Binding Children}">
+              <TextBlock Text="{Binding Name}" />
+            </TreeDataTemplate>
+          </TreeView.ItemTemplate>
+        </TreeView>
+      </DockPanel>
+
+      <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="Transparent" />
+
+      <!--
+        A native child window with the engine's own swap chain behind it. It
+        sits above the XAML rather than inside it, so nothing may be drawn over
+        this cell; that airspace is v1's accepted cost.
+      -->
+      <Border Grid.Column="2" Margin="0,8,8,8">
+        <viewport:EngineViewport x:Name="Viewport" />
+      </Border>
+    </Grid>
+
+    <Border Grid.Row="2" Padding="10,4" Background="#20000000">
+      <TextBlock x:Name="StatusText"
+                 FontFamily="Consolas,Menlo,monospace"
+                 FontSize="12"
+                 Text="Starting..." />
+    </Border>
+  </Grid>
+</Window>

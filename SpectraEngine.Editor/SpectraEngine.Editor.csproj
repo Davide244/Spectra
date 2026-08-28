@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!--
+      Avalonia's XAML compiler runs over this project, so unsafe blocks are the
+      only thing that needs saying explicitly: the Win32 viewport window is
+      P/Invoke, and it is the one place in the shell that touches a handle.
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!--
+    The shell is a peer of the demo executable, not a layer above it: both are
+    HOSTS. It references the engine and the editing layer directly, because the
+    editor runs the engine in-process (ROADMAP §10) and there is no IPC
+    boundary to marshal across.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
+    <ProjectReference Include="..\SpectraEngine.Editing\SpectraEngine.Editing.csproj" />
+    <ProjectReference Include="..\SpectraEngine.Physics.Box3D\SpectraEngine.Physics.Box3D.csproj" />
+    <ProjectReference Include="..\SpectraShade.Compiler\SpectraShade.Compiler.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Serilog" />
+    <PackageReference Include="Serilog.Extensions.Logging" />
+    <PackageReference Include="Serilog.Sinks.Console" />
+    <PackageReference Include="Serilog.Sinks.Debug" />
+    <PackageReference Include="Serilog.Sinks.File" />
+  </ItemGroup>
+
+</Project>

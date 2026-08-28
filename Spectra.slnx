@@ -2,6 +2,7 @@
   <Folder Name="/Test/">
     <Project Path="Test/SpectraEngine.Bsp.Tests/SpectraEngine.Bsp.Tests.csproj" />
     <Project Path="Test/SpectraEngine.Editing.Tests/SpectraEngine.Editing.Tests.csproj" />
+    <Project Path="Test/SpectraEngine.Editor.Tests/SpectraEngine.Editor.Tests.csproj" />
     <Project Path="Test/SpectraEngine.Graphics.Tests/SpectraEngine.Graphics.Tests.csproj">
       <Build Solution="Debug|*" Project="false" />
     </Project>
@@ -21,4 +22,5 @@
   <Project Path="SpectraEngine.Editing/SpectraEngine.Editing.csproj" />
   <Project Path="SpectraEngine.Physics.Box3D/SpectraEngine.Physics.Box3D.csproj" />
   <Project Path="SpectraEngine.Executable/SpectraEngine.Executable.csproj" Id="78f3c10f-f49b-4abe-809d-bec4cfd19994" />
+  <Project Path="SpectraEngine.Editor/SpectraEngine.Editor.csproj" />
 </Solution>
