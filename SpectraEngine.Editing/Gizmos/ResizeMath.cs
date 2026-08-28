@@ -47,39 +47,34 @@ public static class ResizeMath
     /// Size in world units along the node's local x/y/z. A component can still be
     /// zero for a flat object (a quad mesh); callers check per axis.
     /// </param>
-    /// <param name="localMin">
-    /// The low corner of the node's local bounds — the coordinate of the face a
-    /// grow along +axis leaves planted. Zero when there is nothing to measure.
+    /// <param name="localBounds">
+    /// The node's local bounds. Its two corners are the coordinates of the faces
+    /// a resize plants: the minimum for a grow along +axis, the maximum for one
+    /// along −axis. Default when there is nothing to measure.
     /// </param>
     /// <remarks>
-    /// A brush wins over a mesh on the same node: the brush is the authoring
-    /// primitive, and a brush node's mesh (if it somehow has one) is derived
-    /// decoration. Mesh bounds are only trusted when the mesh kept its CPU-side
-    /// positions, which is the same test <c>SceneBvh</c> applies before believing
-    /// <c>Mesh.LocalBounds</c>.
+    /// <b>Both corners, because a resize can be grabbed by either face.</b> A
+    /// face-anchored grow along +x plants the −x face and a grow along −x plants
+    /// the +x one, so a caller that only ever received the minimum could only
+    /// ever anchor one way, which is the same restriction that made half of every
+    /// object unreachable before the negative handles existed.
+    /// <para>
+    /// What counts as measurable geometry is
+    /// <see cref="GizmoSelectionBounds.TryGetLocalBounds"/>'s single definition,
+    /// shared with the box the handles stand on.
+    /// </para>
     /// </remarks>
-    public static bool TryMeasure(SceneNode node, out Vector3 worldSize, out Vector3 localMin)
+    public static bool TryMeasure(SceneNode node, out Vector3 worldSize, out Aabb localBounds)
     {
         ArgumentNullException.ThrowIfNull(node);
 
-        Aabb local;
-        if (node.Brush is { } brush)
-        {
-            local = brush.LocalBounds;
-        }
-        else if (node.MeshRenderer is { } renderer && renderer.Mesh.Positions.Count > 0)
-        {
-            local = renderer.Mesh.LocalBounds;
-        }
-        else
+        if (!GizmoSelectionBounds.TryGetLocalBounds(node, out localBounds))
         {
             worldSize = Vector3.Zero;
-            localMin = Vector3.Zero;
             return false;
         }
 
-        worldSize = local.Size * WorldScaleOf(node);
-        localMin = local.Min;
+        worldSize = localBounds.Size * WorldScaleOf(node);
         return true;
     }
 
@@ -155,9 +150,10 @@ public static class ResizeMath
     /// <paramref name="factor"/> about the node's origin.
     /// </summary>
     /// <param name="localAnchor">
-    /// The anchored face's coordinate in the node's local frame — the local
-    /// bounds' minimum for the usual grow-along-+axis case, since every resize
-    /// handle stands on the positive side of its axis.
+    /// The anchored face's coordinate in the node's local frame: the local
+    /// bounds' minimum when the handle being dragged is on the positive side of
+    /// the axis, and its maximum when the handle is on the negative side. The
+    /// anchored face is always the one opposite the handle.
     /// </param>
     /// <param name="localScale">The node's own local scale on that axis (parent units per local unit).</param>
     /// <param name="factor">The factor the axis is being scaled by.</param>

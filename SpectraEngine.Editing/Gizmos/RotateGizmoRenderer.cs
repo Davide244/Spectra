@@ -49,13 +49,16 @@ public static class RotateGizmoRenderer
         // ring's vertex phase would rotate as the camera turned, which is
         // invisible in a full circle but would make the drawn and picked
         // polygons disagree by half a chord.
-        GizmoColors.DrawCircle(
-            output,
-            geometry.Pivot,
-            geometry.ViewRight,
-            geometry.ViewUp,
-            geometry.ScreenRingRadius,
-            GizmoColors.For(GizmoHandle.Screen, highlighted));
+        if (geometry.Offers(GizmoHandle.Screen))
+        {
+            GizmoColors.DrawCircle(
+                output,
+                geometry.Pivot,
+                geometry.ViewRight,
+                geometry.ViewUp,
+                geometry.ScreenRingRadius,
+                GizmoColors.For(GizmoHandle.Screen, highlighted));
+        }
     }
 
     /// <summary>

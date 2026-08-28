@@ -334,13 +334,21 @@ internal sealed class EditingSelfTest
             return Fail("pick", "a click that moved nothing landed an entry in the history");
 
         // (2) Grab the x translate handle, aiming at the middle of its shaft.
+        //
+        // The geometry is asked of the TOOL rather than built here, because
+        // where a handle stands is a property of the live manipulator style: the
+        // Studio style puts it on the face of the selection's box and the
+        // classic one at a fixed distance from the pivot. Building a second,
+        // independently styled geometry to aim at is how a self-test starts
+        // clicking on empty space the moment the default style moves.
         GizmoTool tool = _rigGizmos.Translate;
-        GizmoGeometry geometry = GizmoGeometry.Build(
-            camera, restWorld, Quaternion.Identity, viewportSize, tool.HandlePixelSize);
+        GizmoGeometry geometry = tool.GeometryFor(viewportSize);
         if (geometry.IsBehindCamera)
             return Fail("grab", "the gizmo pivot projected behind the borrowed camera");
 
-        geometry.TryGetAxisSegment(GizmoHandle.AxisX, out Vector3 axisStart, out Vector3 axisEnd);
+        if (!geometry.TryGetAxisSegment(GizmoHandle.AxisX, out Vector3 axisStart, out Vector3 axisEnd))
+            return Fail("grab", "the live gizmo style offers no +x handle to grab");
+
         Vector3 grabAim = Vector3.Lerp(axisStart, axisEnd, 0.5f);
 
         _rigViewport.Update(Frame(

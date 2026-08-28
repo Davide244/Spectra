@@ -40,6 +40,7 @@ public sealed class GizmoController
 {
     private GizmoMode _mode = GizmoMode.Translate;
     private GizmoOrientation _orientation = GizmoOrientation.World;
+    private GizmoStyle _style = GizmoStyle.Studio;
 
     /// <summary>
     /// Creates a manipulator over a scene and the history its edits land in.
@@ -59,6 +60,13 @@ public sealed class GizmoController
         Translate = new TranslateGizmo(scene, undo);
         Rotate = new RotateGizmo(scene, undo);
         Scale = new ScaleGizmo(scene, undo);
+
+        // Explicit rather than relying on the tools' own default, so the
+        // controller's idea of the live style and the tools' cannot start out
+        // disagreeing if either default ever moves.
+        Translate.Style = _style;
+        Rotate.Style = _style;
+        Scale.Style = _style;
     }
 
     /// <summary>The scene the tools manipulate.</summary>
@@ -121,6 +129,41 @@ public sealed class GizmoController
         }
     }
 
+    /// <summary>
+    /// Which manipulator style all three tools wear: the handle roster, where
+    /// the handles stand, where the pivot sits, and what a resize holds still.
+    /// Defaults to <see cref="GizmoStyle.Studio"/>.
+    /// </summary>
+    /// <remarks>
+    /// <b>It fans out to all three tools, unlike <see cref="Orientation"/>.</b>
+    /// Orientation skips the resize tool because that tool opts out of the whole
+    /// question (<see cref="GizmoTool.SupportsOrientation"/>); style is not
+    /// optional for anybody, and a viewport whose move tool was Studio's and
+    /// whose resize tool was Blender's would be the exact mismatch the styles
+    /// exist to end.
+    /// <para>
+    /// Changing it mid-drag would move the handles out from under a live grab, so
+    /// like a mode switch it resets the live tool first.
+    /// </para>
+    /// </remarks>
+    public GizmoStyle Style
+    {
+        get => _style;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            if (ReferenceEquals(_style, value))
+                return;
+
+            Active.Reset();
+            _style = value;
+            Translate.Style = value;
+            Rotate.Style = value;
+            Scale.Style = value;
+            StyleChanged?.Invoke(value);
+        }
+    }
+
     /// <summary>The live tool.</summary>
     public GizmoTool Active => _mode switch
     {
@@ -134,6 +177,9 @@ public sealed class GizmoController
 
     /// <summary>Raised after <see cref="Orientation"/> actually changed.</summary>
     public event Action<GizmoOrientation>? OrientationChanged;
+
+    /// <summary>Raised after <see cref="Style"/> actually changed.</summary>
+    public event Action<GizmoStyle>? StyleChanged;
 
     /// <summary>
     /// Whether snapping is on. Reading reports the live tool's setting; writing
@@ -194,6 +240,12 @@ public sealed class GizmoController
                 Orientation = _orientation == GizmoOrientation.World
                     ? GizmoOrientation.Local
                     : GizmoOrientation.World;
+                return true;
+
+            case GizmoCommand.ToggleStyle:
+                Style = ReferenceEquals(_style, GizmoStyle.Studio)
+                    ? GizmoStyle.Classic
+                    : GizmoStyle.Studio;
                 return true;
 
             case GizmoCommand.ToggleSnap:

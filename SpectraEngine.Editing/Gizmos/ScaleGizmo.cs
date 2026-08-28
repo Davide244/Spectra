@@ -13,10 +13,10 @@ using System.Numerics;
 namespace SpectraEngine.Editing.Gizmos;
 
 /// <summary>
-/// The resize tool: three cube-capped axis handles and a uniform centre cube,
-/// turning a drag into a <b>world-unit change of the object's size</b> — applied
-/// to a mesh node's transform scale, and to a brush node's <em>local plane
-/// extents</em>.
+/// The resize tool: a cube-capped handle per axis direction the style offers,
+/// plus a uniform centre cube, turning a drag into a <b>world-unit change of the
+/// object's size</b> — applied to a mesh node's transform scale, and to a brush
+/// node's <em>local plane extents</em>.
 /// </summary>
 /// <remarks>
 /// <b>The drag quantity is a size in world units, not a multiplier, and that is
@@ -31,13 +31,18 @@ namespace SpectraEngine.Editing.Gizmos;
 /// (<see cref="ResizeMath.FactorForSizeChange"/>). One notch is one increment on
 /// every object in the selection, at any size.
 /// <para>
-/// <b>Resizes are face-anchored by default</b>, like Roblox Studio's: growing
-/// along +x moves the +x face out by exactly the increment and leaves the −x
-/// face planted, which means the node's position shifts by half the increment.
-/// (Every handle stands on the positive side of its axis, so the anchored face
-/// is always the negative one.) Holding <see cref="SymmetricModifier"/> resizes
-/// about the node origin instead: both faces move, the node stays put, and the
-/// snapped increment is still the total size change. The uniform centre cube is
+/// <b>What a resize holds still is the style's decision, and the handle roster
+/// travels with it.</b> In <see cref="GizmoStyle.Studio"/> a resize is
+/// face-anchored: growing along +x moves the +x face out by exactly the
+/// increment and leaves the −x face planted, so the node's position shifts by
+/// half the increment. That only works because the style offers a handle on
+/// <em>every</em> face; with handles on the positive ends alone, an anchored
+/// resize can only ever move three of an object's six faces, and "grow this
+/// leftwards" has no gesture at all. In <see cref="GizmoStyle.Classic"/> the
+/// resize is symmetric about the pivot instead, both faces moving by half the
+/// increment each, which is why three handles are enough there.
+/// <see cref="SymmetricModifier"/> asks for the other one for the duration of a
+/// gesture, whichever way round the style has it. The uniform centre cube is
 /// always symmetric — it drags no single face — and grows the object's largest
 /// dimension by the increment, scaling the other two in proportion.
 /// </para>
@@ -165,12 +170,17 @@ public sealed class ScaleGizmo : GizmoTool
     // TRANSLATION, never a scale); Brush is non-null only for a brush node. BOTH
     // are null for a node this tool declines to resize, whose slot exists only to
     // keep the list index-aligned with Targets.
+    //
+    // LocalBounds carries BOTH corners because either face can be the anchored
+    // one: a drag on a positive handle plants the minimum face and a drag on a
+    // negative handle plants the maximum, and which it is is not known until the
+    // handle is grabbed.
     private readonly record struct ResizeTarget(
         SetLocalTransformCommand? Transform,
         SetBrushCommand? Brush,
         Brush? StartBrush,
         Vector3 StartSize,
-        Vector3 LocalAnchor);
+        Aabb LocalBounds);
 
     private readonly List<ResizeTarget> _resizeTargets = [];
 
@@ -215,9 +225,11 @@ public sealed class ScaleGizmo : GizmoTool
     public ResizeSnapSettings Snap { get; } = new();
 
     /// <summary>
-    /// The modifier that switches a drag from face-anchored to symmetric: both
-    /// faces move, the node does not, and the snapped increment is still the
-    /// total size change. <see cref="KeyModifiers.None"/> removes the option.
+    /// The modifier that asks for the anchoring the style is not doing: symmetric
+    /// where the style is face-anchored (both faces move and the node stays put),
+    /// face-anchored where the style is symmetric (the grabbed face moves and the
+    /// opposite one is planted). The snapped increment is the total size change
+    /// either way. <see cref="KeyModifiers.None"/> removes the option.
     /// </summary>
     /// <remarks>
     /// Shift, because Alt already inverts snapping for all three tools and
@@ -336,10 +348,10 @@ public sealed class ScaleGizmo : GizmoTool
                 continue;
             }
 
-            if (!ResizeMath.TryMeasure(node, out Vector3 size, out Vector3 anchor) || !IsMeasurable(size))
+            if (!ResizeMath.TryMeasure(node, out Vector3 size, out Aabb bounds) || !IsMeasurable(size))
             {
                 size = Vector3.Zero;
-                anchor = Vector3.Zero;
+                bounds = default;
                 ProportionalFallbackCount++;
                 Logger?.LogWarning(
                     "Resize: node '{Node}' has no measurable size along the dragged axes; " +
@@ -364,7 +376,7 @@ public sealed class ScaleGizmo : GizmoTool
                 Undo.Record(brushCommand);
             }
 
-            _resizeTargets.Add(new ResizeTarget(transform, brushCommand, node.Brush, size, anchor));
+            _resizeTargets.Add(new ResizeTarget(transform, brushCommand, node.Brush, size, bounds));
         }
     }
 
@@ -377,9 +389,14 @@ public sealed class ScaleGizmo : GizmoTool
         if (!TryComputeTravel(in ray, out float travel))
             return;
 
-        bool symmetric = ActiveHandle != GizmoHandle.Screen &&
-            SymmetricModifier != KeyModifiers.None &&
+        // The style decides which way round the default is, and the modifier asks
+        // for the other one. The uniform handle is excluded because it drags no
+        // single face: its travel is already the whole size change, and doubling
+        // it would make one uniform notch two.
+        bool inverted = SymmetricModifier != KeyModifiers.None &&
             (frame.Modifiers & SymmetricModifier) == SymmetricModifier;
+        bool symmetric = ActiveHandle != GizmoHandle.Screen &&
+            (Style.FaceAnchoredResize ? inverted : !inverted);
 
         // Symmetric moves BOTH faces, so the cursor's travel is half the size
         // change. Doubling before the snap is what keeps the dragged face under
@@ -448,10 +465,13 @@ public sealed class ScaleGizmo : GizmoTool
     /// started leaves the object at exactly its original size.
     /// </summary>
     /// <remarks>
-    /// <b>An axis handle measures along its own axis</b>, so the dragged face
-    /// tracks the cursor one-for-one in world space — the mapping that makes the
-    /// handle feel attached to the face it is moving, and the reason the drag has
-    /// no ratio in it any more.
+    /// <b>An axis handle measures along its own DIRECTION</b>, negative handles
+    /// included, so the dragged face tracks the cursor one-for-one in world space
+    /// — the mapping that makes the handle feel attached to the face it is
+    /// moving, and the reason the drag has no ratio in it any more. Because the
+    /// direction carries the sign, pulling a −x handle outward (which is toward
+    /// −x) reads as positive travel and therefore as growth, exactly as pulling
+    /// the +x handle outward does.
     /// <para>
     /// <b>The uniform handle measures along a frozen up-and-right diagonal</b>,
     /// because its cube sits ON the pivot and has no axis of its own; the travel
@@ -614,10 +634,18 @@ public sealed class ScaleGizmo : GizmoTool
         if (ActiveHandle == GizmoHandle.Screen)
             return Vector3.Zero;
 
+        // The planted face is the one OPPOSITE the handle being dragged, which is
+        // the whole content of "you moved this face". Reading the minimum
+        // whichever handle was grabbed is what confined a face-anchored resize to
+        // the positive faces of every object.
+        Vector3 anchor = GizmoHandles.IsNegativeAxis(ActiveHandle)
+            ? target.LocalBounds.Max
+            : target.LocalBounds.Min;
+
         return new Vector3(
-            ResizeMath.AnchorShift(target.LocalAnchor.X, localScale.X, factor.X),
-            ResizeMath.AnchorShift(target.LocalAnchor.Y, localScale.Y, factor.Y),
-            ResizeMath.AnchorShift(target.LocalAnchor.Z, localScale.Z, factor.Z));
+            ResizeMath.AnchorShift(anchor.X, localScale.X, factor.X),
+            ResizeMath.AnchorShift(anchor.Y, localScale.Y, factor.Y),
+            ResizeMath.AnchorShift(anchor.Z, localScale.Z, factor.Z));
     }
 
     /// <summary>
@@ -636,7 +664,12 @@ public sealed class ScaleGizmo : GizmoTool
         return Vector3.Dot(size, _axisMask) > ResizeMath.MinimumMeasurableSize;
     }
 
-    private static Vector3 AxisMaskOf(GizmoHandle handle) => handle switch
+    // Unsigned, and taken from the handle's AXIS rather than its direction: a −x
+    // handle resizes x, exactly as a +x one does, and the direction lives in the
+    // travel instead. Reading the raw handle here (and so letting the negative
+    // values fall into the uniform default) would turn every negative-face drag
+    // into a silent three-axis resize.
+    private static Vector3 AxisMaskOf(GizmoHandle handle) => GizmoHandles.PositiveAxis(handle) switch
     {
         GizmoHandle.AxisX => Vector3.UnitX,
         GizmoHandle.AxisY => Vector3.UnitY,

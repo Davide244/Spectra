@@ -40,14 +40,25 @@ public static class GizmoColors
         if (handle == highlighted && handle != GizmoHandle.None)
             return HighlightColor;
 
-        return handle switch
+        // Both ends of an axis wear the axis's colour: the −x face handle is
+        // still an x handle, and giving it anything else would break the
+        // red/green/blue reading the whole viewport shares. Which end it is
+        // reads from where it sits, not from what colour it is.
+        return GizmoHandles.PositiveAxis(handle) switch
         {
-            // A plane quad takes the colour of the axis it is normal to, which
-            // is how a viewer reads "this square slides in the other two".
-            GizmoHandle.AxisX or GizmoHandle.PlaneYZ => AxisXColor,
-            GizmoHandle.AxisY or GizmoHandle.PlaneZX => AxisYColor,
-            GizmoHandle.AxisZ or GizmoHandle.PlaneXY => AxisZColor,
-            _ => ScreenColor,
+            GizmoHandle.AxisX => AxisXColor,
+            GizmoHandle.AxisY => AxisYColor,
+            GizmoHandle.AxisZ => AxisZColor,
+            _ => handle switch
+            {
+                // A plane quad takes the colour of the axis it is normal to,
+                // which is how a viewer reads "this square slides in the other
+                // two".
+                GizmoHandle.PlaneYZ => AxisXColor,
+                GizmoHandle.PlaneZX => AxisYColor,
+                GizmoHandle.PlaneXY => AxisZColor,
+                _ => ScreenColor,
+            },
         };
     }
 

@@ -72,6 +72,12 @@ public enum GizmoCommand
     /// <summary>Flip between world- and local-aligned handles.</summary>
     ToggleOrientation,
 
+    /// <summary>
+    /// Flip between the two built-in manipulator styles, Studio and Classic.
+    /// See <see cref="GizmoStyle"/>.
+    /// </summary>
+    ToggleStyle,
+
     /// <summary>Turn snapping on or off for the tools that snap.</summary>
     ToggleSnap,
 

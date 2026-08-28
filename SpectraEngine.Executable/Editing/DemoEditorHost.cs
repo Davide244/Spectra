@@ -91,7 +91,7 @@ internal sealed class DemoEditorHost : ISceneEditor
     [
         Key.W, Key.E, Key.R,
         Key.Number2, Key.Number3, Key.Number4,
-        Key.X, Key.G, Key.LeftBracket, Key.RightBracket,
+        Key.X, Key.Y, Key.G, Key.LeftBracket, Key.RightBracket,
     ];
 
     // Keys a camera owns while it is driving. Only the overlap with
@@ -189,25 +189,41 @@ internal sealed class DemoEditorHost : ISceneEditor
             "(or Space/Ctrl) fly while you do, Shift boosts, the wheel trims fly speed while " +
             "looking and zooms otherwise; Alt+drag orbits, middle-drag pans, F frames the " +
             "selection; left-drag picks/moves, marquee on empty space; W/E/R or 2/3/4 pick the " +
-            "tool, X flips world/local, G and [ ] drive snap, Ctrl+Z / Ctrl+Y walk {Capacity} " +
+            "tool, X flips world/local, Y flips the handle style, G and [ ] drive snap, " +
+            "Ctrl+Z / Ctrl+Y walk {Capacity} " +
             "entries of history; Ctrl+T converts the selected brushes between world geometry and " +
             "parts (parts leave the CSG carve, so they stop merging with what they touch and cost " +
             "no recompile when they move — they are outlined in cyan); F7 toggles between the " +
-            "editor camera and the engine fly camera (starting: {Mode})",
-            _undo.Capacity, NavigationModeName);
+            "editor camera and the engine fly camera (starting: {Mode}, gizmos: {Gizmos})",
+            _undo.Capacity, NavigationModeName, GizmoModeName);
     }
 
     /// <inheritdoc/>
     public int SelectionCount => _scene.Selection.Count;
 
     /// <inheritdoc/>
-    /// <remarks>Interned literals, never a formatted enum — see <see cref="ISceneEditor"/>.</remarks>
-    public string GizmoModeName => _gizmos.Mode switch
-    {
-        GizmoMode.Rotate => "rotate",
-        GizmoMode.Scale => "resize",
-        _ => "move",
-    };
+    /// <remarks>
+    /// Interned literals, never a formatted enum: see <see cref="ISceneEditor"/>.
+    /// <para>
+    /// Carries the manipulator STYLE as well, because the two styles disagree
+    /// about what a resize holds still and about how many handles there are, and
+    /// a smoke run reading "resize" alone cannot tell which one it got. One
+    /// interned literal per combination, so the stats line stays allocation-free.
+    /// </para>
+    /// </remarks>
+    public string GizmoModeName => _gizmos.Style.Kind == GizmoStyleKind.Classic
+        ? _gizmos.Mode switch
+        {
+            GizmoMode.Rotate => "rotate/Classic",
+            GizmoMode.Scale => "resize/Classic",
+            _ => "move/Classic",
+        }
+        : _gizmos.Mode switch
+        {
+            GizmoMode.Rotate => "rotate/Studio",
+            GizmoMode.Scale => "resize/Studio",
+            _ => "move/Studio",
+        };
 
     /// <inheritdoc/>
     /// <remarks>Interned literals, never a formatted enum — see <see cref="ISceneEditor"/>.</remarks>

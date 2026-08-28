@@ -81,6 +81,13 @@ public static class TranslateGizmoHitTester
     // then move in.
     private static GizmoPick PickScreenHandle(in GizmoGeometry geometry, in Ray3 ray)
     {
+        // A style that draws no centre disc offers none to grab. The free-move
+        // constraint behind the handle still exists for a press that landed on
+        // the object itself; that gesture is routed by the viewport, not picked
+        // here.
+        if (!geometry.Offers(GizmoHandle.Screen))
+            return GizmoPick.Miss;
+
         if (!GizmoMath.TryRayDisc(
                 in ray, geometry.Pivot, geometry.ViewNormal, geometry.ScreenRadius, out float distance))
         {
@@ -118,8 +125,10 @@ public static class TranslateGizmoHitTester
         GizmoPick best = GizmoPick.Miss;
         float tolerance = MathF.Max(tolerancePixels, 0f);
 
-        for (GizmoHandle handle = GizmoHandle.AxisX; handle <= GizmoHandle.AxisZ; handle++)
+        for (GizmoHandle handle = GizmoHandle.AxisX; handle <= geometry.LastAxisHandle; handle++)
         {
+            // Refuses a handle the style does not offer, exactly as the renderer
+            // draws nothing for one.
             if (!geometry.TryGetAxisSegment(handle, out Vector3 start, out Vector3 end))
                 continue;
 

@@ -5,9 +5,9 @@ using System.Numerics;
 namespace SpectraEngine.Editing.Gizmos;
 
 /// <summary>
-/// Draws the translate gizmo into a <see cref="DebugDraw"/>: three axis arrows,
-/// three plane quads, and a screen-facing centre disc, with the hovered or
-/// active handle highlighted.
+/// Draws the translate gizmo into a <see cref="DebugDraw"/>: an arrow per axis
+/// handle the style offers, its plane quads, and its screen-facing centre disc,
+/// with the hovered or active handle highlighted.
 /// </summary>
 /// <remarks>
 /// <b>The debug line path is the right pipeline for a manipulator, not a
@@ -30,10 +30,6 @@ namespace SpectraEngine.Editing.Gizmos;
 /// </remarks>
 public static class TranslateGizmoRenderer
 {
-    // Arrowhead proportions, in units of the axis length.
-    private const float HeadLengthFactor = 0.22f;
-    private const float HeadRadiusFactor = 0.07f;
-
     /// <summary>
     /// Pushes the whole gizmo into <paramref name="output"/>.
     /// </summary>
@@ -53,7 +49,11 @@ public static class TranslateGizmoRenderer
         if (geometry.IsBehindCamera || geometry.AxisLength <= 0f)
             return;
 
-        for (GizmoHandle handle = GizmoHandle.AxisX; handle <= GizmoHandle.AxisZ; handle++)
+        // The roster is the style's, and every one of these draws nothing for a
+        // handle the style does not offer: the geometry refuses it, so what is
+        // drawn is what is pickable without either side carrying its own copy of
+        // the roster.
+        for (GizmoHandle handle = GizmoHandle.AxisX; handle <= geometry.LastAxisHandle; handle++)
             DrawAxis(output, in geometry, handle, GizmoColors.For(handle, highlighted));
 
         for (GizmoHandle handle = GizmoHandle.PlaneYZ; handle <= GizmoHandle.PlaneXY; handle++)
@@ -61,13 +61,16 @@ public static class TranslateGizmoRenderer
 
         // Built in the camera basis, so the disc faces the viewer exactly as the
         // ray-vs-disc pick assumes.
-        GizmoColors.DrawCircle(
-            output,
-            geometry.Pivot,
-            geometry.ViewRight,
-            geometry.ViewUp,
-            geometry.ScreenRadius,
-            GizmoColors.For(GizmoHandle.Screen, highlighted));
+        if (geometry.Offers(GizmoHandle.Screen))
+        {
+            GizmoColors.DrawCircle(
+                output,
+                geometry.Pivot,
+                geometry.ViewRight,
+                geometry.ViewUp,
+                geometry.ScreenRadius,
+                GizmoColors.For(GizmoHandle.Screen, highlighted));
+        }
     }
 
     private static void DrawAxis(
@@ -84,8 +87,8 @@ public static class TranslateGizmoRenderer
         Vector3 direction = geometry.Axis(handle);
         geometry.AxisPerpendiculars(handle, out Vector3 first, out Vector3 second);
 
-        Vector3 baseCentre = tip - direction * (geometry.AxisLength * HeadLengthFactor);
-        float radius = geometry.AxisLength * HeadRadiusFactor;
+        Vector3 baseCentre = tip - direction * geometry.HeadLength;
+        float radius = geometry.HeadRadius;
         Vector3 offsetA = first * radius;
         Vector3 offsetB = second * radius;
 

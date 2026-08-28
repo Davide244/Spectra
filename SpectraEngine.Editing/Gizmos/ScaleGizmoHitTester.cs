@@ -47,7 +47,7 @@ public static class ScaleGizmoHitTester
         float tolerance = MathF.Max(tolerancePixels, 0f);
         GizmoPick best = GizmoPick.Miss;
 
-        for (GizmoHandle handle = GizmoHandle.AxisX; handle <= GizmoHandle.AxisZ; handle++)
+        for (GizmoHandle handle = GizmoHandle.AxisX; handle <= geometry.LastAxisHandle; handle++)
         {
             if (!geometry.TryGetHandleBox(handle, out Vector3 boxCentre, out float boxRadius))
                 continue;
@@ -69,8 +69,13 @@ public static class ScaleGizmoHitTester
                 continue;
             }
 
-            // The shaft: pixel proximity, like a translate arrow.
-            geometry.TryGetAxisSegment(handle, out Vector3 start, out Vector3 end);
+            // The shaft: pixel proximity, like a translate arrow. A style whose
+            // handles stand on the bounds can give a shaft no length at all, and
+            // measuring to a degenerate segment would quietly make the pivot
+            // itself pickable as an axis handle.
+            if (!geometry.TryGetAxisSegment(handle, out Vector3 start, out Vector3 end))
+                continue;
+
             float pixels = GizmoHitTesting.SegmentPixelDistance(
                 in geometry, in ray, start, end, out float distance);
             if (pixels > tolerance)

@@ -5,8 +5,9 @@ using System.Numerics;
 namespace SpectraEngine.Editing.Gizmos;
 
 /// <summary>
-/// Draws the scale gizmo into a <see cref="DebugDraw"/>: three axis shafts each
-/// capped with a cube, plus a cube at the centre for a uniform resize.
+/// Draws the scale gizmo into a <see cref="DebugDraw"/>: a cube-capped shaft per
+/// axis handle the style offers (three in the classic layout, six per-face in
+/// Studio's), plus a cube at the centre for a uniform resize.
 /// </summary>
 /// <remarks>
 /// <b>Cubes, not arrowheads</b> — the shape difference is how a user tells at a
@@ -37,7 +38,7 @@ public static class ScaleGizmoRenderer
         if (geometry.IsBehindCamera || geometry.AxisLength <= 0f)
             return;
 
-        for (GizmoHandle handle = GizmoHandle.AxisX; handle <= GizmoHandle.AxisZ; handle++)
+        for (GizmoHandle handle = GizmoHandle.AxisX; handle <= geometry.LastAxisHandle; handle++)
         {
             Vector3 color = GizmoColors.For(handle, highlighted);
 

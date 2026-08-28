@@ -50,6 +50,7 @@ public abstract class GizmoTool
     private readonly List<GizmoDragTarget> _targets = [];
 
     private GizmoGeometry _geometry;
+    private GizmoStyle _style = GizmoStyle.Studio;
     private bool _hasGeometry;
 
     private GizmoInteractionState _state = GizmoInteractionState.Idle;
@@ -99,6 +100,27 @@ public abstract class GizmoTool
     /// <see cref="ScaleGizmo"/>, which is local-only by construction.
     /// </summary>
     public virtual bool SupportsOrientation => true;
+
+    /// <summary>
+    /// The manipulator style: which handles exist, where they stand, and what a
+    /// resize holds still. Defaults to <see cref="GizmoStyle.Studio"/>.
+    /// </summary>
+    /// <remarks>
+    /// <b>Set it between gestures, not during one.</b> The style decides where
+    /// handles stand, so changing it mid-drag would move the constraint out from
+    /// under a live grab. <see cref="GizmoController.Style"/> resets the live
+    /// tool before it writes, which is the same discipline
+    /// <see cref="GizmoController.Orientation"/> follows and for the same reason.
+    /// </remarks>
+    public GizmoStyle Style
+    {
+        get => _style;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _style = value;
+        }
+    }
 
     /// <summary>
     /// The frame the handles are laid out in. Ignored when
@@ -244,10 +266,32 @@ public abstract class GizmoTool
             return GizmoPick.Miss;
         }
 
-        GizmoGeometry geometry = GizmoGeometry.Build(
-            Scene.Camera, SelectionPivot(), FrameRotation(), frame.ViewportSize, HandlePixelSize);
+        Quaternion frameRotation = FrameRotation();
+        GizmoGeometry geometry = BuildGeometry(
+            ResolveLayout(frameRotation), frameRotation, frame.ViewportSize);
         Ray3 ray = Scene.Camera.ScreenPointToRay(frame.CursorPosition, frame.ViewportSize);
         return HitTest(in geometry, in ray, PickTolerancePixels);
+    }
+
+    /// <summary>
+    /// The geometry this tool would lay out for the current selection at the
+    /// given viewport size, <b>without touching any of its state</b>: the same
+    /// question <see cref="PickAt"/> asks, for a caller that wants the shape
+    /// rather than a pick.
+    /// </summary>
+    /// <remarks>
+    /// For a host drawing the gizmo itself, and for a test that needs to aim at
+    /// a handle whose position depends on the style and the selection. Returns a
+    /// default (invisible, zero-length) geometry for an empty selection or a
+    /// viewport with no area.
+    /// </remarks>
+    public GizmoGeometry GeometryFor(Vector2 viewportSize)
+    {
+        if (Scene.Selection.Count == 0 || viewportSize.X <= 0f || viewportSize.Y <= 0f)
+            return default;
+
+        Quaternion frameRotation = FrameRotation();
+        return BuildGeometry(ResolveLayout(frameRotation), frameRotation, viewportSize);
     }
 
     /// <summary>
@@ -289,7 +333,7 @@ public abstract class GizmoTool
         // Geometry is normally built by the hover pass; a synthesized grab has
         // to build it itself, and at the pivot of the selection as it stands
         // NOW (the caller has just changed it).
-        if (!TryBuildGeometry(in frame, SelectionPivot(), FrameRotation()))
+        if (!TryBuildGeometry(in frame))
             return false;
 
         _hovered = handle;
@@ -438,7 +482,7 @@ public abstract class GizmoTool
         _hovered = GizmoHandle.None;
         _active = GizmoHandle.None;
 
-        if (!TryBuildGeometry(in frame, SelectionPivot(), FrameRotation()))
+        if (!TryBuildGeometry(in frame))
         {
             _state = GizmoInteractionState.Idle;
             return GizmoUpdateResult.None;
@@ -461,7 +505,7 @@ public abstract class GizmoTool
         return _state == GizmoInteractionState.Hovering ? GizmoUpdateResult.Hovering : GizmoUpdateResult.None;
     }
 
-    private bool TryBuildGeometry(in EditorInputFrame frame, Vector3 pivot, Quaternion frameRotation)
+    private bool TryBuildGeometry(in EditorInputFrame frame)
     {
         // Nothing selected, or a panel that has not been laid out yet: there is
         // no gizmo to draw and nothing to pick.
@@ -471,16 +515,92 @@ public abstract class GizmoTool
             return false;
         }
 
-        _geometry = GizmoGeometry.Build(
-            Scene.Camera, pivot, frameRotation, frame.ViewportSize, HandlePixelSize);
-        _livePivot = pivot;
+        Quaternion frameRotation = FrameRotation();
+        GizmoLayout layout = ResolveLayout(frameRotation);
+        _geometry = BuildGeometry(layout, frameRotation, frame.ViewportSize);
+        _livePivot = layout.Pivot;
         _hasGeometry = true;
         return true;
     }
 
+    private GizmoGeometry BuildGeometry(in GizmoLayout layout, Quaternion frameRotation, Vector2 viewportSize) =>
+        GizmoGeometry.Build(
+            Scene.Camera,
+            layout.Pivot,
+            frameRotation,
+            viewportSize,
+            HandlePixelSize,
+            _style,
+            Mode,
+            layout.PositiveExtent,
+            layout.NegativeExtent);
+
     /// <summary>
-    /// The selection's pivot: the average of every selected node's world
-    /// position, which for a single selection is simply that node's position.
+    /// Where the gizmo sits this frame and how far its handles reach along each
+    /// frame axis, from one measurement of the selection.
+    /// </summary>
+    private readonly record struct GizmoLayout(
+        Vector3 Pivot, Vector3 PositiveExtent, Vector3 NegativeExtent);
+
+    /// <summary>
+    /// Resolves the pivot and the selection box in one pass, because in a style
+    /// that stands its handles on the box the pivot is derived from the same
+    /// measurement and measuring twice would be measuring the selection twice
+    /// per frame.
+    /// </summary>
+    /// <param name="frameRotation">The frame the handles are laid out in.</param>
+    /// <param name="forcedPivot">
+    /// Where the gizmo must sit regardless of the style's pivot mode: the drag
+    /// path's live pivot, frozen at the grab or carried by the tool. The box is
+    /// then measured relative to that point, which is what keeps a handle on the
+    /// face it is dragging while a face-anchored resize pushes the geometry out
+    /// from under a stationary pivot.
+    /// </param>
+    private GizmoLayout ResolveLayout(Quaternion frameRotation, Vector3? forcedPivot = null)
+    {
+        bool needsBox = _style.HandlesStandOffBounds || _style.PivotMode == GizmoPivotMode.BoundsCentre;
+        if (!needsBox)
+            return new GizmoLayout(forcedPivot ?? SelectionOriginAverage(), Vector3.Zero, Vector3.Zero);
+
+        FrameAxes(frameRotation, out Vector3 axisX, out Vector3 axisY, out Vector3 axisZ);
+        if (!GizmoSelectionBounds.TryMeasure(
+                Scene.Selection.Items, axisX, axisY, axisZ, out Vector3 min, out Vector3 max))
+        {
+            return new GizmoLayout(forcedPivot ?? SelectionOriginAverage(), Vector3.Zero, Vector3.Zero);
+        }
+
+        Vector3 pivot = forcedPivot ?? (_style.PivotMode == GizmoPivotMode.BoundsCentre
+            ? GizmoSelectionBounds.ToWorld((min + max) * 0.5f, axisX, axisY, axisZ)
+            : SelectionOriginAverage());
+
+        if (!_style.HandlesStandOffBounds)
+            return new GizmoLayout(pivot, Vector3.Zero, Vector3.Zero);
+
+        var pivotInFrame = new Vector3(
+            Vector3.Dot(pivot, axisX), Vector3.Dot(pivot, axisY), Vector3.Dot(pivot, axisZ));
+
+        return new GizmoLayout(pivot, max - pivotInFrame, pivotInFrame - min);
+    }
+
+    private static void FrameAxes(Quaternion frameRotation, out Vector3 axisX, out Vector3 axisY, out Vector3 axisZ)
+    {
+        if (frameRotation == Quaternion.Identity)
+        {
+            axisX = Vector3.UnitX;
+            axisY = Vector3.UnitY;
+            axisZ = Vector3.UnitZ;
+            return;
+        }
+
+        axisX = Vector3.Transform(Vector3.UnitX, frameRotation);
+        axisY = Vector3.Transform(Vector3.UnitY, frameRotation);
+        axisZ = Vector3.Transform(Vector3.UnitZ, frameRotation);
+    }
+
+    /// <summary>
+    /// The selection's pivot in <see cref="GizmoPivotMode.OriginAverage"/>: the
+    /// average of every selected node's world position, which for a single
+    /// selection is simply that node's position.
     /// </summary>
     /// <remarks>
     /// The average is over the whole selection, including nodes that will not be
@@ -489,7 +609,7 @@ public abstract class GizmoTool
     /// part of what they see. It moves rigidly with everything else either way,
     /// since a parent's edit carries its children.
     /// </remarks>
-    protected Vector3 SelectionPivot()
+    private Vector3 SelectionOriginAverage()
     {
         IReadOnlyList<SceneNode> items = Scene.Selection.Items;
         if (items.Count == 0)
@@ -592,10 +712,14 @@ public abstract class GizmoTool
 
         // Rebuild at the live pivot, in the frozen grab frame, so the gizmo
         // keeps its constant screen size as the selection travels toward or away
-        // from the camera without the handles swinging around mid-gesture.
+        // from the camera without the handles swinging around mid-gesture. The
+        // selection box is re-measured though, so a handle standing on a face
+        // stays on that face while the drag moves it; nothing in the drag math
+        // reads the result, which is what makes that safe rather than a feedback
+        // loop (the constraint and the grab anchor are both frozen).
         _livePivot = LivePivot;
-        _geometry = GizmoGeometry.Build(
-            Scene.Camera, _livePivot, _grabFrame, frame.ViewportSize, HandlePixelSize);
+        _geometry = BuildGeometry(
+            ResolveLayout(_grabFrame, _livePivot), _grabFrame, frame.ViewportSize);
         _hasGeometry = true;
 
         return GizmoUpdateResult.DragUpdated;

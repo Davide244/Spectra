@@ -40,6 +40,12 @@ namespace SpectraEngine.Editing.Gizmos;
 ///     adjacent to the WER row, and mnemonic for "axes".
 ///   </description></item>
 ///   <item><description>
+///     <b>Y: Studio/Classic handles.</b> The style switch this engine offers
+///     because both of its audiences already know a manipulator and they are not
+///     the same one. Y because it is free in every incumbent, sits beside the
+///     tool row, and is not one of the movement keys the fly camera claims.
+///   </description></item>
+///   <item><description>
 ///     <b>G — snap on/off, and [ / ] — finer/coarser.</b> The bracket pair is the
 ///     near-universal "step this setting" binding, and G is Hammer's snap-to-grid
 ///     toggle.
@@ -98,6 +104,10 @@ public static class GizmoShortcuts
                 command = GizmoCommand.ToggleOrientation;
                 return true;
 
+            case "Y":
+                command = GizmoCommand.ToggleStyle;
+                return true;
+
             case "G":
                 command = GizmoCommand.ToggleSnap;
                 return true;
@@ -133,6 +143,7 @@ public static class GizmoShortcuts
         new("E", GizmoCommand.UseRotate),
         new("R", GizmoCommand.UseScale),
         new("X", GizmoCommand.ToggleOrientation),
+        new("Y", GizmoCommand.ToggleStyle),
         new("G", GizmoCommand.ToggleSnap),
         new("[", GizmoCommand.FinerSnap),
         new("]", GizmoCommand.CoarserSnap),
