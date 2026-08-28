@@ -198,7 +198,7 @@ public sealed class SceneEditorHost : ISceneEditor
             "parts (parts leave the CSG carve, so they stop merging with what they touch and cost " +
             "no recompile when they move — they are outlined in cyan); F7 toggles between the " +
             "editor camera and the engine fly camera (starting: {Mode}, gizmos: {Gizmos})",
-            _undo.Capacity, NavigationModeName, GizmoModeName);
+            _undo.Capacity, NavigationModeName, $"{GizmoModeName}/{GizmoStyleName}");
     }
 
     /// <inheritdoc/>
@@ -214,19 +214,31 @@ public sealed class SceneEditorHost : ISceneEditor
     /// interned literal per combination, so the stats line stays allocation-free.
     /// </para>
     /// </remarks>
-    public string GizmoModeName => _gizmos.Style.Kind == GizmoStyleKind.Classic
-        ? _gizmos.Mode switch
-        {
-            GizmoMode.Rotate => "rotate/Classic",
-            GizmoMode.Scale => "resize/Classic",
-            _ => "move/Classic",
-        }
-        : _gizmos.Mode switch
-        {
-            GizmoMode.Rotate => "rotate/Studio",
-            GizmoMode.Scale => "resize/Studio",
-            _ => "move/Studio",
-        };
+    public string GizmoModeName => _gizmos.Mode switch
+    {
+        GizmoMode.Rotate => "rotate",
+        GizmoMode.Scale => "resize",
+        _ => "move",
+    };
+
+    /// <inheritdoc/>
+    public string GizmoStyleName =>
+        _gizmos.Style.Kind == GizmoStyleKind.Classic ? "Classic" : "Studio";
+
+    /// <inheritdoc/>
+    public string GizmoOrientationName =>
+        _gizmos.Orientation == GizmoOrientation.Local ? "local" : "world";
+
+    /// <inheritdoc/>
+    public bool SnapEnabled => _gizmos.SnapEnabled;
+
+    /// <inheritdoc/>
+    public float SnapIncrement => _gizmos.Mode switch
+    {
+        GizmoMode.Rotate => _gizmos.Rotate.Snap.Increment,
+        GizmoMode.Scale => _gizmos.Scale.Snap.Increment,
+        _ => _gizmos.Translate.Snap.Increment,
+    };
 
     /// <inheritdoc/>
     /// <remarks>Interned literals, never a formatted enum — see <see cref="ISceneEditor"/>.</remarks>
@@ -283,6 +295,78 @@ public sealed class SceneEditorHost : ISceneEditor
         _viewport.Update(in frame, _input.WasKeyPressed(InputKey.Escape));
 
         return _editorNavigation;
+    }
+
+    // --- Driving the editor from somewhere other than the keyboard -----------
+    //
+    // Every verb below was reachable only as a key chord. A shell with a
+    // toolbar needs the same ones, and synthesising key presses to reach them
+    // would be a second input path free to drift from the real one; these are
+    // the SAME calls HandleShortcuts makes.
+    //
+    // Render thread only, like everything else here. A UI thread arrives
+    // through EngineHost.EnqueueCommand.
+
+    /// <summary>
+    /// Runs one host verb: history, a structural edit, or a mode toggle.
+    /// </summary>
+    public void Apply(EditorHostCommand command)
+    {
+        switch (command)
+        {
+            case EditorHostCommand.Undo: Undo(); break;
+            case EditorHostCommand.Redo: Redo(); break;
+            case EditorHostCommand.Duplicate: RunStructuralEdit("Duplicate", StructuralEditor.TryDuplicate); break;
+            case EditorHostCommand.Delete: RunStructuralEdit("Delete", StructuralEditor.TryDelete); break;
+            case EditorHostCommand.Group: RunStructuralEdit("Group", (s, u, n) => StructuralEditor.TryGroup(s, u, n)); break;
+            case EditorHostCommand.Ungroup: RunStructuralEdit("Ungroup", StructuralEditor.TryUngroup); break;
+            case EditorHostCommand.ToggleBrushKind: ToggleSelectionBrushKind(); break;
+            case EditorHostCommand.ToggleNavigation: ToggleNavigation(); break;
+        }
+    }
+
+    /// <summary>
+    /// Runs one manipulator verb: pick a tool, flip the frame or the style,
+    /// drive snap, cancel a drag.
+    /// </summary>
+    public bool Apply(GizmoCommand command) => _gizmos.Apply(command);
+
+    /// <summary>
+    /// Runs one camera verb, such as framing the selection.
+    /// </summary>
+    public void Apply(EditorCameraCommand command) => _camera.Apply(command);
+
+    /// <summary>
+    /// Selects the node with this id, replacing, extending or toggling the
+    /// selection. An id the scene does not have clears the selection under
+    /// <see cref="SelectionUpdate.Replace"/> and is otherwise ignored.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is how a tree view selects.</b> A shell holds ids and never
+    /// nodes, so resolving one is the engine's job, on the thread that owns the
+    /// graph. An id that no longer resolves is ordinary rather than
+    /// exceptional: a UI's view of the scene is a frame or two behind, so it
+    /// can genuinely ask for a node that has just been deleted.
+    /// </remarks>
+    public void SelectById(Guid nodeId, SelectionUpdate mode = SelectionUpdate.Replace)
+    {
+        // A selection change under a live gesture would leave the manipulator
+        // holding a capture of nodes it is no longer editing.
+        _viewport.Reset();
+
+        if (!_scene.TryFindById(nodeId, out SceneNode? node))
+        {
+            if (mode == SelectionUpdate.Replace)
+                _scene.Selection.Clear();
+            return;
+        }
+
+        switch (mode)
+        {
+            case SelectionUpdate.Add: _scene.Selection.Add(node); break;
+            case SelectionUpdate.Toggle: _scene.Selection.Toggle(node); break;
+            default: _scene.Selection.Select(node); break;
+        }
     }
 
     /// <inheritdoc/>

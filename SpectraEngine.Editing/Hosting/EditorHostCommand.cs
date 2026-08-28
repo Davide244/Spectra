@@ -1,0 +1,57 @@
+namespace SpectraEngine.Editing.Hosting;
+
+/// <summary>
+/// The editor verbs that belong to the HOST rather than to a manipulator or a
+/// camera: history, structural edits, and the two mode toggles.
+/// </summary>
+/// <remarks>
+/// <b>A third command enum, beside <c>GizmoCommand</c> and
+/// <c>EditorCameraCommand</c>, because these are the verbs neither of those
+/// owns.</b> Undo is not a gizmo concern, a duplicate is not a camera concern,
+/// and folding them into either would make that type know about the other two.
+/// <para>
+/// <b>It exists so a UI can drive the editor without a keyboard.</b> Every one
+/// of these was reachable only as a key chord inside
+/// <see cref="SceneEditorHost"/>; a shell with a toolbar and a menu needs the
+/// same verbs, and synthesising fake key presses to reach them would be a
+/// second input path that can drift from the real one.
+/// </para>
+/// <para>
+/// <b>Threading:</b> every verb here mutates the scene, so
+/// <see cref="SceneEditorHost.Apply(EditorHostCommand)"/> is render-thread only,
+/// like everything else that touches it. A UI thread reaches it through
+/// <c>EngineHost.EnqueueCommand</c>.
+/// </para>
+/// </remarks>
+public enum EditorHostCommand
+{
+    /// <summary>Steps one entry back through the undo history.</summary>
+    Undo,
+
+    /// <summary>Steps one entry forward, if nothing has invalidated the redo stack.</summary>
+    Redo,
+
+    /// <summary>Copies the selection's roots and selects the copies.</summary>
+    Duplicate,
+
+    /// <summary>Removes the selection's roots.</summary>
+    Delete,
+
+    /// <summary>Puts the selection's roots under one new parent node.</summary>
+    Group,
+
+    /// <summary>Dissolves the selected groups, keeping their children in place.</summary>
+    Ungroup,
+
+    /// <summary>
+    /// Converts the selected brushes between world geometry and parts. A mixed
+    /// selection normalises rather than flipping node by node.
+    /// </summary>
+    ToggleBrushKind,
+
+    /// <summary>
+    /// Swaps between the editor's own freelook camera and the engine's fly
+    /// camera.
+    /// </summary>
+    ToggleNavigation,
+}

@@ -74,10 +74,49 @@ public interface ISceneEditor
     int SelectionCount { get; }
 
     /// <summary>
-    /// A stable, allocation-free label for the live manipulator ("Translate",
-    /// "Rotate", "Resize").
+    /// A stable, allocation-free label for the live manipulator ("move",
+    /// "rotate", "resize").
     /// </summary>
+    /// <remarks>
+    /// <b>The tool alone, with the handle style reported separately</b> by
+    /// <see cref="GizmoStyleName"/>. They used to be one combined label, which
+    /// reads fine in a log line and is useless to a toolbar: three buttons need
+    /// to know which one is lit, and splitting a string to find out is a
+    /// contract nobody wrote down. Callers that want the old text compose the
+    /// two, which is what the periodic stats line does.
+    /// </remarks>
     string GizmoModeName { get; }
+
+    /// <summary>
+    /// A stable, allocation-free label for the manipulator's handle style
+    /// ("Studio", "Classic").
+    /// </summary>
+    /// <remarks>
+    /// Worth reporting on its own because the two styles disagree about what a
+    /// resize holds still and about how many handles exist, so "resize" without
+    /// it does not say what the next drag will do.
+    /// </remarks>
+    string GizmoStyleName { get; }
+
+    /// <summary>
+    /// A stable, allocation-free label for the axis frame drags resolve against
+    /// ("world", "local").
+    /// </summary>
+    string GizmoOrientationName { get; }
+
+    /// <summary>Whether the live manipulator quantises its drags.</summary>
+    bool SnapEnabled { get; }
+
+    /// <summary>
+    /// The live manipulator's snap increment, in whatever unit it edits: world
+    /// units for move and resize, degrees for rotate.
+    /// </summary>
+    /// <remarks>
+    /// The unit differs per tool on purpose (all three snaps are absolute
+    /// quantities of the thing being edited, never a multiplier), so a UI
+    /// showing this must show which tool is live beside it.
+    /// </remarks>
+    float SnapIncrement { get; }
 
     /// <summary>
     /// A stable, allocation-free label for the navigation model currently

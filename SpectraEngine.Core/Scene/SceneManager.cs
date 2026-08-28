@@ -893,6 +893,14 @@ public sealed class SceneManager
                $"{map.CoarsestWorldTexelSize:0.000} far, {map.Distance:0} sunit range)";
     }
 
+    // The tool and its handle style, composed. The editor reports them
+    // separately now because a toolbar has to know which of three buttons is lit
+    // and splitting a string to find out is a contract nobody wrote down; this
+    // line wants them together, and says so here rather than making the editor
+    // carry a second combined label for one caller.
+    private static string DescribeGizmo(ISceneEditor? editor) =>
+        editor is null ? "none" : $"{editor.GizmoModeName}/{editor.GizmoStyleName}";
+
     private static SceneNode AddBrushNode(
         Scene scene, string name, Vector3 center, Vector3 halfExtent, MaterialRef material = default)
     {
@@ -996,7 +1004,7 @@ public sealed class SceneManager
                     scene.StaticWorldCompileCount, scene.LastCompileDirtyCells.Count,
                     Physics.IsSimulating ? Physics.GetType().Name : "none",
                     Physics.BodyCount, Physics.StaticShapeCount,
-                    editor?.SelectionCount ?? 0, editor?.GizmoModeName ?? "none",
+                    editor?.SelectionCount ?? 0, DescribeGizmo(editor),
                     editor?.NavigationModeName ?? "none",
                     editor?.UndoDepth ?? 0, editor?.RedoDepth ?? 0,
                     _renderer?.CurrentPipelineName ?? "none", DescribeShadows(_renderer), FrameTimeMs, Fps,

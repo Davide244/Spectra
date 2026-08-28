@@ -46,10 +46,26 @@ public sealed class FrameSnapshot
     public IReadOnlyList<Guid> SelectedIds { get; init; } = Array.Empty<Guid>();
 
     /// <summary>
-    /// The active tool, as the editor names it (for example <c>move/Studio</c>),
-    /// or null when the host installed no editor.
+    /// The active tool, as the editor names it (<c>move</c>, <c>rotate</c>,
+    /// <c>resize</c>), or null when the host installed no editor.
     /// </summary>
     public string? GizmoModeName { get; init; }
+
+    /// <summary>The manipulator's handle style (<c>Studio</c>, <c>Classic</c>), or null.</summary>
+    public string? GizmoStyleName { get; init; }
+
+    /// <summary>The axis frame drags resolve against (<c>world</c>, <c>local</c>), or null.</summary>
+    public string? GizmoOrientationName { get; init; }
+
+    /// <summary>Whether the live manipulator quantises its drags.</summary>
+    public bool SnapEnabled { get; init; }
+
+    /// <summary>
+    /// The live manipulator's snap increment, in world units for move and
+    /// resize and in degrees for rotate. Which unit applies is decided by
+    /// <see cref="GizmoModeName"/>, so a UI showing one must show the other.
+    /// </summary>
+    public float SnapIncrement { get; init; }
 
     /// <summary>Which camera is driving, as the editor names it, or null when there is no editor.</summary>
     public string? NavigationModeName { get; init; }
