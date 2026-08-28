@@ -228,8 +228,142 @@ public sealed class InstancedDrawGlTests
             FloatsPerInstance = 16;
         }
 
-        public override void Update(ReadOnlySpan<float> data, int instanceCount) { }
+        public override int Append(ReadOnlySpan<float> data, int instanceCount) => 0;
         public override void Dispose() { }
+    }
+
+    // --- Several writes in one frame -----------------------------------------
+
+    [Fact]
+    public void Appending_twice_gives_two_distinct_ranges()
+    {
+        // The shadow pass writes once per cascade into ONE buffer, and D3D12
+        // records the whole frame into a single command list submitted at the
+        // end: a second write at offset zero retroactively changes what the
+        // first cascade's already-recorded draws will read. Appending is what
+        // makes sharing a buffer within a frame correct, and the offsets are
+        // the whole of it.
+        ShaderProgram shader = _fixture.Renderer.CreateShaderFromSource(Source);
+        InstanceBuffer instances = _fixture.Renderer.CreateInstanceBuffer(
+            8, VertexAttribute.StandardInstanceLayout, shader);
+        try
+        {
+            instances.BeginFrame();
+            instances.Cursor.ShouldBe(0);
+
+            instances.Append(new float[3 * 16], 3).ShouldBe(0);
+            instances.Cursor.ShouldBe(3);
+            instances.Remaining.ShouldBe(5);
+
+            // Past the first range, not on top of it.
+            instances.Append(new float[2 * 16], 2).ShouldBe(3);
+            instances.Cursor.ShouldBe(5);
+        }
+        finally
+        {
+            instances.Dispose();
+            shader.Dispose();
+        }
+    }
+
+    [Fact]
+    public void A_new_frame_rewinds_to_the_start()
+    {
+        ShaderProgram shader = _fixture.Renderer.CreateShaderFromSource(Source);
+        InstanceBuffer instances = _fixture.Renderer.CreateInstanceBuffer(
+            8, VertexAttribute.StandardInstanceLayout, shader);
+        try
+        {
+            instances.BeginFrame();
+            instances.Append(new float[4 * 16], 4);
+
+            instances.BeginFrame();
+
+            instances.Cursor.ShouldBe(0);
+            instances.Remaining.ShouldBe(8);
+            instances.Append(new float[16], 1).ShouldBe(0);
+        }
+        finally
+        {
+            instances.Dispose();
+            shader.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Appending_past_the_end_is_refused_rather_than_wrapping()
+    {
+        // A wrap would silently draw one pass's geometry with another pass's
+        // transforms, which is a picture rather than an error.
+        ShaderProgram shader = _fixture.Renderer.CreateShaderFromSource(Source);
+        InstanceBuffer instances = _fixture.Renderer.CreateInstanceBuffer(
+            4, VertexAttribute.StandardInstanceLayout, shader);
+        try
+        {
+            instances.BeginFrame();
+            instances.Append(new float[3 * 16], 3);
+
+            instances.Remaining.ShouldBe(1);
+            Should.Throw<ArgumentOutOfRangeException>(() => instances.Append(new float[2 * 16], 2));
+        }
+        finally
+        {
+            instances.Dispose();
+            shader.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Two_appended_ranges_draw_their_own_instances()
+    {
+        // The pixel form of the same claim: write instance 0's transform, then
+        // instances 1 and 2 in a SECOND append, and draw only the second range.
+        // If the second write had landed at offset zero, the range drawn here
+        // would be instance 0's data and the two quads would be in the wrong
+        // places wearing the wrong colours.
+        OpenGLRenderer renderer = _fixture.Renderer;
+        ShaderProgram shader = renderer.CreateShaderFromSource(Source);
+        Mesh mesh = renderer.CreateMesh(QuadVertices, QuadIndices, VertexAttribute.StandardLayout);
+
+        PipelineBlob blob = new SpectraShadeCompiler()
+            .Compile(Source, [GraphicsBackend.OpenGL])
+            .GetPipeline(GraphicsBackend.OpenGL)
+            .ShouldNotBeNull();
+        VertexAttribute[] perInstance = VertexAttribute.ForSlot(
+            VertexAttribute.FromShaderInputs(blob.VertexInputs), VertexAttribute.InstanceSlot);
+
+        InstanceBuffer instances = renderer.CreateInstanceBuffer(Instances, perInstance, shader);
+        RenderTarget output = renderer.CreateRenderTarget(new RenderTargetDesc(Width, Height));
+
+        try
+        {
+            float[] all = BuildInstanceData();
+            instances.BeginFrame();
+            instances.Append(all.AsSpan(0, 20), 1).ShouldBe(0);
+            int second = instances.Append(all.AsSpan(20, 40), 2);
+            second.ShouldBe(1);
+
+            renderer.BeginPass(output, PassClear.To(new Vector4(0f, 0f, 0f, 1f)));
+            shader.Use();
+            shader.SetUniform("viewProjection", Matrix4x4.Identity);
+            mesh.DrawInstanced(instances, 2, second);
+            renderer.EndPass();
+
+            byte[] pixels = ReadPixels(output);
+
+            // Instances 1 and 2 only: green in the middle, blue on the right,
+            // and nothing red on the left where instance 0 would have gone.
+            Channel(pixels, MiddleX, 1).ShouldBeGreaterThan(200);
+            Channel(pixels, RightX, 2).ShouldBeGreaterThan(200);
+            Channel(pixels, LeftX, 0).ShouldBeLessThan(50, "instance 0 was not in the drawn range");
+        }
+        finally
+        {
+            renderer.DestroyRenderTarget(output);
+            instances.Dispose();
+            renderer.DestroyMesh(mesh);
+            shader.Dispose();
+        }
     }
 
     // --- helpers -------------------------------------------------------------
