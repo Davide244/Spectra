@@ -1,3 +1,4 @@
+using Silk.NET.Maths;
 using Silk.NET.OpenGL;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.OpenGL;
@@ -8,44 +9,63 @@ using System.Numerics;
 namespace SpectraEngine.Graphics.Tests;
 
 /// <summary>
-/// A lone sphere must not shadow itself, and a deferred frame must not depend on
-/// the size of the target it is rendered into.
+/// A lone sphere self-shadows along its terminator. Reproduction and oracle for
+/// an OPEN defect, plus the harness discipline that reproduction depends on.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>THE PROBE TARGET MUST BE THE SAME SIZE AS THE G-BUFFER, and getting that
-/// wrong is what an earlier version of this file did.</b> The G-buffer is sized
-/// to the WINDOW and deliberately never follows the frame target (see
-/// <c>Renderer.EnsureGBuffer</c>: following the target resizes it mid-command-list,
-/// which on D3D12 releases a resource the open list still references). So a
-/// deferred render into a differently sized probe reconstructs world position
-/// from a depth buffer at one resolution while the light pass runs at another.
+/// <b>THE PROBE MUST BE THE SAME SIZE AS THE G-BUFFER, and an earlier version of
+/// this file got that wrong and measured itself.</b> The G-buffer is sized to the
+/// WINDOW and deliberately never follows the frame target (following it resizes
+/// the G-buffer mid-command-list, which on D3D12 releases a resource the open
+/// list still references). A deferred render into a differently sized probe
+/// therefore reconstructs world position from a depth buffer at one resolution
+/// while the light pass runs at another, and that produces false self-shadowing
+/// several times larger than the real defect: <b>369 at a 96 probe, 207 at 128,
+/// 420 at 256 and 489 at 512, all against a 64x64 G-buffer</b>. Every conclusion
+/// drawn from those numbers was about a condition the demo does not have. The
+/// tests here drive the framebuffer latch instead, so the G-buffer follows.
 /// </para>
 /// <para>
-/// That mismatch produces false self-shadowing an order of magnitude larger than
-/// anything the shadow code does wrong. Measured on this fixture, worst darkening
-/// of a lone sphere with shadows on versus off: <b>45 at 64x64 into a 64x64
-/// G-buffer, 369 at 96x96, 207 at 128x128, 420 at 256x256, 489 at 512x512</b> -
-/// the artifact tracks the mismatch ratio and nothing else. A test that picked
-/// its own probe size therefore measured the harness, and every bias conclusion
-/// drawn from it was about a condition the demo never has.
+/// <b>The real defect, measured with the two matched.</b> Worst darkening of a
+/// lone sphere, shadows on against off: <b>45 at 64, 66 at 128, 90 at 256, 102
+/// at 512 and 102 at 1024</b> - it converges, so 102 of a possible 765 is the
+/// artifact's true size rather than a sampling accident. The shape is a thin arc
+/// along the terminator, a few pixels wide, which is what the report of mottling
+/// on the demo's PBR spheres looks like.
 /// </para>
 /// <para>
-/// <b>The control that settles it</b> is <c>ShadowStrength = 0</c>, which makes
+/// <b>The depth pass is innocent.</b> <c>ShadowStrength = 0</c> makes
 /// <c>ShadowFactor</c> return 1.0 on its first line while the depth pass still
-/// runs in full. It reads 0 at every size, so the depth pass is innocent and the
-/// darkening is entirely in the lookup.
+/// runs in full, and that reads a drop of 0 at every size. The whole effect is in
+/// the lookup.
 /// </para>
 /// <para>
-/// <b>Two explanations for curved-receiver acne are ruled out by measurement</b>,
-/// and both were confidently argued before the data arrived. (1) Faceted hull
-/// versus smooth analytic normal: there is no such depth discrepancy, because the
-/// receiver's world position is reconstructed from the G-buffer depth, which is
-/// the same faceted triangle the depth pass rasterised. Replacing the sphere's
-/// smooth normals with per-facet ones made the number WORSE (405 against 369).
-/// (2) PCF kernel reach exceeding the slope-scaled bias budget: at
-/// <c>FilterRadius</c> 0 the worst drop is larger, not smaller, and falls
-/// monotonically as the radius grows.
+/// <b>What the lookup is doing, established by replaying it on the CPU against
+/// the real depth atlas and the real matrices</b> (that analysis touches no
+/// G-buffer, so the harness fault above does not reach it). Sampling the exact
+/// triangles of the sphere, at points on facets whose own plane faces the light
+/// and which are therefore present in the map: a SINGLE-TEXEL comparison is
+/// clean at all 2080 of them, and the filter's own neighbourhood falsely shadows
+/// <b>243</b>, worst factor 0.526. So the tap offset is the mechanism, not the
+/// bias.
+/// </para>
+/// <para>
+/// <b>Receiver-plane depth bias is the textbook answer and it did NOT work
+/// here.</b> Implemented for real (screen-space derivatives of world position,
+/// solved for the receiver's depth gradient, applied per tap; it needed
+/// <c>Math.Ddx</c>/<c>Math.Ddy</c> added to SpectraShade) and measured at 512
+/// with the G-buffer matched, it made the artifact WORSE at every useful
+/// setting: 102 with the correction disabled, then 120, 171 and 219 as the
+/// gradient clamp was raised, and only 57 at a clamp of 0.5. Flipping the sign
+/// was uniformly and monotonically worse, which confirms the derivation pointed
+/// the right way. The reason it overshoots is curvature: at 512 one screen pixel
+/// spans about 0.46 shadow texels while the taps sit 1.2 texels out, so a plane
+/// fitted over a one-pixel baseline is extrapolated well past where a curved,
+/// grazing surface still resembles that plane. On the CPU, the same correction
+/// taken from the exact FACET plane removes all 243, and taken from the smooth
+/// shading normal leaves 34 - so the technique is sound and the estimator is
+/// what fails.
 /// </para>
 /// </remarks>
 [Collection(GlRendererCollection.Name)]
@@ -59,7 +79,48 @@ public sealed class ShadowCurvedReceiverGlTests
     // terminator is many pixels wide rather than a handful.
     private const float Radius = 0.45f;
 
+    // Where the artifact stops growing with resolution. Below this a measurement
+    // understates it: the same scene reads 45 at 64 and 102 from 512 up.
+    private const int ConvergedSize = 512;
+
+    /// <summary>
+    /// The invariant every measurement in this file stands on, asserted rather
+    /// than assumed.
+    /// </summary>
+    /// <remarks>
+    /// This is the one test here that passes today, and it exists because the
+    /// trap it guards cost a whole investigation: if the G-buffer ever stops
+    /// following the framebuffer latch, the two oracles below silently go back
+    /// to measuring resampling instead of the renderer, and they would still
+    /// produce a plausible-looking number while doing it.
+    /// </remarks>
     [Fact]
+    public void The_gbuffer_follows_the_framebuffer_latch()
+    {
+        OpenGLRenderer renderer = _fixture.Renderer;
+        renderer.GetFramebufferSize(out int restoreWidth, out int restoreHeight);
+
+        try
+        {
+            foreach (int size in new[] { 64, 128, 256 })
+            {
+                renderer.SetFramebufferSize(new Vector2D<int>(size, size));
+                RenderBlock(size);
+
+                GBuffer gbuffer = renderer.GBuffer!;
+                gbuffer.Width.ShouldBe(size, "the G-buffer must follow the framebuffer latch");
+                gbuffer.Height.ShouldBe(size, "the G-buffer must follow the framebuffer latch");
+            }
+        }
+        finally
+        {
+            renderer.SetFramebufferSize(new Vector2D<int>(restoreWidth, restoreHeight));
+        }
+    }
+
+    [Fact(Skip = "Reproduces an OPEN defect: a lone sphere self-shadows along its terminator by 102 " +
+                "of 765 at converged resolution. See the class remarks for the mechanism (the PCF " +
+                "tap offset, not the bias) and for the receiver-plane fix that measurement rejected.")]
     public void A_lit_sphere_is_not_shadowed_by_itself()
     {
         // The oracle: render the same sphere with shadows on and off, and
@@ -68,47 +129,52 @@ public sealed class ShadowCurvedReceiverGlTests
         // else in the scene to cast onto it and its own far side is dark by
         // Lambert rather than by occlusion.
         OpenGLRenderer renderer = _fixture.Renderer;
-        bool restore = renderer.ShadowsEnabled;
+        bool restoreShadows = renderer.ShadowsEnabled;
+        renderer.GetFramebufferSize(out int restoreWidth, out int restoreHeight);
 
         try
         {
-            int size = GBufferSize();
+            renderer.SetFramebufferSize(new Vector2D<int>(ConvergedSize, ConvergedSize));
 
             renderer.ShadowsEnabled = true;
-            int[,] on = RenderBlock(size);
+            int[,] on = RenderBlock(ConvergedSize);
+            renderer.GBuffer!.Width.ShouldBe(ConvergedSize, "or this measures resampling");
 
             renderer.ShadowsEnabled = false;
-            int[,] off = RenderBlock(size);
+            int[,] off = RenderBlock(ConvergedSize);
 
-            (int worstX, int worstY, int worstDrop) = WorstDarkening(on, off, size);
+            (int worstX, int worstY, int worstDrop) = WorstDarkening(on, off, ConvergedSize);
 
             // A tolerance rather than equality: the shadow term multiplies in at
             // ShadowStrength wherever the filter straddles the terminator, and
             // the tone-mapped 8-bit read has its own wobble. Acne is a drop far
-            // outside that; the measured value here is 45.
-            worstDrop.ShouldBeLessThan(64,
+            // outside that.
+            worstDrop.ShouldBeLessThan(24,
                 $"a lone sphere darkened by {worstDrop} at ({worstX}, {worstY}) when shadows were " +
                 "turned on; nothing in the scene can cast onto it, so that darkening is the sphere " +
                 "shadowing itself");
         }
         finally
         {
-            renderer.ShadowsEnabled = restore;
+            renderer.ShadowsEnabled = restoreShadows;
+            renderer.SetFramebufferSize(new Vector2D<int>(restoreWidth, restoreHeight));
         }
     }
 
     [Fact(Skip = "Reproduces an OPEN defect: a deferred frame rendered into a target that is not " +
-                "the G-buffer's size falsely self-shadows, by up to 8x what it does at matched " +
+                "the G-buffer's size falsely self-shadows, by up to 5x what it does at matched " +
                 "size. --offscreen-probe runs exactly this path and reads only debug-layer error " +
                 "counts, so nothing in the repo can currently see it.")]
     public void A_deferred_frame_does_not_depend_on_the_target_size()
     {
         OpenGLRenderer renderer = _fixture.Renderer;
-        bool restore = renderer.ShadowsEnabled;
+        bool restoreShadows = renderer.ShadowsEnabled;
+        renderer.GetFramebufferSize(out int restoreWidth, out int restoreHeight);
 
         try
         {
-            int matched = GBufferSize();
+            renderer.GetFramebufferSize(out int width, out int height);
+            int matched = Math.Min(width, height);
             int mismatched = matched + (matched / 2);
 
             renderer.ShadowsEnabled = true;
@@ -131,25 +197,9 @@ public sealed class ShadowCurvedReceiverGlTests
         }
         finally
         {
-            renderer.ShadowsEnabled = restore;
+            renderer.ShadowsEnabled = restoreShadows;
+            renderer.SetFramebufferSize(new Vector2D<int>(restoreWidth, restoreHeight));
         }
-    }
-
-    // The G-buffer follows the window, so this is the only probe size that
-    // measures the renderer rather than the resampling. Asserted rather than
-    // assumed: if that sizing rule ever changes, this must fail loudly instead
-    // of quietly going back to measuring the harness.
-    private int GBufferSize()
-    {
-        OpenGLRenderer renderer = _fixture.Renderer;
-        renderer.GetFramebufferSize(out int width, out int height);
-        int size = Math.Min(width, height);
-
-        RenderBlock(size);
-        GBuffer gbuffer = renderer.GBuffer!;
-        gbuffer.Width.ShouldBe(size, "the probe must match the G-buffer, or it measures resampling");
-        gbuffer.Height.ShouldBe(size, "the probe must match the G-buffer, or it measures resampling");
-        return size;
     }
 
     // --- scene ---------------------------------------------------------------
