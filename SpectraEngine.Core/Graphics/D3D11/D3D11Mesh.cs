@@ -1,4 +1,4 @@
-using Silk.NET.Core.Native;
+﻿using Silk.NET.Core.Native;
 using Silk.NET.Direct3D11;
 using Silk.NET.DXGI;
 using System;
@@ -149,7 +149,7 @@ internal sealed unsafe class D3D11Mesh : Mesh
     }
 
     /// <inheritdoc/>
-    public override void DrawInstanced(InstanceBuffer instances, int instanceCount)
+    public override void DrawInstanced(InstanceBuffer instances, int instanceCount, int firstInstance = 0)
     {
         ArgumentNullException.ThrowIfNull(instances);
         if (instanceCount <= 0)
@@ -173,7 +173,7 @@ internal sealed unsafe class D3D11Mesh : Mesh
         ctx->IASetVertexBuffers(0, 2, buffers, strides, offsets);
         ctx->IASetIndexBuffer((ID3D11Buffer*)_indexBuffer.Handle, Format.FormatR32Uint, 0);
         ctx->IASetPrimitiveTopology(D3DPrimitiveTopology.D3D11PrimitiveTopologyTrianglelist);
-        ctx->DrawIndexedInstanced(IndexCount, (uint)instanceCount, 0, 0, 0);
+        ctx->DrawIndexedInstanced(IndexCount, (uint)instanceCount, 0, 0, (uint)firstInstance);
 
         // Slot 1 is left bound, which is harmless for a draw that ignores it but
         // not for the debug layer: an input layout naming only slot 0 with a

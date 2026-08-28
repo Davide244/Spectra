@@ -5,6 +5,7 @@ using SpectraEngine.Core.Graphics.Shaders;
 using System;
 using System.IO;
 using System.Numerics;
+using System.Runtime.InteropServices;
 
 namespace SpectraEngine.Core.Graphics;
 
@@ -586,6 +587,15 @@ public abstract class Renderer
         _shadowMap?.Dispose();
         _shadowMap = null;
         _shadowShader = null;
+        _shadowInstancedShader = null;
+
+        // Disposed rather than dropped: unlike the shaders above (which the
+        // renderer's own program list owns and releases), the instance buffer
+        // is held only here, so nothing else would free it.
+        _shadowInstances?.Dispose();
+        _shadowInstances = null;
+        _shadowInstanceCapacity = 0;
+        _shadowInstanceHighWater = 0;
 
         _fullscreenTriangle = null;
         _resolveShader = null;
@@ -641,7 +651,22 @@ public abstract class Renderer
 
     private ShadowMap? _shadowMap;
     private ShaderProgram? _shadowShader;
+    private ShaderProgram? _shadowInstancedShader;
     private readonly RenderView _shadowView = new();
+
+    // One buffer for the whole shadow pass, grown to the largest batch any
+    // cascade needs and never shrunk. Per batch would be a GPU allocation
+    // inside the frame; per cascade would be four times the uploads for the
+    // same data.
+    private InstanceBuffer? _shadowInstances;
+    private int _shadowInstanceCapacity;
+    private int _shadowInstanceHighWater;
+
+    /// <summary>
+    /// Shadow-caster draws that batching removed this frame. Reported so a
+    /// scene that stops batching says so, rather than only getting slower.
+    /// </summary>
+    public int ShadowDrawsSaved { get; private set; }
 
     /// <summary>
     /// The depth offset the rasterizer is currently applying. Ambient state,
@@ -717,6 +742,7 @@ public abstract class Renderer
     internal int RenderShadowMap(Scene.Scene scene, RenderView view)
     {
         ShadowCasterCount = 0;
+        ShadowDrawsSaved = 0;
         if (!ShadowsEnabled) return -1;
 
         int index = FindShadowCaster(view);
@@ -733,6 +759,13 @@ public abstract class Renderer
         _shadowShader ??= BaseShaders.ShadowDepthPath is { } path
             ? CreateShaderFromFile(path)
             : CreateShaderFromSource(BaseShaders.ShadowDepth);
+
+        _shadowInstancedShader ??= BaseShaders.ShadowDepthInstancedPath is { } instancedPath
+            ? CreateShaderFromFile(instancedPath)
+            : CreateShaderFromSource(BaseShaders.ShadowDepthInstanced);
+
+        // Before BeginPass, never between cascades: see EnsureShadowInstanceCapacity.
+        EnsureShadowInstanceCapacity();
 
         // Culled against the LIGHT, not the camera. See Scene.BuildShadowView
         // for why reusing the camera's list makes shadows flicker as you turn.
@@ -766,7 +799,16 @@ public abstract class Renderer
                 scene.BuildShadowView(lightViewProjection, _shadowView);
 
                 Matrix4x4 lightClip = lightViewProjection * ClipZCorrection;
-                DrawShadowCasters(_shadowView.Items, lightClip);
+
+                // Batched first, then whatever no batch claimed. Items is NOT
+                // drawn here: the two together are exactly its contents, and
+                // drawing it as well would double every caster.
+                DrawShadowBatches(_shadowView, lightClip);
+                DrawShadowCasters(_shadowView.SingleItems, lightClip);
+
+                // World chunks are never batched, and cannot be: each chunk is
+                // unique geometry drawn once at identity, so there is nothing
+                // repeated to collapse.
                 DrawShadowCasters(_shadowView.WorldItems, lightClip);
             }
         }
@@ -790,6 +832,113 @@ public abstract class Renderer
                 return i;
         }
         return -1;
+    }
+
+    // Every batch in the view, as one instanced draw each.
+    //
+    // The transforms are uploaded ONCE for the whole view, not once per batch:
+    // RenderView lays every batch's instances out contiguously in one array
+    // precisely so that a batch is a range within a single upload rather than a
+    // buffer of its own.
+    private void DrawShadowBatches(RenderView view, in Matrix4x4 lightClip)
+    {
+        if (view.Batches.Count == 0)
+            return;
+
+        ReadOnlySpan<Matrix4x4> transforms = view.InstanceTransforms;
+
+        // Remembered for the NEXT frame's grow, which happens before the pass
+        // opens. See EnsureShadowInstances for why growing here would be a
+        // device hang rather than a stall.
+        _shadowInstanceHighWater = Math.Max(_shadowInstanceHighWater, transforms.Length);
+
+        if (_shadowInstances is null || _shadowInstanceCapacity < transforms.Length)
+        {
+            // The buffer is not big enough yet, so these batches are drawn one
+            // instance at a time this frame. Correct, merely unbatched, and it
+            // self-corrects next frame once the high-water mark is applied.
+            DrawShadowBatchesUnbatched(view, lightClip);
+            return;
+        }
+
+        _shadowInstances.Update(MemoryMarshal.Cast<Matrix4x4, float>(transforms), transforms.Length);
+
+        ShaderProgram shader = _shadowInstancedShader!;
+        if (BindsProgramBeforeUniforms) shader.Use();
+        shader.SetUniform("uLightViewProjection", lightClip);
+        if (!BindsProgramBeforeUniforms) shader.Use();
+
+        for (int i = 0; i < view.Batches.Count; i++)
+        {
+            RenderBatch batch = view.Batches[i];
+
+            // No material, exactly as the unbatched path: a shadow map records
+            // where a surface is, not what it looks like.
+            batch.Mesh.DrawInstanced(_shadowInstances, batch.Count, batch.Offset);
+            ShadowCasterCount += batch.Count;
+        }
+
+        ShadowDrawsSaved += view.DrawsSaved;
+    }
+
+    // The batches this frame could not fit, drawn one instance at a time.
+    // Their items are not in SingleItems, so without this they would simply not
+    // be drawn, and a caster missing from a shadow map is a hole in the shadow
+    // with nothing reporting it.
+    private void DrawShadowBatchesUnbatched(RenderView view, in Matrix4x4 lightClip)
+    {
+        ReadOnlySpan<Matrix4x4> transforms = view.InstanceTransforms;
+        ShaderProgram shader = _shadowShader!;
+
+        for (int i = 0; i < view.Batches.Count; i++)
+        {
+            RenderBatch batch = view.Batches[i];
+            for (int n = 0; n < batch.Count; n++)
+            {
+                if (BindsProgramBeforeUniforms) shader.Use();
+                shader.SetUniform("uModel", transforms[batch.Offset + n]);
+                shader.SetUniform("uLightViewProjection", lightClip);
+                if (!BindsProgramBeforeUniforms) shader.Use();
+
+                batch.Mesh.Draw();
+                ShadowCasterCount++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sizes the shadow instance buffer to the largest batch total any cascade
+    /// needed last frame. Called BEFORE the shadow pass opens.
+    /// </summary>
+    /// <remarks>
+    /// <b>Growing inside the pass is a device hang, not a stall.</b> Cascades
+    /// are drawn one after another into one open pass, so a reallocation
+    /// between them frees a resource the command list already references. D3D11
+    /// executes immediately and survives it; D3D12 executes at submit and the
+    /// device is removed with DXGI_ERROR_DEVICE_HUNG, which is how this was
+    /// found. Sizing from the previous frame's high-water mark keeps every
+    /// allocation outside the pass, and a frame whose demand jumped simply
+    /// draws those batches unbatched once.
+    /// <para>
+    /// Powers of two, and never shrunk: a scene whose batch sizes wobble would
+    /// otherwise reallocate continuously, and the buffer is one allocation for
+    /// the run.
+    /// </para>
+    /// </remarks>
+    private void EnsureShadowInstanceCapacity()
+    {
+        int needed = _shadowInstanceHighWater;
+        if (needed <= 0 || (_shadowInstances is not null && _shadowInstanceCapacity >= needed))
+            return;
+
+        int capacity = Math.Max(64, _shadowInstanceCapacity);
+        while (capacity < needed)
+            capacity *= 2;
+
+        _shadowInstances?.Dispose();
+        _shadowInstances = CreateInstanceBuffer(
+            capacity, VertexAttribute.StandardInstanceLayout, _shadowInstancedShader!);
+        _shadowInstanceCapacity = capacity;
     }
 
     private void DrawShadowCasters(System.Collections.Generic.IReadOnlyList<RenderItem> items, in Matrix4x4 lightClip)
@@ -1152,14 +1301,31 @@ public abstract class Renderer
     /// <see cref="Mesh.DrawInstanced"/>.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// <b>Every attribute must name <see cref="VertexAttribute.InstanceSlot"/>.</b>
     /// A per-vertex attribute here would be bound to the instance buffer and
     /// read one element per instance instead of per vertex, which is a mesh
     /// that renders as garbage with nothing reporting why, so it is refused.
+    /// </para>
+    /// <para>
+    /// <b><paramref name="program"/> is the shader the buffer will be drawn
+    /// under, and D3D11 genuinely needs it.</b> An input layout there is
+    /// validated against a vertex shader signature at creation and is only
+    /// usable under a shader whose inputs it satisfies. An earlier version of
+    /// this built the layout against the DEFAULT shader, reasoning that extra
+    /// elements are permitted; creation did succeed, and then every instanced
+    /// draw failed with "the input stage requires Semantic/Index (TEXCOORD,3)
+    /// as input, but it is not provided by the output stage". Permitted extra
+    /// elements are not the same thing as a layout that carries them into
+    /// another shader. GL and D3D12 ignore this parameter: GL binds attributes
+    /// into the vertex array and D3D12 into the PSO, so neither needs a
+    /// signature here.
+    /// </para>
     /// </remarks>
     public abstract InstanceBuffer CreateInstanceBuffer(
         int capacityInstances,
-        ReadOnlySpan<VertexAttribute> attributes);
+        ReadOnlySpan<VertexAttribute> attributes,
+        ShaderProgram program);
 
     /// <summary>
     /// Throws if <paramref name="attributes"/> is not a valid instance layout.

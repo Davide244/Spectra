@@ -1,4 +1,4 @@
-using Silk.NET.Core.Native;
+﻿using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 using System;
@@ -127,7 +127,7 @@ internal sealed unsafe class D3D12Mesh : Mesh
     }
 
     /// <inheritdoc/>
-    public override void DrawInstanced(InstanceBuffer instances, int instanceCount)
+    public override void DrawInstanced(InstanceBuffer instances, int instanceCount, int firstInstance = 0)
     {
         ArgumentNullException.ThrowIfNull(instances);
         if (instanceCount <= 0)
@@ -161,7 +161,7 @@ internal sealed unsafe class D3D12Mesh : Mesh
         {
             list->IASetIndexBuffer(ib);
         }
-        list->DrawIndexedInstanced(IndexCount, (uint)instanceCount, 0, 0, 0);
+        list->DrawIndexedInstanced(IndexCount, (uint)instanceCount, 0, 0, (uint)firstInstance);
     }
 
     public override void Dispose()

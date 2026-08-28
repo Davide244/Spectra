@@ -70,13 +70,14 @@ internal sealed class OpenGLMesh : Mesh
     }
 
     // Which instance buffer's attributes are currently wired into this mesh's
-    // vertex array, by generation rather than by GL name: names are recycled, so
-    // a freed buffer and a fresh one can share one and the check would pass
-    // against different storage. Zero means none.
+    // vertex array, and at what base offset. Keyed by generation rather than by
+    // GL name: names are recycled, so a freed buffer and a fresh one can share
+    // one and the check would pass against different storage. Zero means none.
     private uint _wiredInstanceGeneration;
+    private int _wiredFirstInstance;
 
     /// <inheritdoc/>
-    public override unsafe void DrawInstanced(InstanceBuffer instances, int instanceCount)
+    public override unsafe void DrawInstanced(InstanceBuffer instances, int instanceCount, int firstInstance = 0)
     {
         ArgumentNullException.ThrowIfNull(instances);
         if (instanceCount <= 0)
@@ -93,11 +94,15 @@ internal sealed class OpenGLMesh : Mesh
         // call; and it cannot be done at mesh creation either, because the
         // buffer does not exist yet and one mesh may be drawn from more than
         // one of them over its life.
-        if (_wiredInstanceGeneration != gl.Generation)
+        // GL 3.3 has no BaseInstance, so the base offset is folded into the
+        // attribute pointers and a batch drawn from a different slice of the
+        // same buffer is a rewire rather than a draw parameter. Four calls per
+        // batch, against one draw per instance saved.
+        if (_wiredInstanceGeneration != gl.Generation || _wiredFirstInstance != firstInstance)
         {
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, gl.Handle);
 
-            uint offset = 0;
+            uint offset = (uint)firstInstance * gl.Stride;
             foreach (VertexAttribute attr in gl.Attributes)
             {
                 _gl.VertexAttribPointer(
@@ -115,6 +120,7 @@ internal sealed class OpenGLMesh : Mesh
 
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
             _wiredInstanceGeneration = gl.Generation;
+            _wiredFirstInstance = firstInstance;
         }
 
         _gl.DrawElementsInstanced(

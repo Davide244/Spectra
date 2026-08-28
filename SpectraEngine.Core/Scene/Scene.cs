@@ -615,6 +615,12 @@ public sealed partial class Scene
         Frustum frustum = camera.GetFrustum();
         CollectLights(camera.Position, view);
         CollectVisible(in frustum, view);
+
+        // After collection, because it partitions what collection produced. A
+        // pipeline that knows about batches draws Batches plus SingleItems; one
+        // that does not still draws Items and is unaffected, which is what lets
+        // the backends adopt this one at a time.
+        view.BuildBatches();
     }
 
     /// <summary>
@@ -642,6 +648,11 @@ public sealed partial class Scene
 
         Frustum frustum = Frustum.FromViewProjection(lightViewProjection);
         CollectVisible(in frustum, view);
+
+        // Batched per cascade, not once for the atlas: each cascade culls
+        // against its own volume, so the surviving set and therefore the
+        // batches differ between them.
+        view.BuildBatches();
     }
 
     // The shared walk: everything drawable inside a frustum, whether that

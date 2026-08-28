@@ -471,8 +471,10 @@ public class OpenGLRenderer : Renderer
 
     /// <inheritdoc/>
     public override InstanceBuffer CreateInstanceBuffer(
-        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes)
+        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes, ShaderProgram program)
     {
+        // program is unused: GL binds attributes into the vertex array, so a
+        // buffer is not tied to a shader signature the way a D3D11 layout is.
         int floats = ValidateInstanceLayout(capacityInstances, attributes);
         return new OpenGLInstanceBuffer(_gl!, capacityInstances, attributes, floats);
     }

@@ -1,4 +1,4 @@
-# SpectraShade Feature Roadmap
+﻿# SpectraShade Feature Roadmap
 
 ## Currently Implemented
 - [x] Vertex + Fragment stages (as attributed methods)
@@ -10,7 +10,7 @@
 - [x] cbuffer uniform blocks
 - [x] C#-style attributes ([Vertex], [Location(N)], [Binding(N)], [Target(N)])
 - [x] Type inference (var)
-- [x] Import system
+- [~] Import system - `import` is PARSED into `CompilationUnit.Imports` and never resolved; no resolver exists anywhere in the compiler, so imported code is not available to a shader. Two shaders cannot currently share a stage.
 - [x] Built-in math functions (Math.Normalize, Math.Dot, etc.)
 - [x] Method-style texture sampling (tex.Sample(uv))
 - [x] Position built-in (vertex output)

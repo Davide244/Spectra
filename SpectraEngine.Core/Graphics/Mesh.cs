@@ -137,7 +137,15 @@ public abstract class Mesh : IDisposable
     /// guard every call is how one site forgets.
     /// </para>
     /// </remarks>
-    public abstract void DrawInstanced(InstanceBuffer instances, int instanceCount);
+    /// <param name="instances">The buffer holding per-instance attributes.</param>
+    /// <param name="instanceCount">How many instances to draw.</param>
+    /// <param name="firstInstance">
+    /// Index of the first instance to read, so several batches can share one
+    /// upload. D3D takes this natively as a start location; GL 3.3 has no
+    /// <c>BaseInstance</c> at all (that is 4.2), so the GL backend expresses it
+    /// by re-pointing the attributes at the right byte offset instead.
+    /// </param>
+    public abstract void DrawInstanced(InstanceBuffer instances, int instanceCount, int firstInstance = 0);
 
     public abstract void Dispose();
 }

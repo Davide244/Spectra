@@ -1554,8 +1554,10 @@ public sealed unsafe class D3D12Renderer : Renderer
 
     /// <inheritdoc/>
     public override InstanceBuffer CreateInstanceBuffer(
-        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes)
+        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes, ShaderProgram program)
     {
+        // program is unused: on D3D12 the input layout is part of the PSO, and
+        // the PSO is selected per draw from the program actually bound.
         int floats = ValidateInstanceLayout(capacityInstances, attributes);
         return new D3D12InstanceBuffer(
             _device, capacityInstances, VertexAttribute.StandardLayout, attributes, floats);

@@ -991,7 +991,14 @@ public sealed class SceneManager
         if (!renderer.ShadowsEnabled) return "shadows off";
         if (renderer.ShadowMap is not { } map) return "shadows on, no caster yet";
 
-        return $"shadows on ({renderer.ShadowCasterCount} caster(s), " +
+        // The saved count is reported rather than the batch count, because what
+        // matters is the draws that did NOT happen; a scene that silently stops
+        // batching reads as zero here instead of only as a slower frame.
+        string batched = renderer.ShadowDrawsSaved > 0
+            ? $", {renderer.ShadowDrawsSaved} draw(s) saved by instancing"
+            : string.Empty;
+
+        return $"shadows on ({renderer.ShadowCasterCount} caster(s){batched}, " +
                $"{map.CascadeCount} cascade(s) in a {map.Resolution}px atlas, " +
                $"texel {map.WorldTexelSize:0.000} sunit near / " +
                $"{map.CoarsestWorldTexelSize:0.000} far, {map.Distance:0} sunit range)";

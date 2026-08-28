@@ -498,17 +498,20 @@ public sealed unsafe class D3D11Renderer : Renderer
 
     /// <inheritdoc/>
     public override InstanceBuffer CreateInstanceBuffer(
-        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes)
+        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes, ShaderProgram program)
     {
         int floats = ValidateInstanceLayout(capacityInstances, attributes);
-        var litShader = (D3D11ShaderProgram?)DefaultShader
-            ?? throw new InvalidOperationException(
-                "Default shader must be created before instance buffers: D3D validates an " +
-                "input layout against a vertex shader signature.");
+
+        // The layout is validated against THIS program's signature and is only
+        // usable under it. Building it against the default shader instead
+        // compiles, creates and then fails every draw; see
+        // Renderer.CreateInstanceBuffer for the message it produces.
+        if (program is not D3D11ShaderProgram d3dProgram)
+            throw new ArgumentException("Shader program belongs to another backend.", nameof(program));
 
         return new D3D11InstanceBuffer(
             _device, capacityInstances,
-            VertexAttribute.StandardLayout, attributes, floats, litShader.VertexBytecode);
+            VertexAttribute.StandardLayout, attributes, floats, d3dProgram.VertexBytecode);
     }
 
     public override Texture CreateTexture(

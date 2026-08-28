@@ -311,15 +311,48 @@ D3D11, validation off, 1080p, RTX 4070 Ti:
 | 2,000 | 562 | 2.25 ms | 0.45 | 1.00 | 0.15 | 2,141 |
 | 8,000 | 2,134 | **5.24 ms** | **1.53** | **2.26** | 0.52 | 3,362 |
 
-**Buys: 3.7 ms of a 5.24 ms frame** at 8,000 props, being Geometry plus Shadows
-against a 0.10 ms baseline for both. It is worth more in the shadow pass than in
-the geometry pass, because a caster is redrawn per cascade and 2,134 visible
-props became 3,362 caster draws.
+#### What it actually bought, and the correction that came with it
 
-**What it does NOT buy: `ViewBuild` (0.52 ms).** Culling still visits every node,
-and a batching pass adds to that rather than replacing it. Instancing removes
-draw *submission*, not draw *selection*; §4.1 is the entry that attacks the other
-one.
+**Landed for the shadow pass 2026-08-28**, and the first thing to record is that
+the projection above this paragraph was **wrong by roughly ten times**, in a way
+worth naming because it is easy to repeat.
+
+Measured, D3D11, validation off, shadow batching on:
+
+| props | frame before | frame after | Shadows before | Shadows after | draws saved/frame |
+|---|---|---|---|---|---|
+| 2,000 | 2.25 ms | **1.98 ms** | 1.00 ms | **0.75 ms** | 1,987 |
+| 8,000 | 5.24 ms | **5.12 ms** | 2.26 ms | **1.95 ms** | 3,209 |
+
+So removing **3,209 draws a frame bought about 0.3 ms**, not 3.7. That is roughly
+**0.1 µs per shadow draw removed**, against the 0.85 µs this document quotes for
+a general draw.
+
+**The error was reading a phase total as a submission cost.** "Geometry plus
+Shadows is 3.79 ms" is true and says nothing about how much of it is *draws*.
+Three things sit inside those phases that instancing cannot touch:
+
+- **The per-cascade view build and cull**, which is inside the `Shadows` phase
+  and is proportional to the caster count either way.
+- **The GPU's actual work.** Instancing submits the same triangles; it does not
+  rasterise fewer of them.
+- **How cheap a shadow draw already was.** `DrawShadowCasters` binds no material
+  and writes two uniforms, so it never cost the 0.85 µs a shaded draw does.
+
+**Geometry is not batched yet** (1.55 → 1.68 ms is noise), so its share is
+untouched. That is a deliberate stop rather than an omission: see `R12` for why
+the G-buffer pass was left alone.
+
+**What it does NOT buy: `ViewBuild` (0.52 → 0.72 ms).** Culling still visits every
+node, and the batching pass *adds* to it. Instancing removes draw *submission*,
+not draw *selection*; §4.1 is the entry that attacks the other one. At 8,000
+props the batching pass costs about 0.2 ms to save about 0.3 ms, which is a
+thinner margin than it looks and is the number to watch if batching ever seems
+not to pay.
+
+**Where it will pay properly** is content with more distinct batches and more
+expensive draws than a depth-only pass: the geometry pass, where every draw binds
+a material and a texture table.
 
 **Costs, which the roadmap entry also understated (see `R12`).** The missing
 dependency is the shader language: `uModel` is a `cbuffer` uniform that every
