@@ -9,8 +9,8 @@ using System.Numerics;
 namespace SpectraEngine.Graphics.Tests;
 
 /// <summary>
-/// A lone sphere self-shadows along its terminator. Reproduction and oracle for
-/// an OPEN defect, plus the harness discipline that reproduction depends on.
+/// A lone sphere must not shadow itself along its terminator, and the harness
+/// discipline that measuring it depends on.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -27,18 +27,39 @@ namespace SpectraEngine.Graphics.Tests;
 /// tests here drive the framebuffer latch instead, so the G-buffer follows.
 /// </para>
 /// <para>
-/// <b>The real defect, measured with the two matched.</b> Worst darkening of a
-/// lone sphere, shadows on against off: <b>45 at 64, 66 at 128, 90 at 256, 102
-/// at 512 and 102 at 1024</b> - it converges, so 102 of a possible 765 is the
-/// artifact's true size rather than a sampling accident. The shape is a thin arc
-/// along the terminator, a few pixels wide, which is what the report of mottling
-/// on the demo's PBR spheres looks like.
+/// <b>The defect this was written for, measured with the two matched.</b> Worst
+/// darkening of a lone sphere, shadows on against off, before the fix: <b>45 at
+/// 64, 66 at 128, 90 at 256, 102 at 512 and 102 at 1024</b> - it converges, so
+/// 102 of a possible 765 was the artifact's true size rather than a sampling
+/// accident. The shape was a thin arc along the terminator, a few pixels wide,
+/// which is what the report of mottling on the demo's PBR spheres looked like.
+/// </para>
+/// <para>
+/// <b>THE FIX: the slope-scaled raster bias has to cover the FILTER'S
+/// FOOTPRINT, and the value it shipped with covered one texel.</b> A tap does
+/// not compare the receiver against its own texel but against one up to
+/// <c>FilterRadius</c> away plus the texel the bilinear weighting straddles, so
+/// the bias must span the depth change across all of that. The smallest slope
+/// term leaving zero false self-shadowing, swept against filter radius: radius
+/// 0, 0.4 and 0.8 need 6; radius 1.2 (the default) needs 8; radius 2 needs 10;
+/// radius 3 needs 14. The shipped 2.5 was below what even a zero-radius filter
+/// needs. <b>Widening the filter without raising the bias brings this straight
+/// back</b>, which is why the two are documented against each other on
+/// <c>ShadowMap.RasterBias</c>.
 /// </para>
 /// <para>
 /// <b>The depth pass is innocent.</b> <c>ShadowStrength = 0</c> makes
 /// <c>ShadowFactor</c> return 1.0 on its first line while the depth pass still
 /// runs in full, and that reads a drop of 0 at every size. The whole effect is in
 /// the lookup.
+/// </para>
+/// <para>
+/// <b>The filter sweep is the evidence for the mechanism.</b> Worst darkening
+/// against <c>FilterRadius</c> at the shipped bias: 45, 45, 69, 102, 162, 258 at
+/// radius 0, 0.4, 0.8, 1.2, 2 and 3. A wider filter reaches further across a
+/// grazing surface and the artifact grows with it, monotonically. An earlier
+/// sweep appeared to show the opposite and was used to rule this out; it was
+/// taken on the mismatched harness above and measured nothing.
 /// </para>
 /// <para>
 /// <b>What the lookup is doing, established by replaying it on the CPU against
@@ -118,9 +139,7 @@ public sealed class ShadowCurvedReceiverGlTests
         }
     }
 
-    [Fact(Skip = "Reproduces an OPEN defect: a lone sphere self-shadows along its terminator by 102 " +
-                "of 765 at converged resolution. See the class remarks for the mechanism (the PCF " +
-                "tap offset, not the bias) and for the receiver-plane fix that measurement rejected.")]
+    [Fact]
     public void A_lit_sphere_is_not_shadowed_by_itself()
     {
         // The oracle: render the same sphere with shadows on and off, and

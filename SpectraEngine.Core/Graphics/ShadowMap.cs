@@ -140,8 +140,30 @@ public sealed class ShadowMap : IDisposable
     /// everything else here, because a depth-buffer unit is already a fraction
     /// of that cascade's own ortho depth range.
     /// </para>
+    /// <para>
+    /// <b>THE SLOPE TERM MUST COVER THE FILTER'S WHOLE FOOTPRINT, NOT ONE
+    /// TEXEL, and that is why this is 8 rather than the 2.5 it shipped as.</b>
+    /// A tap does not compare the receiver against its own texel: it compares
+    /// against one up to <see cref="FilterRadius"/> away, plus the texel the
+    /// bilinear weighting straddles. The stored depth there belongs to a
+    /// different part of the surface, and on a surface grazing to the light
+    /// that difference is large - so the bias has to cover the depth change
+    /// across the footprint, and the value tuned for a point sample does not.
+    /// The old value was below what even a zero-radius filter needs.
+    /// </para>
+    /// <para>
+    /// Measured on a lone sphere at a resolution where the artifact has
+    /// converged, as the smallest slope term leaving no false self-shadowing at
+    /// all: radius 0, 0.4 and 0.8 need 6; radius 1.2 (the default) needs 8;
+    /// radius 2 needs 10 and radius 3 needs 14. <b>Widening
+    /// <see cref="FilterRadius"/> without raising this brings the acne
+    /// back.</b> The cost is real but small, and it is paid in cast-shadow area
+    /// rather than in acne: at the default radius, going from 2.5 to 8 removes
+    /// a worst-case false darkening of 102 of 765 and shrinks the measured
+    /// shadow a hair over one and a half percent.
+    /// </para>
     /// </remarks>
-    public DepthBias RasterBias { get; set; } = new(Constant: 2000, SlopeScaled: 2.5f);
+    public DepthBias RasterBias { get; set; } = new(Constant: 2000, SlopeScaled: 8f);
 
     /// <summary>
     /// Radius of the PCF tap circle, in texels of the chosen cascade.
