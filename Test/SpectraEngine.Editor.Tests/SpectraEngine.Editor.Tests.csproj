@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SpectraEngine.Editor.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    The shell is an application, but the two pieces worth pinning in it are pure:
+    the scene tree's replay of a change log, and the virtual-key table. Neither
+    needs a window, a dispatcher or a GPU, which is exactly why they are the two
+    that get tests rather than a screenshot.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\SpectraEngine.Editor\SpectraEngine.Editor.csproj" />
+  </ItemGroup>
+
+</Project>
