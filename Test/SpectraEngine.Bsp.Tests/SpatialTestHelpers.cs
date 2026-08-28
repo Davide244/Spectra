@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
@@ -104,6 +104,10 @@ internal sealed class TestMesh : Mesh
     public override void Draw()
     {
         // Nothing to draw without a GPU.
+    }
+
+    public override void DrawInstanced(InstanceBuffer instances, int instanceCount)
+    {
     }
 
     public override void Dispose()

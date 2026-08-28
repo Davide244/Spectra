@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Bsp;
+﻿using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
 using System.Numerics;
 
@@ -65,6 +65,10 @@ internal sealed class BoxMesh : Mesh
     }
 
     public override void Draw()
+    {
+    }
+
+    public override void DrawInstanced(InstanceBuffer instances, int instanceCount)
     {
     }
 

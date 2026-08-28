@@ -37,6 +37,10 @@ internal sealed class StubRenderer : Renderer
         ReadOnlySpan<VertexAttribute> attributes, MeshCpuAccess cpuAccess = MeshCpuAccess.Retained)
         => throw new NotSupportedException("StubRenderer creates no GPU resources.");
 
+    public override InstanceBuffer CreateInstanceBuffer(
+        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes)
+        => throw new NotSupportedException("StubRenderer creates no GPU resources.");
+
     public override Texture CreateTexture(
         ReadOnlySpan<byte> pixels,
         int width,

@@ -49,6 +49,10 @@ internal sealed class CompilingRenderer : Renderer
         return new EmptyMesh((uint)indices.Length);
     }
 
+    public override InstanceBuffer CreateInstanceBuffer(
+        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes)
+        => throw new NotSupportedException("This renderer creates no GPU resources.");
+
     public override Texture CreateTexture(
         ReadOnlySpan<byte> pixels,
         int width,
@@ -93,6 +97,10 @@ internal sealed class CompilingRenderer : Renderer
         public EmptyMesh(uint indexCount) => IndexCount = indexCount;
 
         public override void Draw()
+        {
+        }
+
+        public override void DrawInstanced(InstanceBuffer instances, int instanceCount)
         {
         }
 

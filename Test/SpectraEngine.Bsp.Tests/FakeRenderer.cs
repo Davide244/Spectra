@@ -150,6 +150,10 @@ internal sealed class FakeRenderer : Renderer
         return mesh;
     }
 
+    public override InstanceBuffer CreateInstanceBuffer(
+        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes)
+        => throw new NotSupportedException("This renderer creates no GPU resources.");
+
     public override Texture CreateTexture(
         ReadOnlySpan<byte> pixels,
         int width,
@@ -229,6 +233,10 @@ internal sealed class FakeMesh : Mesh
     public override void Draw()
     {
         // Nothing to draw without a GPU.
+    }
+
+    public override void DrawInstanced(InstanceBuffer instances, int instanceCount)
+    {
     }
 
     public override void Dispose() => Disposed = true;
