@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using SpectraEngine.Core.Hosting;
+using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
 using System;
 using System.Collections.Generic;
@@ -376,6 +377,59 @@ public sealed class EngineHostTests
         scene.Root.CreateChild("Ignored");
 
         log.Drain().Changes.ShouldBeEmpty();
+    }
+
+    // --- Input ---------------------------------------------------------------
+
+    [Fact]
+    public void Submitted_input_reaches_the_engine_state_immediately()
+    {
+        // Not queued, deliberately: the engine's input state is already a
+        // lock-guarded machine written from whichever thread owns the window,
+        // so deferring a mouse move to the next frame would add latency and buy
+        // no safety that is not already there.
+        var input = new InputManager(NullLogger<InputManager>.Instance);
+        EngineHost host = NewHost();
+        host.AttachInput(input);
+
+        host.SubmitInput(InputEvent.KeyDown(InputKey.W));
+
+        input.IsKeyDown(InputKey.W).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Submitting_input_before_an_engine_exists_is_ignored_rather_than_fatal()
+    {
+        // A shell can wire its viewport's events up before it starts the
+        // engine, and a stray keystroke in that window must not throw into a
+        // UI thread's event handler.
+        EngineHost host = NewHost();
+
+        Should.NotThrow(() => host.SubmitInput(InputEvent.KeyDown(InputKey.W)));
+        host.RequestedCursorMode.ShouldBe(CursorMode.Normal);
+        Should.NotThrow(host.ApplyPendingCursorMode);
+    }
+
+    [Fact]
+    public void A_hosts_cursor_request_is_visible_before_it_is_applied()
+    {
+        // The embedded split: the engine asks, the shell performs the platform
+        // capture it has and the engine does not, then acknowledges. Without
+        // the request being readable, a shell could only discover a freelook by
+        // guessing.
+        var input = new InputManager(NullLogger<InputManager>.Instance);
+        EngineHost host = NewHost();
+        host.AttachInput(input);
+
+        input.RequestCursorMode(CursorMode.Locked);
+
+        host.RequestedCursorMode.ShouldBe(CursorMode.Locked);
+        input.CursorMode.ShouldBe(CursorMode.Normal, "nothing has applied it yet");
+
+        host.ApplyPendingCursorMode();
+
+        input.CursorMode.ShouldBe(CursorMode.Locked);
+        input.IsCursorLocked.ShouldBeTrue();
     }
 
     private static FrameSnapshot Build(FrameSnapshotBuilder builder) => new()

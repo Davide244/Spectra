@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging.Abstractions;
+﻿using Microsoft.Extensions.Logging.Abstractions;
 using Silk.NET.Input;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Editing.Cameras;
@@ -259,13 +259,13 @@ public sealed class CursorLockTests
         input.OnKeyDown(null!, Key.W, 0);
         input.OnMouseDown(null!, MouseButton.Right);
         input.Update(0.016);
-        input.IsKeyDown(Key.W).ShouldBeTrue();
+        input.IsKeyDown(InputKey.W).ShouldBeTrue();
         input.PointerButtonsDown.ShouldBe(PointerButtons.Right);
 
         input.OnWindowFocusChanged(false);
         input.Update(0.016);
 
-        input.IsKeyDown(Key.W).ShouldBeFalse();
+        input.IsKeyDown(InputKey.W).ShouldBeFalse();
         input.PointerButtonsDown.ShouldBe(PointerButtons.None);
         input.PointerButtonsReleased.ShouldBe(PointerButtons.Right);
     }
