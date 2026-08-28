@@ -1,4 +1,4 @@
-# SpectraShade Language Reference
+﻿# SpectraShade Language Reference
 
 SpectraShade is the shader language consumed by `SpectraShade.Compiler`. Source files use the
 `.spectrashade` extension. A file produces a single shader program that the compiler lowers to
@@ -102,6 +102,7 @@ Attributes use C# bracket syntax and attach to the declaration that immediately 
 | `[Compute]` | function | Compute stage entry point (return void) |
 | `[Location(N)]` | struct field / parameter | Vertex input location / varying slot |
 | `[PerInstance]` | vertex input field | Advances once per instance, not per vertex |
+| `[PerInstance]` | `cbuffer` field (`mat4`) | Also emit an instanced vertex stage taking this uniform per instance |
 | `[Binding(N)]` | `cbuffer`, sampler | Descriptor binding index |
 | `[Target(N)]` | struct field | Fragment output render-target index (for MRT) |
 | `[NumThreads(x,y,z)]` | `[Compute]` function | Compute workgroup dimensions |
@@ -191,6 +192,39 @@ on every backend and simply draws the wrong thing:
   `InputSlotClass`/`InstanceDataStepRate` on the input element. The compiled output reports
   it instead, per input, alongside the location and the span, so the renderer builds the
   layout from the shader rather than by agreement with it.
+
+#### One shader, both ways
+
+Writing the instanced twin of a shader by hand does not scale: it duplicates the
+whole vertex stage, and every future shader that wants instancing owes the same
+copy. So mark the uniform instead, and the compiler emits both stages from one
+source:
+
+```
+shader Lit {
+    [Binding(0)] cbuffer Transforms {
+        [PerInstance] mat4 uModel;
+        mat4 uViewProjection;
+    }
+
+    [Vertex]
+    VertexOutput VertexMain(VertexInput input) {
+        // Unchanged. uModel means the same thing in both stages.
+        output.position = uViewProjection * uModel * vec4(input.position, 1.0);
+    }
+}
+```
+
+The compiled output then carries a second vertex stage in which `uModel` has
+left the cbuffer and arrived as a per-instance input at the first free location.
+The **ordinary stage is emitted byte-for-byte as it was**, so a single draw keeps
+the uniform path and pays nothing for the variant existing; the renderer picks
+whichever the draw needs.
+
+One per shader, and `mat4` only: the location span and the instance-buffer stride
+both follow from the type, and a second marked uniform would need a layout this
+does not describe. Both are refused rather than guessed at.
+
 
 ### Geometry stage
 

@@ -1,4 +1,4 @@
-// ShadowDepth.spectrashade - the shadow map's depth pass.
+﻿// ShadowDepth.spectrashade - the shadow map's depth pass.
 //
 // Writes nothing but depth. There is no render target bound while this runs, so
 // whatever the fragment stage returns is discarded by the hardware; the pass
@@ -27,7 +27,15 @@ struct FragmentInput {
 
 shader ShadowDepth {
     [Binding(0)] cbuffer Transforms {
-        mat4 uModel;
+        // [PerInstance] does not change THIS stage at all. It tells the
+        // compiler to emit a second vertex stage alongside it, identical except
+        // that the matrix arrives as a per-instance vertex input, so a batch of
+        // casters is one draw instead of N. A single draw still takes the
+        // uniform and pays nothing for the variant existing.
+        //
+        // The alternative was a hand-written twin of this file, which is fine
+        // for a depth pass and is not fine for GBufferFill; see InstancedVariant.
+        [PerInstance] mat4 uModel;
         mat4 uLightViewProjection;
     }
 

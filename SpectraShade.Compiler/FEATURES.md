@@ -27,6 +27,7 @@
 - [x] Depth testing hints ([DepthWrite], [EarlyDepthStencil])
 - [x] Array uniforms (`vec4[8] colors;` in cbuffers, `sampler2D[4] textures;`) — size on the type, not after the name. The engine can fill `vec4[N]` and `mat4[N]`; other element types are language-level only, because their D3D and GL strides differ.
 - [x] Texture arrays (sampler2DArray type)
+- [x] Compiler-generated instanced variant: `[PerInstance]` on a `mat4` cbuffer field emits a SECOND vertex stage taking it per instance, from one source. The ordinary stage is unchanged, so single draws pay nothing. No twin shader, and no need for imports to share one.
 - [x] Per-instance vertex inputs (`[PerInstance]`), with multi-location accounting for matrix inputs and a reported vertex-input signature on the compiled blob. The rate itself appears in neither GLSL nor HLSL by design (it lives in `glVertexAttribDivisor` / `InputSlotClass`), which is why it is reported rather than emitted.
 
 ## Medium Priority — Competitive Rendering

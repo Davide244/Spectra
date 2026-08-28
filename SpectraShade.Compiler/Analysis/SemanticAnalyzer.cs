@@ -214,6 +214,8 @@ public sealed class SemanticAnalyzer
         foreach (var inputStruct in inputStructs)
             ValidateVertexInputStruct(inputStruct);
 
+        ValidatePerInstanceUniforms(shader);
+
         // [PerInstance] anywhere that is not a vertex input is a
         // misunderstanding worth naming, because both generators ignore it and
         // the author is left believing they asked for something.
@@ -228,6 +230,54 @@ public sealed class SemanticAnalyzer
                     _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
                         $"[PerInstance] is only valid on a vertex input field; '{s.Name}.{field.Name}' is not one",
                         field.Span));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Checks <c>[PerInstance]</c> where it marks a <c>cbuffer</c> field, i.e.
+    /// a uniform the compiler should also emit an instanced vertex stage for.
+    /// </summary>
+    /// <remarks>
+    /// Both refusals here are cases where the variant would be built wrong and
+    /// nothing downstream could tell. A non-matrix type has a different location
+    /// span and buffer stride than the instance layout describes, and a second
+    /// marked uniform would need a stride this does not express, so
+    /// <c>InstancedVariant</c> would silently take only the first.
+    /// </remarks>
+    private void ValidatePerInstanceUniforms(ShaderDeclaration shader)
+    {
+        FieldDeclaration? first = null;
+
+        foreach (var member in shader.Members)
+        {
+            if (member is not CBufferDeclaration cbuffer)
+                continue;
+
+            foreach (var field in cbuffer.Fields)
+            {
+                if (!VertexInputLayout.IsPerInstance(field))
+                    continue;
+
+                if (field.Type.Name != InstancedVariant.SupportedType)
+                {
+                    _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                        $"[PerInstance] uniform '{cbuffer.Name}.{field.Name}' must be " +
+                        $"{InstancedVariant.SupportedType}, not {field.Type.Name}",
+                        field.Span));
+                    continue;
+                }
+
+                if (first is not null)
+                {
+                    _diagnostics.Add(new Diagnostic(DiagnosticSeverity.Error,
+                        $"A shader may declare one [PerInstance] uniform; '{field.Name}' is a second " +
+                        $"(the first was '{first.Name}')",
+                        field.Span));
+                    continue;
+                }
+
+                first = field;
             }
         }
     }

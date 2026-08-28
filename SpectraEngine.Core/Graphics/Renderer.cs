@@ -212,6 +212,30 @@ public abstract class Renderer
     /// for hot-reload — saving the file recompiles and swaps it in without
     /// invalidating materials that reference it.
     /// </summary>
+    /// <summary>
+    /// Compiles <paramref name="spectraShadeSource"/> and returns a program built
+    /// from its INSTANCED vertex stage, or null if the source declares none.
+    /// </summary>
+    /// <remarks>
+    /// <b>One source, two programs.</b> The instanced stage is emitted by the
+    /// compiler from the same file whenever it marks a uniform
+    /// <c>[PerInstance]</c>, so this is how a renderer gets the batched twin
+    /// without anyone having authored one. Null is an ordinary answer, not a
+    /// failure: most shaders do not declare a per-instance uniform.
+    /// </remarks>
+    public ShaderProgram? TryCreateInstancedShaderFromSource(string spectraShadeSource)
+    {
+        ReadOnlySpan<GraphicsBackend> targets = [Backend];
+        CompiledShaderFile compiled = _shaderCompiler.Compile(spectraShadeSource, targets);
+        PipelineBlob? blob = compiled.GetPipeline(Backend);
+        if (blob?.InstancedVertexData is null || blob.FragmentData is null)
+            return null;
+
+        return CreateShader(
+            System.Text.Encoding.UTF8.GetString(blob.InstancedVertexData),
+            System.Text.Encoding.UTF8.GetString(blob.FragmentData));
+    }
+
     public ShaderProgram CreateShaderFromFile(string absolutePath)
     {
         string source = File.ReadAllText(absolutePath);
@@ -662,6 +686,10 @@ public abstract class Renderer
     private int _shadowInstanceCapacity;
     private int _shadowInstanceHighWater;
 
+    // Cleared when the compiler produced no instanced stage, so the frame draws
+    // every caster the ordinary way instead of silently dropping batches.
+    private bool _shadowBatchingAvailable = true;
+
     /// <summary>
     /// Shadow-caster draws that batching removed this frame. Reported so a
     /// scene that stops batching says so, rather than only getting slower.
@@ -760,9 +788,15 @@ public abstract class Renderer
             ? CreateShaderFromFile(path)
             : CreateShaderFromSource(BaseShaders.ShadowDepth);
 
-        _shadowInstancedShader ??= BaseShaders.ShadowDepthInstancedPath is { } instancedPath
-            ? CreateShaderFromFile(instancedPath)
-            : CreateShaderFromSource(BaseShaders.ShadowDepthInstanced);
+        // The instanced twin of the SAME source. Nobody wrote it: the compiler
+        // emits it because ShadowDepth marks uModel [PerInstance].
+        _shadowInstancedShader ??= TryCreateInstancedShaderFromSource(
+            BaseShaders.ShadowDepthPath is { } p ? File.ReadAllText(p) : BaseShaders.ShadowDepth);
+
+        // No instanced variant means no batching, not a broken frame: the
+        // unbatched path below draws every caster either way.
+        if (_shadowInstancedShader is null)
+            _shadowBatchingAvailable = false;
 
         // Before BeginPass, never between cascades: see EnsureShadowInstanceCapacity.
         EnsureShadowInstanceCapacity();
@@ -844,6 +878,12 @@ public abstract class Renderer
     {
         if (view.Batches.Count == 0)
             return;
+
+        if (!_shadowBatchingAvailable)
+        {
+            DrawShadowBatchesUnbatched(view, lightClip);
+            return;
+        }
 
         ReadOnlySpan<Matrix4x4> transforms = view.InstanceTransforms;
 

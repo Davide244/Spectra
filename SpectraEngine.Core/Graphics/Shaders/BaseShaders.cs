@@ -18,7 +18,6 @@ public static class BaseShaders
     private const string GBufferFillFileName = "GBufferFill.spectrashade";
     private const string DeferredLightFileName = "DeferredLight.spectrashade";
     private const string ShadowDepthFileName = "ShadowDepth.spectrashade";
-    private const string ShadowDepthInstancedFileName = "ShadowDepthInstanced.spectrashade";
 
     /// <summary>The built-in lit shader — diffuse + ambient from one directional light, modulated by a diffuse texture.</summary>
     public static string Lit => ReadEmbedded(LitFileName);
@@ -38,8 +37,6 @@ public static class BaseShaders
     /// <summary>The shadow map's depth pass: writes depth from the light, and nothing else.</summary>
     public static string ShadowDepth => ReadEmbedded(ShadowDepthFileName);
 
-    /// <summary>The shadow depth pass, batched: the model matrix arrives per instance rather than per draw.</summary>
-    public static string ShadowDepthInstanced => ReadEmbedded(ShadowDepthInstancedFileName);
 
     /// <summary>
     /// Resolves the absolute path of <paramref name="fileName"/> on disk if the
@@ -71,9 +68,6 @@ public static class BaseShaders
 
     /// <summary>Source-file path for <see cref="ShadowDepth"/>, if locatable on disk.</summary>
     public static string? ShadowDepthPath => TryResolveSourcePath(ShadowDepthFileName);
-
-    /// <summary>Source-file path for <see cref="ShadowDepthInstanced"/>, if locatable on disk.</summary>
-    public static string? ShadowDepthInstancedPath => TryResolveSourcePath(ShadowDepthInstancedFileName);
 
     private static string ReadEmbedded(string fileName)
     {

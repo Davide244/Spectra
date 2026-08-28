@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace SpectraEngine.Core.Graphics.Shaders;
@@ -75,4 +75,24 @@ public sealed class PipelineBlob
     /// </para>
     /// </remarks>
     public IReadOnlyList<VertexInputElement> VertexInputs { get; init; } = [];
+
+    /// <summary>
+    /// A second vertex stage for the same shader, with its per-instance uniform
+    /// arriving as a vertex input instead. Null unless the source marked a
+    /// <c>cbuffer</c> field <c>[PerInstance]</c>.
+    /// </summary>
+    /// <remarks>
+    /// <b>Same fragment stage, same materials, same everything else.</b> Only
+    /// the vertex stage differs, so a renderer builds the instanced program from
+    /// this plus <see cref="FragmentData"/> and the author never wrote a second
+    /// shader. See <c>InstancedVariant</c> for the rewrite.
+    /// </remarks>
+    public byte[]? InstancedVertexData { get; init; }
+
+    /// <summary>
+    /// The vertex inputs <see cref="InstancedVertexData"/> declares, which is
+    /// <see cref="VertexInputs"/> plus the per-instance matrix. Empty when there
+    /// is no instanced variant.
+    /// </summary>
+    public IReadOnlyList<VertexInputElement> InstancedVertexInputs { get; init; } = [];
 }

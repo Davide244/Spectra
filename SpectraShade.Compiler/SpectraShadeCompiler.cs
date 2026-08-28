@@ -1,4 +1,4 @@
-using SpectraEngine.Core;
+﻿using SpectraEngine.Core;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.Shaders;
 using SpectraShade.Compiler.Analysis;
@@ -63,6 +63,13 @@ public sealed class SpectraShadeCompiler : IShaderCompiler
                 throw new InvalidOperationException($"No code generator registered for {backend}");
 
             var blob = generator.Generate(unit);
+
+            // The instanced twin, from the SAME generator over a rewritten AST.
+            // Running the generator twice is what keeps both stages in step:
+            // there is no second emission path that could drift from the first.
+            if (InstancedVariant.TryBuild(unit, out CompilationUnit? instancedUnit))
+                blob = InstancedBlob.With(blob, generator.Generate(instancedUnit));
+
             pipelines.Add(blob);
             allStages |= blob.Stages;
         }
