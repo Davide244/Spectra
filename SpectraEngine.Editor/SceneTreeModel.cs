@@ -41,6 +41,8 @@ public sealed class SceneTreeNode(Guid id, string name) : ObservableObject
     private string _name = name;
     private bool _isSelected;
     private bool _isExpanded;
+    private bool _hasChildren;
+    private int _depth;
     private SceneNodeKind _kind;
     private SceneTreeMatch _match = SceneTreeMatch.Match;
 
@@ -102,6 +104,33 @@ public sealed class SceneTreeNode(Guid id, string name) : ObservableObject
         set => Set(ref _isExpanded, value);
     }
 
+    /// <summary>
+    /// How deep this node sits, with a top-level node at zero. The row's indent.
+    /// </summary>
+    /// <remarks>
+    /// <b>Carried on the node because the flat row list has no nesting left to
+    /// read it from.</b> Virtualizing a tree means handing the panel a list of
+    /// visible rows, and a list cannot say how far in a row belongs; the depth
+    /// travels with the row instead. It is observable because a reparent
+    /// changes it.
+    /// </remarks>
+    public int Depth
+    {
+        get => _depth;
+        internal set => Set(ref _depth, value);
+    }
+
+    /// <summary>Whether this node has children, and therefore an expander.</summary>
+    /// <remarks>
+    /// Observable because a group emptied by a delete stops having one, and a
+    /// chevron on a node with nothing under it is a control that does nothing.
+    /// </remarks>
+    public bool HasChildren
+    {
+        get => _hasChildren;
+        internal set => Set(ref _hasChildren, value);
+    }
+
     /// <summary>Whether the filter excludes this node. Bound as a style class.</summary>
     public bool IsDimmed => _match == SceneTreeMatch.None;
 
@@ -159,6 +188,11 @@ public sealed class SceneTreeModel
     // The live filter. Empty means everything matches.
     private string _filter = string.Empty;
 
+    // Scratch for the flat projection: the list being computed, and its
+    // membership. Reused so a rebuild allocates nothing.
+    private readonly List<SceneTreeNode> _desired = [];
+    private readonly HashSet<SceneTreeNode> _desiredSet = [];
+
     // Child to parent, maintained at the two sites that can change parentage
     // (Insert and RemoveFromParent) rather than derived on demand.
     //
@@ -179,7 +213,33 @@ public sealed class SceneTreeModel
     }
 
     /// <summary>The top-level nodes, which for a live scene is its root.</summary>
+    /// <remarks>
+    /// The structure. What the panel actually binds to is <see cref="Rows"/>;
+    /// this stays the model of the graph that the flat projection is computed
+    /// from, and is what every structural operation edits.
+    /// </remarks>
     public ObservableCollection<SceneTreeNode> Roots { get; } = [];
+
+    /// <summary>
+    /// The currently visible rows, flattened in display order with each node's
+    /// depth recorded on it. <b>This is what a virtualizing list binds to.</b>
+    /// </summary>
+    /// <remarks>
+    /// <b>A tree control that keeps its own hierarchy realises a container per
+    /// node, which is the wall a scene of any size hits.</b> The demo alone is
+    /// 257 nodes; the engine's own documented ceiling is 25,000, and at that
+    /// size a panel showing thirty-five rows was building twenty-five thousand
+    /// of them. Flattening to only what is visible is what lets a panel realise
+    /// the thirty-five it can actually show.
+    /// <para>
+    /// <b>It is patched, never rebuilt.</b> Replacing the collection resets the
+    /// scroll position and the selection, so expanding one group would throw the
+    /// user back to the top of the scene. The recompute produces a desired list
+    /// and then inserts and removes the difference, which for the common cases
+    /// (expand a group, collapse it, add a node) is one contiguous run.
+    /// </para>
+    /// </remarks>
+    public ObservableCollection<SceneTreeNode> Rows { get; } = [];
 
     /// <summary>How many nodes the tree is showing.</summary>
     public int Count => _index.Count;
@@ -217,12 +277,19 @@ public sealed class SceneTreeModel
         for (int i = 0; i < snapshot.Changes.Count; i++)
             ApplyChange(snapshot.Changes[i]);
 
+        if (snapshot.Changes.Count == 0)
+            return;
+
         // A node added under a live filter starts out matching, because that is
         // the only sane default for an unfiltered tree. Re-running the filter is
         // what stops a duplicate appearing at full strength beside the dimmed
         // row it was copied from.
-        if (snapshot.Changes.Count > 0 && _filter.Length > 0)
+        if (_filter.Length > 0)
             ApplyFilter(_filter);
+
+        // Once per batch, not once per change: a hundred adds in one snapshot
+        // are one recompute.
+        RebuildRows();
     }
 
     /// <summary>
@@ -276,14 +343,105 @@ public sealed class SceneTreeModel
 
         node = found;
 
+        bool opened = false;
         SceneTreeNode current = found;
         while (_parents.TryGetValue(current, out SceneTreeNode? parent))
         {
+            opened |= !parent.IsExpanded;
             parent.IsExpanded = true;
             current = parent;
         }
 
+        if (opened)
+            RebuildRows();
+
         return true;
+    }
+
+    /// <summary>
+    /// Opens or closes a node's children. UI thread; what the row's expander
+    /// calls.
+    /// </summary>
+    /// <remarks>
+    /// Expansion goes through the model rather than being a property the view
+    /// sets, because it is the input to the flat projection: a chevron that
+    /// wrote the flag directly would leave <see cref="Rows"/> describing a tree
+    /// nobody has any more.
+    /// </remarks>
+    public void ToggleExpanded(SceneTreeNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+
+        if (!node.HasChildren)
+            return;
+
+        node.IsExpanded = !node.IsExpanded;
+        RebuildRows();
+    }
+
+    /// <summary>Recomputes the visible rows and patches the difference in.</summary>
+    private void RebuildRows()
+    {
+        _desired.Clear();
+        for (int i = 0; i < Roots.Count; i++)
+            Flatten(Roots[i], 0);
+
+        SyncRows();
+    }
+
+    private void Flatten(SceneTreeNode node, int depth)
+    {
+        node.Depth = depth;
+        node.HasChildren = node.Children.Count > 0;
+        _desired.Add(node);
+
+        if (!node.IsExpanded)
+            return;
+
+        for (int i = 0; i < node.Children.Count; i++)
+            Flatten(node.Children[i], depth + 1);
+    }
+
+    // Walks the two lists together, removing what is gone and inserting what is
+    // new. Every common case (expand, collapse, add, delete) is one contiguous
+    // run, so this issues one notification per row that genuinely moved rather
+    // than one per row in the tree.
+    private void SyncRows()
+    {
+        _desiredSet.Clear();
+        for (int i = 0; i < _desired.Count; i++)
+            _desiredSet.Add(_desired[i]);
+
+        int index = 0;
+        while (index < _desired.Count)
+        {
+            if (index >= Rows.Count)
+            {
+                Rows.Add(_desired[index]);
+                index++;
+                continue;
+            }
+
+            if (ReferenceEquals(Rows[index], _desired[index]))
+            {
+                index++;
+                continue;
+            }
+
+            // A row that is not wanted anywhere any more: drop it and look at
+            // whatever slid into its place, without advancing.
+            if (!_desiredSet.Contains(Rows[index]))
+            {
+                Rows.RemoveAt(index);
+                continue;
+            }
+
+            Rows.Insert(index, _desired[index]);
+            index++;
+        }
+
+        while (Rows.Count > _desired.Count)
+            Rows.RemoveAt(Rows.Count - 1);
     }
 
     /// <summary>How many nodes pass the current filter. Equals <see cref="Count"/> when there is none.</summary>
@@ -534,9 +692,16 @@ public sealed class SceneTreeModel
             {
                 Roots.Clear();
                 _index.Clear();
+                _parents.Clear();
+                _selectedIds.Clear();
 
                 for (int i = 0; i < flattened.Count; i++)
                     ApplyChange(flattened[i]);
+
+                if (_filter.Length > 0)
+                    ApplyFilter(_filter);
+
+                RebuildRows();
 
                 _rebuildPending = false;
                 _logger.LogDebug("Scene tree rebuilt: {Count} node(s)", _index.Count);

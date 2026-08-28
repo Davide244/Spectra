@@ -85,3 +85,24 @@ public sealed class SceneNodeKindBrushConverter : IValueConverter
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException("A row's tint is never edited.");
 }
+
+/// <summary>Turns a row's depth into its indent.</summary>
+/// <remarks>
+/// <b>A flat list has no nesting to indent by</b>, which is the trade a
+/// virtualizing tree makes: the panel sees a list of rows and the depth travels
+/// on each one. The indent is therefore a left margin computed here rather than
+/// something the control does on its own.
+/// </remarks>
+public sealed class TreeDepthIndentConverter : IValueConverter
+{
+    /// <summary>Pixels of indent per level of depth.</summary>
+    public const double PerLevel = 13;
+
+    /// <inheritdoc/>
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        new Thickness(value is int depth ? depth * PerLevel : 0, 0, 0, 0);
+
+    /// <inheritdoc/>
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException("A row's indent is never edited.");
+}

@@ -66,6 +66,10 @@
   <!-- Frame the selection: a viewfinder closing on a point. -->
   <StreamGeometry x:Key="IconFrame">M2.5,5.5 L2.5,2.5 L5.5,2.5 M10.5,2.5 L13.5,2.5 L13.5,5.5 M13.5,10.5 L13.5,13.5 L10.5,13.5 M5.5,13.5 L2.5,13.5 L2.5,10.5 M8,6.5 A1.5,1.5 0 1 0 8,9.5 A1.5,1.5 0 1 0 8,6.5</StreamGeometry>
 
+  <!-- The expander. Drawn pointing right and rotated 90 degrees when open, so
+       one geometry covers both states and they cannot drift in weight. -->
+  <StreamGeometry x:Key="IconChevronRight">M6,3.5 L10.5,8 L6,12.5</StreamGeometry>
+
   <StreamGeometry x:Key="IconSearch">M7,2.5 A4.5,4.5 0 1 0 7,11.5 A4.5,4.5 0 1 0 7,2.5 M10.5,10.5 L14,14</StreamGeometry>
   <StreamGeometry x:Key="IconClear">M4.5,4.5 L11.5,11.5 M11.5,4.5 L4.5,11.5</StreamGeometry>
 

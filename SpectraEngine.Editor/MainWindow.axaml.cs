@@ -93,6 +93,13 @@ public partial class MainWindow : Window
         Viewport.SurfaceCreated += OnSurfaceCreated;
         Viewport.SurfaceDestroying += OnSurfaceDestroying;
 
+        // TUNNEL, not the bubbling handler XAML would attach. ListBox handles
+        // every arrow key itself: on a vertical panel a Left or Right press
+        // still runs its selection move, which re-selects the row it is already
+        // on, returns true, and marks the event handled. A bubbling handler for
+        // the tree's own collapse/expand would therefore never run at all.
+        SceneTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
+
         _pump = new DispatcherTimer(
             TimeSpan.FromMilliseconds(16), DispatcherPriority.Normal, OnPump);
 
@@ -124,9 +131,12 @@ public partial class MainWindow : Window
             Viewport.Host = session.Host;
             session.Host.FrameCompleted += OnFrameCompleted;
 
+            // The list binds to the model's flat row projection through the
+            // shell model; assigning ItemsSource here would replace that binding
+            // with the hierarchy it was flattened FROM, which shows exactly the
+            // top-level nodes and never changes again.
             _tree = new SceneTreeModel(session.Host, _loggerFactory.CreateLogger<SceneTreeModel>());
             _shell.Tree = _tree;
-            SceneTree.ItemsSource = _tree.Roots;
 
             _surface = surface;
             _shell.SetViewportSize(surface.PixelSize.X, surface.PixelSize.Y);
@@ -315,11 +325,10 @@ public partial class MainWindow : Window
             _syncingSelection = false;
 
             // A second hop, and not one to skip. Selecting an item starts the
-            // framework's own scroll, which does not take effect until the
-            // layout pass after this callback; measuring the row here would
-            // read its pre-scroll position and nudge it by an offset that has
-            // already been applied, sending it off the other end of the panel.
-            // Measured: the row landed a few positions above the visible range.
+            // framework's own scroll AND realises the row; both land in the
+            // layout pass after this callback, and an offset written before
+            // that is computed against an extent the panel has not finished
+            // estimating.
             Dispatcher.UIThread.Post(() => ScrollWithContext(node), DispatcherPriority.Loaded);
         }, DispatcherPriority.Loaded);
     }
@@ -339,39 +348,42 @@ public partial class MainWindow : Window
     /// AROUND it in the hierarchy, and a row on the last pixel of the panel has
     /// neighbours on one side only.
     /// <para>
-    /// <b>The scroll offset is set directly, and the obvious alternative does
-    /// not work.</b> Asking the row to bring a deliberately oversized rectangle
-    /// into view is the tidy version of this and it does nothing: the rect is
-    /// clamped to the control, so it behaves exactly like a plain
-    /// <c>BringIntoView</c>. Measured both ways, with the row landing on the
-    /// top edge one time and the bottom edge the next.
+    /// <b>The position is computed from the row's INDEX, not from its
+    /// container.</b> Under virtualization a container exists only if the row
+    /// is already on screen, which is precisely not the case when something
+    /// needs revealing; a flat list of uniform rows makes the arithmetic exact
+    /// without one. The row height comes from the scroller's own extent divided
+    /// by the row count, so it stays right if the row height ever changes.
     /// </para>
     /// <para>
-    /// Best-effort by design: with no realised row or no scroller there is
-    /// nothing to place, and the framework's own scroll stands.
+    /// <b>Setting the offset directly is not fussiness either.</b> The tidy
+    /// alternative, asking for a deliberately oversized <c>BringIntoView</c>
+    /// rect, does nothing: the rect is clamped to the control. Measured, with
+    /// the row landing on the top edge one time and the bottom the next.
     /// </para>
     /// </remarks>
     private void ScrollWithContext(SceneTreeNode node)
     {
-        if (SceneTree.TreeContainerFromItem(node) is not Control container)
-        {
-            _logger.LogDebug("Revealed {Node}, but its row is not realised; leaving the scroll alone", node.Name);
-            return;
-        }
-
-        if (SceneTree.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault() is not { } scroller)
+        if (_tree is not { } tree)
             return;
 
-        if (container.TranslatePoint(default, scroller) is not { } position)
+        int index = tree.Rows.IndexOf(node);
+        if (index < 0 || tree.Rows.Count == 0)
             return;
 
-        // Screen position plus the current offset is the row's place in the
-        // scrolled content, which is the only frame a target offset means
-        // anything in.
-        double rowInContent = position.Y + scroller.Offset.Y;
-        double resting = (scroller.Viewport.Height - container.Bounds.Height) * RevealRestingFraction;
+        // The list exposes its own scroller: a public property bound to the
+        // template's PART_ScrollViewer. Walking the visual tree for one works
+        // and is a guess about somebody else's template.
+        if (SceneTree.Scroll is not { } scroller)
+            return;
+
+        double rowHeight = scroller.Extent.Height / tree.Rows.Count;
+        if (rowHeight <= 0)
+            return;
+
+        double resting = (scroller.Viewport.Height - rowHeight) * RevealRestingFraction;
         double target = Math.Clamp(
-            rowInContent - resting,
+            (index * rowHeight) - resting,
             0,
             Math.Max(0, scroller.Extent.Height - scroller.Viewport.Height));
 
@@ -425,6 +437,90 @@ public partial class MainWindow : Window
         // the user's cursor.
         _treeRequestedId = node.Id;
         _session?.Select(node.Id);
+    }
+
+    // Claimed before the row can act on it: clicking an expander is not a way
+    // of selecting the thing it belongs to, which is what every file tree does
+    // and what a user pressing it repeatedly to browse expects.
+    private void OnChevronPressed(object? sender, PointerPressedEventArgs e) => e.Handled = true;
+
+    private void OnChevronClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: SceneTreeNode node })
+            return;
+
+        _tree?.ToggleExpanded(node);
+        Dispatcher.UIThread.Post(LogRealization, DispatcherPriority.Loaded);
+    }
+
+    /// <summary>
+    /// Reports how many rows the panel actually built against how many it is
+    /// showing.
+    /// </summary>
+    /// <remarks>
+    /// <b>The whole point of the flat projection is that these two numbers
+    /// differ</b>, and nothing else in the app would say if they stopped. A
+    /// panel that quietly reverted to realising a container per row would look
+    /// completely correct and simply get slower with the scene, which is the
+    /// failure this replaced. Debug level: it costs one enumeration of the
+    /// realised set, on a user action.
+    /// </remarks>
+    private void LogRealization()
+    {
+        if (_tree is not { } tree || SceneTree.ItemsPanelRoot is not { } panel)
+            return;
+
+        // Children is the realised set for a virtualizing panel: the containers
+        // it has actually built. GetRealizedContainers is protected, and this
+        // is the same number from the outside.
+        _logger.LogDebug(
+            "Scene tree: {Realized} row(s) realised of {Visible} visible, {Total} in the scene ({Panel})",
+            panel.Children.Count, tree.Rows.Count, tree.Count, panel.GetType().Name);
+    }
+
+    /// <summary>
+    /// Left and right collapse and walk out of the hierarchy, which is the tree
+    /// keyboard pattern every file browser uses.
+    /// </summary>
+    /// <remarks>
+    /// Up and down are the list's own and are left alone. The flat projection is
+    /// what makes "go to my parent" a backwards scan for the first shallower
+    /// row rather than a walk of the graph.
+    /// </remarks>
+    private void OnTreeKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (_tree is not { } tree || SceneTree.SelectedItem is not SceneTreeNode node)
+            return;
+
+        if (e.Key == Key.Right)
+        {
+            if (node.HasChildren && !node.IsExpanded)
+                tree.ToggleExpanded(node);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key != Key.Left)
+            return;
+
+        if (node.IsExpanded)
+        {
+            tree.ToggleExpanded(node);
+            e.Handled = true;
+            return;
+        }
+
+        int index = tree.Rows.IndexOf(node);
+        for (int i = index - 1; i >= 0; i--)
+        {
+            if (tree.Rows[i].Depth >= node.Depth)
+                continue;
+
+            SceneTree.SelectedItem = tree.Rows[i];
+            break;
+        }
+
+        e.Handled = true;
     }
 
     private void OnFilterKeyDown(object? sender, KeyEventArgs e)

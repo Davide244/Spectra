@@ -23,12 +23,81 @@
   <Window.Resources>
     <shell:SceneNodeKindIconConverter x:Key="KindIcon" />
     <shell:SceneNodeKindBrushConverter x:Key="KindTint" />
+    <shell:TreeDepthIndentConverter x:Key="DepthIndent" />
   </Window.Resources>
 
   <Window.Styles>
     <!-- Tree rows. Selection and hover are drawn here, from model state and
          the pointer, because Fluent's own row highlight is a different shape
          and would sit underneath this one. -->
+    <!-- The list draws none of its own row chrome: every state the row has is
+         drawn by the template below, from model state and the pointer. -->
+    <Style Selector="ListBoxItem">
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Margin" Value="0" />
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="FocusAdorner" Value="{x:Null}" />
+    </Style>
+    <!-- Every state, named explicitly. Fluent hangs the row fill on the
+         template's presenter and picks it per state, so a single transparent
+         setter is beaten the moment the row is selected or hovered: the system
+         accent comes through as a bright bar the theme never chose. -->
+    <Style Selector="ListBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBoxItem:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBoxItem:selected:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <!-- The expander. A button rather than a glyph, because it is one, and
+         hidden rather than disabled on a node with nothing under it. -->
+    <Style Selector="Button.chevron">
+      <Setter Property="Width" Value="14" />
+      <Setter Property="Height" Value="{StaticResource SpectraTreeRowHeight}" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.chevron /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="Button.chevron Path">
+      <Setter Property="Stroke" Value="{StaticResource SpectraTextMuted}" />
+      <Setter Property="StrokeThickness" Value="1.3" />
+      <Setter Property="StrokeLineCap" Value="Round" />
+      <Setter Property="StrokeJoin" Value="Round" />
+      <Setter Property="Fill" Value="Transparent" />
+      <Setter Property="Width" Value="9" />
+      <Setter Property="Height" Value="9" />
+      <Setter Property="Stretch" Value="Uniform" />
+      <Setter Property="RenderTransformOrigin" Value="50%,50%" />
+    </Style>
+    <Style Selector="Button.chevron:pointerover Path">
+      <Setter Property="Stroke" Value="{StaticResource SpectraTextEmphasis}" />
+    </Style>
+    <Style Selector="Button.chevron.open Path">
+      <Setter Property="RenderTransform" Value="rotate(90deg)" />
+    </Style>
+
     <Style Selector="Border.row">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
@@ -49,14 +118,6 @@
     </Style>
     <Style Selector="Border.row.selected Border.selbar">
       <Setter Property="Background" Value="{StaticResource SpectraAccent}" />
-    </Style>
-
-    <!-- Expansion is MODEL state, bound two-way. The containers under a
-         collapsed parent do not exist, so revealing a node picked in the
-         viewport has to be something the data can express before any of them
-         is realised; the user's own chevron clicks write the same flag. -->
-    <Style Selector="TreeViewItem" x:DataType="local:SceneTreeNode">
-      <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
     </Style>
 
     <Style Selector="TextBlock.rowname">
@@ -262,29 +323,57 @@
           </Button>
         </Grid>
 
-        <TreeView x:Name="SceneTree"
-                  SelectionChanged="OnTreeSelectionChanged"
-                  Margin="4,0,0,4">
-          <TreeView.ItemTemplate>
-            <TreeDataTemplate x:DataType="local:SceneTreeNode" ItemsSource="{Binding Children}">
+        <!--
+          A flat list, not a tree control. A TreeView realises a container per
+          node whether or not it can be seen, which at this engine's own ceiling
+          of 25,000 nodes means building twenty-five thousand rows to show
+          thirty-five. The model flattens to the visible rows and carries each
+          one's depth, so the panel virtualizes like any list and the indent is
+          a margin.
+        -->
+        <ListBox x:Name="SceneTree"
+                 ItemsSource="{Binding Tree.Rows}"
+                 SelectionChanged="OnTreeSelectionChanged"
+                 Background="Transparent"
+                 BorderThickness="0"
+                 Padding="0,2,0,4"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+          <ListBox.ItemsPanel>
+            <ItemsPanelTemplate>
+              <!-- The default panel already, named so the realisation buffer can
+                   be set: it defaults to zero, which realises exactly the
+                   visible rows and pops one in at each edge as you scroll. Half
+                   a viewport either side costs about thirty more rows. -->
+              <VirtualizingStackPanel CacheLength="0.5" />
+            </ItemsPanelTemplate>
+          </ListBox.ItemsPanel>
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="local:SceneTreeNode">
               <Border Classes="row"
                       Classes.selected="{Binding IsSelected}"
                       Classes.dim="{Binding IsDimmed}"
-                      Classes.context="{Binding IsContext}">
-                <Grid ColumnDefinitions="2,Auto,*">
+                      Classes.context="{Binding IsContext}"
+                      Margin="{Binding Depth, Converter={StaticResource DepthIndent}}">
+                <Grid ColumnDefinitions="2,14,Auto,*">
                   <Border Grid.Column="0" Classes="selbar" Margin="0,3" CornerRadius="1" />
-                  <Path Grid.Column="1"
+                  <Button Grid.Column="1" Classes="chevron"
+                          Classes.open="{Binding IsExpanded}"
+                          IsVisible="{Binding HasChildren}"
+                          Click="OnChevronClicked" PointerPressed="OnChevronPressed">
+                    <Path Data="{StaticResource IconChevronRight}" />
+                  </Button>
+                  <Path Grid.Column="2"
                         Data="{Binding Kind, Converter={StaticResource KindIcon}}"
                         Stroke="{Binding Kind, Converter={StaticResource KindTint}}"
                         StrokeThickness="1.2" StrokeLineCap="Round" StrokeJoin="Round"
                         Fill="Transparent" Width="14" Height="14" Stretch="Uniform"
-                        Margin="6,0,0,0" VerticalAlignment="Center" />
-                  <TextBlock Grid.Column="2" Classes="rowname" Text="{Binding Name}" Margin="6,0,4,0" />
+                        Margin="2,0,0,0" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="3" Classes="rowname" Text="{Binding Name}" Margin="6,0,4,0" />
                 </Grid>
               </Border>
-            </TreeDataTemplate>
-          </TreeView.ItemTemplate>
-        </TreeView>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
       </DockPanel>
 
       <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
