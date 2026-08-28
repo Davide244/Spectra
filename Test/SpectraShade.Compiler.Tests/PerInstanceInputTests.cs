@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using SpectraEngine.Core.Graphics;
@@ -260,6 +260,162 @@ public sealed class PerInstanceInputTests
         }
     }
 
+    // --- The compiler-generated instanced variant ----------------------------
+
+    // One source, two vertex stages. The author marks a uniform and writes no
+    // second shader; see InstancedVariant for why a twin file does not scale.
+    private const string Marked = """
+        struct VertexInput {
+            [Location(0)] vec3 position;
+            [Location(1)] vec3 normal;
+            [Location(2)] vec2 uv;
+        }
+
+        struct VertexOutput {
+            [Position] vec4 position;
+        }
+
+        shader Marked {
+            [Binding(0)] cbuffer Transforms {
+                [PerInstance] mat4 uModel;
+                mat4 uViewProjection;
+            }
+
+            [Vertex]
+            VertexOutput VertexMain(VertexInput input) {
+                var output = new VertexOutput();
+                output.position = uViewProjection * uModel * vec4(input.position, 1.0);
+                return output;
+            }
+
+            [Fragment] [Target(0)]
+            vec4 FragmentMain(VertexOutput input) {
+                return vec4(1.0, 1.0, 1.0, 1.0);
+            }
+        }
+        """;
+
+    [Fact]
+    public void A_marked_uniform_produces_a_second_vertex_stage()
+    {
+        PipelineBlob blob = CompileSource(Marked);
+
+        blob.VertexData.ShouldNotBeNull();
+        blob.InstancedVertexData.ShouldNotBeNull();
+        blob.InstancedVertexData.ShouldNotBe(blob.VertexData);
+    }
+
+    [Fact]
+    public void A_shader_with_no_marked_uniform_produces_no_variant()
+    {
+        // Most shaders do not want this, and every one of them goes through the
+        // same path, so "no variant" has to be an ordinary answer.
+        CompileSource(TestFixtures.Load("SimpleVertex.spectrashade"))
+            .InstancedVertexData.ShouldBeNull();
+    }
+
+    [Fact]
+    public void The_ordinary_stage_is_left_exactly_as_it_was()
+    {
+        // The whole point of emitting two: a single draw keeps the uniform path
+        // and pays nothing for the variant existing.
+        string withMark = Stage(CompileSource(Marked).VertexData!);
+        string withoutMark = Stage(CompileSource(Marked.Replace("[PerInstance] mat4 uModel;", "mat4 uModel;")).VertexData!);
+
+        withMark.ShouldBe(withoutMark);
+    }
+
+    [Fact]
+    public void The_variant_takes_the_matrix_as_a_vertex_input()
+    {
+        PipelineBlob blob = CompileSource(Marked);
+
+        // Location 3: the first one free past position, normal and uv.
+        blob.InstancedVertexInputs.Count.ShouldBe(4);
+        VertexInputElement model = blob.InstancedVertexInputs.First(v => v.Name == "uModel");
+        model.Rate.ShouldBe(VertexInputRate.PerInstance);
+        model.Location.ShouldBe(3u);
+        model.LocationSpan.ShouldBe(4u);
+
+        blob.VertexInputs.ShouldAllBe(v => v.Rate == VertexInputRate.PerVertex);
+    }
+
+    [Fact]
+    public void The_variant_drops_the_uniform_but_keeps_its_neighbours()
+    {
+        string glsl = Stage(CompileSource(Marked).InstancedVertexData!);
+
+        glsl.ShouldContain("layout(location = 3) in mat4 a_uModel;", Case.Sensitive);
+        glsl.ShouldContain("uniform mat4 uViewProjection;", Case.Sensitive);
+        glsl.ShouldNotContain("uniform mat4 uModel;", Case.Sensitive);
+    }
+
+    [Fact]
+    public void The_variant_binds_the_name_so_the_body_is_untouched()
+    {
+        // The rewrite is three edits and no expression rewriting: a leading
+        // local keeps every existing bare reference resolving, which is what
+        // lets both code generators stay unaware the feature exists.
+        string glsl = Stage(CompileSource(Marked).InstancedVertexData!);
+
+        glsl.ShouldContain("mat4 uModel = a_uModel;", Case.Sensitive);
+        glsl.ShouldContain("(uViewProjection * uModel)", Case.Sensitive);
+    }
+
+    [Fact]
+    public void Hlsl_gets_the_same_treatment()
+    {
+        // Through the public compiler, which is what attaches the variant: a
+        // generator called directly emits one stage and knows nothing about it.
+        PipelineBlob blob = new SpectraShadeCompiler()
+            .Compile(Marked, [GraphicsBackend.D3D11])
+            .GetPipeline(GraphicsBackend.D3D11)
+            .ShouldNotBeNull();
+
+        string hlsl = Stage(blob.InstancedVertexData.ShouldNotBeNull());
+
+        hlsl.ShouldContain("float4x4 uModel : TEXCOORD3;", Case.Sensitive);
+        hlsl.ShouldContain("float4x4 uModel = input.uModel;", Case.Sensitive);
+    }
+
+    [Fact]
+    public void A_per_instance_uniform_that_is_not_a_matrix_is_refused()
+    {
+        // Its location span and buffer stride differ from what the instance
+        // layout describes, so the variant would be built wrong silently.
+        var analyzer = new SemanticAnalyzer();
+        analyzer.Analyze(Parse(Marked.Replace("[PerInstance] mat4 uModel;", "[PerInstance] vec3 uModel;")));
+
+        analyzer.Diagnostics.ShouldContain(d =>
+            d.Severity == DiagnosticSeverity.Error && d.Message.Contains("must be mat4"));
+    }
+
+    [Fact]
+    public void A_second_per_instance_uniform_is_refused()
+    {
+        // InstancedVariant takes the first and would ignore the rest, which is
+        // a shader that compiles and quietly does half of what it says.
+        var analyzer = new SemanticAnalyzer();
+        analyzer.Analyze(Parse(Marked.Replace(
+            "mat4 uViewProjection;", "[PerInstance] mat4 uOther; mat4 uViewProjection;")));
+
+        analyzer.Diagnostics.ShouldContain(d =>
+            d.Severity == DiagnosticSeverity.Error && d.Message.Contains("a second"));
+    }
+
+    [Fact]
+    public void The_engines_shadow_pass_carries_a_variant()
+    {
+        // The end-to-end claim: ShadowDepth marks its uModel, so the batched
+        // twin the renderer draws is generated rather than authored. A file
+        // named ShadowDepthInstanced no longer exists.
+        PipelineBlob blob = CompileSource(BaseShaders.ShadowDepth);
+
+        blob.InstancedVertexData.ShouldNotBeNull();
+        blob.InstancedVertexInputs.ShouldContain(v =>
+            v.Name == "uModel" && v.Rate == VertexInputRate.PerInstance && v.LocationSpan == 4);
+    }
+
     // --- helpers -------------------------------------------------------------
 
     private static VertexInputElement Input(PipelineBlob blob, string name) =>
@@ -286,6 +442,25 @@ public sealed class PerInstanceInputTests
         analyzer.Analyze(unit).ShouldBeTrue();
         return unit;
     }
+
+    // Normalized to LF: the generators emit Environment.NewLine, so multi-line
+    // ShouldContain checks would otherwise be OS-dependent.
+    private static string Stage(byte[] data) =>
+        Encoding.UTF8.GetString(data).ReplaceLineEndings("\n");
+
+    private static CompilationUnit AnalyzedSource(string source)
+    {
+        CompilationUnit unit = Parse(source);
+        var analyzer = new SemanticAnalyzer();
+        analyzer.Analyze(unit).ShouldBeTrue();
+        return unit;
+    }
+
+    private static PipelineBlob CompileSource(string source) =>
+        new GlslGenerator().Generate(AnalyzedSource(source)) is var glsl
+            && InstancedVariant.TryBuild(AnalyzedSource(source), out CompilationUnit? instanced)
+            ? InstancedBlob.With(glsl, new GlslGenerator().Generate(instanced))
+            : glsl;
 
     private static string GlslStage(string fixtureName) =>
         Encoding.UTF8.GetString(CompileGlsl(fixtureName).VertexData!).Replace("\r\n", "\n");
