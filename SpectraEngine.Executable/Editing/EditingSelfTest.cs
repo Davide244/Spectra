@@ -1,9 +1,10 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Editing.Gizmos;
+using SpectraEngine.Editing.Hosting;
 using SpectraEngine.Editing.Input;
 using SpectraEngine.Editing.Undo;
 using SpectraEngine.Editing.Viewport;
@@ -84,7 +85,7 @@ namespace SpectraEngine.Executable.Editing;
 /// <b>Threading:</b> render thread only, like everything it drives.
 /// </para>
 /// </remarks>
-internal sealed class EditingSelfTest
+internal sealed class EditingSelfTest : IEditorFrameProbe
 {
     /// <summary>
     /// Seconds between runs, measured from the end of the previous one.

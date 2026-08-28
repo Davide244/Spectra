@@ -11,6 +11,7 @@ using SpectraEngine.Core.Graphics.Shaders;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Executable;
+using SpectraEngine.Editing.Hosting;
 using SpectraEngine.Executable.Editing;
 using SpectraEngine.Physics.Box3D;
 using SpectraShade.Compiler;
@@ -84,9 +85,11 @@ try
     // The self-test node is handed over only when the switch asked for it: the
     // host skips the whole synthetic run on a null subject, so opting out here
     // is the entire gate.
-    sceneManager.EditorFactory = scene => new DemoEditorHost(
+    sceneManager.EditorFactory = scene => new SceneEditorHost(
         loggerFactory, scene, renderer, inputManager,
-        options.SelfTestEnabled ? sceneManager.SelfTestNode : null);
+        options.SelfTestEnabled && sceneManager.SelfTestNode is { } subject
+            ? new EditingSelfTest(loggerFactory.CreateLogger<EditingSelfTest>(), scene, subject)
+            : null);
 
     // Physics, through the same seam shape and for a different reason: gizmos
     // must never ship in a game binary, whereas physics must — what this

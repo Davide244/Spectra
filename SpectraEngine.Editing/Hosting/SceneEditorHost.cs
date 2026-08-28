@@ -12,7 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 
-namespace SpectraEngine.Executable.Editing;
+namespace SpectraEngine.Editing.Hosting;
 
 /// <summary>
 /// The demo's editor: everything needed to turn the running engine into a
@@ -72,7 +72,7 @@ namespace SpectraEngine.Executable.Editing;
 /// (from <c>SceneManager.EditorFactory</c>, inside the scene load).
 /// </para>
 /// </remarks>
-internal sealed class DemoEditorHost : ISceneEditor
+public sealed class SceneEditorHost : ISceneEditor
 {
     /// <summary>Toggles between the editor's freelook camera and the engine's fly camera.</summary>
     private const InputKey NavigationToggleKey = InputKey.F7;
@@ -107,7 +107,7 @@ internal sealed class DemoEditorHost : ISceneEditor
         InputKey.Space, InputKey.ControlLeft, InputKey.ShiftLeft,
     ];
 
-    private readonly ILogger<DemoEditorHost> _logger;
+    private readonly ILogger<SceneEditorHost> _logger;
     private readonly Scene _scene;
     private readonly Renderer _renderer;
     private readonly InputManager _input;
@@ -118,7 +118,7 @@ internal sealed class DemoEditorHost : ISceneEditor
     private readonly ViewportInteractionController _viewport;
     private readonly EngineEditorInputSource _inputSource;
     private readonly GizmoBinding[] _gizmoBindings;
-    private readonly EditingSelfTest? _selfTest;
+    private readonly IEditorFrameProbe? _probe;
 
     // Editor-only, and deliberately not in Core: a shipped game has no reason
     // to outline its own parts, and this assembly is the one that never gets
@@ -135,31 +135,30 @@ internal sealed class DemoEditorHost : ISceneEditor
     private bool _editorNavigation = true;
 
     /// <summary>
-    /// Builds the demo's editor over a freshly loaded scene.
+    /// Builds an editor over a freshly loaded scene.
     /// </summary>
-    /// <param name="loggerFactory">Used for this host's log and the self-test's.</param>
+    /// <param name="loggerFactory">Used for this host's log and its tools'.</param>
     /// <param name="scene">The scene to edit; supplies the camera and the selection.</param>
     /// <param name="renderer">Supplies the framebuffer latch the viewport is sized from.</param>
     /// <param name="input">The live input manager the per-frame snapshot is built from.</param>
-    /// <param name="selfTestNode">
-    /// The brush node the synthetic self-test manipulates, or null to run
-    /// without one — which is the default: the demo passes a node only when
-    /// <c>--selftest</c> asked for it, because the test visibly moves whatever
-    /// it is given (see <see cref="EditingSelfTest"/>).
+    /// <param name="probe">
+    /// Optional per-frame instrumentation the host hangs off this editor, or
+    /// null for none, which is the ordinary case. See
+    /// <see cref="IEditorFrameProbe"/>.
     /// </param>
-    public DemoEditorHost(
+    public SceneEditorHost(
         ILoggerFactory loggerFactory,
         Scene scene,
         Renderer renderer,
         InputManager input,
-        SceneNode? selfTestNode)
+        IEditorFrameProbe? probe = null)
     {
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentNullException.ThrowIfNull(renderer);
         ArgumentNullException.ThrowIfNull(input);
 
-        _logger = loggerFactory.CreateLogger<DemoEditorHost>();
+        _logger = loggerFactory.CreateLogger<SceneEditorHost>();
         _scene = scene;
         _renderer = renderer;
         _input = input;
@@ -185,8 +184,7 @@ internal sealed class DemoEditorHost : ISceneEditor
         renderer.GetFramebufferSize(out int width, out int height);
         _viewportSize = new Vector2(width, height);
 
-        if (selfTestNode is not null)
-            _selfTest = new EditingSelfTest(loggerFactory.CreateLogger<EditingSelfTest>(), scene, selfTestNode);
+        _probe = probe;
 
         _logger.LogInformation(
             "Editor viewport ready: hold right mouse to lock the cursor and look, W/A/S/D + Q/E " +
@@ -277,7 +275,7 @@ internal sealed class DemoEditorHost : ISceneEditor
         // pose afterwards either way.
         bool viewportIdle =
             _viewport.DragMode == ViewportDragMode.None && !frame.WasPressed(_viewport.DragButton);
-        _selfTest?.Update(deltaTime, _viewportSize, viewportIdle);
+        _probe?.Update(deltaTime, _viewportSize, viewportIdle);
 
         // Escape arrives as the cancel flag rather than as a GizmoCommand: it
         // has to reach the marquee as well as the manipulator, and Update is the
