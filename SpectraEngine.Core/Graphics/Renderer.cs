@@ -686,6 +686,10 @@ public abstract class Renderer
     private int _shadowInstanceCapacity;
     private int _shadowInstanceHighWater;
 
+    // Instances this frame's cascades have asked for so far. Reset per frame,
+    // and summed rather than maxed because they share one buffer.
+    private int _shadowInstanceDemand;
+
     // Cleared when the compiler produced no instanced stage, so the frame draws
     // every caster the ordinary way instead of silently dropping batches.
     private bool _shadowBatchingAvailable = true;
@@ -800,6 +804,8 @@ public abstract class Renderer
 
         // Before BeginPass, never between cascades: see EnsureShadowInstanceCapacity.
         EnsureShadowInstanceCapacity();
+        _shadowInstanceDemand = 0;
+        _shadowInstances?.BeginFrame();
 
         // Culled against the LIGHT, not the camera. See Scene.BuildShadowView
         // for why reusing the camera's list makes shadows flicker as you turn.
@@ -887,21 +893,26 @@ public abstract class Renderer
 
         ReadOnlySpan<Matrix4x4> transforms = view.InstanceTransforms;
 
-        // Remembered for the NEXT frame's grow, which happens before the pass
-        // opens. See EnsureShadowInstances for why growing here would be a
-        // device hang rather than a stall.
-        _shadowInstanceHighWater = Math.Max(_shadowInstanceHighWater, transforms.Length);
+        // Accumulated ACROSS cascades, because they share one buffer within a
+        // frame and the demand is therefore the sum rather than the largest.
+        _shadowInstanceDemand += transforms.Length;
+        _shadowInstanceHighWater = Math.Max(_shadowInstanceHighWater, _shadowInstanceDemand);
 
-        if (_shadowInstances is null || _shadowInstanceCapacity < transforms.Length)
+        if (_shadowInstances is null || _shadowInstances.Remaining < transforms.Length)
         {
-            // The buffer is not big enough yet, so these batches are drawn one
-            // instance at a time this frame. Correct, merely unbatched, and it
-            // self-corrects next frame once the high-water mark is applied.
+            // Not enough room left this frame, so these batches are drawn one
+            // instance at a time. Correct, merely unbatched, and it self-corrects
+            // next frame once the high-water mark is applied.
             DrawShadowBatchesUnbatched(view, lightClip);
             return;
         }
 
-        _shadowInstances.Update(MemoryMarshal.Cast<Matrix4x4, float>(transforms), transforms.Length);
+        // APPENDED, not overwritten. This runs once per cascade and on D3D12 the
+        // whole frame is a single command list submitted at the end, so writing
+        // every cascade at offset zero left the first three drawing the fourth's
+        // transforms: silent, and on that backend only. See InstanceBuffer.
+        int baseInstance = _shadowInstances.Append(
+            MemoryMarshal.Cast<Matrix4x4, float>(transforms), transforms.Length);
 
         ShaderProgram shader = _shadowInstancedShader!;
         if (BindsProgramBeforeUniforms) shader.Use();
@@ -914,7 +925,7 @@ public abstract class Renderer
 
             // No material, exactly as the unbatched path: a shadow map records
             // where a surface is, not what it looks like.
-            batch.Mesh.DrawInstanced(_shadowInstances, batch.Count, batch.Offset);
+            batch.Mesh.DrawInstanced(_shadowInstances, batch.Count, baseInstance + batch.Offset);
             ShadowCasterCount += batch.Count;
         }
 

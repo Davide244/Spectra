@@ -1,4 +1,4 @@
-using Silk.NET.Core.Native;
+﻿using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 using System;
@@ -131,14 +131,32 @@ internal sealed unsafe class D3D12InstanceBuffer : InstanceBuffer
     };
 
     /// <inheritdoc/>
-    public override void Update(ReadOnlySpan<float> data, int instanceCount)
+    /// <remarks>
+    /// <b>Appending at the cursor is the whole reason this API is not a plain
+    /// overwrite.</b> The buffer is persistently mapped with no renaming and no
+    /// versioning, and the frame is a single command list submitted at the end,
+    /// so a second write at offset zero retroactively changes what every draw
+    /// already recorded will read. Distinct ranges are what make several passes
+    /// (or four shadow cascades) able to share one buffer in one frame.
+    /// </remarks>
+    public override int Append(ReadOnlySpan<float> data, int instanceCount)
     {
         ValidateUpdate(data, instanceCount);
+        int first = Cursor;
         if (instanceCount == 0 || _mapped is null)
-            return;
+            return first;
 
+        byte* dst = (byte*)_mapped + (long)first * View.StrideInBytes;
         fixed (float* src = data)
-            System.Buffer.MemoryCopy(src, _mapped, View.SizeInBytes, (long)data.Length * sizeof(float));
+        {
+            System.Buffer.MemoryCopy(
+                src, dst,
+                (long)(Capacity - first) * View.StrideInBytes,
+                (long)data.Length * sizeof(float));
+        }
+
+        Cursor = first + instanceCount;
+        return first;
     }
 
     /// <inheritdoc/>

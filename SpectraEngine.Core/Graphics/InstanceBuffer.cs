@@ -33,16 +33,57 @@ public abstract class InstanceBuffer : IDisposable
     public int FloatsPerInstance { get; protected set; }
 
     /// <summary>
-    /// Replaces the buffer's contents with <paramref name="data"/>, which must
-    /// hold <c>instanceCount * FloatsPerInstance</c> floats.
+    /// Instances written since the last <see cref="BeginFrame"/>.
+    /// </summary>
+    public int Cursor { get; protected set; }
+
+    /// <summary>How many more instances fit before the buffer is full.</summary>
+    public int Remaining => Capacity - Cursor;
+
+    /// <summary>
+    /// Starts a frame's writes, discarding what the buffer held.
     /// </summary>
     /// <remarks>
-    /// Render thread only, and before the draws that read it. The data is
-    /// discarded and rewritten rather than appended to, because a batch's
-    /// matrices are rebuilt from the view every frame and there is nothing in
-    /// the previous frame's contents worth keeping.
+    /// <b>Once per frame, not once per pass.</b> A pass that writes more than
+    /// once per frame must APPEND, because on D3D12 the whole frame is a single
+    /// command list submitted at the end: a second write at the same offset
+    /// retroactively changes what every draw already recorded will read. That is
+    /// exactly the bug the shadow pass shipped with, where four cascades each
+    /// wrote at zero and the first three ended up drawing the fourth's
+    /// transforms. D3D11 renames on <c>WriteDiscard</c> and GL orphans, so both
+    /// were correct and only D3D12 was wrong, silently.
     /// </remarks>
-    public abstract void Update(ReadOnlySpan<float> data, int instanceCount);
+    public void BeginFrame()
+    {
+        Cursor = 0;
+        OnBeginFrame();
+    }
+
+    /// <summary>Backend hook for <see cref="BeginFrame"/>; discards prior contents where that is how the API renames.</summary>
+    protected virtual void OnBeginFrame() { }
+
+    /// <summary>
+    /// Appends <paramref name="instanceCount"/> instances and returns the index
+    /// of the first, for use as a draw's <c>firstInstance</c>.
+    /// </summary>
+    /// <remarks>
+    /// Render thread only, and before the draws that read the range. Callers
+    /// must check <see cref="Remaining"/>: an append past capacity throws rather
+    /// than wrapping, because a wrap would silently draw one pass's geometry
+    /// with another's transforms.
+    /// </remarks>
+    public abstract int Append(ReadOnlySpan<float> data, int instanceCount);
+
+    /// <summary>
+    /// Replaces the buffer's contents with <paramref name="data"/>: the
+    /// single-write case, equivalent to <see cref="BeginFrame"/> then
+    /// <see cref="Append"/>.
+    /// </summary>
+    public void Update(ReadOnlySpan<float> data, int instanceCount)
+    {
+        BeginFrame();
+        Append(data, instanceCount);
+    }
 
     /// <inheritdoc/>
     public abstract void Dispose();
@@ -61,7 +102,7 @@ public abstract class InstanceBuffer : IDisposable
     protected void ValidateUpdate(ReadOnlySpan<float> data, int instanceCount)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(instanceCount);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(instanceCount, Capacity);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(instanceCount, Remaining);
 
         int expected = instanceCount * FloatsPerInstance;
         if (data.Length != expected)

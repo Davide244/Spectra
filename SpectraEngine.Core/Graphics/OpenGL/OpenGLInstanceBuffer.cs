@@ -1,4 +1,4 @@
-using Silk.NET.OpenGL;
+﻿using Silk.NET.OpenGL;
 using System;
 
 namespace SpectraEngine.Core.Graphics.OpenGL;
@@ -64,25 +64,41 @@ internal sealed class OpenGLInstanceBuffer : InstanceBuffer
     }
 
     /// <inheritdoc/>
-    public override unsafe void Update(ReadOnlySpan<float> data, int instanceCount)
+    /// <remarks>
+    /// Orphaning belongs here rather than in <see cref="Append"/>: handing the
+    /// driver a fresh allocation lets it keep serving in-flight draws from the
+    /// old one instead of stalling, but doing it per append would also throw
+    /// away everything earlier appends in the same frame wrote.
+    /// </remarks>
+    protected override unsafe void OnBeginFrame()
     {
-        ValidateUpdate(data, instanceCount);
-        if (instanceCount == 0)
-            return;
-
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, Handle);
-
-        // Orphan first: handing the driver a fresh allocation lets it keep
-        // serving in-flight draws from the old one instead of stalling until
-        // they finish. Without it, writing a buffer the GPU is still reading is
-        // an implicit synchronisation point every frame.
         _gl.BufferData(
             BufferTargetARB.ArrayBuffer, (nuint)(Capacity * Stride), null, BufferUsageARB.DynamicDraw);
-
-        fixed (float* p = data)
-            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(data.Length * sizeof(float)), p);
-
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+    }
+
+    /// <inheritdoc/>
+    public override unsafe int Append(ReadOnlySpan<float> data, int instanceCount)
+    {
+        ValidateUpdate(data, instanceCount);
+        int first = Cursor;
+        if (instanceCount == 0)
+            return first;
+
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, Handle);
+        fixed (float* p = data)
+        {
+            _gl.BufferSubData(
+                BufferTargetARB.ArrayBuffer,
+                (nint)((nuint)first * Stride),
+                (nuint)(data.Length * sizeof(float)),
+                p);
+        }
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+
+        Cursor = first + instanceCount;
+        return first;
     }
 
     /// <inheritdoc/>

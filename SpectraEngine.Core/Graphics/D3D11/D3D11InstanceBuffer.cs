@@ -1,4 +1,4 @@
-using Silk.NET.Core.Native;
+﻿using Silk.NET.Core.Native;
 using Silk.NET.Direct3D11;
 using Silk.NET.DXGI;
 using System;
@@ -21,19 +21,22 @@ namespace SpectraEngine.Core.Graphics.D3D11;
 /// mesh.
 /// </para>
 /// <para>
-/// <b>Built against the default shader's signature, exactly as mesh layouts
-/// are.</b> D3D validates that a layout supplies everything the vertex shader
-/// declares, and permits elements the shader does not read; so a layout carrying
-/// TEXCOORD0 through TEXCOORD6 is valid against the lit shader (which reads the
-/// first three) and equally valid at draw time under an instanced shader that
-/// reads all seven. Creating it against the instanced shader instead would make
-/// instance buffers un-creatable until that shader exists, for no gain.
+/// <b>Built against the signature of the program it will be DRAWN under, and
+/// that is not negotiable.</b> An earlier version built it against the default
+/// shader, reasoning that D3D permits a layout to declare elements the shader
+/// does not read. Creation did succeed; every instanced draw then failed with
+/// "the input stage requires Semantic/Index (TEXCOORD,3) as input, but it is not
+/// provided by the output stage". A layout is bound to the signature it was
+/// validated against, and permitted extra elements are not the same thing as a
+/// layout that carries them into another shader.
 /// </para>
 /// <para>
-/// <b>Dynamic with discard, not immutable.</b> The contents are rebuilt from the
-/// view every frame, and mapping with
-/// <see cref="Map.WriteDiscard"/> is what lets the driver hand back fresh
-/// storage instead of waiting for in-flight draws to finish reading the old.
+/// <b>Dynamic, written by appending.</b> The frame's first write maps with
+/// <see cref="Map.WriteDiscard"/> so the driver can rename the whole allocation
+/// rather than wait for in-flight draws; later writes in the same frame map with
+/// <see cref="Map.WriteNoOverwrite"/> at their own offset, which is what lets
+/// several passes share one buffer without a later write changing what an
+/// earlier draw reads.
 /// </para>
 /// </remarks>
 internal sealed unsafe class D3D11InstanceBuffer : InstanceBuffer
@@ -159,21 +162,34 @@ internal sealed unsafe class D3D11InstanceBuffer : InstanceBuffer
     };
 
     /// <inheritdoc/>
-    public override void Update(ReadOnlySpan<float> data, int instanceCount)
+    /// <remarks>
+    /// The canonical dynamic-append pair: <see cref="Map.WriteDiscard"/> on a
+    /// frame's first write lets the driver rename the whole allocation, and
+    /// <see cref="Map.WriteNoOverwrite"/> afterwards promises it that earlier
+    /// ranges are untouched, so appending never renames away what a draw
+    /// already recorded against.
+    /// </remarks>
+    public override int Append(ReadOnlySpan<float> data, int instanceCount)
     {
         ValidateUpdate(data, instanceCount);
+        int first = Cursor;
         if (instanceCount == 0)
-            return;
+            return first;
 
         var ctx = (ID3D11DeviceContext*)_context.Handle;
         MappedSubresource mapped;
         SilkMarshal.ThrowHResult(ctx->Map(
-            (ID3D11Resource*)_buffer.Handle, 0, Map.WriteDiscard, 0, &mapped));
+            (ID3D11Resource*)_buffer.Handle, 0,
+            first == 0 ? Map.WriteDiscard : Map.WriteNoOverwrite, 0, &mapped));
 
+        byte* dst = (byte*)mapped.PData + (long)first * Stride;
         fixed (float* src = data)
-            System.Buffer.MemoryCopy(src, mapped.PData, (long)Capacity * Stride, (long)data.Length * sizeof(float));
+            System.Buffer.MemoryCopy(src, dst, (long)(Capacity - first) * Stride, (long)data.Length * sizeof(float));
 
         ctx->Unmap((ID3D11Resource*)_buffer.Handle, 0);
+
+        Cursor = first + instanceCount;
+        return first;
     }
 
     /// <inheritdoc/>
