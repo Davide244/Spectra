@@ -80,6 +80,25 @@ public sealed class Light
     /// <summary>Whether this light contributes at all. A disabled light is collected by nothing.</summary>
     public bool Enabled { get; set; } = true;
 
+    /// <summary>A new light carrying the same settings.</summary>
+    /// <remarks>
+    /// <b>This exists because a light is the one MUTABLE payload a node can
+    /// carry.</b> Duplicating a node shares its mesh by reference (a
+    /// <c>MeshRenderer</c> is immutable and its GPU resources are
+    /// renderer-owned) and gives it its own brush (see
+    /// <c>Brush.CloneShape</c>). A light shared the way a mesh is shared would
+    /// mean dimming the copy dims the original, with nothing anywhere to say
+    /// why, so a duplicate takes a copy.
+    /// </remarks>
+    public Light Clone() => new()
+    {
+        Kind = Kind,
+        Color = Color,
+        Intensity = Intensity,
+        Range = Range,
+        Enabled = Enabled,
+    };
+
     /// <summary>
     /// The node rotation that makes a directional light travel along
     /// <paramref name="travelDirection"/>. A sun wants a direction with a

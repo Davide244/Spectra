@@ -451,13 +451,76 @@ public class SceneNode
     public Vector3 WorldPosition => WorldMatrix.Translation;
 
     /// <summary>
-    /// Attaches an existing node as a child, detaching it from any previous
-    /// parent. When the moved subtree contains brushes, both the old and the
-    /// new owning scene (if any) get their static world marked dirty — the
-    /// brushes' placements changed on both sides.
+    /// This node's position among its parent's children, or −1 when it has no
+    /// parent. The coordinate a structural edit has to record to be reversible.
+    /// </summary>
+    /// <remarks>
+    /// <b>Sibling index is not cosmetic here.</b> Traversal order is child-list
+    /// order, traversal order is the static world's placement-slot order, and
+    /// placement order breaks ties in the carve's overlap ordering, so a node
+    /// that comes back from an undo at a different index produces geometry that
+    /// is valid, different, and bit-unequal to what was there before. Linear in
+    /// the sibling count, which is why it is read at gesture time and stored,
+    /// never consulted per frame.
+    /// </remarks>
+    public int IndexInParent => Parent?._children.IndexOf(this) ?? -1;
+
+    /// <summary>
+    /// Attaches an existing node as a child at the end of the child list,
+    /// detaching it from any previous parent. See
+    /// <see cref="InsertChild(int, SceneNode)"/>, which this is the append case
+    /// of.
     /// </summary>
     public SceneNode AddChild(SceneNode child)
     {
+        ArgumentNullException.ThrowIfNull(child);
+        return InsertChild(_children.Count, child);
+    }
+
+    /// <summary>
+    /// Attaches an existing node as a child at a chosen position, detaching it
+    /// from any previous parent. When the moved subtree contains brushes, both
+    /// the old and the new owning scene (if any) get their static world marked
+    /// dirty — the brushes' placements changed on both sides.
+    /// </summary>
+    /// <param name="index">
+    /// Where in the child list the node lands. Clamped to the list's length
+    /// <em>after</em> the detach, so a node moved within its own parent may name
+    /// the end of the list, and an undo may restore into a parent that has since
+    /// lost other siblings.
+    /// </param>
+    /// <param name="child">The node to attach.</param>
+    /// <exception cref="ArgumentException">
+    /// The node is this node, or an ancestor of it: either would make the graph
+    /// a cycle, and every walk over it non-terminating.
+    /// </exception>
+    /// <remarks>
+    /// <b>Restoring the index is the whole reason this exists.</b> Appending is
+    /// the right answer when a node is first created and the wrong one when a
+    /// node is coming back: see <see cref="IndexInParent"/> for what re-ordering
+    /// costs.
+    /// </remarks>
+    public SceneNode InsertChild(int index, SceneNode child)
+    {
+        ArgumentNullException.ThrowIfNull(child);
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+
+        // A cycle is not a bug that surfaces here: it surfaces as a hang the
+        // first time anything walks the graph, which is every frame. Reparenting
+        // is the operation that can reach it (dragging a parent onto its own
+        // child in a tree view is an ordinary slip), so the guard belongs on the
+        // one attach path rather than in each caller.
+        for (SceneNode? ancestor = this; ancestor is not null; ancestor = ancestor.Parent)
+        {
+            if (ReferenceEquals(ancestor, child))
+            {
+                throw new ArgumentException(
+                    $"Cannot attach '{child.Name}' under '{Name}': it is that node or an ancestor of it, " +
+                    "which would make the graph a cycle.",
+                    nameof(child));
+            }
+        }
+
         Scene? previousOwner = child.Owner;
 
         // Detach from the old parent first, unwinding the subtree brush count
@@ -475,8 +538,15 @@ public class SceneNode
             }
         }
 
+        // Clamped after the detach, never before: moving a node to the end of
+        // its own parent's list names an index the list only has once the node
+        // has left it, and an undo restores into a parent that may have lost
+        // other siblings in the same gesture.
+        if (index > _children.Count)
+            index = _children.Count;
+
         child.Parent = this;
-        _children.Add(child);
+        _children.Insert(index, child);
         // Invalidate the cached world matrices BEFORE announcing the node to
         // its new scene: NodeAdded handlers (the spatial index in particular)
         // read WorldMatrix, which must already reflect the new parent chain.
@@ -504,6 +574,78 @@ public class SceneNode
     {
         var node = new SceneNode(name);
         return AddChild(node);
+    }
+
+    /// <summary>
+    /// A detached copy of this node under a <b>fresh identity</b>, ready to be
+    /// attached wherever the caller wants it.
+    /// </summary>
+    /// <param name="deep">
+    /// True (the default) to copy the whole subtree; false for this node's
+    /// payloads alone, which leaves a group node empty.
+    /// </param>
+    /// <remarks>
+    /// <b>Each of the three payloads a node can carry is copied differently, and
+    /// the differences are not stylistic.</b>
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <see cref="MeshRenderer"/> is <em>shared by reference</em>. It is
+    ///     immutable and its GPU resources are owned by the renderer, so a
+    ///     thousand duplicates of a prop cost one mesh.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="Brush"/> gets its own instance through
+    ///     <c>Brush.CloneShape()</c>. Sharing would be geometrically correct but
+    ///     the CSG carve cache keys on reference identity and holds one entry
+    ///     per instance, so every duplicate past the first would re-carve on
+    ///     every compile forever.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="Light"/> gets a copy, because it is the one payload that is
+    ///     MUTABLE. Sharing it would make dimming the copy dim the original.
+    ///   </description></item>
+    /// </list>
+    /// <para>
+    /// <b>Returned detached, deliberately.</b> The caller decides the parent and
+    /// the sibling index, and attaching is what raises the membership events,
+    /// indexes the new ids and dirties the static world, so a clone that
+    /// attached itself would take that decision away from the one place that
+    /// has to record it for undo.
+    /// </para>
+    /// <para>
+    /// <see cref="PhysicsFlags.HasBody"/> is stripped: it is owned by the
+    /// physics layer and says a body exists in its side table for the ORIGINAL
+    /// node. A copy that claimed it would send every body lookup for the
+    /// duplicate to a table entry that is not there.
+    /// </para>
+    /// </remarks>
+    public SceneNode Clone(bool deep = true)
+    {
+        var copy = new SceneNode(Name);
+
+        copy._localTransform = _localTransform;
+        copy._physicsFlags = _physicsFlags & ~PhysicsFlags.HasBody;
+        copy._collisionGroup = _collisionGroup;
+
+        // The kind is stamped before the brush arrives, so the brush setter
+        // counts the new node into the right subtree lane on the first write
+        // rather than counting it twice through an admission change.
+        copy._brushKind = _brushKind;
+
+        // Through the properties from here down: they are what maintain the
+        // subtree counters. The scene-side hooks they also call are all
+        // null-guarded on Owner, which a detached copy does not have.
+        copy.MeshRenderer = _meshRenderer;
+        copy.Brush = _brush?.CloneShape();
+        copy.Light = _light?.Clone();
+
+        if (deep)
+        {
+            for (int i = 0; i < _children.Count; i++)
+                copy.AddChild(_children[i].Clone(deep: true));
+        }
+
+        return copy;
     }
 
     public void RemoveChild(SceneNode child)

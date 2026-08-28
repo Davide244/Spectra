@@ -191,7 +191,8 @@ internal sealed class DemoEditorHost : ISceneEditor
             "selection; left-drag picks/moves, marquee on empty space; W/E/R or 2/3/4 pick the " +
             "tool, X flips world/local, Y flips the handle style, G and [ ] drive snap, " +
             "Ctrl+Z / Ctrl+Y walk {Capacity} " +
-            "entries of history; Ctrl+T converts the selected brushes between world geometry and " +
+            "entries of history; Ctrl+D duplicates, Delete removes, Ctrl+G groups and Ctrl+Shift+G " +
+            "ungroups the selection; Ctrl+T converts the selected brushes between world geometry and " +
             "parts (parts leave the CSG carve, so they stop merging with what they touch and cost " +
             "no recompile when they move — they are outlined in cyan); F7 toggles between the " +
             "editor camera and the engine fly camera (starting: {Mode}, gizmos: {Gizmos})",
@@ -368,8 +369,20 @@ internal sealed class DemoEditorHost : ISceneEditor
             {
                 ToggleSelectionBrushKind();
             }
+            else if (_input.WasKeyPressed(Key.D))
+            {
+                RunStructuralEdit("Duplicate", StructuralEditor.TryDuplicate);
+            }
+            else if (_input.WasKeyPressed(Key.G))
+            {
+                if (shift) RunStructuralEdit("Ungroup", StructuralEditor.TryUngroup);
+                else RunStructuralEdit("Group", (s, u, n) => StructuralEditor.TryGroup(s, u, n));
+            }
             return;
         }
+
+        if (_input.WasKeyPressed(Key.Delete))
+            RunStructuralEdit("Delete", StructuralEditor.TryDelete);
 
         for (int i = 0; i < _gizmoBindings.Length; i++)
         {
@@ -480,6 +493,37 @@ internal sealed class DemoEditorHost : ISceneEditor
             "Part brushes leave the CSG carve — they no longer merge with the geometry around them, " +
             "and they cost no static-world recompile when they move.",
             name, commands.Count, skipped);
+    }
+
+    // Duplicate, delete, group and ungroup all have the same shape: snapshot the
+    // selection, refuse mid-gesture, run one verb, say what happened.
+    private void RunStructuralEdit(
+        string label, Func<Scene, UndoStack, IReadOnlyList<SceneNode>, bool> operation)
+    {
+        // A structural edit inside a gizmo drag would open a transaction while
+        // one is already open, which does not nest and throws. It would also be
+        // meaningless: the gesture is still deciding where the thing it is
+        // holding ends up.
+        if (_gizmos.Active.State == GizmoInteractionState.Dragging)
+        {
+            _logger.LogDebug("{Label}: refused, a manipulation is in progress", label);
+            return;
+        }
+
+        // Copied because every one of these verbs rewrites the selection, and
+        // SelectionSet.Items is the live list.
+        var selection = new List<SceneNode>(_scene.Selection.Items);
+        if (!operation(_scene, _undo, selection))
+        {
+            // Never a silent no-op, for the same reason the brush-kind convert
+            // is not: a key that does nothing reads as a broken binding.
+            _logger.LogInformation("{Label}: nothing to act on ({Selected} selected)", label, selection.Count);
+            return;
+        }
+
+        _logger.LogInformation(
+            "{Label}: {Selected} node(s) in, {Now} selected now (undo {UndoDepth} / redo {RedoDepth})",
+            label, selection.Count, _scene.Selection.Count, _undo.UndoCount, _undo.RedoCount);
     }
 
     private void Undo()

@@ -166,6 +166,28 @@ public sealed class Brush
         operation == Operation ? this : new Brush(this, operation);
 
     /// <summary>
+    /// A distinct <see cref="Brush"/> instance describing exactly the same
+    /// solid: every plane, face, payload and bound shared verbatim, with only
+    /// the reference identity new.
+    /// </summary>
+    /// <remarks>
+    /// <b>Duplicating a brush node must not share the brush reference, and the
+    /// reason is the carve cache rather than mutability.</b> Brushes are deeply
+    /// immutable, so sharing one would be perfectly correct geometrically. But
+    /// <c>CsgCompileCache</c> keys on reference identity and holds exactly one
+    /// entry per instance, so N placements backed by a single instance can
+    /// produce at most one cache hit and the other N−1 re-carve on every
+    /// compile, for the life of the level. A fresh reference costs one small
+    /// object at duplicate time and buys each copy its own cache slot forever.
+    /// <para>
+    /// The second reason is <see cref="Transform"/>, which is a mutable property
+    /// on an otherwise immutable type: two nodes sharing a brush would share it,
+    /// and the standalone carve path reads it.
+    /// </para>
+    /// </remarks>
+    public Brush CloneShape() => new(this, Operation);
+
+    /// <summary>
     /// The world-from-local transform for <em>standalone</em> use (tests, tools,
     /// brushes carved outside the scene graph): the brush-list overloads of
     /// <see cref="Csg.Carve(IReadOnlyList{Brush})"/> and

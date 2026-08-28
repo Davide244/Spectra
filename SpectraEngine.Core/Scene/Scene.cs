@@ -130,6 +130,15 @@ public sealed partial class Scene
         // already resolve the arriving node through TryFindById.
         _nodesById[node.Id] = node;
         UpdatePartBrushMembership(node);
+        // The light list is rebuilt on arrival for the same reason the part set
+        // is. OnNodeRemoved drops a departing node from _lightNodes
+        // unconditionally, and the Light setter only registers a node that
+        // already has an Owner, so without this a light node that leaves and
+        // comes back is never relit: undoing a delete, re-attaching a detached
+        // subtree, or attaching a clone whose Light was assigned before it had a
+        // parent all produce a scene that is simply darker, with nothing thrown
+        // and nothing logged.
+        UpdateLightMembership(node);
         NodeAdded?.Invoke(node);
     }
 
