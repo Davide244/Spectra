@@ -39,7 +39,7 @@ public sealed class ScaleGizmoDragTests
     [InlineData(GizmoHandle.AxisZ)]
     public void An_axis_drag_resizes_a_mesh_node_along_that_axis_only(GizmoHandle handle)
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ResizeHarness();
         // A one-unit cube, so a +1 size change is exactly a ×2 scale.
         SceneNode node = harness.AddSelectedMeshNode(Vector3.Zero, halfExtent: 0.5f);
         ScaleGizmo scale = Scale(harness);
@@ -64,7 +64,7 @@ public sealed class ScaleGizmoDragTests
     [Fact]
     public void A_negative_drag_shrinks_a_mesh_node()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ResizeHarness();
         SceneNode node = harness.AddSelectedMeshNode(Vector3.Zero, halfExtent: 0.5f);
         Scale(harness).Snap.Enabled = false;
 
@@ -77,7 +77,7 @@ public sealed class ScaleGizmoDragTests
     [Fact]
     public void An_existing_scale_is_multiplied_not_replaced()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ResizeHarness();
         SceneNode node = harness.AddSelectedMeshNode(Vector3.Zero, halfExtent: 0.5f);
         node.LocalScale = new Vector3(3f, 4f, 5f);
         Scale(harness).Snap.Enabled = false;
@@ -92,7 +92,7 @@ public sealed class ScaleGizmoDragTests
     [Fact]
     public void The_uniform_handle_resizes_all_three_axes_together()
     {
-        var harness = GizmoHarness.FrontView();
+        var harness = ResizeFrontHarness();
         SceneNode node = harness.AddSelectedMeshNode(Vector3.Zero, halfExtent: 0.5f);
         ScaleGizmo scale = Scale(harness);
         scale.Snap.Enabled = false;
@@ -120,7 +120,7 @@ public sealed class ScaleGizmoDragTests
     [Fact]
     public void Resizing_a_brush_node_edits_its_plane_extents_and_never_its_scale()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero, halfExtent: 1f);
         Brush original = node.Brush!;
         Transform before = node.LocalTransform;
@@ -152,7 +152,7 @@ public sealed class ScaleGizmoDragTests
     [Fact]
     public void A_uniform_brush_resize_scales_all_three_extents()
     {
-        var harness = GizmoHarness.FrontView();
+        var harness = ResizeFrontHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero, halfExtent: 2f);
         ScaleGizmo scale = Scale(harness);
         scale.Snap.Enabled = false;
@@ -174,7 +174,7 @@ public sealed class ScaleGizmoDragTests
     [Fact]
     public void Undoing_a_brush_resize_puts_the_original_brush_instance_and_position_back()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero);
         Brush original = node.Brush!;
         Transform before = node.LocalTransform;
@@ -195,7 +195,7 @@ public sealed class ScaleGizmoDragTests
     [Fact]
     public void A_cancelled_brush_resize_restores_the_original_brush_and_leaves_no_history()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero);
         Brush original = node.Brush!;
         Transform before = node.LocalTransform;
@@ -216,7 +216,7 @@ public sealed class ScaleGizmoDragTests
     [Fact]
     public void A_mixed_selection_resizes_the_mesh_node_and_reshapes_the_brush_node()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ResizeHarness();
         SceneNode mesh = harness.AddSelectedMeshNode(new Vector3(-2f, 0f, 0f), halfExtent: 0.5f, name: "Mesh");
         SceneNode brush = harness.AddSelectedBrushNode(new Vector3(2f, 0f, 0f));
         Scale(harness).Snap.Enabled = false;
@@ -233,7 +233,7 @@ public sealed class ScaleGizmoDragTests
     [Fact]
     public void A_brush_resize_marks_the_static_world_dirty_like_any_other_brush_edit()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero);
         var renderer = new CompilingRenderer();
         harness.Scene.RebuildStaticWorld(renderer);
@@ -254,7 +254,7 @@ public sealed class ScaleGizmoDragTests
     [Fact]
     public void A_resize_that_never_left_its_starting_size_commits_nothing()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero);
         Brush original = node.Brush!;
         Scale(harness);
@@ -269,7 +269,7 @@ public sealed class ScaleGizmoDragTests
     [Fact]
     public void The_resize_gizmo_offers_no_world_orientation()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ResizeHarness();
         SceneNode node = harness.AddSelectedNode(Vector3.Zero);
         node.LocalRotation = Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2f);
 
@@ -283,6 +283,26 @@ public sealed class ScaleGizmoDragTests
     }
 
     // --- Helpers -------------------------------------------------------------
+
+    /// <summary>
+    /// The harness every resize test uses: the <see cref="GizmoStyle.Studio"/>
+    /// style, which is the engine's default and the one whose resize holds a
+    /// face still.
+    /// </summary>
+    /// <remarks>
+    /// <b>Face anchoring is a property of the style, not of the tool.</b>
+    /// <see cref="GizmoStyle.Classic"/> resizes about the pivot instead, both
+    /// faces moving by half the increment, which is what makes three handles
+    /// enough there; <c>ClassicGizmoStyleTests</c> pins that half. Everything in
+    /// this suite and in <see cref="ResizeIncrementTests"/> is about the anchored
+    /// reading, so it says which style it means rather than inheriting the
+    /// harness default (which is Classic, for the aiming reason
+    /// <see cref="GizmoHarness"/> documents).
+    /// </remarks>
+    internal static GizmoHarness ResizeHarness() => GizmoHarness.ThreeQuarterView(GizmoStyle.Studio);
+
+    /// <summary>The <see cref="ResizeHarness"/> camera for the uniform handle, which needs a face-on view.</summary>
+    internal static GizmoHarness ResizeFrontHarness() => GizmoHarness.FrontView(style: GizmoStyle.Studio);
 
     internal static ScaleGizmo Scale(GizmoHarness harness)
     {
@@ -305,7 +325,13 @@ public sealed class ScaleGizmoDragTests
         GizmoGeometry geometry = Prime(harness);
         pivot = harness.Gizmo.Pivot;
         axis = geometry.Axis(handle);
-        length = geometry.AxisLength;
+
+        // How far out the handle STANDS, which equals the axis length only in a
+        // style that puts it there. Studio's handles sit on the selection's own
+        // box, so asking the geometry is the only aim that survives a style
+        // switch; `axis` already carries the direction, so a negative handle
+        // needs no special case here.
+        length = geometry.AxisReach(handle);
 
         // Aimed at the centre of the cube handle, so the travel measured below is
         // exactly the world distance the cursor is moved.

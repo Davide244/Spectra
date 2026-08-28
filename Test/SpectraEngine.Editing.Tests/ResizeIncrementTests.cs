@@ -41,7 +41,7 @@ public sealed class ResizeIncrementTests
     [InlineData(5f)]    // a 10-unit brush: two and a half notches under the old factor snap
     public void One_notch_changes_a_brush_by_exactly_the_increment_whatever_it_measures(float halfExtent)
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero, halfExtent);
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
         scale.Snap.Enabled = true;
@@ -60,7 +60,7 @@ public sealed class ResizeIncrementTests
     public void The_increment_is_settable_in_code_and_the_notch_follows_it()
     {
         // The UI comes later; the mechanism has to be there now.
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero, halfExtent: 1f);
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
         scale.Snap.Increment = 0.25f;
@@ -73,7 +73,13 @@ public sealed class ResizeIncrementTests
     [Fact]
     public void Every_object_in_a_multi_selection_lands_on_its_own_increment()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        // Three times the usual standoff, because this selection is deliberately
+        // enormous: a 0.4-unit brush and a 10-unit one, sixteen units apart. The
+        // Studio style stands its handles on the box around all of that, so the
+        // ordinary three-quarter camera would put the +x handle off the side of
+        // an 800x600 viewport and there would be nothing under the cursor to
+        // grab.
+        var harness = new GizmoHarness(new Vector3(24f, 18f, 30f), Vector3.Zero, style: GizmoStyle.Studio);
         SceneNode small = harness.AddSelectedBrushNode(new Vector3(-8f, 0f, 0f), 0.2f, "Small");
         SceneNode big = harness.AddSelectedBrushNode(new Vector3(8f, 0f, 0f), 5f, "Big");
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
@@ -90,7 +96,7 @@ public sealed class ResizeIncrementTests
     [Fact]
     public void A_face_anchored_notch_moves_the_dragged_face_and_plants_the_opposite_one()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(new Vector3(3f, 0f, 0f), halfExtent: 1f);
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
         scale.Snap.Increment = 1f;
@@ -111,7 +117,7 @@ public sealed class ResizeIncrementTests
     [Fact]
     public void A_symmetric_resize_leaves_the_node_where_it_is_and_still_lands_on_the_increment()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(new Vector3(3f, 0f, 0f), halfExtent: 1f);
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
         scale.Snap.Increment = 1f;
@@ -128,7 +134,7 @@ public sealed class ResizeIncrementTests
     [Fact]
     public void A_mesh_node_lands_on_the_requested_world_size_through_its_bounds()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         // Two units across in its own frame, scaled to four in the world.
         SceneNode node = harness.AddSelectedMeshNode(Vector3.Zero, halfExtent: 1f);
         node.LocalScale = new Vector3(2f);
@@ -148,7 +154,7 @@ public sealed class ResizeIncrementTests
     {
         // The factor is derived from WORLD size, so an ancestor's scale is part
         // of the measurement rather than something the tool has to be told about.
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode parent = harness.AddNode(Vector3.Zero, "Parent");
         parent.LocalScale = new Vector3(2f);
 
@@ -169,7 +175,7 @@ public sealed class ResizeIncrementTests
     [Fact]
     public void A_drag_shorter_than_half_an_increment_snaps_back_to_nothing_and_commits_nothing()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero, halfExtent: 1f);
         Brush original = node.Brush!;
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
@@ -187,7 +193,7 @@ public sealed class ResizeIncrementTests
     [Fact]
     public void A_whole_snapped_drag_is_one_undo_entry_that_restores_both_halves_of_the_edit()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(new Vector3(3f, 0f, 0f), halfExtent: 1f);
         Brush original = node.Brush!;
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
@@ -216,7 +222,7 @@ public sealed class ResizeIncrementTests
     [Fact]
     public void A_cancelled_snapped_drag_restores_the_transform_exactly()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(new Vector3(3f, 0f, 0f), halfExtent: 1f);
         Brush original = node.Brush!;
         Transform before = node.LocalTransform;
@@ -240,13 +246,15 @@ public sealed class ResizeIncrementTests
     [Fact]
     public void A_node_with_no_measurable_size_falls_back_to_a_proportional_factor_and_says_so()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedNode(Vector3.Zero); // no brush, no mesh: no size
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
         scale.Snap.Enabled = false;
 
-        ScaleGizmoDragTests.GrabAxis(harness, GizmoHandle.AxisX, out Vector3 pivot, out Vector3 axis, out float length);
-        harness.DragTo(pivot + axis * (length * 2f));
+        ScaleGizmoDragTests.GrabAxis(harness, GizmoHandle.AxisX, out Vector3 pivot, out Vector3 axis, out float reach);
+        // Travel measured in GIZMO LENGTHS, which is the fallback's own unit, and
+        // no longer the same thing as how far out the handle stands.
+        harness.DragTo(pivot + axis * (reach + harness.Gizmo.Geometry.AxisLength));
         harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
 
         // One gizmo length of travel doubles it — the old proportional mapping,
@@ -265,7 +273,7 @@ public sealed class ResizeIncrementTests
         // world for another async CSG recompile. The tool's stated bargain is that
         // a SNAPPED drag pays that once per increment — so the frames inside one
         // notch, which ask for a size the node already has, must do nothing at all.
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero, halfExtent: 1f);
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
         scale.Snap.Enabled = true;
@@ -303,15 +311,15 @@ public sealed class ResizeIncrementTests
         // The fallback factor is only COMPUTED when a target needs it, so the
         // gate that keeps it out of the ordinary case must not turn it off for
         // the case it exists for.
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedNode(Vector3.Zero); // no brush, no mesh: no size
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
         scale.Snap.Enabled = true;
         scale.Snap.Increment = 1f;
 
         ScaleGizmoDragTests.GrabAxis(
-            harness, GizmoHandle.AxisX, out Vector3 pivot, out Vector3 axis, out float length);
-        harness.DragTo(pivot + axis * (length * 2f));
+            harness, GizmoHandle.AxisX, out Vector3 pivot, out Vector3 axis, out float reach);
+        harness.DragTo(pivot + axis * (reach + harness.Gizmo.Geometry.AxisLength));
         harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
 
         scale.ProportionalFallbackCount.ShouldBe(1);
@@ -323,7 +331,7 @@ public sealed class ResizeIncrementTests
     [Fact]
     public void A_measurable_selection_reports_no_proportional_fallback()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         harness.AddSelectedBrushNode(new Vector3(-3f, 0f, 0f), 1f, "Brush");
         harness.AddSelectedMeshNode(new Vector3(3f, 0f, 0f), 1f, "Mesh");
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
@@ -343,7 +351,7 @@ public sealed class ResizeIncrementTests
         ResizeSnapSettings.Presets.ShouldBe(GridSnapSettings.Presets);
 
         // ...and it is a SEPARATE object, so a future UI can link or split them.
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         harness.Scale.Snap.ShouldNotBeSameAs(harness.Translate.Snap);
 
         // The shared policy still applies: Alt inverts, the ladder clamps.
@@ -355,7 +363,7 @@ public sealed class ResizeIncrementTests
     [Fact]
     public void Snapping_off_makes_the_resize_continuous_again()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero, halfExtent: 1f);
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
         scale.Snap.Enabled = false;
@@ -369,7 +377,7 @@ public sealed class ResizeIncrementTests
     [Fact]
     public void Alt_drops_a_snapped_resize_to_free_movement_for_the_gesture()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero, halfExtent: 1f);
         ScaleGizmo scale = ScaleGizmoDragTests.Scale(harness);
         scale.Snap.Enabled = true;

@@ -140,6 +140,34 @@ public sealed class EditingAllocationTests
     }
 
     [Fact]
+    public void Hovering_a_studio_style_gizmo_allocates_nothing_despite_measuring_the_selection()
+    {
+        // The Studio style stands its handles on the selection's box and puts the
+        // pivot at that box's centre, so every frame measures the selection
+        // instead of averaging three floats. That measurement is on the per-frame
+        // path and has to hold the same bar: one pass by index, an oriented-box
+        // projection per node, and a record struct carrying the answer out.
+        var harness = GizmoHarness.ThreeQuarterView(GizmoStyle.Studio);
+        harness.AddSelectedBrushNode(Vector3.Zero, halfExtent: 1f, name: "Brush");
+        harness.AddSelectedMeshNode(new Vector3(4f, 0f, 0f), halfExtent: 0.5f, name: "Mesh");
+        harness.Use(GizmoMode.Scale);
+
+        EditorInputFrame frame = harness.Frame(
+            harness.WorldToScreen(harness.GrabPointFor(GizmoHandle.AxisNegX)));
+
+        for (int i = 0; i < 200; i++)
+            harness.Gizmo.Update(in frame);
+        harness.Gizmo.HoveredHandle.ShouldBe(GizmoHandle.AxisNegX);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 10_000; i++)
+            harness.Gizmo.Update(in frame);
+        long after = GC.GetAllocatedBytesForCurrentThread();
+
+        (after - before).ShouldBe(0);
+    }
+
+    [Fact]
     public void Dragging_the_translate_gizmo_allocates_nothing_per_frame()
     {
         var harness = GizmoHarness.ThreeQuarterView();

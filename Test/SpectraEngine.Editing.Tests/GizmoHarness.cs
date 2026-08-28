@@ -40,7 +40,22 @@ internal sealed class GizmoHarness
     // accumulating — the same discipline the gizmo itself follows.
     private Vector3 _grabAim;
 
-    public GizmoHarness(Vector3 cameraPosition, Vector3 lookAt, float viewportWidth = 800f, float viewportHeight = 600f)
+    /// <remarks>
+    /// <b>The style defaults to <see cref="GizmoStyle.Classic"/>, which is NOT
+    /// the engine's default.</b> The classic layout is the one this suite grew
+    /// up pinning: handles at a fixed distance from the pivot, so a test can aim
+    /// at "eight tenths of an axis length along x" and mean it. Studio's handles
+    /// stand on the selection's own box, so those aim points would land on
+    /// nothing. A test that means the shipping default says
+    /// <see cref="GizmoStyle.Studio"/> and asks <see cref="GrabPointFor"/> where
+    /// the handle actually is; <c>StudioGizmoStyleTests</c> is that suite.
+    /// </remarks>
+    public GizmoHarness(
+        Vector3 cameraPosition,
+        Vector3 lookAt,
+        float viewportWidth = 800f,
+        float viewportHeight = 600f,
+        GizmoStyle? style = null)
     {
         ViewportSize = new Vector2(viewportWidth, viewportHeight);
         Scene = new Scene("Gizmo");
@@ -51,14 +66,16 @@ internal sealed class GizmoHarness
         // point would land a few pixels off.
         Scene.Camera.AspectRatio = ViewportSize.X / ViewportSize.Y;
         Undo = new UndoStack(Scene);
-        Gizmos = new GizmoController(Scene, Undo);
+        Gizmos = new GizmoController(Scene, Undo) { Style = style ?? GizmoStyle.Classic };
     }
 
     /// <summary>A camera looking at the origin from a three-quarter view, where all three axes are separated on screen.</summary>
-    public static GizmoHarness ThreeQuarterView() => new(new Vector3(8f, 6f, 10f), Vector3.Zero);
+    public static GizmoHarness ThreeQuarterView(GizmoStyle? style = null) =>
+        new(new Vector3(8f, 6f, 10f), Vector3.Zero, style: style);
 
     /// <summary>A camera on the +z axis looking straight down −z: the x and y axes lie in the view plane, and z projects to a point.</summary>
-    public static GizmoHarness FrontView(float distance = 10f) => new(new Vector3(0f, 0f, distance), Vector3.Zero);
+    public static GizmoHarness FrontView(float distance = 10f, GizmoStyle? style = null) =>
+        new(new Vector3(0f, 0f, distance), Vector3.Zero, style: style);
 
     public Scene Scene { get; }
 
@@ -158,6 +175,40 @@ internal sealed class GizmoHarness
     /// <summary>This frame's gizmo geometry for a pivot in an explicit frame.</summary>
     public GizmoGeometry GeometryAt(Vector3 pivot, Quaternion frame) =>
         GizmoGeometry.Build(Scene.Camera, pivot, frame, ViewportSize, Gizmo.HandlePixelSize);
+
+    /// <summary>
+    /// The geometry the live tool would actually lay out for the current
+    /// selection: the style's roster, the style's pivot, and handles standing
+    /// wherever the style puts them.
+    /// </summary>
+    public GizmoGeometry LiveGeometry() => Gizmo.GeometryFor(ViewportSize);
+
+    /// <summary>
+    /// A world point on <paramref name="handle"/> that a grab can be aimed at,
+    /// wherever the live style has put it: the centre of a resize cube, or the
+    /// middle of an axis handle's shaft.
+    /// </summary>
+    /// <remarks>
+    /// The whole reason a Studio-style test cannot hard-code an aim point. The
+    /// handle's distance from the pivot is a property of the selection's box,
+    /// so the test has to ask the geometry the same way the renderer and the hit
+    /// tester do.
+    /// </remarks>
+    public Vector3 GrabPointFor(GizmoHandle handle)
+    {
+        GizmoGeometry geometry = LiveGeometry();
+
+        if (Gizmo.Mode == GizmoMode.Scale &&
+            geometry.TryGetHandleBox(handle, out Vector3 boxCentre, out _))
+        {
+            return boxCentre;
+        }
+
+        if (geometry.TryGetAxisSegment(handle, out Vector3 start, out Vector3 end))
+            return Vector3.Lerp(start, end, 0.5f);
+
+        return geometry.Pivot;
+    }
 
     /// <summary>Builds one input frame.</summary>
     public EditorInputFrame Frame(

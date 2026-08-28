@@ -47,7 +47,10 @@ public sealed class GizmoBrushRigidityTests
     [Fact]
     public void Resizing_a_brush_node_keeps_its_transform_rigid_and_compiles()
     {
-        var harness = GizmoHarness.ThreeQuarterView();
+        // The Studio style, whose resize holds the opposite face still: this test
+        // is about the anchoring shift being a TRANSLATION, so it needs a style
+        // that produces one.
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode node = harness.AddSelectedBrushNode(Vector3.Zero, halfExtent: 1f);
         var renderer = new CompilingRenderer();
         harness.Scene.RebuildStaticWorld(renderer);
@@ -57,10 +60,11 @@ public sealed class GizmoBrushRigidityTests
 
         harness.Gizmos.Update(harness.Frame(new Vector2(-10f, -10f)));
         GizmoGeometry geometry = harness.Gizmo.Geometry;
-        harness.Grab(geometry.AxisX * geometry.AxisLength).ShouldBe(GizmoUpdateResult.DragBegan);
+        float reach = geometry.AxisReach(GizmoHandle.AxisX);
+        harness.Grab(geometry.AxisX * reach).ShouldBe(GizmoUpdateResult.DragBegan);
         // Three world units wider: the cursor's travel along the axis IS the
         // size change, so the two-unit brush ends up five across.
-        harness.DragTo(geometry.AxisX * (geometry.AxisLength + 3f));
+        harness.DragTo(geometry.AxisX * (reach + 3f));
         harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
 
         node.LocalScale.ShouldBe(Vector3.One);
@@ -145,7 +149,7 @@ public sealed class GizmoBrushRigidityTests
     {
         // The declined node keeps a slot in the tool's per-target list, so the
         // mesh node beside it must still be resized — and by the right factor.
-        var harness = GizmoHarness.ThreeQuarterView();
+        var harness = ScaleGizmoDragTests.ResizeHarness();
         SceneNode mesh = harness.AddMeshNode(new Vector3(-4f, 0f, 0f), 0.5f, "Mesh");
         SceneNode group = harness.AddNode(new Vector3(4f, 0f, 0f), "Group");
         SceneNode child = group.CreateChild("BrushChild");
@@ -161,9 +165,10 @@ public sealed class GizmoBrushRigidityTests
         GizmoGeometry geometry = harness.Gizmo.Geometry;
         Vector3 pivot = geometry.Pivot;
 
-        harness.Grab(pivot + geometry.AxisX * geometry.AxisLength).ShouldBe(GizmoUpdateResult.DragBegan);
+        float reach = geometry.AxisReach(GizmoHandle.AxisX);
+        harness.Grab(pivot + geometry.AxisX * reach).ShouldBe(GizmoUpdateResult.DragBegan);
         // The mesh is one world unit across, so +1 is exactly a doubling.
-        harness.DragTo(pivot + geometry.AxisX * (geometry.AxisLength + 1f));
+        harness.DragTo(pivot + geometry.AxisX * (reach + 1f));
         harness.Release().ShouldBe(GizmoUpdateResult.DragCommitted);
 
         mesh.LocalScale.X.ShouldBe(2f, 1e-2f);

@@ -9,12 +9,14 @@ namespace SpectraEngine.Editing.Tests;
 /// no GPU resource behind it at all.
 /// </summary>
 /// <remarks>
-/// <b>The resize tool measures a mesh node through exactly these two
-/// properties</b> — <see cref="Mesh.Positions"/> (non-empty is what makes bounds
-/// trustworthy, the same test <c>SceneBvh</c> applies) and
-/// <see cref="Mesh.LocalBounds"/> — so a mesh node in the editing suite has to
-/// carry them or it is testing the tool's no-bounds fallback by accident. Drawing
-/// is a no-op: nothing here ever reaches a renderer.
+/// <b>The resize tool and the gizmo's selection box both measure a mesh node
+/// through <see cref="Mesh.HasLocalBounds"/> and <see cref="Mesh.LocalBounds"/></b>,
+/// so a mesh node in the editing suite has to carry both or it is testing the
+/// no-bounds fallback by accident. <see cref="Mesh.Positions"/> is filled too,
+/// because picking and the BVH read it, but it is no longer what makes the
+/// bounds trustworthy: a real mesh computes its bounds off the upload stream
+/// whether or not it keeps a CPU copy. Drawing is a no-op: nothing here ever
+/// reaches a renderer.
 /// </remarks>
 internal sealed class BoxMesh : Mesh
 {
@@ -22,6 +24,7 @@ internal sealed class BoxMesh : Mesh
     {
         Positions = corners;
         LocalBounds = bounds;
+        HasLocalBounds = true;
         IndexCount = 0;
     }
 

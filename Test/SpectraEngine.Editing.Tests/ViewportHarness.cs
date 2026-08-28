@@ -34,7 +34,8 @@ namespace SpectraEngine.Editing.Tests;
 /// </remarks>
 internal sealed class ViewportHarness
 {
-    public ViewportHarness(float viewportWidth = 800f, float viewportHeight = 600f)
+    public ViewportHarness(
+        float viewportWidth = 800f, float viewportHeight = 600f, GizmoStyle? gizmoStyle = null)
     {
         ViewportSize = new Vector2(viewportWidth, viewportHeight);
         Scene = new Scene("Viewport");
@@ -43,7 +44,13 @@ internal sealed class ViewportHarness
         // lands a few pixels off.
         Scene.Camera.AspectRatio = ViewportSize.X / ViewportSize.Y;
         Undo = new UndoStack(Scene);
-        Gizmos = new GizmoController(Scene, Undo);
+        // Classic by default, not the engine's Studio default, for the reason
+        // GizmoHarness gives: these tests aim at pixels near a gizmo whose
+        // handles stand a fixed distance from the pivot, and Studio stands them
+        // on the selection's own box instead. The arbitration this suite is
+        // about (press means manipulate, or select, or marquee) is style
+        // independent; where the handles are is not.
+        Gizmos = new GizmoController(Scene, Undo) { Style = gizmoStyle ?? GizmoStyle.Classic };
         CursorLock = new FakeCursorLock();
         EditorCamera = new EditorCameraController(Scene)
         {
