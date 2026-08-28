@@ -67,7 +67,7 @@ public sealed unsafe class D3D12Renderer : Renderer
     private readonly DxgiApi _dxgi = DxgiApi.GetApi();
     private readonly D3DCompiler _d3dCompiler = D3DCompiler.GetApi();
 
-    private IWindow? _window;
+    private IRenderSurface? _surface;
     private ComPtr<ID3D12Device> _device;
     private ComPtr<ID3D12CommandQueue> _queue;
     private ComPtr<IDXGISwapChain3> _swapChain;
@@ -188,8 +188,8 @@ public sealed unsafe class D3D12Renderer : Renderer
     /// <summary>D3D12 creates its own device, so the window must not bring up an OpenGL context.</summary>
     public override GraphicsAPI WindowApi => GraphicsAPI.None;
 
-    public override void AcquireContext(IWindow window) { /* not thread-affine */ }
-    public override void ReleaseContext(IWindow window) { }
+    public override void AcquireContext(IRenderSurface surface) { /* not thread-affine */ }
+    public override void ReleaseContext(IRenderSurface surface) { }
 
     public override string CurrentPipelineName =>
         _pipelines.Count == 0 ? "None" : _pipelines[_pipelineIndex].Name;
@@ -283,9 +283,9 @@ public sealed unsafe class D3D12Renderer : Renderer
 
     // ─── Initialization ──────────────────────────────────────
 
-    public override void Initialize(IWindow window)
+    public override void Initialize(IRenderSurface surface)
     {
-        _window = window;
+        _surface = surface;
 
         // Read the engine-fed latch, not window.FramebufferSize: this runs on
         // the render thread while the main thread is already pumping
@@ -295,7 +295,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         _swapChainSize = size;
 
         CreateDevice();
-        CreateQueueAndSwapChain(window, (uint)size.X, (uint)size.Y);
+        CreateQueueAndSwapChain(surface, (uint)size.X, (uint)size.Y);
         CreateFrameResources((uint)size.X, (uint)size.Y);
 
         DefaultShader = BaseShaders.LitPath is { } litPath
@@ -379,12 +379,16 @@ public sealed unsafe class D3D12Renderer : Renderer
             _infoQueue = ComOwnership.Own(infoQueue);
     }
 
-    private void CreateQueueAndSwapChain(IWindow window, uint width, uint height)
+    private void CreateQueueAndSwapChain(IRenderSurface surface, uint width, uint height)
     {
-        var native = window.Native
-            ?? throw new InvalidOperationException("D3D12 requires a native window handle; window has none.");
-        nint hwnd = native.Win32?.Hwnd
-            ?? throw new InvalidOperationException("D3D12 backend only runs on Win32 (need HWND).");
+        if (surface.Kind != RenderSurfaceKind.Win32 || surface.NativeHandle == 0)
+        {
+            throw new InvalidOperationException(
+                $"The D3D12 backend needs a Win32 surface with an HWND; this one is {surface.Kind}. " +
+                "On another platform, or for a surface that offers only a GL context, use the OpenGL backend.");
+        }
+
+        nint hwnd = surface.NativeHandle;
 
         var queueDesc = new CommandQueueDesc
         {
@@ -625,7 +629,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         DrainPendingResize();
         HotReloader.PumpPendingReloads();
 
-        if (_pipelines.Count == 0 || _window is null) return;
+        if (_pipelines.Count == 0 || _surface is null) return;
 
         var allocator = (ID3D12CommandAllocator*)_commandAllocator.Handle;
         var list = (ID3D12GraphicsCommandList*)_commandList.Handle;
@@ -698,7 +702,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         ((ID3D12CommandQueue*)_queue.Handle)->ExecuteCommandLists(1, &executeList);
     }
 
-    public override void Present(IWindow window)
+    public override void Present(IRenderSurface surface)
     {
         if (_swapChain.Handle is null || _deviceLost) return;
 

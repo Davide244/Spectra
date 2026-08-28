@@ -12,7 +12,7 @@ namespace SpectraEngine.Core.Graphics.OpenGL;
 public class OpenGLRenderer : Renderer
 {
     private GL? _gl;
-    private IWindow? _window;
+    private IRenderSurface? _surface;
 
     // Every resource built by the Create* factories is tracked here so
     // Shutdown can free stragglers. Meshes/textures leave early through
@@ -39,10 +39,14 @@ public class OpenGLRenderer : Renderer
     {
     }
 
-    public override void Initialize(IWindow window)
+    public override void Initialize(IRenderSurface surface)
     {
-        _window = window;
-        _gl = window.CreateOpenGL();
+        _surface = surface;
+        _gl = GL.GetApi(surface.GLContext
+            ?? throw new InvalidOperationException(
+                "The OpenGL backend needs a surface carrying a GL context; this one has none. " +
+                "A window created with GraphicsAPI.None, or an embedded surface offering only a " +
+                "native handle, can only drive a D3D backend."));
 
         // No framebuffer-size handling here: the engine seeds the base-class
         // latch on the main thread before this thread starts and feeds it from
@@ -192,10 +196,10 @@ public class OpenGLRenderer : Renderer
     /// exactly the refresh interval with almost no work in it, which reads as a
     /// slow renderer rather than as a wait.
     /// </remarks>
-    public override void AcquireContext(IWindow window)
+    public override void AcquireContext(IRenderSurface surface)
     {
-        base.AcquireContext(window);
-        window.GLContext?.SwapInterval(0);
+        base.AcquireContext(surface);
+        surface.GLContext?.SwapInterval(0);
     }
 
     /// <inheritdoc/>
@@ -221,7 +225,7 @@ public class OpenGLRenderer : Renderer
         // frame. We're on the render thread here, so GL calls are safe.
         HotReloader.PumpPendingReloads();
 
-        if (_pipelines.Count == 0 || _gl is null || _window is null)
+        if (_pipelines.Count == 0 || _gl is null || _surface is null)
             return;
 
         var context = new OpenGLRenderContext

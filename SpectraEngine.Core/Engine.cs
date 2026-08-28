@@ -41,6 +41,7 @@ public sealed class Engine
     private readonly WindowModeLatch _windowModeLatch;
 
     private IWindow? _window;
+    private WindowRenderSurface? _surface;
     private FlyCameraController? _cameraController;
     private FirstPersonController? _character;
     private DebugVisualization _debugFlags = DebugVisualization.None;
@@ -222,13 +223,19 @@ public sealed class Engine
         _audioManager.Initialize();
         _inputManager.Initialize(_window.CreateInput());
 
+        // The renderer is handed a SURFACE, not a window: a handle, a context
+        // and a size, with none of the ownership (title, cursor, event pump,
+        // lifetime) that stays here. An embedded host supplies its own
+        // implementation of the same three things and needs to touch no backend.
+        _surface = new WindowRenderSurface(_window);
+
         // Seed the renderer's framebuffer-size latch while we are still the
         // only thread, then keep it fresh from the resize event (which fires
         // during DoEvents on this thread). GLFW gives no thread-safety
         // guarantee for size queries, so the render side only ever reads the
-        // latch and never touches IWindow.
-        _renderer.SetFramebufferSize(_window.FramebufferSize);
-        _window.FramebufferResize += _renderer.SetFramebufferSize;
+        // latch and never touches the surface's own size.
+        _renderer.SetFramebufferSize(_surface.PixelSize);
+        _surface.Resized += _renderer.SetFramebufferSize;
 
         // Focus changes fire during DoEvents, i.e. on this thread — which is
         // the only thread allowed to touch the cursor. A focus loss has to
@@ -240,7 +247,7 @@ public sealed class Engine
 
         // Release any thread-affine context (OpenGL) here so the render thread
         // can take ownership. Backends without one (D3D, Vulkan) no-op.
-        _renderer.ReleaseContext(_window);
+        _renderer.ReleaseContext(_surface);
 
         var renderThread = new Thread(RenderLoop)
         {
@@ -359,16 +366,16 @@ public sealed class Engine
     // without a fatal log entry or a log flush.
     private void RenderLoop()
     {
-        var window = _window!;
+        var surface = _surface!;
         try
         {
-            _renderer.AcquireContext(window);
+            _renderer.AcquireContext(surface);
 
             if (DebugLayer is { } wanted)
                 _renderer.EnableDebugLayer = wanted;
             _renderer.PreferredAdapter = PreferredAdapter;
 
-            _renderer.Initialize(window);
+            _renderer.Initialize(surface);
 
             _renderer.ShadowsEnabled = ShadowsEnabled;
             _renderer.Profiler.Enabled = ProfileFrames;
@@ -646,7 +653,7 @@ public sealed class Engine
                 }
 
                 using (Profiler.Measure(FramePhase.Present))
-                    _renderer.Present(window);
+                    _renderer.Present(surface);
 
                 Profiler.EndFrame();
             }
@@ -657,7 +664,7 @@ public sealed class Engine
             _sceneManager.ActiveScene?.ReleasePartBrushMeshes(_renderer);
             _assetManager.ReleaseGraphicsResources();
             _renderer.Shutdown();
-            _renderer.ReleaseContext(window);
+            _renderer.ReleaseContext(surface);
         }
         catch (Exception ex)
         {
@@ -670,7 +677,7 @@ public sealed class Engine
             {
                 _assetManager.ReleaseGraphicsResources();
                 _renderer.Shutdown();
-                _renderer.ReleaseContext(window);
+                _renderer.ReleaseContext(surface);
             }
             catch (Exception cleanupEx)
             {

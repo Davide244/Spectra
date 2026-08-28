@@ -74,19 +74,19 @@ public abstract class Renderer
     /// calling thread. Called once at the start of the render loop. Backends
     /// without thread-current state (D3D, Vulkan) leave this empty.
     /// </summary>
-    public virtual void AcquireContext(IWindow window) => window.GLContext?.MakeCurrent();
+    public virtual void AcquireContext(IRenderSurface surface) => surface.GLContext?.MakeCurrent();
 
     /// <summary>
     /// Releases the context from the calling thread; mirror of
     /// <see cref="AcquireContext"/>. Called at render-loop shutdown.
     /// </summary>
-    public virtual void ReleaseContext(IWindow window) => window.GLContext?.Clear();
+    public virtual void ReleaseContext(IRenderSurface surface) => surface.GLContext?.Clear();
 
     /// <summary>
     /// Presents the most recently rendered frame to the window. OpenGL swaps
     /// buffers via the GL context; D3D11/12 call IDXGISwapChain::Present.
     /// </summary>
-    public virtual void Present(IWindow window) => window.GLContext?.SwapBuffers();
+    public virtual void Present(IRenderSurface surface) => surface.GLContext?.SwapBuffers();
 
     /// <summary>
     /// A backend-provided shader suitable for general lit geometry. Available
@@ -219,7 +219,7 @@ public abstract class Renderer
         return program;
     }
 
-    public virtual void Initialize(IWindow window)
+    public virtual void Initialize(IRenderSurface surface)
     {
         _logger.LogInformation("Renderer initialized");
     }

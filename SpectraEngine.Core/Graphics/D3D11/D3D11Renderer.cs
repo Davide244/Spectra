@@ -29,7 +29,7 @@ public sealed unsafe class D3D11Renderer : Renderer
     private readonly DxgiApi _dxgi = DxgiApi.GetApi();
     internal readonly D3DCompiler _d3dCompiler = D3DCompiler.GetApi();
 
-    private IWindow? _window;
+    private IRenderSurface? _surface;
     private ComPtr<ID3D11Device> _device;
     private ComPtr<ID3D11DeviceContext> _context;
     private ComPtr<IDXGISwapChain1> _swapChain;
@@ -127,10 +127,10 @@ public sealed unsafe class D3D11Renderer : Renderer
     public override string CurrentPipelineName =>
         _pipelines.Count == 0 ? "None" : _pipelines[_pipelineIndex].Name;
 
-    public override void AcquireContext(IWindow window) { /* D3D11 immediate context isn't thread-affine */ }
-    public override void ReleaseContext(IWindow window) { }
+    public override void AcquireContext(IRenderSurface surface) { /* D3D11 immediate context isn't thread-affine */ }
+    public override void ReleaseContext(IRenderSurface surface) { }
 
-    public override void Present(IWindow window)
+    public override void Present(IRenderSurface surface)
     {
         if (_swapChain.Handle is not null && !_deviceLost)
         {
@@ -210,9 +210,9 @@ public sealed unsafe class D3D11Renderer : Renderer
     {
     }
 
-    public override void Initialize(IWindow window)
+    public override void Initialize(IRenderSurface surface)
     {
-        _window = window;
+        _surface = surface;
 
         // Read the engine-fed latch, not window.FramebufferSize: this runs on
         // the render thread while the main thread is already pumping
@@ -221,7 +221,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         Vector2D<int> size = FramebufferSize;
         _swapChainSize = size;
 
-        CreateDeviceAndSwapChain(window, size.X, size.Y);
+        CreateDeviceAndSwapChain(surface, size.X, size.Y);
         CreateBackBufferViews((uint)size.X, (uint)size.Y);
         CreateDefaultStates();
 
@@ -279,7 +279,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         DrainPendingResize();
         HotReloader.PumpPendingReloads();
 
-        if (_pipelines.Count == 0 || _window is null) return;
+        if (_pipelines.Count == 0 || _surface is null) return;
 
         var ctx = new D3D11RenderContext
         {
@@ -575,12 +575,16 @@ public sealed unsafe class D3D11Renderer : Renderer
 
     // ─── Device + swap chain setup ───────────────────────────
 
-    private void CreateDeviceAndSwapChain(IWindow window, int width, int height)
+    private void CreateDeviceAndSwapChain(IRenderSurface surface, int width, int height)
     {
-        var native = window.Native
-            ?? throw new InvalidOperationException("D3D11 requires a native window handle; window has none.");
-        nint hwnd = native.Win32?.Hwnd
-            ?? throw new InvalidOperationException("D3D11 backend only runs on Win32 (need HWND).");
+        if (surface.Kind != RenderSurfaceKind.Win32 || surface.NativeHandle == 0)
+        {
+            throw new InvalidOperationException(
+                $"The D3D11 backend needs a Win32 surface with an HWND; this one is {surface.Kind}. " +
+                "On another platform, or for a surface that offers only a GL context, use the OpenGL backend.");
+        }
+
+        nint hwnd = surface.NativeHandle;
 
         D3DFeatureLevel featureLevel = default;
         D3DFeatureLevel[] requested = [D3DFeatureLevel.Level110];
