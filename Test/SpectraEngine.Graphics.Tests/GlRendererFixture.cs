@@ -74,7 +74,9 @@ public sealed class GlRendererFixture : IDisposable
         Renderer = new OpenGLRenderer(
             NullLogger<Renderer>.Instance,
             new SpectraShadeCompiler());
-        Renderer.Initialize(_window);
+        // The renderer takes a surface rather than a window, so the fixture
+        // wraps its hidden window in the same adapter the engine uses.
+        Renderer.Initialize(new WindowRenderSurface(_window));
 
         // After Initialize, so the context exists and is current on this thread.
         Gl = _window.CreateOpenGL();
