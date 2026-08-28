@@ -1147,6 +1147,52 @@ public abstract class Renderer
         MeshCpuAccess cpuAccess = MeshCpuAccess.Retained);
 
     /// <summary>
+    /// Creates a buffer able to hold <paramref name="capacityInstances"/>
+    /// instances of <paramref name="attributes"/>, for
+    /// <see cref="Mesh.DrawInstanced"/>.
+    /// </summary>
+    /// <remarks>
+    /// <b>Every attribute must name <see cref="VertexAttribute.InstanceSlot"/>.</b>
+    /// A per-vertex attribute here would be bound to the instance buffer and
+    /// read one element per instance instead of per vertex, which is a mesh
+    /// that renders as garbage with nothing reporting why, so it is refused.
+    /// </remarks>
+    public abstract InstanceBuffer CreateInstanceBuffer(
+        int capacityInstances,
+        ReadOnlySpan<VertexAttribute> attributes);
+
+    /// <summary>
+    /// Throws if <paramref name="attributes"/> is not a valid instance layout.
+    /// Shared by every backend's <see cref="CreateInstanceBuffer"/>, and the
+    /// reason none of them re-states the rule.
+    /// </summary>
+    protected static int ValidateInstanceLayout(
+        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacityInstances);
+
+        if (attributes.Length == 0)
+            throw new ArgumentException("An instance layout needs at least one attribute.", nameof(attributes));
+
+        int floats = 0;
+        for (int i = 0; i < attributes.Length; i++)
+        {
+            if (attributes[i].InputSlot != VertexAttribute.InstanceSlot)
+            {
+                throw new ArgumentException(
+                    $"Attribute at location {attributes[i].Location} names input slot " +
+                    $"{attributes[i].InputSlot}, but an instance buffer binds " +
+                    $"{VertexAttribute.InstanceSlot}.",
+                    nameof(attributes));
+            }
+
+            floats += (int)attributes[i].ComponentCount;
+        }
+
+        return floats;
+    }
+
+    /// <summary>
     /// Disposes a mesh created by <see cref="CreateMesh"/> and drops it from the
     /// creating renderer's tracking list. Meshes destroyed mid-run (e.g. the
     /// static world mesh, rebuilt on every CSG edit) must go through here rather

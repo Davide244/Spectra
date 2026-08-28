@@ -126,6 +126,44 @@ internal sealed unsafe class D3D12Mesh : Mesh
         list->DrawIndexedInstanced(IndexCount, 1, 0, 0, 0);
     }
 
+    /// <inheritdoc/>
+    public override void DrawInstanced(InstanceBuffer instances, int instanceCount)
+    {
+        ArgumentNullException.ThrowIfNull(instances);
+        if (instanceCount <= 0)
+            return;
+
+        if (instances is not D3D12InstanceBuffer d3d)
+            throw new ArgumentException("Instance buffer belongs to another backend.", nameof(instances));
+
+        var list = _renderer.CurrentList;
+        var program = _renderer.CurrentProgram;
+        if (list is null || program is null) return;
+
+        var target = _renderer.CurrentTargetState;
+
+        // The COMBINED layout, not this mesh's. On D3D12 the input layout is
+        // part of the pipeline, so an instanced draw is a different PSO rather
+        // than a different binding; the PSO cache keys on the elements
+        // structurally, so this selects one without the cache knowing why.
+        var pso = program.GetPso(
+            d3d.CombinedLayout, _renderer.CurrentFillMode, PrimitiveTopologyType.Triangle,
+            _renderer.CurrentDepthMode, BlendMode.Opaque, _renderer.CurrentDepthBias, in target);
+        _renderer.BindPipelineState(list, pso);
+        _renderer.BindTopology(list, D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+
+        VertexBufferView* views = stackalloc VertexBufferView[2];
+        views[0] = _vbView;
+        views[1] = d3d.View;
+        list->IASetVertexBuffers(0, 2, views);
+
+        fixed (IndexBufferView* ib = &_ibView)
+        {
+            list->IASetIndexBuffer(ib);
+        }
+        list->DrawIndexedInstanced(IndexCount, (uint)instanceCount, 0, 0, 0);
+    }
+
     public override void Dispose()
     {
         if (_disposed) return;

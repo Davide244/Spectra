@@ -1,4 +1,4 @@
-using Silk.NET.OpenGL;
+﻿using Silk.NET.OpenGL;
 using System;
 
 namespace SpectraEngine.Core.Graphics.OpenGL;
@@ -67,6 +67,58 @@ internal sealed class OpenGLMesh : Mesh
     {
         _gl.BindVertexArray(_vao);
         _gl.DrawElements(PrimitiveType.Triangles, IndexCount, DrawElementsType.UnsignedInt, null);
+    }
+
+    // Which instance buffer's attributes are currently wired into this mesh's
+    // vertex array, by generation rather than by GL name: names are recycled, so
+    // a freed buffer and a fresh one can share one and the check would pass
+    // against different storage. Zero means none.
+    private uint _wiredInstanceGeneration;
+
+    /// <inheritdoc/>
+    public override unsafe void DrawInstanced(InstanceBuffer instances, int instanceCount)
+    {
+        ArgumentNullException.ThrowIfNull(instances);
+        if (instanceCount <= 0)
+            return;
+
+        if (instances is not OpenGLInstanceBuffer gl)
+            throw new ArgumentException("Instance buffer belongs to another backend.", nameof(instances));
+
+        _gl.BindVertexArray(_vao);
+
+        // Wire the instance attributes into this mesh's vertex array once per
+        // buffer. GL stores attribute pointers and divisors IN the vertex array,
+        // so this cannot be done per draw call without paying for it per draw
+        // call; and it cannot be done at mesh creation either, because the
+        // buffer does not exist yet and one mesh may be drawn from more than
+        // one of them over its life.
+        if (_wiredInstanceGeneration != gl.Generation)
+        {
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, gl.Handle);
+
+            uint offset = 0;
+            foreach (VertexAttribute attr in gl.Attributes)
+            {
+                _gl.VertexAttribPointer(
+                    attr.Location, (int)attr.ComponentCount,
+                    VertexAttribPointerType.Float, false, gl.Stride, (void*)offset);
+                _gl.EnableVertexAttribArray(attr.Location);
+
+                // The divisor is the whole feature. Without it the attribute
+                // advances per vertex, every instance reads the first few
+                // matrices, and the draw succeeds.
+                _gl.VertexAttribDivisor(attr.Location, 1);
+
+                offset += attr.ComponentCount * sizeof(float);
+            }
+
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+            _wiredInstanceGeneration = gl.Generation;
+        }
+
+        _gl.DrawElementsInstanced(
+            PrimitiveType.Triangles, IndexCount, DrawElementsType.UnsignedInt, null, (uint)instanceCount);
     }
 
     public override void Dispose()

@@ -469,6 +469,14 @@ public class OpenGLRenderer : Renderer
         return mesh;
     }
 
+    /// <inheritdoc/>
+    public override InstanceBuffer CreateInstanceBuffer(
+        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes)
+    {
+        int floats = ValidateInstanceLayout(capacityInstances, attributes);
+        return new OpenGLInstanceBuffer(_gl!, capacityInstances, attributes, floats);
+    }
+
     public override Texture CreateTexture(
         ReadOnlySpan<byte> pixels, int width, int height,
         TextureFormat format, TextureColorSpace colorSpace, TextureFilter filter, TextureWrap wrap)

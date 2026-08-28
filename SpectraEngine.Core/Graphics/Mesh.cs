@@ -118,5 +118,26 @@ public abstract class Mesh : IDisposable
 
     public abstract void Draw();
 
+    /// <summary>
+    /// Draws this mesh <paramref name="instanceCount"/> times, with per-instance
+    /// attributes read from <paramref name="instances"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The bound shader must declare the instance attributes</b>, or the
+    /// hardware feeds them nothing and every instance lands on top of the first.
+    /// That is a picture rather than an error on all three backends, which is
+    /// why the compiler reports a shader's inputs (see
+    /// <see cref="VertexAttribute.FromShaderInputs"/>) instead of leaving the
+    /// layout to be agreed by hand.
+    /// </para>
+    /// <para>
+    /// A count of zero draws nothing and is not an error: a batch can be culled
+    /// to empty between being formed and being submitted, and making the caller
+    /// guard every call is how one site forgets.
+    /// </para>
+    /// </remarks>
+    public abstract void DrawInstanced(InstanceBuffer instances, int instanceCount);
+
     public abstract void Dispose();
 }

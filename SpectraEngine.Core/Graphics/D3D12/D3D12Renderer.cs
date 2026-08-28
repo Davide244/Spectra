@@ -1552,6 +1552,15 @@ public sealed unsafe class D3D12Renderer : Renderer
         return mesh;
     }
 
+    /// <inheritdoc/>
+    public override InstanceBuffer CreateInstanceBuffer(
+        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes)
+    {
+        int floats = ValidateInstanceLayout(capacityInstances, attributes);
+        return new D3D12InstanceBuffer(
+            _device, capacityInstances, VertexAttribute.StandardLayout, attributes, floats);
+    }
+
     public override Texture CreateTexture(
         ReadOnlySpan<byte> pixels, int width, int height,
         TextureFormat format, TextureColorSpace colorSpace, TextureFilter filter, TextureWrap wrap)

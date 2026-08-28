@@ -496,6 +496,21 @@ public sealed unsafe class D3D11Renderer : Renderer
         return mesh;
     }
 
+    /// <inheritdoc/>
+    public override InstanceBuffer CreateInstanceBuffer(
+        int capacityInstances, ReadOnlySpan<VertexAttribute> attributes)
+    {
+        int floats = ValidateInstanceLayout(capacityInstances, attributes);
+        var litShader = (D3D11ShaderProgram?)DefaultShader
+            ?? throw new InvalidOperationException(
+                "Default shader must be created before instance buffers: D3D validates an " +
+                "input layout against a vertex shader signature.");
+
+        return new D3D11InstanceBuffer(
+            _device, capacityInstances,
+            VertexAttribute.StandardLayout, attributes, floats, litShader.VertexBytecode);
+    }
+
     public override Texture CreateTexture(
         ReadOnlySpan<byte> pixels, int width, int height,
         TextureFormat format, TextureColorSpace colorSpace, TextureFilter filter, TextureWrap wrap)

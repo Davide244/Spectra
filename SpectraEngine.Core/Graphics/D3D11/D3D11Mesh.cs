@@ -148,6 +148,42 @@ internal sealed unsafe class D3D11Mesh : Mesh
         ctx->DrawIndexed(IndexCount, 0, 0);
     }
 
+    /// <inheritdoc/>
+    public override void DrawInstanced(InstanceBuffer instances, int instanceCount)
+    {
+        ArgumentNullException.ThrowIfNull(instances);
+        if (instanceCount <= 0)
+            return;
+
+        if (instances is not D3D11InstanceBuffer d3d)
+            throw new ArgumentException("Instance buffer belongs to another backend.", nameof(instances));
+
+        var ctx = (ID3D11DeviceContext*)_context.Handle;
+
+        // Two buffers into two slots, described by the instance buffer's
+        // combined layout rather than this mesh's slot-0-only one.
+        ID3D11Buffer** buffers = stackalloc ID3D11Buffer*[2];
+        buffers[0] = (ID3D11Buffer*)_vertexBuffer.Handle;
+        buffers[1] = d3d.Buffer;
+
+        uint* strides = stackalloc uint[2] { _stride, d3d.Stride };
+        uint* offsets = stackalloc uint[2] { 0, 0 };
+
+        ctx->IASetInputLayout(d3d.Layout);
+        ctx->IASetVertexBuffers(0, 2, buffers, strides, offsets);
+        ctx->IASetIndexBuffer((ID3D11Buffer*)_indexBuffer.Handle, Format.FormatR32Uint, 0);
+        ctx->IASetPrimitiveTopology(D3DPrimitiveTopology.D3D11PrimitiveTopologyTrianglelist);
+        ctx->DrawIndexedInstanced(IndexCount, (uint)instanceCount, 0, 0, 0);
+
+        // Slot 1 is left bound, which is harmless for a draw that ignores it but
+        // not for the debug layer: an input layout naming only slot 0 with a
+        // stale buffer still bound is a warning per draw into the same info
+        // queue the engine reads for real errors.
+        ID3D11Buffer* none = null;
+        uint zero = 0;
+        ctx->IASetVertexBuffers(VertexAttribute.InstanceSlot, 1, &none, &zero, &zero);
+    }
+
     public override void Dispose()
     {
         if (_disposed) return;

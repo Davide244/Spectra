@@ -1,4 +1,4 @@
-using Silk.NET.Core.Native;
+﻿using Silk.NET.Core.Native;
 using Silk.NET.Direct3D.Compilers;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
@@ -388,10 +388,12 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
                     SemanticName = semName,
                     SemanticIndex = e.SemanticIndex,
                     Format = e.Format,
-                    InputSlot = 0,
+                    InputSlot = e.InputSlot,
                     AlignedByteOffset = e.ByteOffset,
-                    InputSlotClass = InputClassification.PerVertexData,
-                    InstanceDataStepRate = 0,
+                    InputSlotClass = e.PerInstance
+                        ? InputClassification.PerInstanceData
+                        : InputClassification.PerVertexData,
+                    InstanceDataStepRate = e.PerInstance ? 1u : 0u,
                 };
             }
 
@@ -664,7 +666,17 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
 /// </summary>
 internal sealed class D3D12VertexLayout
 {
-    public readonly record struct Element(uint SemanticIndex, Format Format, uint ByteOffset);
+    /// <param name="SemanticIndex">The TEXCOORD index, i.e. the shader's location.</param>
+    /// <param name="Format">The element's format, from its component count.</param>
+    /// <param name="ByteOffset">Byte offset within its OWN slot, not within a concatenation of both.</param>
+    /// <param name="InputSlot">Which bound vertex buffer it reads from: 0 the mesh, 1 the instance buffer.</param>
+    /// <param name="PerInstance">Whether it advances per instance rather than per vertex.</param>
+    public readonly record struct Element(
+        uint SemanticIndex,
+        Format Format,
+        uint ByteOffset,
+        uint InputSlot = 0,
+        bool PerInstance = false);
 
     public Element[] Elements { get; }
     public uint StrideBytes { get; }
@@ -684,6 +696,11 @@ internal sealed class D3D12VertexLayout
             hash.Add(e.SemanticIndex);
             hash.Add((int)e.Format);
             hash.Add(e.ByteOffset);
+            // Part of PSO identity: a pipeline compiled for a per-vertex layout
+            // and handed an instanced draw binds slot 1 to nothing, and every
+            // instance lands on top of the first.
+            hash.Add(e.InputSlot);
+            hash.Add(e.PerInstance);
         }
         Key = hash.ToHashCode();
     }
