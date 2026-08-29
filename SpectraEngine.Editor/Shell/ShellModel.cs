@@ -1,8 +1,21 @@
 using Avalonia.Threading;
 using SpectraEngine.Core.Hosting;
 using System;
+using System.Collections.ObjectModel;
 
 namespace SpectraEngine.Editor.Shell;
+
+/// <summary>
+/// One map in the open project's panel: the manifest's, the folder's, or both.
+/// </summary>
+/// <param name="RelativePath">Project-relative bundle path, the manifest's key.</param>
+/// <param name="Name">The bundle's folder name without its extension.</param>
+/// <param name="IsStartup">Whether the manifest boots this one.</param>
+/// <param name="IsUnlisted">
+/// On disk but not in the manifest — the reconciliation the format docs assign
+/// to the editor, shown rather than silently resolved either way.
+/// </param>
+public sealed record ProjectMapRow(string RelativePath, string Name, bool IsStartup, bool IsUnlisted);
 
 /// <summary>
 /// Everything the window binds to: the engine's reported state, the readouts,
@@ -60,6 +73,37 @@ public sealed class ShellModel : ObservableObject
 
     /// <summary>Whether there is a tree to show at all.</summary>
     public bool HasTree => _tree is not null;
+
+    private bool _hasSession;
+
+    /// <summary>
+    /// Whether an engine session is running — what separates the editor view
+    /// from the start page, and what the toolbar and the session-only menu
+    /// items key their visibility and enabling on.
+    /// </summary>
+    public bool HasSession
+    {
+        get => _hasSession;
+        set => Set(ref _hasSession, value);
+    }
+
+    private bool _hasProject;
+
+    /// <summary>Whether a project is open, for the maps panel.</summary>
+    public bool HasProject
+    {
+        get => _hasProject;
+        set => Set(ref _hasProject, value);
+    }
+
+    /// <summary>
+    /// The open project's maps: the manifest's list in the author's order,
+    /// then anything on disk the manifest does not name. Rebuilt whole on the
+    /// UI thread when the project or its manifest changes — it is at most a
+    /// handful of rows, so the patch discipline the tree needs would be
+    /// ceremony here.
+    /// </summary>
+    public ObservableCollection<ProjectMapRow> ProjectMaps { get; } = [];
 
     // ─── Tool state ──────────────────────────────────────
     // Mirrored as booleans as well as labels, because a toolbar needs to know

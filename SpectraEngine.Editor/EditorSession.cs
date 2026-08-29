@@ -55,7 +55,16 @@ public sealed class EditorSession : IDisposable
     /// <summary>Builds a session on the given backend, without starting it.</summary>
     /// <param name="loggerFactory">Owned by the caller; used for every subsystem.</param>
     /// <param name="backend">D3D11 or D3D12. See the remarks on OpenGL.</param>
-    public EditorSession(ILoggerFactory loggerFactory, GraphicsBackend backend)
+    /// <param name="contentRoot">
+    /// The asset content root, or null for the engine's default. A project
+    /// session passes the project's <c>Assets/</c> folder — and it is a
+    /// constructor argument rather than a setter, because the asset manager
+    /// resolves every path against the root it was built with and a root
+    /// swapped mid-session would leave every cached texture keyed to a folder
+    /// nothing looks in any more. Opening a different project is a new
+    /// session, the way it is a new window in every IDE.
+    /// </param>
+    public EditorSession(ILoggerFactory loggerFactory, GraphicsBackend backend, string? contentRoot = null)
     {
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
@@ -72,8 +81,17 @@ public sealed class EditorSession : IDisposable
                 "WGL context and proc-address loader, which is not built. Use d3d11 or d3d12."),
         };
 
-        var sceneManager = new SceneManager(loggerFactory.CreateLogger<SceneManager>());
-        var assetManager = new AssetManager(loggerFactory.CreateLogger<AssetManager>());
+        var sceneManager = new SceneManager(loggerFactory.CreateLogger<SceneManager>())
+        {
+            // The shell edits projects; the authored demo belongs to the demo
+            // executable. A session boots into the baseplate and whatever map
+            // it should show is opened through OpenMap, where a bad bundle
+            // reports instead of logging and falling back.
+            Startup = StartupSceneKind.Baseplate,
+        };
+        var assetManager = contentRoot is null
+            ? new AssetManager(loggerFactory.CreateLogger<AssetManager>())
+            : new AssetManager(loggerFactory.CreateLogger<AssetManager>(), contentRoot);
         var audioManager = new AudioManager(loggerFactory.CreateLogger<AudioManager>());
         var inputManager = new InputManager(loggerFactory.CreateLogger<InputManager>());
 
@@ -265,6 +283,11 @@ public sealed class EditorSession : IDisposable
                 var empty = new MapDocument();
                 empty.Scene.Name = string.IsNullOrWhiteSpace(name) ? "Scene" : name;
                 MapSceneBinder.ApplyTo(empty, scene);
+
+                // A new map is a baseplate, not a void: lit, with a floor to
+                // stand things on — the same starter a fresh project boots
+                // into, so "new" means one thing everywhere.
+                SceneManager.PopulateBaseplate(scene);
                 scene.RebuildStaticWorld(_renderer);
 
                 done(null);

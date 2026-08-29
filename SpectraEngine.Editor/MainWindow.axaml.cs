@@ -77,6 +77,22 @@ public partial class MainWindow : Window
     private int _lastUndoDepth;
     private int _lastRedoDepth;
 
+    // The per-user shell state: today, the recent projects the start page
+    // shows. Loaded once; written whenever a project is opened or created.
+    private readonly EditorSettings _settings;
+
+    // The live viewport control, created when a session launches and removed
+    // when it closes: a NativeControlHost's child window lives exactly as long
+    // as the control is in the visual tree, so "no session" and "no viewport
+    // control" are the same state on purpose.
+    private EngineViewport? _viewport;
+
+    // What the next OnSurfaceCreated should build: the project (if any), the
+    // asset content root, and the map to open once the engine is up. Set by
+    // LaunchSession, consumed by the surface callback.
+    private sealed record SessionLaunch(ProjectLayout? Project, string? ContentRoot, string? OpenMapPath);
+    private SessionLaunch? _pendingLaunch;
+
     // Guards tree -> engine -> tree. Without it a click sets the engine's
     // selection, the next snapshot writes it back into the tree, and the tree
     // reports that as a fresh user selection. The symptom is not a hang: it is
@@ -100,8 +116,15 @@ public partial class MainWindow : Window
         _loggerFactory = new SerilogLoggerFactory(Serilog.Log.Logger, dispose: false);
         _logger = _loggerFactory.CreateLogger<MainWindow>();
 
-        Viewport.SurfaceCreated += OnSurfaceCreated;
-        Viewport.SurfaceDestroying += OnSurfaceDestroying;
+        _settings = EditorSettings.Load(_logger);
+
+        // The start page raises intents; the window owns every consequence,
+        // because it owns the storage provider, the dialogs and the session.
+        StartView.NewProjectRequested += () => _ = CreateProjectFlowAsync();
+        StartView.OpenProjectRequested += () => _ = OpenProjectFlowAsync();
+        StartView.OpenMapRequested += () => _ = OpenLooseMapFlowAsync();
+        StartView.RecentProjectPicked += recent => _ = OpenRecentProjectAsync(recent);
+        StartView.ShowRecents(_settings.RecentProjects);
 
         // TUNNEL, not the bubbling handler XAML would attach. ListBox handles
         // every arrow key itself: on a vertical panel a Left or Right press
@@ -119,10 +142,6 @@ public partial class MainWindow : Window
         };
         Title = _document.Title;
 
-        // The viewport hands up the document chords it intercepted, because
-        // while it has focus the OS gives it the keyboard and Avalonia never
-        // sees the menu accelerators at all.
-        Viewport.ShellChord += OnShellChord;
         _shell.Properties = new PropertyPanelModel(OnPropertyEdit);
 
         _pump = new DispatcherTimer(
@@ -133,7 +152,11 @@ public partial class MainWindow : Window
         // attribute rather than a custom title bar, so it costs nothing in
         // hit-testing, keeps Aero Snap and the maximise flyout, and simply does
         // nothing on Windows versions that do not know the attribute.
-        Opened += (_, _) => DarkCaption.Apply(this, _logger);
+        Opened += (_, _) =>
+        {
+            DarkCaption.Apply(this, _logger);
+            OpenFromStartupArgs();
+        };
 
         if (!EngineViewport.IsSupported)
         {
@@ -142,18 +165,148 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Opens whatever a startup argument names: a manifest, a project folder,
+    /// or a loose map bundle. First match wins; backend switches are skipped.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes a <c>.spectraproj</c> double-clickable once the OS
+    /// association exists, and it costs nothing until then.
+    /// </remarks>
+    private void OpenFromStartupArgs()
+    {
+        foreach (string arg in Program.StartupArgs)
+        {
+            if (arg.Length == 0 || arg[0] == '-')
+                continue;
+
+            switch (arg.ToLowerInvariant())
+            {
+                case "d3d11" or "d3d12" or "opengl":
+                    continue;
+            }
+
+            if (File.Exists(arg) &&
+                arg.EndsWith(ProjectFormat.Extension, StringComparison.OrdinalIgnoreCase))
+            {
+                OpenProjectAt(arg);
+                return;
+            }
+
+            if (Directory.Exists(arg))
+            {
+                if (MapBundle.IsBundle(arg))
+                {
+                    _document.SetProject(null);
+                    LaunchSession(new SessionLaunch(null, null, Path.GetFullPath(arg)));
+                    return;
+                }
+
+                if (Directory.GetFiles(arg, "*" + ProjectFormat.Extension).Length >= 1)
+                {
+                    OpenProjectAt(arg);
+                    return;
+                }
+            }
+        }
+    }
+
     // --- Engine lifetime -----------------------------------------------------
+
+    /// <summary>
+    /// Creates the viewport control and switches to the editor view; the
+    /// engine session itself is built when the native surface arrives.
+    /// </summary>
+    /// <remarks>
+    /// <b>The view switches before the child attaches</b>, so the viewport is
+    /// laid out at its real size and the first swap chain is not built against
+    /// a collapsed cell. From the attach onwards the airspace rule applies:
+    /// nothing Avalonia draws may cross the viewport's cell.
+    /// </remarks>
+    private void LaunchSession(SessionLaunch launch)
+    {
+        if (_viewport is not null)
+        {
+            // Callers close the running session first; stacking two engines
+            // over one window is never what anyone meant.
+            _logger.LogWarning("A session is already running; ignoring the launch request");
+            return;
+        }
+
+        if (!EngineViewport.IsSupported)
+        {
+            _shell.SetError(
+                "This platform cannot host the viewport yet: the embedded surface is Windows-only in v1.");
+            return;
+        }
+
+        _pendingLaunch = launch;
+
+        var viewport = new EngineViewport();
+        viewport.SurfaceCreated += OnSurfaceCreated;
+        viewport.SurfaceDestroying += OnSurfaceDestroying;
+
+        // The viewport hands up the document chords it intercepted, because
+        // while it has focus the OS gives it the keyboard and Avalonia never
+        // sees the menu accelerators at all.
+        viewport.ShellChord += OnShellChord;
+        _viewport = viewport;
+
+        StartView.IsVisible = false;
+        EditorView.IsVisible = true;
+        _shell.HasSession = true;
+
+        // Attach last: creating the native child is what eventually raises
+        // SurfaceCreated, and everything above must be in place by then.
+        ViewportHost.Child = viewport;
+        viewport.Focus();
+    }
+
+    /// <summary>
+    /// Tears the session and its viewport down and returns to the start page.
+    /// Callers have already confirmed any unsaved work.
+    /// </summary>
+    private void CloseSessionView()
+    {
+        if (_viewport is not { } viewport)
+            return;
+
+        // The child leaves the tree FIRST: destroying the native window raises
+        // SurfaceDestroying, which stops the engine before the HWND dies. The
+        // explicit stop after it covers a viewport that never got a surface.
+        ViewportHost.Child = null;
+        StopSession();
+
+        viewport.SurfaceCreated -= OnSurfaceCreated;
+        viewport.SurfaceDestroying -= OnSurfaceDestroying;
+        viewport.ShellChord -= OnShellChord;
+        _viewport = null;
+        _pendingLaunch = null;
+
+        _tree = null;
+        _shell.Tree = null;
+        _shell.HasSession = false;
+        _shell.HasProject = false;
+        _shell.ProjectMaps.Clear();
+
+        EditorView.IsVisible = false;
+        StartView.IsVisible = true;
+        StartView.ShowRecents(_settings.RecentProjects);
+    }
 
     private void OnSurfaceCreated(IRenderSurface surface)
     {
         try
         {
-            var session = new EditorSession(_loggerFactory, ResolveBackend());
+            SessionLaunch? launch = _pendingLaunch;
+            _pendingLaunch = null;
+
+            var session = new EditorSession(_loggerFactory, ResolveBackend(), launch?.ContentRoot);
 
             // Input is armed before the engine starts: the host exists from
             // construction, so a click during the first frames reaches a real
             // state machine rather than being dropped.
-            Viewport.Host = session.Host;
+            _viewport!.Host = session.Host;
             session.Host.FrameCompleted += OnFrameCompleted;
 
             // The list binds to the model's flat row projection through the
@@ -171,7 +324,20 @@ public partial class MainWindow : Window
             _session = session;
             _pump.Start();
 
-            _shell.SetMessage("Ready.");
+            // The engine is up on a baseplate; whatever should really be open
+            // goes through the ordinary map path, so a broken bundle reports
+            // instead of silently falling back.
+            if (launch?.OpenMapPath is { } mapPath)
+            {
+                OpenMapAt(mapPath);
+            }
+            else
+            {
+                _document.MarkNew();
+                _shell.SetMessage(_document.HasProject
+                    ? $"New baseplate scene. Save it to add a first map to {_document.ProjectLabel}."
+                    : "Ready.");
+            }
         }
         catch (Exception ex)
         {
@@ -201,7 +367,8 @@ public partial class MainWindow : Window
 
         _stopping = true;
         _pump.Stop();
-        Viewport.Host = null;
+        if (_viewport is { } viewport)
+            viewport.Host = null;
 
         // Detached, not merely ignored: the surface outlives this subscription
         // by exactly as long as the window takes to tear down, and a resize
@@ -216,6 +383,19 @@ public partial class MainWindow : Window
         _session.Stop();
         _session.Dispose();
         _session = null;
+
+        // Per-session UI state, reset so nothing leaks into the next session:
+        // the snapshot queue is this session's history, and the dirty baseline
+        // and reveal gates describe a scene that no longer exists.
+        _latest = FrameSnapshot.Empty;
+        while (_published.TryDequeue(out _))
+            Interlocked.Decrement(ref _queuedSnapshots);
+        _droppedSnapshots = false;
+        _lastUndoDepth = 0;
+        _lastRedoDepth = 0;
+        _revealedId = Guid.Empty;
+        _treeRequestedId = Guid.Empty;
+
         _stopping = false;
     }
 
@@ -246,7 +426,7 @@ public partial class MainWindow : Window
     {
         // The cursor first: a freelook that started this frame should capture
         // before anything else looks at the pointer.
-        Viewport.PumpCursorMode();
+        _viewport?.PumpCursorMode();
 
         // Drained, never sampled: each snapshot's change list is a batch that
         // exists once.
@@ -592,7 +772,7 @@ public partial class MainWindow : Window
 
     private void OnExitClicked(object? sender, RoutedEventArgs e) => Close();
 
-    private void OnFocusViewportClicked(object? sender, RoutedEventArgs e) => Viewport.Focus();
+    private void OnFocusViewportClicked(object? sender, RoutedEventArgs e) => _viewport?.Focus();
 
     private void OnShellChord(ShellChord chord)
     {
@@ -646,7 +826,7 @@ public partial class MainWindow : Window
                 // Handing focus back to the viewport is what makes Escape read
                 // as "I am done here" rather than leaving the caret in a box
                 // that just changed under it.
-                Viewport.Focus();
+                _viewport?.Focus();
                 e.Handled = true;
                 break;
         }
@@ -746,17 +926,127 @@ public partial class MainWindow : Window
         }));
     }
 
-    private async void OnOpenProjectClicked(object? sender, RoutedEventArgs e)
-    {
-        IReadOnlyList<IStorageFolder> picked = await StorageProvider.OpenFolderPickerAsync(
-            new FolderPickerOpenOptions { Title = "Open project folder", AllowMultiple = false });
+    // --- Projects ------------------------------------------------------------
+    //
+    // A session per project, the way it is a window per project in every IDE:
+    // the asset content root is fixed at session birth, so opening a different
+    // project closes the running session and launches a fresh one over the new
+    // project's Assets folder. Every flow below confirms unsaved work BEFORE
+    // touching anything.
 
+    private void OnNewProjectClicked(object? sender, RoutedEventArgs e) => _ = CreateProjectFlowAsync();
+    private void OnOpenProjectClicked(object? sender, RoutedEventArgs e) => _ = OpenProjectFlowAsync();
+
+    private async void OnCloseProjectClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_session is null) return;
+        if (!await ConfirmDiscardAsync("closing the project")) return;
+
+        CloseSessionView();
+        _document.SetProject(null);
+        _document.MarkNew();
+        _shell.SetMessage(string.Empty);
+    }
+
+    private async Task CreateProjectFlowAsync()
+    {
+        if (!await ConfirmDiscardAsync("creating a new project")) return;
+
+        IReadOnlyList<IStorageFolder> picked = await StorageProvider.OpenFolderPickerAsync(
+            new FolderPickerOpenOptions { Title = "Folder to create the project in", AllowMultiple = false });
         if (picked.Count == 0) return;
+
+        string? name = await NameDialog.AskAsync(
+            this, "New project", "Name for the project:", "MyGame");
+        if (name is null) return;
+
+        name = name.Trim();
+        if (name.Length == 0 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            _shell.SetError("A project name has to work as a folder name.");
+            return;
+        }
+
+        string root = Path.Combine(picked[0].Path.LocalPath, name);
+        if (Directory.Exists(root) &&
+            Directory.GetFiles(root, "*" + ProjectFormat.Extension).Length > 0)
+        {
+            // Scaffolding into an existing project would adopt its folders and
+            // write a second manifest beside its own, which Open then refuses.
+            _shell.SetError($"'{root}' already holds a project; open it instead.");
+            return;
+        }
 
         ProjectLayout layout;
         try
         {
-            layout = ProjectLayout.Open(picked[0].Path.LocalPath);
+            layout = ProjectLayout.Create(root, name);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ProjectFormatException)
+        {
+            _shell.SetError($"Could not create the project: {ex.Message}");
+            return;
+        }
+
+        OpenProjectLayout(layout);
+    }
+
+    private async Task OpenProjectFlowAsync()
+    {
+        if (!await ConfirmDiscardAsync("opening another project")) return;
+
+        IReadOnlyList<IStorageFolder> picked = await StorageProvider.OpenFolderPickerAsync(
+            new FolderPickerOpenOptions { Title = "Open project folder", AllowMultiple = false });
+        if (picked.Count == 0) return;
+
+        OpenProjectAt(picked[0].Path.LocalPath);
+    }
+
+    private async Task OpenRecentProjectAsync(RecentProject recent)
+    {
+        if (!Directory.Exists(recent.Path))
+        {
+            // Forgotten rather than left to fail on every click: the folder
+            // moved or was deleted, and a card that errors forever is worse
+            // than one that says goodbye once.
+            _settings.ForgetProject(recent.Path);
+            _settings.Save(_logger);
+            StartView.ShowRecents(_settings.RecentProjects);
+            _shell.SetError($"'{recent.Path}' is gone; removed it from the recent list.");
+            return;
+        }
+
+        if (!await ConfirmDiscardAsync("opening another project")) return;
+        OpenProjectAt(recent.Path);
+    }
+
+    private async Task OpenLooseMapFlowAsync()
+    {
+        // The start page's third door: one bundle, no project. A level
+        // designer handed a folder should not have to scaffold a project to
+        // look at it.
+        IReadOnlyList<IStorageFolder> picked = await StorageProvider.OpenFolderPickerAsync(
+            new FolderPickerOpenOptions { Title = "Open map bundle", AllowMultiple = false });
+        if (picked.Count == 0) return;
+
+        string path = picked[0].Path.LocalPath;
+        if (!MapBundle.IsBundle(path))
+        {
+            _shell.SetError($"That folder is not a map bundle: it has no {MapFormat.DocumentFileName}.");
+            return;
+        }
+
+        _document.SetProject(null);
+        LaunchSession(new SessionLaunch(null, null, Path.GetFullPath(path)));
+    }
+
+    /// <summary>Opens the project at a path, replacing any running session.</summary>
+    private void OpenProjectAt(string path)
+    {
+        ProjectLayout layout;
+        try
+        {
+            layout = ProjectLayout.Open(path);
         }
         catch (Exception ex) when (ex is FileNotFoundException or ProjectFormatException)
         {
@@ -764,20 +1054,100 @@ public partial class MainWindow : Window
             return;
         }
 
+        OpenProjectLayout(layout);
+    }
+
+    private void OpenProjectLayout(ProjectLayout layout)
+    {
+        CloseSessionView();
+
         _document.SetProject(layout);
+        _document.MarkNew();
+
+        _settings.TouchProject(layout.Root, layout.Project.Name, DateTime.UtcNow);
+        _settings.Save(_logger);
+        StartView.ShowRecents(_settings.RecentProjects);
 
         // Opening a project opens its startup map, because a project with a
-        // level in it and an empty viewport is a state nobody asked for.
-        if (layout.Project.StartupMap is { } startup)
+        // level in it and an empty viewport is a state nobody asked for. A
+        // manifest naming a bundle that is not there is said out loud and the
+        // session still starts: the person who can fix the manifest needs the
+        // editor open to do it.
+        string? mapToOpen = null;
+        if (layout.Project.StartupMap is { Length: > 0 } startup)
         {
-            OpenMapAt(layout.Resolve(startup));
+            string resolved = layout.Resolve(startup);
+            if (MapBundle.IsBundle(resolved))
+                mapToOpen = resolved;
+            else
+                _shell.SetError($"The project's startup map '{startup}' is not on disk; starting on a baseplate.");
+        }
+
+        LaunchSession(new SessionLaunch(layout, layout.AssetsPath, mapToOpen));
+        RefreshProjectMaps();
+    }
+
+    /// <summary>
+    /// Rebuilds the maps panel: the manifest's list in the author's order,
+    /// then whatever is on disk that the manifest does not name.
+    /// </summary>
+    private void RefreshProjectMaps()
+    {
+        _shell.ProjectMaps.Clear();
+
+        if (_document.Project is not { } project)
+        {
+            _shell.HasProject = false;
             return;
         }
 
-        int found = layout.DiscoverMaps().Count;
-        _shell.SetMessage(found == 0
-            ? $"Opened project {layout.Project.Name}; it has no maps yet"
-            : $"Opened project {layout.Project.Name}; it names no startup map, but {found} are on disk");
+        _shell.HasProject = true;
+        string? startup = project.Project.StartupMap;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string relative in project.Project.Maps)
+        {
+            if (!seen.Add(relative)) continue;
+            _shell.ProjectMaps.Add(new ProjectMapRow(
+                relative,
+                MapDisplayName(relative),
+                IsStartup: string.Equals(relative, startup, StringComparison.OrdinalIgnoreCase),
+                IsUnlisted: false));
+        }
+
+        foreach (string relative in project.DiscoverMaps())
+        {
+            if (!seen.Add(relative)) continue;
+            _shell.ProjectMaps.Add(new ProjectMapRow(
+                relative, MapDisplayName(relative), IsStartup: false, IsUnlisted: true));
+        }
+    }
+
+    private static string MapDisplayName(string projectRelative) =>
+        Path.GetFileNameWithoutExtension(projectRelative.Replace('/', Path.DirectorySeparatorChar));
+
+    private async void OnProjectMapClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: ProjectMapRow row }) return;
+        if (_document.Project is not { } project || _session is null) return;
+
+        string resolved = project.Resolve(row.RelativePath);
+        if (!MapBundle.IsBundle(resolved))
+        {
+            _shell.SetError($"'{row.RelativePath}' is in the manifest but not on disk.");
+            return;
+        }
+
+        // Clicking the map that is already open must not discard-and-reload.
+        if (_document.MapPath is { } current &&
+            string.Equals(Path.GetFullPath(resolved), current, StringComparison.OrdinalIgnoreCase))
+        {
+            _shell.SetMessage($"{row.Name} is already open");
+            return;
+        }
+
+        if (!await ConfirmDiscardAsync($"opening {row.Name}")) return;
+        OpenMapAt(resolved);
     }
 
     private void OnSaveClicked(object? sender, RoutedEventArgs e)
@@ -824,14 +1194,69 @@ public partial class MainWindow : Window
             _document.MarkSaved(bundlePath);
             ResetDirtyBaseline();
 
+            string manifestNote = UpdateManifestAfterSave();
+
             // An incomplete save is still a save: the scene held something the
             // format cannot name, such as a mesh built in code. Reported rather
             // than silent, because the alternative is a map that quietly forgets
             // a prop.
             _shell.SetMessage(report?.Describe() is { } lost
-                ? $"Saved {_document.MapLabel}. {lost}"
-                : $"Saved {_document.MapLabel}");
+                ? $"Saved {_document.MapLabel}.{manifestNote} {lost}"
+                : $"Saved {_document.MapLabel}.{manifestNote}");
         }));
+    }
+
+    /// <summary>
+    /// Adds a just-saved map to the open project's manifest, and makes it the
+    /// startup map when the project had none. Returns a short note for the
+    /// status line, or an empty string when nothing applied.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is the write-back half of the maps story.</b> The manifest is
+    /// the author's ordered list and what a cook bakes; a map saved into
+    /// <c>Maps/</c> and never listed would run in the editor and silently miss
+    /// the shipped game. A map saved OUTSIDE the project folder is legal and
+    /// deliberately not listed — <see cref="EditorDocument.MapPathWithinProject"/>
+    /// answers that. Removal stays a hand edit: the editor adds what you save
+    /// and never deletes an entry, because the manifest is the author's file.
+    /// </remarks>
+    private string UpdateManifestAfterSave()
+    {
+        if (_document.Project is not { } project)
+            return string.Empty;
+
+        if (_document.MapPathWithinProject() is not { } relative)
+            return string.Empty;
+
+        bool listed = project.Project.Maps.Any(m =>
+            string.Equals(m, relative, StringComparison.OrdinalIgnoreCase));
+        bool becameStartup = false;
+
+        if (!listed)
+            project.Project.Maps.Add(relative);
+
+        if (string.IsNullOrEmpty(project.Project.StartupMap))
+        {
+            project.Project.StartupMap = relative;
+            becameStartup = true;
+        }
+
+        if (listed && !becameStartup)
+            return string.Empty;
+
+        try
+        {
+            project.Save();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Saved the map but could not update the project manifest");
+            _shell.SetError("The map saved, but the project manifest could not be written.");
+            return string.Empty;
+        }
+
+        RefreshProjectMaps();
+        return becameStartup ? " Added to the project as its startup map." : " Added to the project.";
     }
 
     /// <summary>

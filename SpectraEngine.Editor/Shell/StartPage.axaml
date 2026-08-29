@@ -1,0 +1,125 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shell="clr-namespace:SpectraEngine.Editor.Shell"
+             x:Class="SpectraEngine.Editor.Shell.StartPage"
+             Background="{StaticResource SpectraBgApp}">
+
+  <!--
+    The launch experience: what shows instead of a viewport until a project is
+    open. This page exists BEFORE any engine session, so it is ordinary
+    Avalonia with no airspace constraint — the one place in the shell that can
+    lay out freely.
+  -->
+
+  <Grid>
+    <Grid HorizontalAlignment="Center" VerticalAlignment="Center"
+          ColumnDefinitions="320,56,440" MaxHeight="560">
+
+      <!-- ─── Identity and actions ─────────────────────── -->
+      <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="0">
+
+        <StackPanel Orientation="Horizontal" Spacing="10">
+          <!-- The one place the accent may be a shape rather than a state:
+               the mark. Well under the 5% pixel budget. -->
+          <Border Width="18" Height="18" CornerRadius="4"
+                  Background="{StaticResource SpectraAccent}"
+                  VerticalAlignment="Center" />
+          <TextBlock Text="Spectra"
+                     FontSize="28" FontWeight="SemiBold"
+                     Foreground="{StaticResource SpectraTextEmphasis}"
+                     VerticalAlignment="Center" />
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" Spacing="8" Margin="28,6,0,0">
+          <TextBlock Text="editor"
+                     FontFamily="{StaticResource SpectraFontMono}"
+                     FontSize="{StaticResource SpectraFontSmall}"
+                     Foreground="{StaticResource SpectraTextMuted}" />
+          <TextBlock x:Name="VersionLabel"
+                     FontFamily="{StaticResource SpectraFontMono}"
+                     FontSize="{StaticResource SpectraFontSmall}"
+                     Foreground="{StaticResource SpectraTextMuted}" />
+        </StackPanel>
+
+        <StackPanel Margin="0,40,0,0" Spacing="8" HorizontalAlignment="Left">
+          <Button Classes="primary" Content="New project" Click="OnNewProjectClicked" />
+          <Button Classes="secondary" Content="Open project" Click="OnOpenProjectClicked" />
+          <Button Classes="secondary" Content="Open map bundle" Click="OnOpenMapClicked" />
+        </StackPanel>
+
+        <TextBlock Margin="0,28,0,0" MaxWidth="300" TextWrapping="Wrap"
+                   FontSize="{StaticResource SpectraFontSecondary}"
+                   Foreground="{StaticResource SpectraTextMuted}"
+                   Text="A project is a folder: its manifest, Assets, Maps and Scripts. Everything authored is text." />
+      </StackPanel>
+
+      <!-- ─── Recent projects ──────────────────────────── -->
+      <Border Grid.Column="2"
+              Background="{StaticResource SpectraBgPanel}"
+              BorderBrush="{StaticResource SpectraBorderStrong}"
+              BorderThickness="1"
+              CornerRadius="{StaticResource SpectraRadius2}">
+        <DockPanel>
+
+          <!-- The panel-header motif: a category chip and a monospace name
+               that refers to something real. -->
+          <Border DockPanel.Dock="Top"
+                  Height="{StaticResource SpectraPanelHeaderHeight}"
+                  BorderBrush="{StaticResource SpectraBorderStrong}"
+                  BorderThickness="0,0,0,1"
+                  Padding="10,0">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+              <Border Grid.Column="0" Width="9" Height="9" CornerRadius="2"
+                      Background="{StaticResource SpectraAccent}" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="1" Text="projects.recent" Margin="8,0,0,0"
+                         FontFamily="{StaticResource SpectraFontMono}"
+                         FontSize="{StaticResource SpectraFontSecondary}"
+                         Foreground="{StaticResource SpectraTextBody}"
+                         VerticalAlignment="Center" />
+              <TextBlock Grid.Column="2" x:Name="RecentCountLabel"
+                         FontFamily="{StaticResource SpectraFontMono}"
+                         FontSize="{StaticResource SpectraFontSmall}"
+                         Foreground="{StaticResource SpectraTextMuted}"
+                         VerticalAlignment="Center" />
+            </Grid>
+          </Border>
+
+          <TextBlock x:Name="EmptyLabel" DockPanel.Dock="Top" Margin="12,16"
+                     Text="Nothing yet. A created or opened project appears here."
+                     FontSize="{StaticResource SpectraFontSecondary}"
+                     Foreground="{StaticResource SpectraTextMuted}"
+                     TextWrapping="Wrap" />
+
+          <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl x:Name="RecentList" Margin="8">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="shell:RecentProjectRow">
+                  <Button Classes="card" Margin="0,0,0,6" Click="OnRecentClicked">
+                    <StackPanel Margin="12,8" Spacing="2">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="{Binding Name}"
+                                   FontSize="{StaticResource SpectraFontBase}"
+                                   Foreground="{StaticResource SpectraTextEmphasis}"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="1" Text="{Binding OpenedLabel}"
+                                   FontFamily="{StaticResource SpectraFontMono}"
+                                   FontSize="{StaticResource SpectraFontMicro}"
+                                   Foreground="{StaticResource SpectraTextMuted}"
+                                   VerticalAlignment="Center" />
+                      </Grid>
+                      <TextBlock Text="{Binding Path}"
+                                 FontFamily="{StaticResource SpectraFontMono}"
+                                 FontSize="{StaticResource SpectraFontMicro}"
+                                 Foreground="{StaticResource SpectraTextMuted}"
+                                 TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+    </Grid>
+  </Grid>
+</UserControl>

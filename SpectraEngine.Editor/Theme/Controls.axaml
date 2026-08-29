@@ -159,6 +159,84 @@
     <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
   </Style>
 
+  <!-- ─── Start-page buttons ───────────────────────────────
+       The one filled-accent button in the shell, and the fill is
+       SpectraAccentRest rather than the brand red: white on #E33A3A is 4.3:1
+       and fails AA at 13px. The brighter red is the hover, not the rest. -->
+  <Style Selector="Button.primary">
+    <Setter Property="Height" Value="32" />
+    <Setter Property="MinWidth" Value="150" />
+    <Setter Property="Padding" Value="14,0" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontBase}" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Foreground" Value="#FFFFFF" />
+  </Style>
+  <Style Selector="Button.primary /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraAccentRest}" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+  </Style>
+  <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraAccent}" />
+  </Style>
+  <Style Selector="Button.primary:pointerover">
+    <Setter Property="Foreground" Value="#FFFFFF" />
+  </Style>
+  <Style Selector="Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraAccentRest}" />
+  </Style>
+
+  <Style Selector="Button.secondary">
+    <Setter Property="Height" Value="32" />
+    <Setter Property="MinWidth" Value="150" />
+    <Setter Property="Padding" Value="14,0" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontBase}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button.secondary /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+  </Style>
+  <Style Selector="Button.secondary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+  </Style>
+  <Style Selector="Button.secondary:pointerover">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
+
+  <!-- ─── Recent-project cards ─────────────────────────────
+       Buttons in a card's clothing, so keyboard focus and activation come
+       from the control instead of being re-invented on a Border. -->
+  <Style Selector="Button.card">
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+  </Style>
+  <Style Selector="Button.card /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraBgPanel}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+  </Style>
+  <Style Selector="Button.card:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+  </Style>
+  <Style Selector="Button.card:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraBgPanel}" />
+  </Style>
+
   <!-- ─── Text input ───────────────────────────────────────-->
   <Style Selector="TextBox.filter">
     <Setter Property="Height" Value="{StaticResource SpectraControlHeight}" />

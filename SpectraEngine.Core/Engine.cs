@@ -700,7 +700,7 @@ public sealed class Engine
             // it has to be created on the thread that owns the context.
             _assetManager.AttachRenderer(_renderer);
 
-            _sceneManager.LoadDemoScene(_renderer, _assetManager);
+            _sceneManager.LoadStartupScene(_renderer, _assetManager);
 
             // After the scene, so the probe's frames draw real geometry through
             // real pipeline states rather than an empty clear. The PSO built for

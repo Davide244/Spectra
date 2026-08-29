@@ -195,13 +195,15 @@
           modal window instead.
         -->
         <MenuItem Header="_File">
-          <MenuItem Header="_New map" InputGesture="Ctrl+N" Click="OnNewMapClicked" />
+          <MenuItem Header="New _project..." Click="OnNewProjectClicked" />
+          <MenuItem Header="Open p_roject..." Click="OnOpenProjectClicked" />
+          <MenuItem Header="_Close project" Click="OnCloseProjectClicked" IsEnabled="{Binding HasSession}" />
           <Separator />
-          <MenuItem Header="_Open map..." InputGesture="Ctrl+O" Click="OnOpenMapClicked" />
-          <MenuItem Header="Open _project..." Click="OnOpenProjectClicked" />
+          <MenuItem Header="_New map" InputGesture="Ctrl+N" Click="OnNewMapClicked" IsEnabled="{Binding HasSession}" />
+          <MenuItem Header="_Open map..." InputGesture="Ctrl+O" Click="OnOpenMapClicked" IsEnabled="{Binding HasSession}" />
           <Separator />
-          <MenuItem Header="_Save" InputGesture="Ctrl+S" Click="OnSaveClicked" />
-          <MenuItem Header="Save _as..." InputGesture="Ctrl+Shift+S" Click="OnSaveAsClicked" />
+          <MenuItem Header="_Save" InputGesture="Ctrl+S" Click="OnSaveClicked" IsEnabled="{Binding HasSession}" />
+          <MenuItem Header="Save _as..." InputGesture="Ctrl+Shift+S" Click="OnSaveAsClicked" IsEnabled="{Binding HasSession}" />
           <Separator />
           <MenuItem Header="E_xit" Click="OnExitClicked" />
         </MenuItem>
@@ -219,9 +221,9 @@
         </MenuItem>
         <MenuItem Header="_View">
           <MenuItem Header="_Frame selection" InputGesture="F" Click="OnFrameClicked" IsEnabled="{Binding HasSelection}" />
-          <MenuItem Header="Toggle _navigation model" InputGesture="F7" Click="OnToggleNavigationClicked" />
+          <MenuItem Header="Toggle _navigation model" InputGesture="F7" Click="OnToggleNavigationClicked" IsEnabled="{Binding HasSession}" />
           <Separator />
-          <MenuItem Header="Focus _viewport" Click="OnFocusViewportClicked" />
+          <MenuItem Header="Focus _viewport" Click="OnFocusViewportClicked" IsEnabled="{Binding HasSession}" />
         </MenuItem>
       </Menu>
     </Border>
@@ -236,7 +238,8 @@
             Height="{StaticResource SpectraToolbarHeight}"
             Background="{StaticResource SpectraBgPanel}"
             BorderBrush="{StaticResource SpectraBorderStrong}"
-            BorderThickness="0,1">
+            BorderThickness="0,1"
+            IsVisible="{Binding HasSession}">
       <Grid ColumnDefinitions="Auto,*,Auto" Margin="8,0">
 
         <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
@@ -300,15 +303,82 @@
       </Grid>
     </Border>
 
-    <!-- ═══ Scene panel | viewport | inspector ═══════════
-         DOCKED, all of it. The viewport is a native child window and
-         composites above anything Avalonia draws, so a floating inspector, a
-         drop shadow or a popup that reached across it would be invisible from
-         wherever it crossed the edge. Every panel owns its own grid cell and
-         none of them intersect the viewport's. -->
-    <Grid Grid.Row="2" ColumnDefinitions="280,1,*,1,300">
+    <!-- ═══ Start page | editor ═══════════════════════════
+         Two states of one row. The start page shows while NO engine session
+         exists, which is the only time free layout is possible at all: the
+         viewport's native child window is created when a session launches and
+         composites above anything Avalonia draws from then on. The code
+         behind switches the two explicitly, because the viewport must leave
+         the tree BEFORE the editor view hides, never after. -->
+    <Panel Grid.Row="2">
+
+      <shell:StartPage x:Name="StartView" />
+
+      <!-- ═══ Scene panel | viewport | inspector ═══════════
+           DOCKED, all of it. The viewport is a native child window and
+           composites above anything Avalonia draws, so a floating inspector, a
+           drop shadow or a popup that reached across it would be invisible from
+           wherever it crossed the edge. Every panel owns its own grid cell and
+           none of them intersect the viewport's. -->
+      <Grid x:Name="EditorView" IsVisible="False" ColumnDefinitions="280,1,*,1,300">
 
       <DockPanel Grid.Column="0" Background="{StaticResource SpectraBgPanel}">
+
+        <!-- ─── The project's maps ─────────────────────────
+             A panel rather than a menu, and not only for reachability: a
+             Project menu's dropdown would open past the 280px tree column and
+             cross the viewport, where it is simply invisible. The list is the
+             manifest's order, then anything on disk the manifest does not
+             name, marked instead of silently adopted. -->
+        <StackPanel DockPanel.Dock="Top" IsVisible="{Binding HasProject}">
+          <Border Height="{StaticResource SpectraPanelHeaderHeight}"
+                  BorderBrush="{StaticResource SpectraBorderStrong}"
+                  BorderThickness="0,0,0,1"
+                  Padding="10,0">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+              <Border Grid.Column="0" Width="9" Height="9" CornerRadius="2"
+                      Background="{StaticResource SpectraAccent}" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="1" Text="project.maps" Margin="8,0,0,0"
+                         FontFamily="{StaticResource SpectraFontMono}"
+                         FontSize="{StaticResource SpectraFontSecondary}"
+                         Foreground="{StaticResource SpectraTextBody}"
+                         VerticalAlignment="Center" />
+              <TextBlock Grid.Column="2" Classes="value" Text="{Binding ProjectMaps.Count}"
+                         Foreground="{StaticResource SpectraTextMuted}" />
+            </Grid>
+          </Border>
+
+          <ScrollViewer MaxHeight="132" HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl ItemsSource="{Binding ProjectMaps}" Margin="8,6">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="shell:ProjectMapRow">
+                  <Button Classes="card" Margin="0,0,0,4" Click="OnProjectMapClicked"
+                          ToolTip.Tip="{Binding RelativePath}">
+                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="8,4">
+                      <!-- The startup dot: which map the project boots. -->
+                      <Border Grid.Column="0" Width="6" Height="6" CornerRadius="3"
+                              VerticalAlignment="Center"
+                              Background="{StaticResource SpectraAccent}"
+                              IsVisible="{Binding IsStartup}" />
+                      <TextBlock Grid.Column="1" Text="{Binding Name}"
+                                 Margin="6,0,0,0"
+                                 FontSize="{StaticResource SpectraFontSecondary}"
+                                 Foreground="{StaticResource SpectraTextBody}"
+                                 TextTrimming="CharacterEllipsis"
+                                 VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="2" Text="unlisted"
+                                 FontFamily="{StaticResource SpectraFontMono}"
+                                 FontSize="{StaticResource SpectraFontMicro}"
+                                 Foreground="{StaticResource SpectraTextMuted}"
+                                 VerticalAlignment="Center"
+                                 IsVisible="{Binding IsUnlisted}" />
+                    </Grid>
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </StackPanel>
 
         <!-- The panel header carries the site's motif honestly: a category
              chip and a monospace name that refers to something real. No
@@ -401,11 +471,12 @@
       <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
 
       <!-- MinWidth is not cosmetic: dragging the splitter to zero can leave
-           the swap chain unable to recover. -->
-      <Border Grid.Column="2" MinWidth="360"
-              Background="{StaticResource SpectraBgApp}">
-        <viewport:EngineViewport x:Name="Viewport" />
-      </Border>
+           the swap chain unable to recover. The viewport control itself is
+           created in code when a session launches and removed when it closes,
+           because a NativeControlHost's child window lives exactly as long as
+           the control is in the visual tree. -->
+      <Border x:Name="ViewportHost" Grid.Column="2" MinWidth="360"
+              Background="{StaticResource SpectraBgApp}" />
 
       <GridSplitter Grid.Column="3" ResizeDirection="Columns" />
 
@@ -533,7 +604,8 @@
           </ItemsControl>
         </ScrollViewer>
       </DockPanel>
-    </Grid>
+      </Grid>
+    </Panel>
 
     <!-- ═══ Status bar ═══════════════════════════════════
          Left is the message zone, which the pump never overwrites. Right is
@@ -552,7 +624,7 @@
                    Text="{Binding Message}"
                    TextTrimming="CharacterEllipsis" />
 
-        <StackPanel Grid.Column="1" Orientation="Horizontal">
+        <StackPanel Grid.Column="1" Orientation="Horizontal" IsVisible="{Binding HasSession}">
           <TextBlock Classes="value" Text="{Binding SelectionLabel}" MinWidth="112" />
           <TextBlock Classes="sep" />
           <TextBlock Classes="value" Text="{Binding GizmoMode}" MinWidth="46" />

@@ -311,6 +311,106 @@ public sealed class SceneManager
     }
 
     /// <summary>
+    /// Which scene <see cref="LoadStartupScene"/> builds. An instance property
+    /// rather than a static override like the map switches, because a shell
+    /// creates a session per project and static state would leak from one
+    /// session into the next.
+    /// </summary>
+    public StartupSceneKind Startup { get; set; } = StartupSceneKind.Demo;
+
+    /// <summary>
+    /// Builds whichever startup scene <see cref="Startup"/> names. The engine
+    /// loop calls this once, on the render thread, after the renderer and the
+    /// asset manager are up.
+    /// </summary>
+    public void LoadStartupScene(Renderer renderer, AssetManager assets)
+    {
+        if (Startup == StartupSceneKind.Baseplate)
+            LoadBaseplateScene(renderer, assets);
+        else
+            LoadDemoScene(renderer, assets);
+    }
+
+    /// <summary>
+    /// Builds the editor's blank scene: a sun and a ground plate, nothing else.
+    /// Render thread only, like <see cref="LoadDemoScene"/>.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately tiny. A shell that wants a real level open goes through the
+    /// ordinary map path afterwards, where a load failure carries a report; a
+    /// shell that wants nothing gets a scene that is lit and walkable rather
+    /// than a black viewport, which reads as a broken renderer to exactly the
+    /// audience this editor is for.
+    /// </remarks>
+    public void LoadBaseplateScene(Renderer renderer, AssetManager assets)
+    {
+        _renderer = renderer;
+        _assets = assets;
+
+        var scene = new Scene("Untitled");
+        scene.Assets = assets;
+        scene.Camera.Position = new Vector3(9f, 6f, 11f);
+        scene.Camera.LookAt(Vector3.Zero);
+
+        PopulateBaseplate(scene);
+        scene.RebuildStaticWorld(renderer);
+
+        // On the plate, a step above its top face, looking along -z like the
+        // camera. Fall-out far enough below that walking off the edge reads as
+        // falling before the respawn catches it.
+        PlayerSpawn = new Vector3(0f, 1f, 0f);
+        PlayerSpawnYaw = 0f;
+        PlayerFallOutHeight = -50f;
+
+        ActiveScene = scene;
+
+        // Same order as the demo load: the editor and physics adopt the scene
+        // only once it is complete.
+        Editor = EditorFactory?.Invoke(scene);
+        Physics = PhysicsFactory?.Invoke(scene) ?? NullScenePhysics.Instance;
+
+        _logger.LogInformation(
+            "Baseplate scene loaded: {Nodes} node(s), content root {Root}",
+            scene.Root.Children.Count, assets.ContentRootPath);
+    }
+
+    /// <summary>
+    /// Adds the baseplate starter content to a scene: a directional sun and a
+    /// 64x64 ground plate whose top face sits at y = 0.
+    /// </summary>
+    /// <remarks>
+    /// <b>Also what a fresh map starts as</b>, so "New map" in the shell and a
+    /// brand-new project agree about what empty means. The plate wears
+    /// <see cref="Bsp.MaterialRef.Default"/> rather than naming a material,
+    /// because a new project's content root is empty and a baseplate that
+    /// warned about a missing file on first boot would teach that warnings are
+    /// noise. The sun's direction and tuning are the demo's, which are stated
+    /// for the engine's BRDF.
+    /// </remarks>
+    public static void PopulateBaseplate(Scene scene)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+
+        SceneNode sun = scene.Root.CreateChild("Sun");
+        sun.LocalRotation = Light.RotationForDirection(new Vector3(-0.35f, -0.85f, -0.4f));
+        sun.Light = new Light
+        {
+            Kind = LightKind.Directional,
+            Color = ColorSpace.SrgbToLinear(new Vector3(1f, 0.96f, 0.88f)),
+            Intensity = 11f,
+        };
+
+        // Centred extents with the node carrying the offset, the demo's own
+        // pattern: a compile snapshots the NODE's world matrix as the
+        // placement and ignores the brush's baked translation, so extents
+        // that were not centred would leave the plate floating half a unit
+        // high. Top face at y = 0.
+        SceneNode plate = scene.Root.CreateChild("Baseplate");
+        plate.LocalPosition = new Vector3(0f, -0.5f, 0f);
+        plate.Brush = Bsp.Brush.CreateBox(new Vector3(-32f, -0.5f, -32f), new Vector3(32f, 0.5f, 32f));
+    }
+
+    /// <summary>
     /// Builds the demo scene, which is the engine's end-to-end smoke test as
     /// much as a placeholder: a spinning cube with a child cube that orbits
     /// purely by inheriting its parent's rotation; a brush-built floor, two
