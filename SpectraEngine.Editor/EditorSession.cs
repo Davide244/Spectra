@@ -9,7 +9,9 @@ using SpectraEngine.Core.Hosting;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Maps;
 using SpectraEngine.Core.Scene;
+using SpectraEngine.Core.Inspection;
 using SpectraEngine.Editing.Cameras;
+using SpectraEngine.Editing.Commands;
 using SpectraEngine.Editing.Gizmos;
 using SpectraEngine.Editing.Hosting;
 using SpectraEngine.Physics.Box3D;
@@ -146,6 +148,10 @@ public sealed class EditorSession : IDisposable
     /// </summary>
     public void Select(Guid nodeId, SelectionUpdate mode = SelectionUpdate.Replace) =>
         Host.EnqueueCommand(_ => Editor?.SelectById(nodeId, mode));
+
+    /// <summary>Applies one property-panel edit to the current selection.</summary>
+    public void ApplyProperty(PropertyEdit edit) =>
+        Host.EnqueueCommand(_ => Editor?.ApplyProperty(edit));
 
     // Render thread only. Null before the scene has loaded, and null for a host
     // that installed no editing layer at all.

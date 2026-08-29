@@ -1,3 +1,4 @@
+using SpectraEngine.Core.Inspection;
 using System;
 using System.Collections.Generic;
 
@@ -78,6 +79,27 @@ public sealed class FrameSnapshot
 
     /// <summary>How many static-world compiles have landed for the active scene.</summary>
     public int StaticWorldCompileCount { get; init; }
+
+    /// <summary>
+    /// The selection's editable properties, merged across every selected node.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Values, like everything else here.</b> A row carries no
+    /// <c>SceneNode</c>, no <c>Brush</c> and no asset handle, because a UI
+    /// holding one of those would be holding something the render thread
+    /// mutates the instant the frame ends.
+    /// </para>
+    /// <para>
+    /// <b>On the snapshot rather than fetched on demand, and that is what makes
+    /// a panel follow a gizmo drag.</b> A drag moves the node every frame, and a
+    /// panel that only refreshed when the selection changed would sit there
+    /// showing the position the object had before it was picked up. The cost is
+    /// a dozen struct rows per publish, at the snapshot's own ~30 Hz rather than
+    /// per frame.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<PropertyRow> SelectionProperties { get; init; } = Array.Empty<PropertyRow>();
 
     /// <summary>
     /// The structural changes since the previous snapshot, in the order they

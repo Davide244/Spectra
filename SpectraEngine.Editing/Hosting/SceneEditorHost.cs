@@ -6,6 +6,7 @@ using SpectraEngine.Editing.Cameras;
 using SpectraEngine.Editing.Gizmos;
 using SpectraEngine.Editing.Input;
 using SpectraEngine.Editing.Undo;
+using SpectraEngine.Core.Inspection;
 using SpectraEngine.Editing.Commands;
 using SpectraEngine.Editing.Viewport;
 using System;
@@ -380,6 +381,20 @@ public sealed class SceneEditorHost : ISceneEditor
         _viewport.Reset();
         _camera.SuspendNavigation();
     }
+
+    /// <summary>
+    /// Applies a property-panel edit to the current selection.
+    /// </summary>
+    /// <returns>How many nodes actually changed.</returns>
+    /// <remarks>
+    /// <b>The selection is read HERE, not passed in.</b> A UI's view of the
+    /// selection is a frame or two behind, so an edit carrying its own node
+    /// list would occasionally write to nodes the user had already deselected.
+    /// The panel says which property and which value; which objects that means
+    /// is the editor's answer, given at the moment the edit runs.
+    /// </remarks>
+    public int ApplyProperty(PropertyEdit edit) =>
+        PropertyEditor.Apply(_undo, _scene.Selection.Items, edit);
 
     /// <summary>
     /// Resets the editor after the scene's graph has been replaced wholesale,

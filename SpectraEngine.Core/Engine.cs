@@ -6,6 +6,7 @@ using SpectraEngine.Core.Audio;
 using SpectraEngine.Core.Diagnostics;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Hosting;
+using SpectraEngine.Core.Inspection;
 using SpectraEngine.Core.Physics;
 using SpectraEngine.Core.Physics.Character;
 using SpectraEngine.Core.Input;
@@ -144,6 +145,7 @@ public sealed class Engine
                 UndoDepth = editor?.UndoDepth ?? 0,
                 RedoDepth = editor?.RedoDepth ?? 0,
                 StaticWorldCompileCount = _sceneManager.ActiveScene?.StaticWorldCompileCount ?? 0,
+                SelectionProperties = CaptureProperties(),
             };
         });
     }
@@ -154,6 +156,49 @@ public sealed class Engine
     {
         Host.SnapshotInterval = TimeSpan.Zero;
         PublishHostFrame(elapsed);
+    }
+
+    // Reused across publishes for the same reason the selection list is: a
+    // panel showing a dozen rows must not allocate a dozen rows per publish on
+    // the render thread.
+    private readonly List<SceneNode> _snapshotNodes = [];
+    private readonly List<PropertyRow> _snapshotProperties = [];
+    private PropertyRow[] _publishedProperties = [];
+
+    /// <summary>
+    /// The selection's merged property rows, or an empty list when nothing is
+    /// selected.
+    /// </summary>
+    /// <remarks>
+    /// <b>Rebuilt every publish rather than diffed.</b> The values move
+    /// continuously during a drag, so a change check would almost always say
+    /// "changed" and would cost a full comparison to say it. The selection list
+    /// above is the opposite case, which is why it is cached and this is not.
+    /// </remarks>
+    private IReadOnlyList<PropertyRow> CaptureProperties()
+    {
+        if (_sceneManager.ActiveScene is not { } scene || scene.Selection.Count == 0)
+        {
+            _publishedProperties = [];
+            return _publishedProperties;
+        }
+
+        // Copied into a list of our own rather than handed the live one: the
+        // inspector runs while the render thread owns the scene, but the set is
+        // the selection's and may be rewritten by the next pick.
+        _snapshotNodes.Clear();
+        _snapshotNodes.AddRange(scene.Selection.Items);
+
+        NodeInspector.Describe(_snapshotNodes, _snapshotProperties);
+
+        // Copied out, because the working list is reused next publish and a UI
+        // reading it a frame later would see rows for a selection that has
+        // moved on.
+        if (_publishedProperties.Length != _snapshotProperties.Count)
+            _publishedProperties = new PropertyRow[_snapshotProperties.Count];
+
+        _snapshotProperties.CopyTo(_publishedProperties);
+        return _publishedProperties;
     }
 
     /// <summary>

@@ -14,6 +14,7 @@ using SpectraEngine.Core.Maps;
 using SpectraEngine.Core.Projects;
 using SpectraEngine.Editing.Cameras;
 using SpectraEngine.Editing.Gizmos;
+using SpectraEngine.Editing.Commands;
 using SpectraEngine.Editing.Hosting;
 using SpectraEngine.Editor.Shell;
 using SpectraEngine.Editor.Viewport;
@@ -122,6 +123,7 @@ public partial class MainWindow : Window
         // while it has focus the OS gives it the keyboard and Avalonia never
         // sees the menu accelerators at all.
         Viewport.ShellChord += OnShellChord;
+        _shell.Properties = new PropertyPanelModel(OnPropertyEdit);
 
         _pump = new DispatcherTimer(
             TimeSpan.FromMilliseconds(16), DispatcherPriority.Normal, OnPump);
@@ -602,6 +604,64 @@ public partial class MainWindow : Window
             case ShellChord.SaveMapAs: OnSaveAsClicked(this, new RoutedEventArgs()); break;
         }
     }
+
+    // --- Property panel ------------------------------------------------------
+    //
+    // Three handlers, and between them they are the whole commit policy: a
+    // focused field stops taking refreshes, Enter and losing focus apply it, and
+    // Escape puts the live value back. Escape has to exist precisely BECAUSE
+    // blur commits, or there would be no way to abandon a half-typed value once
+    // a field is holding it.
+
+    private void OnPropertyFieldFocused(object? sender, FocusChangedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: PropertyFieldModel field })
+            field.BeginEdit();
+    }
+
+    private void OnPropertyFieldBlurred(object? sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: PropertyFieldModel field })
+            field.Commit();
+    }
+
+    private void OnPropertyFieldKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: PropertyFieldModel field } box)
+            return;
+
+        switch (e.Key)
+        {
+            case Key.Enter:
+                field.Commit();
+                // Focus stays put so a run of edits can be typed and confirmed
+                // without reaching for the mouse, but the field is no longer
+                // being edited, so the next snapshot may correct it.
+                field.BeginEdit();
+                e.Handled = true;
+                break;
+
+            case Key.Escape:
+                field.Revert();
+                // Handing focus back to the viewport is what makes Escape read
+                // as "I am done here" rather than leaving the caret in a box
+                // that just changed under it.
+                Viewport.Focus();
+                e.Handled = true;
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Queues one property edit onto the render thread.
+    /// </summary>
+    /// <remarks>
+    /// The panel says which property and which value; which nodes that means is
+    /// the editor's answer, given at the moment the edit runs. A UI's view of
+    /// the selection is a frame or two behind, so an edit carrying its own node
+    /// list would occasionally write to nodes the user had already deselected.
+    /// </remarks>
+    private void OnPropertyEdit(PropertyEdit edit) => _session?.ApplyProperty(edit);
 
     // --- File ----------------------------------------------------------------
     //

@@ -43,6 +43,7 @@ public sealed class ShellModel : ObservableObject
     private string _message = string.Empty;
     private bool _isError;
     private string _filterText = string.Empty;
+    private PropertyPanelModel? _properties;
 
     private DispatcherTimer? _filterDebounce;
 
@@ -366,6 +367,23 @@ public sealed class ShellModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// The property panel, or null until the session exists to apply edits
+    /// through.
+    /// </summary>
+    public PropertyPanelModel? Properties
+    {
+        get => _properties;
+        set
+        {
+            if (Set(ref _properties, value))
+                Raise(nameof(HasProperties));
+        }
+    }
+
+    /// <summary>Whether the panel is wired up at all.</summary>
+    public bool HasProperties => _properties is not null;
+
     /// <summary>Whether a filter is narrowing the tree, for the clear button.</summary>
     public bool HasFilter => _filterText.Length > 0;
 
@@ -413,6 +431,8 @@ public sealed class ShellModel : ObservableObject
         SnapEnabled = snapshot.SnapEnabled;
         SnapIncrement = snapshot.SnapIncrement;
         Navigation = snapshot.NavigationModeName ?? "-";
+
+        _properties?.Apply(snapshot.SelectionProperties, snapshot.SelectedIds.Count);
 
         if (_tree is { } tree)
         {
