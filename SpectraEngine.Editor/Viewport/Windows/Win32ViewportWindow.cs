@@ -70,6 +70,20 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
     // teleport the pointer every time a freelook finished.
     private Win32Interop.POINT _lastClientPosition;
 
+    // Right-click-vs-right-drag: where the right button went down (client
+    // pixels) and how far the pointer travelled while it was held. The
+    // engine's freelook owns a right DRAG, so a context menu can only mean a
+    // right press that ended before it became one. Travel is accumulated from
+    // both move shapes, because the cursor lock usually engages mid-hold and
+    // the moves after it are deltas rather than positions.
+    private Win32Interop.POINT _rightPressPosition;
+    private double _rightPressTravel;
+    private bool _rightPressActive;
+
+    // Matches SM_CXDRAG's default: the movement Windows itself considers "not
+    // a drag yet".
+    private const double RightClickTravelLimit = 4.0;
+
     /// <summary>Creates the child window under <paramref name="parent"/>.</summary>
     internal Win32ViewportWindow(nint parent)
     {
@@ -134,6 +148,15 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
     /// engine, where the editor's own keymap already owns it.
     /// </remarks>
     public event Action<ShellChord>? ShellChord;
+
+    /// <summary>
+    /// Raised on the UI thread when a right press ends without having become a
+    /// drag: a right-CLICK, in client pixels. The engine has already received
+    /// the balanced down/up pair (its freelook legitimately started and ended
+    /// around it); what the shell does with the click - a context menu - is
+    /// the shell's business, exactly like the document chords.
+    /// </summary>
+    public event Action<int, int>? ContextMenuRequested;
 
     private static ShellChord? ShellChordFor(int virtualKey) => virtualKey switch
     {
@@ -273,6 +296,7 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
                 // whose release went to whoever took the focus are never coming.
                 EndCursorLock();
                 _buttonsDown = PointerButtons.None;
+                _rightPressActive = false;
                 Submit(InputEvent.FocusLost());
                 return false;
 
@@ -375,16 +399,27 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
             if (dx == 0 && dy == 0)
                 return;
 
+            if (_rightPressActive)
+                _rightPressTravel += Math.Abs(dx) + Math.Abs(dy);
+
             Submit(InputEvent.PointerDelta(new Vector2(dx, dy)));
             Win32Interop.SetCursorPos(_lockAnchor.X, _lockAnchor.Y);
             return;
         }
 
-        _lastClientPosition = new Win32Interop.POINT
+        var position = new Win32Interop.POINT
         {
             X = Win32Interop.LowInt16(lParam),
             Y = Win32Interop.HighInt16(lParam),
         };
+
+        if (_rightPressActive)
+        {
+            _rightPressTravel += Math.Abs(position.X - _lastClientPosition.X)
+                + Math.Abs(position.Y - _lastClientPosition.Y);
+        }
+
+        _lastClientPosition = position;
 
         Submit(InputEvent.PointerMove(new Vector2(_lastClientPosition.X, _lastClientPosition.Y)));
     }
@@ -400,6 +435,14 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
             Win32Interop.SetCapture(_hwnd);
 
         _buttonsDown |= button;
+
+        if (button == PointerButtons.Right)
+        {
+            _rightPressActive = true;
+            _rightPressTravel = 0;
+            _rightPressPosition = _lastClientPosition;
+        }
+
         Submit(InputEvent.PointerDown(button));
     }
 
@@ -414,6 +457,16 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
             Win32Interop.ReleaseCapture();
 
         Submit(InputEvent.PointerUp(button));
+
+        // AFTER the up is submitted, so the engine's freelook has ended and
+        // released its cursor request before the shell opens anything over the
+        // viewport.
+        if (button == PointerButtons.Right && _rightPressActive)
+        {
+            _rightPressActive = false;
+            if (_rightPressTravel <= RightClickTravelLimit)
+                ContextMenuRequested?.Invoke(_rightPressPosition.X, _rightPressPosition.Y);
+        }
     }
 
     // --- Cursor lock ---------------------------------------------------------

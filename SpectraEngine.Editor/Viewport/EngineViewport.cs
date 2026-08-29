@@ -62,6 +62,14 @@ public sealed class EngineViewport : NativeControlHost
     /// </remarks>
     public event Action<ShellChord>? ShellChord;
 
+    /// <summary>
+    /// Raised on the UI thread for a right-click that never became a freelook
+    /// drag, in the viewport's own pixels (which are framebuffer pixels: the
+    /// child window is the framebuffer). The shell opens its context menu; the
+    /// engine has already seen the balanced button events.
+    /// </summary>
+    public event Action<int, int>? ContextMenuRequested;
+
     /// <summary>Whether this platform can host the engine at all.</summary>
     public static bool IsSupported => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
@@ -112,6 +120,7 @@ public sealed class EngineViewport : NativeControlHost
 
         _window = new Win32ViewportWindow(parent.Handle) { Host = _host };
         _window.ShellChord += chord => ShellChord?.Invoke(chord);
+        _window.ContextMenuRequested += (x, y) => ContextMenuRequested?.Invoke(x, y);
 
         // After the handle exists and before anything can render: a host that
         // started the engine any earlier would be initialising a renderer

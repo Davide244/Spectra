@@ -320,6 +320,7 @@ public partial class MainWindow : Window
         // while it has focus the OS gives it the keyboard and Avalonia never
         // sees the menu accelerators at all.
         viewport.ShellChord += OnShellChord;
+        viewport.ContextMenuRequested += OnViewportContextMenu;
         _viewport = viewport;
 
         StartView.IsVisible = false;
@@ -352,6 +353,7 @@ public partial class MainWindow : Window
         viewport.SurfaceCreated -= OnSurfaceCreated;
         viewport.SurfaceDestroying -= OnSurfaceDestroying;
         viewport.ShellChord -= OnShellChord;
+        viewport.ContextMenuRequested -= OnViewportContextMenu;
         _viewport = null;
         _pendingLaunch = null;
 
@@ -796,6 +798,80 @@ public partial class MainWindow : Window
             case ShellChord.SaveMap: OnSaveClicked(this, new RoutedEventArgs()); break;
             case ShellChord.SaveMapAs: OnSaveAsClicked(this, new RoutedEventArgs()); break;
         }
+    }
+
+    // --- Viewport context menu -----------------------------------------------
+
+    // Built once and reused; where it was opened, in framebuffer pixels, so
+    // "insert here" means the spot that was right-clicked rather than wherever
+    // the camera is pointing by the time the item is picked.
+    private ContextMenu? _viewportMenu;
+    private System.Numerics.Vector2 _viewportMenuPoint;
+
+    /// <summary>
+    /// A right-click in the viewport that never became a freelook drag. The
+    /// menu itself is a real OS popup, which is the one kind of surface that
+    /// may legally cross the viewport (the NameDialog rule).
+    /// </summary>
+    private void OnViewportContextMenu(int x, int y)
+    {
+        if (_session is null || _viewport is not { } viewport || _shell.IsPlaying)
+            return;
+
+        // Retarget first, the rule every editor shares: an unselected object
+        // under the cursor becomes the selection, a selected one keeps the
+        // set, empty space changes nothing. By the time a human picks a menu
+        // item the render thread has long since applied it.
+        _viewportMenuPoint = new System.Numerics.Vector2(x, y);
+        _session.SelectAtPoint(_viewportMenuPoint);
+
+        _viewportMenu ??= BuildViewportMenu();
+
+        // Client pixels are physical; Avalonia placement wants logical units.
+        double scaling = (VisualRoot as TopLevel)?.RenderScaling ?? 1.0;
+        _viewportMenu.Placement = PlacementMode.AnchorAndGravity;
+        _viewportMenu.PlacementAnchor = Avalonia.Controls.Primitives.PopupPositioning.PopupAnchor.TopLeft;
+        _viewportMenu.PlacementGravity = Avalonia.Controls.Primitives.PopupPositioning.PopupGravity.BottomRight;
+        _viewportMenu.PlacementRect = new Rect(x / scaling, y / scaling, 1, 1);
+        _viewportMenu.Open(viewport);
+    }
+
+    private ContextMenu BuildViewportMenu()
+    {
+        MenuItem Item(string header, string? gesture, Action action)
+        {
+            var item = new MenuItem { Header = header };
+            if (gesture is not null)
+                item.InputGesture = KeyGesture.Parse(gesture);
+            item.Click += (_, _) => action();
+            return item;
+        }
+
+        // The same vocabulary as the Model strip: one set of names for one set
+        // of things.
+        var insert = new MenuItem { Header = "Insert here" };
+        insert.Items.Add(Item("World brush", null, () => _session?.Insert(InsertKind.WorldBrush, _viewportMenuPoint)));
+        insert.Items.Add(Item("Part", null, () => _session?.Insert(InsertKind.PartBrush, _viewportMenuPoint)));
+        insert.Items.Add(Item("Hole", null, () => _session?.Insert(InsertKind.SubtractiveBrush, _viewportMenuPoint)));
+        insert.Items.Add(Item("Point light", null, () => _session?.Insert(InsertKind.PointLight, _viewportMenuPoint)));
+        insert.Items.Add(Item("Empty group", null, () => _session?.Insert(InsertKind.Group, _viewportMenuPoint)));
+
+        var menu = new ContextMenu();
+        menu.Items.Add(insert);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Item("Duplicate", "Ctrl+D", () => _session?.Post(EditorHostCommand.Duplicate)));
+        menu.Items.Add(Item("Delete", "Delete", () => _session?.Post(EditorHostCommand.Delete)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Item("Group", "Ctrl+G", () => _session?.Post(EditorHostCommand.Group)));
+        menu.Items.Add(Item("Ungroup", "Ctrl+Shift+G", () => _session?.Post(EditorHostCommand.Ungroup)));
+        menu.Items.Add(Item("Convert part / world", "Ctrl+T", () => _session?.Post(EditorHostCommand.ToggleBrushKind)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Item("Frame selection", "F", () => _session?.Post(EditorCameraCommand.FrameSelection)));
+
+        // The popup takes real focus, so closing it must hand the keyboard
+        // back to the engine's HWND or the tool keys go dead until a click.
+        menu.Closed += (_, _) => _viewport?.FocusEngine();
+        return menu;
     }
 
 
