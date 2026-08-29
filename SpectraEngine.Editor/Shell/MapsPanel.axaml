@@ -1,0 +1,64 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shell="clr-namespace:SpectraEngine.Editor.Shell"
+             x:Class="SpectraEngine.Editor.Shell.MapsPanel"
+             x:DataType="shell:ShellModel"
+             Background="{StaticResource SpectraBgPanel}">
+
+  <!-- The open project's maps: the manifest's order, then anything on disk
+       the manifest does not name, marked instead of silently adopted. A
+       panel rather than a menu, and not only for reachability: a menu's
+       dropdown would cross the viewport, where it is invisible. -->
+
+  <DockPanel>
+    <Border DockPanel.Dock="Top"
+            Height="{StaticResource SpectraPanelHeaderHeight}"
+            BorderBrush="{StaticResource SpectraBorderStrong}"
+            BorderThickness="0,0,0,1"
+            Padding="10,0">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <Border Grid.Column="0" Width="9" Height="9" CornerRadius="2"
+                Background="{StaticResource SpectraAccent}" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Text="project.maps" Margin="8,0,0,0"
+                   FontFamily="{StaticResource SpectraFontMono}"
+                   FontSize="{StaticResource SpectraFontSecondary}"
+                   Foreground="{StaticResource SpectraTextBody}"
+                   VerticalAlignment="Center" />
+        <TextBlock Grid.Column="2" Classes="value" Text="{Binding ProjectMaps.Count}"
+                   Foreground="{StaticResource SpectraTextMuted}" />
+      </Grid>
+    </Border>
+
+    <ScrollViewer MaxHeight="132" HorizontalScrollBarVisibility="Disabled"
+                  VerticalAlignment="Top">
+      <ItemsControl ItemsSource="{Binding ProjectMaps}" Margin="8,6">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="shell:ProjectMapRow">
+            <Button Classes="card" Margin="0,0,0,4" Click="OnMapClicked"
+                    ToolTip.Tip="{Binding RelativePath}">
+              <Grid ColumnDefinitions="Auto,*,Auto" Margin="8,4">
+                <!-- The startup dot: which map the project boots. -->
+                <Border Grid.Column="0" Width="6" Height="6" CornerRadius="3"
+                        VerticalAlignment="Center"
+                        Background="{StaticResource SpectraAccent}"
+                        IsVisible="{Binding IsStartup}" />
+                <TextBlock Grid.Column="1" Text="{Binding Name}"
+                           Margin="6,0,0,0"
+                           FontSize="{StaticResource SpectraFontSecondary}"
+                           Foreground="{StaticResource SpectraTextBody}"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" Text="unlisted"
+                           FontFamily="{StaticResource SpectraFontMono}"
+                           FontSize="{StaticResource SpectraFontMicro}"
+                           Foreground="{StaticResource SpectraTextMuted}"
+                           VerticalAlignment="Center"
+                           IsVisible="{Binding IsUnlisted}" />
+              </Grid>
+            </Button>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+  </DockPanel>
+</UserControl>

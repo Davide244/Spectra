@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -94,19 +94,6 @@ public partial class MainWindow : Window
     private sealed record SessionLaunch(ProjectLayout? Project, string? ContentRoot, string? OpenMapPath);
     private SessionLaunch? _pendingLaunch;
 
-    // Guards tree -> engine -> tree. Without it a click sets the engine's
-    // selection, the next snapshot writes it back into the tree, and the tree
-    // reports that as a fresh user selection. The symptom is not a hang: it is
-    // a selection that collapses to a single node, which reads like a broken
-    // keyboard rather than a loop.
-    private bool _syncingSelection;
-
-    // The node the reveal last scrolled to, and the one the TREE last asked
-    // for. Together they answer "did this selection come from the viewport, and
-    // is it new?", which is the whole gate on scrolling the panel.
-    private Guid _revealedId;
-    private Guid _treeRequestedId;
-
     /// <summary>Creates the window and wires the viewport's lifetime to the engine's.</summary>
     public MainWindow()
     {
@@ -127,12 +114,11 @@ public partial class MainWindow : Window
         StartView.RecentProjectPicked += recent => _ = OpenRecentProjectAsync(recent);
         StartView.ShowRecents(_settings.RecentProjects);
 
-        // TUNNEL, not the bubbling handler XAML would attach. ListBox handles
-        // every arrow key itself: on a vertical panel a Left or Right press
-        // still runs its selection move, which re-selects the row it is already
-        // on, returns true, and marks the event handled. A bubbling handler for
-        // the tree's own collapse/expand would therefore never run at all.
-        SceneTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
+        // The panels raise intents; the window owns the session they reach.
+        SceneView.Logger = _loggerFactory.CreateLogger<ScenePanel>();
+        SceneView.NodeSelected += id => _session?.Select(id);
+        PropertiesView.EscapePressed += () => _viewport?.Focus();
+        MapsView.MapClicked += row => _ = OpenProjectMapAsync(row);
 
         // The title is the only place the shell says what is open and whether
         // it is saved, so it follows the document rather than being set once.
@@ -469,15 +455,14 @@ public partial class MainWindow : Window
 
         // Per-session UI state, reset so nothing leaks into the next session:
         // the snapshot queue is this session's history, and the dirty baseline
-        // and reveal gates describe a scene that no longer exists.
+        // and the panel's reveal gates describe a scene that no longer exists.
         _latest = FrameSnapshot.Empty;
         while (_published.TryDequeue(out _))
             Interlocked.Decrement(ref _queuedSnapshots);
         _droppedSnapshots = false;
         _lastUndoDepth = 0;
         _lastRedoDepth = 0;
-        _revealedId = Guid.Empty;
-        _treeRequestedId = Guid.Empty;
+        SceneView.ResetSelectionMemory();
 
         _stopping = false;
     }
@@ -531,12 +516,9 @@ public partial class MainWindow : Window
             return;
 
         // Selection is a state rather than a history, so it is applied once
-        // from the newest snapshot instead of once per drained one.
-        _syncingSelection = true;
-        _tree?.ApplySelection(snapshot.SelectedIds);
-        _syncingSelection = false;
-
-        RevealSelection(snapshot.SelectedIds);
+        // from the newest snapshot instead of once per drained one; the panel
+        // owns the sync guards and the reveal choreography.
+        SceneView.SyncSelection(snapshot);
         TrackDirty(snapshot);
 
         _shell.ApplySnapshot(snapshot);
@@ -656,143 +638,6 @@ public partial class MainWindow : Window
         _document.MarkDirty();
     }
 
-    /// <summary>
-    /// Scrolls the tree to whatever was just picked in the viewport, expanding
-    /// the collapsed parents in its way.
-    /// </summary>
-    /// <remarks>
-    /// <b>Three gates, and each of them is a way this feature becomes
-    /// annoying.</b> It reveals only when the selection actually CHANGED, or
-    /// every pump tick would re-scroll a panel the user is trying to browse.
-    /// It reveals only when the change did not come from the tree itself, since
-    /// a row somebody just clicked is already on screen and yanking the
-    /// viewport under them is pure noise. And it stands down while the filter
-    /// box has focus, because scrolling the list out from under someone
-    /// mid-search is the single most-complained-about behaviour in editors that
-    /// ship this.
-    /// <para>
-    /// <b>The LAST id, not the first.</b> They arrive in selection order, so
-    /// the last is the most recently added and the one the user just acted on;
-    /// revealing the first would mean a marquee over fifty objects scrolls to
-    /// whichever happened to be picked up earliest.
-    /// </para>
-    /// </remarks>
-    private void RevealSelection(IReadOnlyList<Guid> selected)
-    {
-        if (_tree is not { } tree)
-            return;
-
-        if (selected.Count == 0)
-        {
-            _revealedId = Guid.Empty;
-            return;
-        }
-
-        Guid target = selected[^1];
-        if (target == _revealedId)
-            return;
-
-        _revealedId = target;
-
-        // The tree already knows about this one: it is the echo of a row the
-        // user clicked, coming back a frame later.
-        if (target == _treeRequestedId)
-            return;
-
-        if (FilterBox.IsFocused)
-            return;
-
-        if (!tree.TryReveal(target, out SceneTreeNode node))
-        {
-            // Not in the tree yet, so nothing to scroll to. Forgetting that we
-            // "revealed" it lets the next tick try again once its Added change
-            // has drained.
-            _revealedId = Guid.Empty;
-            return;
-        }
-
-        // Posted rather than done here: expanding a parent is a change to the
-        // MODEL, and the containers it brings into existence do not exist until
-        // the layout pass that follows. Setting the control's selection now
-        // would be aiming at a row that has not been built.
-        Dispatcher.UIThread.Post(() =>
-        {
-            if (_tree is null || !ReferenceEquals(_tree, tree))
-                return;
-
-            // Avalonia scrolls the selected item into view on its own; what it
-            // must not do is treat this as the user selecting something and
-            // post it straight back to the engine.
-            _syncingSelection = true;
-            SceneTree.SelectedItem = node;
-            _syncingSelection = false;
-
-            // A second hop, and not one to skip. Selecting an item starts the
-            // framework's own scroll AND realises the row; both land in the
-            // layout pass after this callback, and an offset written before
-            // that is computed against an extent the panel has not finished
-            // estimating.
-            Dispatcher.UIThread.Post(() => ScrollWithContext(node), DispatcherPriority.Loaded);
-        }, DispatcherPriority.Loaded);
-    }
-
-    // Where a revealed row should sit in the panel, as a fraction of the way
-    // down it. A third leaves roughly twice as much hierarchy visible below the
-    // node as above, which is the direction a tree is usually read.
-    private const double RevealRestingFraction = 1.0 / 3.0;
-
-    /// <summary>
-    /// Places a revealed row a third of the way down the panel instead of flush
-    /// against whichever edge it was scrolled past.
-    /// </summary>
-    /// <remarks>
-    /// <b>Minimal scrolling is technically "in view" and practically
-    /// useless.</b> What a user wants after picking an object is to see what is
-    /// AROUND it in the hierarchy, and a row on the last pixel of the panel has
-    /// neighbours on one side only.
-    /// <para>
-    /// <b>The position is computed from the row's INDEX, not from its
-    /// container.</b> Under virtualization a container exists only if the row
-    /// is already on screen, which is precisely not the case when something
-    /// needs revealing; a flat list of uniform rows makes the arithmetic exact
-    /// without one. The row height comes from the scroller's own extent divided
-    /// by the row count, so it stays right if the row height ever changes.
-    /// </para>
-    /// <para>
-    /// <b>Setting the offset directly is not fussiness either.</b> The tidy
-    /// alternative, asking for a deliberately oversized <c>BringIntoView</c>
-    /// rect, does nothing: the rect is clamped to the control. Measured, with
-    /// the row landing on the top edge one time and the bottom the next.
-    /// </para>
-    /// </remarks>
-    private void ScrollWithContext(SceneTreeNode node)
-    {
-        if (_tree is not { } tree)
-            return;
-
-        int index = tree.Rows.IndexOf(node);
-        if (index < 0 || tree.Rows.Count == 0)
-            return;
-
-        // The list exposes its own scroller: a public property bound to the
-        // template's PART_ScrollViewer. Walking the visual tree for one works
-        // and is a guess about somebody else's template.
-        if (SceneTree.Scroll is not { } scroller)
-            return;
-
-        double rowHeight = scroller.Extent.Height / tree.Rows.Count;
-        if (rowHeight <= 0)
-            return;
-
-        double resting = (scroller.Viewport.Height - rowHeight) * RevealRestingFraction;
-        double target = Math.Clamp(
-            (index * rowHeight) - resting,
-            0,
-            Math.Max(0, scroller.Extent.Height - scroller.Viewport.Height));
-
-        scroller.Offset = scroller.Offset.WithY(target);
-    }
-
     // Raised on the UI thread by the viewport's own window procedure, beside
     // the renderer's size latch rather than instead of it.
     private void OnViewportResized(Vector2D<int> size)
@@ -850,121 +695,6 @@ public partial class MainWindow : Window
     private void OnFrameClicked(object? sender, RoutedEventArgs e) =>
         _session?.Post(EditorCameraCommand.FrameSelection);
 
-    // --- Tree ----------------------------------------------------------------
-
-    private void OnTreeSelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        // The pump is writing the model's selection flags right now; what the
-        // control is reporting is the engine's own answer coming back, not a
-        // user's click.
-        if (_syncingSelection)
-            return;
-
-        if (SceneTree.SelectedItem is not SceneTreeNode node)
-            return;
-
-        // Remembered so the echo of this selection, arriving from the engine a
-        // frame later, does not scroll the panel to a row that is already under
-        // the user's cursor.
-        _treeRequestedId = node.Id;
-        _session?.Select(node.Id);
-    }
-
-    // Claimed before the row can act on it: clicking an expander is not a way
-    // of selecting the thing it belongs to, which is what every file tree does
-    // and what a user pressing it repeatedly to browse expects.
-    private void OnChevronPressed(object? sender, PointerPressedEventArgs e) => e.Handled = true;
-
-    private void OnChevronClicked(object? sender, RoutedEventArgs e)
-    {
-        if (sender is not Control { DataContext: SceneTreeNode node })
-            return;
-
-        _tree?.ToggleExpanded(node);
-        Dispatcher.UIThread.Post(LogRealization, DispatcherPriority.Loaded);
-    }
-
-    /// <summary>
-    /// Reports how many rows the panel actually built against how many it is
-    /// showing.
-    /// </summary>
-    /// <remarks>
-    /// <b>The whole point of the flat projection is that these two numbers
-    /// differ</b>, and nothing else in the app would say if they stopped. A
-    /// panel that quietly reverted to realising a container per row would look
-    /// completely correct and simply get slower with the scene, which is the
-    /// failure this replaced. Debug level: it costs one enumeration of the
-    /// realised set, on a user action.
-    /// </remarks>
-    private void LogRealization()
-    {
-        if (_tree is not { } tree || SceneTree.ItemsPanelRoot is not { } panel)
-            return;
-
-        // Children is the realised set for a virtualizing panel: the containers
-        // it has actually built. GetRealizedContainers is protected, and this
-        // is the same number from the outside.
-        _logger.LogDebug(
-            "Scene tree: {Realized} row(s) realised of {Visible} visible, {Total} in the scene ({Panel})",
-            panel.Children.Count, tree.Rows.Count, tree.Count, panel.GetType().Name);
-    }
-
-    /// <summary>
-    /// Left and right collapse and walk out of the hierarchy, which is the tree
-    /// keyboard pattern every file browser uses.
-    /// </summary>
-    /// <remarks>
-    /// Up and down are the list's own and are left alone. The flat projection is
-    /// what makes "go to my parent" a backwards scan for the first shallower
-    /// row rather than a walk of the graph.
-    /// </remarks>
-    private void OnTreeKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (_tree is not { } tree || SceneTree.SelectedItem is not SceneTreeNode node)
-            return;
-
-        if (e.Key == Key.Right)
-        {
-            if (node.HasChildren && !node.IsExpanded)
-                tree.ToggleExpanded(node);
-            e.Handled = true;
-            return;
-        }
-
-        if (e.Key != Key.Left)
-            return;
-
-        if (node.IsExpanded)
-        {
-            tree.ToggleExpanded(node);
-            e.Handled = true;
-            return;
-        }
-
-        int index = tree.Rows.IndexOf(node);
-        for (int i = index - 1; i >= 0; i--)
-        {
-            if (tree.Rows[i].Depth >= node.Depth)
-                continue;
-
-            SceneTree.SelectedItem = tree.Rows[i];
-            break;
-        }
-
-        e.Handled = true;
-    }
-
-    private void OnFilterKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Escape)
-            return;
-
-        _shell.ClearFilter();
-        e.Handled = true;
-    }
-
-    private void OnClearFilterClicked(object? sender, RoutedEventArgs e) => _shell.ClearFilter();
-
     // --- Menu ----------------------------------------------------------------
 
     private void OnExitClicked(object? sender, RoutedEventArgs e) => Close();
@@ -980,52 +710,6 @@ public partial class MainWindow : Window
         }
     }
 
-    // --- Property panel ------------------------------------------------------
-    //
-    // Three handlers, and between them they are the whole commit policy: a
-    // focused field stops taking refreshes, Enter and losing focus apply it, and
-    // Escape puts the live value back. Escape has to exist precisely BECAUSE
-    // blur commits, or there would be no way to abandon a half-typed value once
-    // a field is holding it.
-
-    private void OnPropertyFieldFocused(object? sender, FocusChangedEventArgs e)
-    {
-        if (sender is TextBox { DataContext: PropertyFieldModel field })
-            field.BeginEdit();
-    }
-
-    private void OnPropertyFieldBlurred(object? sender, RoutedEventArgs e)
-    {
-        if (sender is TextBox { DataContext: PropertyFieldModel field })
-            field.Commit();
-    }
-
-    private void OnPropertyFieldKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (sender is not TextBox { DataContext: PropertyFieldModel field } box)
-            return;
-
-        switch (e.Key)
-        {
-            case Key.Enter:
-                field.Commit();
-                // Focus stays put so a run of edits can be typed and confirmed
-                // without reaching for the mouse, but the field is no longer
-                // being edited, so the next snapshot may correct it.
-                field.BeginEdit();
-                e.Handled = true;
-                break;
-
-            case Key.Escape:
-                field.Revert();
-                // Handing focus back to the viewport is what makes Escape read
-                // as "I am done here" rather than leaving the caret in a box
-                // that just changed under it.
-                _viewport?.Focus();
-                e.Handled = true;
-                break;
-        }
-    }
 
     /// <summary>
     /// Queues one property edit onto the render thread.
@@ -1343,9 +1027,8 @@ public partial class MainWindow : Window
     private static string MapDisplayName(string projectRelative) =>
         Path.GetFileNameWithoutExtension(projectRelative.Replace('/', Path.DirectorySeparatorChar));
 
-    private async void OnProjectMapClicked(object? sender, RoutedEventArgs e)
+    private async Task OpenProjectMapAsync(ProjectMapRow row)
     {
-        if (sender is not Button { DataContext: ProjectMapRow row }) return;
         if (_document.Project is not { } project || _session is null) return;
 
         string resolved = project.Resolve(row.RelativePath);
