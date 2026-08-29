@@ -221,6 +221,7 @@
     <ListBox x:Name="SceneTree"
              ItemsSource="{Binding Tree.Rows}"
              SelectionMode="Multiple"
+             AutoScrollToSelectedItem="False"
              SelectionChanged="OnTreeSelectionChanged"
              Background="Transparent"
              BorderThickness="0"

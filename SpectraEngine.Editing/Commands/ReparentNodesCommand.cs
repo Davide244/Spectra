@@ -99,28 +99,86 @@ public sealed class ReparentNodesCommand : IEditorCommand
     /// <inheritdoc/>
     public void Undo(Scene scene) => Apply(scene, _backward, forward: false);
 
+    /// <summary>
+    /// Moves every resolvable node, in two passes.
+    /// </summary>
+    /// <remarks>
+    /// <b>Park them all at the end first, then place them.</b> The indices
+    /// this command carries were computed in the ALL-MOVERS-VACATED model —
+    /// each node's position in the finished list — so applying them one at a
+    /// time is wrong the moment two nodes move within one parent: when the
+    /// first is inserted the others still occupy their old slots, and it lands
+    /// beside them rather than where it belongs. Undo had the mirror defect,
+    /// which is worse, because it made undo not an inverse: dragging two
+    /// siblings and pressing Ctrl+Z left the two permanently swapped, and no
+    /// further undo or redo could recover the authored order.
+    /// <para>
+    /// Parking every mover at the end of its destination parent makes the
+    /// vacated model literally true: the prefix of each parent's list is then
+    /// exactly its non-movers in their original order, and an insert at any
+    /// index up to that prefix's length cannot be disturbed by the movers
+    /// still parked behind it. Cross-parent moves were always correct (the
+    /// destination never held the movers), and they stay correct here.
+    /// </para>
+    /// <para>
+    /// Sibling index is traversal order is the static world's placement-slot
+    /// order, so getting this wrong silently rebuilds a level that is valid,
+    /// different, and bit-unequal to the authored one.
+    /// </para>
+    /// </remarks>
     private static void Apply(Scene scene, NodeReparent[] moves, bool forward)
     {
         ArgumentNullException.ThrowIfNull(scene);
 
-        foreach (NodeReparent move in moves)
-        {
-            Guid parentId = forward ? move.ToParentId : move.FromParentId;
-            int index = forward ? move.ToIndex : move.FromIndex;
+        // Resolved once: a missing target on either end is a no-op per the
+        // IEditorCommand contract (history behind a still-undone delete
+        // legitimately names a node or a parent that is not in the scene).
+        var nodes = new SceneNode?[moves.Length];
+        var parents = new SceneNode?[moves.Length];
+        bool anyToDo = false;
 
-            // Missing target on either end is a no-op, per the IEditorCommand
-            // contract: history behind a still-undone delete legitimately names
-            // a node or a parent that is not in the scene right now.
+        for (int i = 0; i < moves.Length; i++)
+        {
+            NodeReparent move = moves[i];
+            Guid parentId = forward ? move.ToParentId : move.FromParentId;
+
             if (!scene.TryFindById(move.NodeId, out SceneNode? node) ||
                 !scene.TryFindById(parentId, out SceneNode? parent))
             {
                 continue;
             }
 
-            if (ReferenceEquals(node.Parent, parent) && node.IndexInParent == index)
+            nodes[i] = node;
+            parents[i] = parent;
+
+            int index = forward ? move.ToIndex : move.FromIndex;
+            if (!ReferenceEquals(node.Parent, parent) || node.IndexInParent != index)
+                anyToDo = true;
+        }
+
+        // Everything already sits where this direction wants it. Checked over
+        // the WHOLE set rather than per node, because the per-node skip is
+        // what would break the two-pass model: a node parked in pass one is
+        // never "already in place" in pass two.
+        if (!anyToDo)
+            return;
+
+        // Pass one: park. InsertChild detaches from the old parent itself, so
+        // this is an ordinary reparent and raises the events a mirror needs.
+        for (int i = 0; i < moves.Length; i++)
+        {
+            if (nodes[i] is { } node && parents[i] is { } parent)
+                parent.InsertChild(parent.Children.Count, node);
+        }
+
+        // Pass two: place, ascending by destination index so each insert lands
+        // among the already-placed movers in the right order.
+        for (int i = 0; i < moves.Length; i++)
+        {
+            if (nodes[i] is not { } node || parents[i] is not { } parent)
                 continue;
 
-            parent.InsertChild(index, node);
+            parent.InsertChild(forward ? moves[i].ToIndex : moves[i].FromIndex, node);
         }
     }
 }

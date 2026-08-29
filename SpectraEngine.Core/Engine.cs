@@ -663,6 +663,11 @@ public sealed class Engine
             return;
 
         character.Exit();
+
+        // The editor takes the frame back, and says so: while suspended it
+        // refuses edits rather than trusting a shell whose view of play mode
+        // is a publish interval behind.
+        _sceneManager.Editor?.Resume();
     }
 
     // Runs on the dedicated render thread: owns the GL context, drives update

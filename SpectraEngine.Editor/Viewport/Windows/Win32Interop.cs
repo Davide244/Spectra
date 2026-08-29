@@ -140,6 +140,20 @@ internal static partial class Win32Interop
     [LibraryImport("user32.dll", EntryPoint = "SetFocus")]
     internal static partial nint SetFocus(nint hwnd);
 
+    /// <summary>SM_CXDRAG: how far a press may travel and still be a click.</summary>
+    internal const int SM_CXDRAG = 68;
+
+    /// <summary>
+    /// A system metric in the DPI the given window is running at, so a
+    /// pixel-valued threshold means the same physical distance on every
+    /// monitor. Windows 10 1607 and later.
+    /// </summary>
+    [LibraryImport("user32.dll", EntryPoint = "GetSystemMetricsForDpi")]
+    internal static partial int GetSystemMetricsForDpi(int index, uint dpi);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetDpiForWindow")]
+    internal static partial uint GetDpiForWindow(nint hwnd);
+
     [LibraryImport("user32.dll", EntryPoint = "SetCapture")]
     internal static partial nint SetCapture(nint hwnd);
 

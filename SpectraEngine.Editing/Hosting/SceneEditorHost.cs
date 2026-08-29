@@ -319,10 +319,54 @@ public sealed class SceneEditorHost : ISceneEditor
     // through EngineHost.EnqueueCommand.
 
     /// <summary>
+    /// Whether the editor has handed the frame away (play mode). While true,
+    /// every verb that would change the scene refuses and says so.
+    /// </summary>
+    /// <remarks>
+    /// <b>The authoritative half of a gate a UI cannot hold.</b> A shell's
+    /// play-mode state comes from a published snapshot up to a publish
+    /// interval old, so a click in that window enqueues an edit that arrives
+    /// here mid-play; a menu already open when play starts can keep sending
+    /// them indefinitely. Checking on this side is the only place the answer
+    /// is current.
+    /// </remarks>
+    public bool IsSuspended { get; private set; }
+
+    // One refusal for every mutating verb: suspended (play mode owns the
+    // scene) or mid-drag (a gizmo transaction is open, and transactions do not
+    // nest). Never silent — a verb that does nothing reads as a broken
+    // binding, which is why every caller of this logs through it.
+    private bool RefuseEdit(string label)
+    {
+        if (IsSuspended)
+        {
+            _logger.LogDebug("{Label}: refused, play mode owns the scene", label);
+            return true;
+        }
+
+        if (_gizmos.Active.State == GizmoInteractionState.Dragging)
+        {
+            _logger.LogDebug("{Label}: refused, a manipulation is in progress", label);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Runs one host verb: history, a structural edit, or a mode toggle.
     /// </summary>
     public void Apply(EditorHostCommand command)
     {
+        // The two mode toggles are not scene edits and stay live: navigation
+        // is the editor's own camera, and clearing a selection is how a play
+        // session should start.
+        if (command is not (EditorHostCommand.ToggleNavigation or EditorHostCommand.ClearSelection) &&
+            RefuseEdit(command.ToString()))
+        {
+            return;
+        }
+
         switch (command)
         {
             case EditorHostCommand.Undo: Undo(); break;
@@ -445,6 +489,14 @@ public sealed class SceneEditorHost : ISceneEditor
     /// </remarks>
     public bool RenameById(Guid nodeId, string name)
     {
+        // The same refusal its sibling verbs carry. Without it a rename
+        // committed by the blur that a gizmo grab itself causes (clicking a
+        // handle moves focus off the rename box) opens a transaction inside
+        // the drag's own, which throws, is caught by the command drain, and
+        // logs at Error while the typed name is dropped.
+        if (RefuseEdit("Rename"))
+            return false;
+
         if (!_scene.TryFindById(nodeId, out SceneNode? node))
             return false;
 
@@ -469,13 +521,8 @@ public sealed class SceneEditorHost : ISceneEditor
     {
         ArgumentNullException.ThrowIfNull(nodeIds);
 
-        // Same refusal as the structural verbs: a transaction is open
-        // mid-drag, and transactions do not nest.
-        if (_gizmos.Active.State == GizmoInteractionState.Dragging)
-        {
-            _logger.LogDebug("Reparent: refused, a manipulation is in progress");
+        if (RefuseEdit("Reparent"))
             return;
-        }
 
         _viewport.Reset();
 
@@ -520,11 +567,29 @@ public sealed class SceneEditorHost : ISceneEditor
         if (_viewportSize.X <= 0f || _viewportSize.Y <= 0f)
             return;
 
+        // A right-click that beat the shell's play-mode gate must not reach
+        // into a scene somebody is walking around in.
+        if (IsSuspended)
+            return;
+
         _viewport.Reset();
 
         Ray3 ray = _scene.Camera.ScreenPointToRay(viewportPoint, _viewportSize);
-        if (!_scene.Raycast(in ray, out SceneRaycastHit hit, SceneQueryFilter.EditorPicking, InsertRayReach))
+
+        // The PICK's reach, read from the one controller that owns it, never
+        // the insert clamp. They are different questions: an insert 300 units
+        // away is useless, while an object 300 units away is ordinary in an
+        // open world and left-clickable. Reusing the insert's 200 units here
+        // made a right-click past it silently keep the previous selection,
+        // which is indistinguishable from the empty-space rule and puts the
+        // menu's Delete on the wrong object.
+        if (!_scene.Raycast(
+                in ray, out SceneRaycastHit hit, SceneQueryFilter.EditorPicking, _viewport.PickDistance))
+        {
+            _logger.LogDebug("Right-click at ({X:0.#}, {Y:0.#}) hit nothing; the selection stands",
+                viewportPoint.X, viewportPoint.Y);
             return;
+        }
 
         if (!_scene.Selection.Contains(hit.Node))
             _scene.Selection.Select(hit.Node);
@@ -540,7 +605,11 @@ public sealed class SceneEditorHost : ISceneEditor
         // long as play mode lasted.
         _viewport.Reset();
         _camera.SuspendNavigation();
+        IsSuspended = true;
     }
+
+    /// <inheritdoc/>
+    public void Resume() => IsSuspended = false;
 
     /// <summary>
     /// Applies a property-panel edit to the current selection.
@@ -553,8 +622,17 @@ public sealed class SceneEditorHost : ISceneEditor
     /// The panel says which property and which value; which objects that means
     /// is the editor's answer, given at the moment the edit runs.
     /// </remarks>
-    public int ApplyProperty(PropertyEdit edit) =>
-        PropertyEditor.Apply(_undo, _scene.Selection.Items, edit);
+    public int ApplyProperty(PropertyEdit edit)
+    {
+        // Same gate as every other edit: a property field committed by the
+        // blur that entering play mode causes must not write into a running
+        // session, and a bulk edit opens a transaction that cannot nest inside
+        // a live drag.
+        if (RefuseEdit("Property edit"))
+            return 0;
+
+        return PropertyEditor.Apply(_undo, _scene.Selection.Items, edit);
+    }
 
     /// <summary>
     /// Resets the editor after the scene's graph has been replaced wholesale,
@@ -810,12 +888,10 @@ public sealed class SceneEditorHost : ISceneEditor
         // A structural edit inside a gizmo drag would open a transaction while
         // one is already open, which does not nest and throws. It would also be
         // meaningless: the gesture is still deciding where the thing it is
-        // holding ends up.
-        if (_gizmos.Active.State == GizmoInteractionState.Dragging)
-        {
-            _logger.LogDebug("{Label}: refused, a manipulation is in progress", label);
+        // holding ends up. Play mode is refused for its own reason: the scene
+        // belongs to whoever is walking around in it.
+        if (RefuseEdit(label))
             return;
-        }
 
         // Copied because every one of these verbs rewrites the selection, and
         // SelectionSet.Items is the live list.
@@ -873,13 +949,8 @@ public sealed class SceneEditorHost : ISceneEditor
     /// </param>
     public void Insert(InsertKind kind, Vector2? viewportPoint = null)
     {
-        // Same refusal as the structural verbs: a transaction is open
-        // mid-drag, and transactions do not nest.
-        if (_gizmos.Active.State == GizmoInteractionState.Dragging)
-        {
-            _logger.LogDebug("Insert: refused, a manipulation is in progress");
+        if (RefuseEdit("Insert"))
             return;
-        }
 
         // Any OTHER live gesture — a marquee mid-sweep — is abandoned before
         // the insert rewrites the selection under it, the same rule

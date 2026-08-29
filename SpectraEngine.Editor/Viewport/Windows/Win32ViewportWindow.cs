@@ -71,18 +71,30 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
     private Win32Interop.POINT _lastClientPosition;
 
     // Right-click-vs-right-drag: where the right button went down (client
-    // pixels) and how far the pointer travelled while it was held. The
+    // pixels) and how far the pointer has moved AWAY from it since. The
     // engine's freelook owns a right DRAG, so a context menu can only mean a
-    // right press that ended before it became one. Travel is accumulated from
-    // both move shapes, because the cursor lock usually engages mid-hold and
-    // the moves after it are deltas rather than positions.
+    // right press that ended before it became one.
+    //
+    // NET DISPLACEMENT, not the length of the path travelled. Windows itself
+    // draws a rectangle around the press point that the pointer has to LEAVE
+    // (SM_CXDRAG, what DragDetect implements), and that has no time
+    // component: a press held for a second while the hand shakes is still a
+    // click. Summing |dx|+|dy| per message instead makes an ordinary hesitant
+    // click on a high-dpi mouse silently open no menu, and pressing faster
+    // "fixes" it - the signature of a bug nobody can report.
+    //
+    // Accumulated from both move shapes, because the cursor lock engages
+    // within a frame or two of the press and everything after it arrives as a
+    // delta rather than a position.
     private Win32Interop.POINT _rightPressPosition;
-    private double _rightPressTravel;
+    private int _rightTravelX;
+    private int _rightTravelY;
     private bool _rightPressActive;
+    private bool _rightBecameDrag;
 
-    // Matches SM_CXDRAG's default: the movement Windows itself considers "not
-    // a drag yet".
-    private const double RightClickTravelLimit = 4.0;
+    // Half the system's drag width, in this window's DPI: the same slack
+    // Explorer gives a click, resolved once per press.
+    private int _rightClickSlack = 4;
 
     /// <summary>Creates the child window under <paramref name="parent"/>.</summary>
     internal Win32ViewportWindow(nint parent)
@@ -400,7 +412,7 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
                 return;
 
             if (_rightPressActive)
-                _rightPressTravel += Math.Abs(dx) + Math.Abs(dy);
+                AccumulateRightTravel(dx, dy);
 
             Submit(InputEvent.PointerDelta(new Vector2(dx, dy)));
             Win32Interop.SetCursorPos(_lockAnchor.X, _lockAnchor.Y);
@@ -414,10 +426,7 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
         };
 
         if (_rightPressActive)
-        {
-            _rightPressTravel += Math.Abs(position.X - _lastClientPosition.X)
-                + Math.Abs(position.Y - _lastClientPosition.Y);
-        }
+            AccumulateRightTravel(position.X - _lastClientPosition.X, position.Y - _lastClientPosition.Y);
 
         _lastClientPosition = position;
 
@@ -439,8 +448,11 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
         if (button == PointerButtons.Right)
         {
             _rightPressActive = true;
-            _rightPressTravel = 0;
+            _rightBecameDrag = false;
+            _rightTravelX = 0;
+            _rightTravelY = 0;
             _rightPressPosition = _lastClientPosition;
+            _rightClickSlack = ResolveRightClickSlack();
         }
 
         Submit(InputEvent.PointerDown(button));
@@ -464,8 +476,50 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
         if (button == PointerButtons.Right && _rightPressActive)
         {
             _rightPressActive = false;
-            if (_rightPressTravel <= RightClickTravelLimit)
+            if (!_rightBecameDrag)
                 ContextMenuRequested?.Invoke(_rightPressPosition.X, _rightPressPosition.Y);
+        }
+    }
+
+    // Leaving the rectangle is what makes a press a drag, and it is one-way:
+    // coming back inside afterwards does not turn a freelook into a click.
+    private void AccumulateRightTravel(int dx, int dy)
+    {
+        if (_rightBecameDrag)
+            return;
+
+        _rightTravelX += dx;
+        _rightTravelY += dy;
+
+        if (Math.Abs(_rightTravelX) > _rightClickSlack || Math.Abs(_rightTravelY) > _rightClickSlack)
+            _rightBecameDrag = true;
+    }
+
+    private int ResolveRightClickSlack()
+    {
+        // Half of SM_CXDRAG, which is the full WIDTH of the rectangle while
+        // the travel here is measured from its centre. Per-window DPI, so the
+        // slack is the same physical distance on a 200% display as on a 100%
+        // one; the fallback is the metric's own default.
+        const int fallback = 4;
+
+        if (_hwnd == 0)
+            return fallback;
+
+        try
+        {
+            uint dpi = Win32Interop.GetDpiForWindow(_hwnd);
+            if (dpi == 0)
+                return fallback;
+
+            int width = Win32Interop.GetSystemMetricsForDpi(Win32Interop.SM_CXDRAG, dpi);
+            return width > 1 ? width / 2 : fallback;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // Pre-1607 Windows has neither entry point; the constant is what
+            // the metric returns at 100% anyway.
+            return fallback;
         }
     }
 

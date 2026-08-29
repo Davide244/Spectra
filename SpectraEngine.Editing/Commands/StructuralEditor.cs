@@ -291,17 +291,47 @@ public static class StructuralEditor
         if (roots.Count == 0)
             return false;
 
-        int firstIndex = insertIndex < 0 ? newParent.Children.Count : insertIndex;
+        // The dragged block keeps the TREE's order, not the click order. A
+        // selection list is in the order rows were Ctrl-clicked, so without
+        // this, dragging B then A drops them as B, A - and sibling order is
+        // placement order, so that is authored data decided by which row the
+        // user happened to touch first. Only meaningful when they share a
+        // parent; across parents there is no single order to sort by.
+        bool oneParent = true;
+        for (int i = 1; i < roots.Count && oneParent; i++)
+            oneParent = ReferenceEquals(roots[i].Parent, roots[0].Parent);
 
-        // Same-parent moves vacate a slot before the insert happens.
+        if (oneParent)
+            roots.Sort(static (a, b) => a.IndexInParent.CompareTo(b.IndexInParent));
+
+        int target = insertIndex < 0 ? newParent.Children.Count : insertIndex;
+
+        // Same-parent movers vacate their slots before the insert happens, so
+        // the destination shifts down by however many of them sat above it.
+        // Counted against the ORIGINAL target, never against a running total:
+        // comparing each root to a progressively decremented index makes the
+        // answer depend on the order the roots arrive in.
+        int vacated = 0;
         foreach (SceneNode root in roots)
         {
-            if (ReferenceEquals(root.Parent, newParent) && root.IndexInParent < firstIndex)
-                firstIndex--;
+            if (ReferenceEquals(root.Parent, newParent) && root.IndexInParent < target)
+                vacated++;
         }
 
-        if (firstIndex < 0)
-            firstIndex = 0;
+        int firstIndex = Math.Max(0, target - vacated);
+
+        // A drop that asks for the arrangement the scene already has records
+        // nothing. Without this, nudging a row a few pixels onto its own edge
+        // commits a "Reparent" entry whose undo changes nothing visible, so
+        // the next Ctrl+Z reads as dead - the same refusal a rename makes for
+        // an unchanged name and the property panel makes for an unchanged
+        // value.
+        bool alreadyPlaced = true;
+        for (int i = 0; i < roots.Count && alreadyPlaced; i++)
+            alreadyPlaced = ReferenceEquals(roots[i].Parent, newParent) && roots[i].IndexInParent == firstIndex + i;
+
+        if (alreadyPlaced)
+            return false;
 
         undo.BeginTransaction("Reparent");
         if (!TryReparentPreservingWorld(scene, undo, roots, newParent, firstIndex, "Reparent"))

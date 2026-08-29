@@ -104,6 +104,37 @@ public sealed class SceneTreeModelTests
         tree.Roots[0].Name.ShouldBe("Orphan");
     }
 
+    // --- Row patching --------------------------------------------------------
+
+    [Fact]
+    public void Rows_report_that_they_are_being_patched_while_they_change()
+    {
+        // The flag a view reads to tell the framework's own reaction to rows
+        // leaving the list from a user gesture. A list control drops a removed
+        // item from its selection and reports that exactly as it reports a
+        // click, so without this a collapsed group reads as "the user
+        // deselected everything inside it" - and the shell dutifully told the
+        // engine so, losing a selection that could not be got back.
+        SceneTreeModel tree = NewTree();
+        tree.ApplyChanges(Batch(1,
+            Added(Root, Guid.Empty, "Root", -1),
+            Added(ChildA, Root, "A", 0),
+            Added(GrandChild, ChildA, "Deep", 0)));
+        tree.TryReveal(GrandChild, out _).ShouldBeTrue();
+
+        var seen = new List<bool>();
+        tree.Rows.CollectionChanged += (_, _) => seen.Add(tree.IsPatchingRows);
+
+        tree.ToggleExpanded(tree.Roots[0].Children[0]);
+
+        seen.ShouldNotBeEmpty("collapsing hides a row, which changes the projection");
+        seen.ShouldAllBe(patching => patching);
+
+        // ...and the flag is down again once the patch is finished, or the
+        // panel would ignore the user's next real click.
+        tree.IsPatchingRows.ShouldBeFalse();
+    }
+
     // --- Rename --------------------------------------------------------------
 
     [Fact]

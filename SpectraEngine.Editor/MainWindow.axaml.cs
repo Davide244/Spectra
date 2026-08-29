@@ -583,6 +583,14 @@ public partial class MainWindow : Window
         _sceneView.SyncSelection(snapshot);
         TrackDirty(snapshot);
 
+        // A menu opened in the moment before play mode was reported would
+        // otherwise stand over a running session for as long as the user left
+        // it there, sending edits at a scene somebody is walking around in.
+        // The engine refuses those now; this is what stops the menu being on
+        // screen at all.
+        if (snapshot.IsPlaying && _viewportMenu is { IsOpen: true } menu)
+            menu.Close();
+
         _shell.ApplySnapshot(snapshot);
         RefreshSnapFields(snapshot);
     }

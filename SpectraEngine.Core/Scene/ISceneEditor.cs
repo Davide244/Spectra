@@ -64,6 +64,24 @@ public interface ISceneEditor
     void Suspend();
 
     /// <summary>
+    /// Hands the frame back: the host is about to resume calling
+    /// <see cref="Update"/>.
+    /// </summary>
+    /// <remarks>
+    /// <b>The pair matters because a UI's view of play mode is stale.</b> A
+    /// shell gates its own editing surfaces on a snapshot up to a publish
+    /// interval old, so a click landing in that window enqueues an edit that
+    /// arrives at a suspended editor and is applied to a scene the player is
+    /// standing in. The editor knowing it is suspended is what turns that into
+    /// a logged refusal instead; the alternative, trusting every caller to
+    /// have fresh state, is a race nobody can close from the outside.
+    /// <para>
+    /// Idempotent, like <see cref="Suspend"/>.
+    /// </para>
+    /// </remarks>
+    void Resume();
+
+    /// <summary>
     /// Pushes the editor's overlay — manipulator handles, marquee — into this
     /// frame's debug line buffer. Called after the buffer has been cleared and
     /// before the draw list is built.

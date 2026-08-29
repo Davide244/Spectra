@@ -97,6 +97,18 @@ public partial class ScenePanel : UserControl
     private readonly HashSet<SceneTreeNode> _listSelectionScratch = [];
     private readonly List<SceneTreeNode> _desiredListSelection = [];
 
+    // The selection this panel last asked the engine for, held until the
+    // engine's own snapshots agree with it. Between the two, every published
+    // snapshot still describes the selection the gesture replaced.
+    private readonly HashSet<Guid> _pendingSelection = [];
+    private bool _hasPendingSelection;
+    private int _pendingSelectionTicks;
+
+    // Pump ticks (~16 ms each) to wait for the echo before deferring to the
+    // engine regardless. Comfortably longer than a publish interval, far
+    // shorter than a person notices.
+    private const int PendingSelectionTickLimit = 8;
+
     public ScenePanel()
     {
         InitializeComponent();
@@ -139,6 +151,9 @@ public partial class ScenePanel : UserControl
     {
         _revealedId = Guid.Empty;
         _treeRequestedId = Guid.Empty;
+        _pendingSelection.Clear();
+        _hasPendingSelection = false;
+        _pendingSelectionTicks = 0;
         CancelRename();
     }
 
@@ -154,12 +169,47 @@ public partial class ScenePanel : UserControl
         if (Model?.Tree is not { } tree)
             return;
 
+        // A gesture is in flight: this snapshot was built before the engine
+        // saw it, so applying it would briefly revert the user's own click and
+        // make the next incremental Ctrl-click compute against a selection
+        // nobody asked for. Skipped whole - flags and list together - until an
+        // echo carrying the requested set arrives.
+        if (_hasPendingSelection)
+        {
+            // Given up on after a few ticks rather than held forever: the
+            // engine legitimately answers with a DIFFERENT set (ids that left
+            // the scene are skipped, a verb rewrote the selection), and a
+            // panel that waited for an echo that will never come would stop
+            // showing the engine's selection at all. The engine is
+            // authoritative; this only defers to it a fraction of a second
+            // late.
+            if (!MatchesPending(snapshot.SelectedIds) && ++_pendingSelectionTicks < PendingSelectionTickLimit)
+                return;
+
+            _hasPendingSelection = false;
+            _pendingSelectionTicks = 0;
+        }
+
         _syncingSelection = true;
         tree.ApplySelection(snapshot.SelectedIds);
         SyncListSelection(tree, snapshot.SelectedIds);
         _syncingSelection = false;
 
         RevealSelection(tree, snapshot.SelectedIds);
+    }
+
+    private bool MatchesPending(IReadOnlyList<Guid> selected)
+    {
+        if (selected.Count != _pendingSelection.Count)
+            return false;
+
+        for (int i = 0; i < selected.Count; i++)
+        {
+            if (!_pendingSelection.Contains(selected[i]))
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -336,6 +386,17 @@ public partial class ScenePanel : UserControl
         if (_syncingSelection)
             return;
 
+        // Rows are leaving the list because the PROJECTION changed - a
+        // collapse, an engine-side delete draining in, a filter re-run, a
+        // whole-graph rebuild. The control drops each removed row from its
+        // selection and reports that exactly as it reports a click, so
+        // without this a collapsed group told the engine "the user deselected
+        // everything inside me" and the selection was gone for good. Hidden
+        // nodes keep their model flag instead, which is what the next
+        // SyncSelection re-reconciles against.
+        if (Model?.Tree is { IsPatchingRows: true })
+            return;
+
         var ids = new List<Guid>();
         if (SceneTree.SelectedItems is { } items)
         {
@@ -357,6 +418,17 @@ public partial class ScenePanel : UserControl
         // frame later, does not scroll the panel to a row that is already under
         // the user's cursor.
         _treeRequestedId = ids.Count > 0 ? ids[^1] : Guid.Empty;
+
+        // ...and remembered as a whole set, because until the engine echoes it
+        // back every snapshot still describes the selection as it was BEFORE
+        // this gesture. Writing that stale set into the list would undo the
+        // click the user just made, and the next Ctrl-click would then compute
+        // against it and drop a node that was already applied.
+        _pendingSelection.Clear();
+        for (int i = 0; i < ids.Count; i++)
+            _pendingSelection.Add(ids[i]);
+
+        _hasPendingSelection = true;
         SelectionRequested?.Invoke(ids);
     }
 
@@ -680,6 +752,13 @@ public partial class ScenePanel : UserControl
         if (_renaming is not null)
             return;
 
+        // Not from the chevron: opening and closing a group quickly is an
+        // ordinary way to look inside one, and it must not also fly the camera
+        // somewhere. RowNodeForDrag returns null for exactly the interactive
+        // children a row carries.
+        if (RowNodeForDrag(e.Source) is null)
+            return;
+
         FrameRequested?.Invoke();
         e.Handled = true;
     }
@@ -836,6 +915,14 @@ public partial class ScenePanel : UserControl
     {
         CancelRename();
 
+        // A row that is scrolled out of the virtualization window has no
+        // container to put an editor in, so it is brought back first. Without
+        // this, F2 on a selected row the user had scrolled away from armed a
+        // rename with no visible editor - and because the tree's key handler
+        // stands down while a rename is live, the whole tree keyboard went
+        // dead with nothing on screen explaining why.
+        SceneTree.ScrollIntoView(node);
+
         _renaming = node;
         node.IsRenaming = true;
 
@@ -846,17 +933,21 @@ public partial class ScenePanel : UserControl
             if (!ReferenceEquals(_renaming, node))
                 return;
 
-            if (SceneTree.ContainerFromItem(node) is not Control container)
+            if (SceneTree.ContainerFromItem(node) is Control container &&
+                container.GetVisualDescendants().OfType<TextBox>().FirstOrDefault() is { } box)
+            {
+                // Set imperatively, never bound: a binding would let the ~30 Hz
+                // snapshot republish rewrite the text mid-keystroke.
+                box.Text = node.Name;
+                box.Focus();
+                box.SelectAll();
                 return;
+            }
 
-            if (container.GetVisualDescendants().OfType<TextBox>().FirstOrDefault() is not { } box)
-                return;
-
-            // Set imperatively, never bound: a binding would let the ~30 Hz
-            // snapshot republish rewrite the text mid-keystroke.
-            box.Text = node.Name;
-            box.Focus();
-            box.SelectAll();
+            // No editor could be reached. Disarming is what keeps the failure
+            // to one dead keystroke instead of a wedged panel.
+            Logger?.LogDebug("Rename: no row editor for '{Name}'; the tree keyboard stays live", node.Name);
+            CancelRename();
         }, DispatcherPriority.Loaded);
     }
 

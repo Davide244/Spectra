@@ -508,6 +508,25 @@ public sealed class SceneTreeModel
             SetExpandedRecursive(node.Children[i], expanded);
     }
 
+    /// <summary>
+    /// True while the visible-row projection is being patched, so a view can
+    /// tell the framework's own reaction to rows leaving the list from a user
+    /// gesture.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is a guard against silent data loss, not bookkeeping.</b> A
+    /// list control drops a removed item from its selection and reports that
+    /// as a selection change, which is indistinguishable from a click unless
+    /// somebody says otherwise. Collapsing a group therefore looked exactly
+    /// like "the user deselected everything inside it", and the shell duly
+    /// told the engine so - losing a selection the user had built and could
+    /// not get back. Every path that folds rows away (a chevron, the Left key,
+    /// collapse-all, a delete draining from the engine, a filter re-run, a
+    /// whole-graph rebuild) funnels through <see cref="SyncRows"/>, so one
+    /// flag here covers all of them.
+    /// </remarks>
+    public bool IsPatchingRows { get; private set; }
+
     /// <summary>Recomputes the visible rows and patches the difference in.</summary>
     private void RebuildRows()
     {
@@ -541,36 +560,44 @@ public sealed class SceneTreeModel
         for (int i = 0; i < _desired.Count; i++)
             _desiredSet.Add(_desired[i]);
 
-        int index = 0;
-        while (index < _desired.Count)
+        IsPatchingRows = true;
+        try
         {
-            if (index >= Rows.Count)
+            int index = 0;
+            while (index < _desired.Count)
             {
-                Rows.Add(_desired[index]);
+                if (index >= Rows.Count)
+                {
+                    Rows.Add(_desired[index]);
+                    index++;
+                    continue;
+                }
+
+                if (ReferenceEquals(Rows[index], _desired[index]))
+                {
+                    index++;
+                    continue;
+                }
+
+                // A row that is not wanted anywhere any more: drop it and look at
+                // whatever slid into its place, without advancing.
+                if (!_desiredSet.Contains(Rows[index]))
+                {
+                    Rows.RemoveAt(index);
+                    continue;
+                }
+
+                Rows.Insert(index, _desired[index]);
                 index++;
-                continue;
             }
 
-            if (ReferenceEquals(Rows[index], _desired[index]))
-            {
-                index++;
-                continue;
-            }
-
-            // A row that is not wanted anywhere any more: drop it and look at
-            // whatever slid into its place, without advancing.
-            if (!_desiredSet.Contains(Rows[index]))
-            {
-                Rows.RemoveAt(index);
-                continue;
-            }
-
-            Rows.Insert(index, _desired[index]);
-            index++;
+            while (Rows.Count > _desired.Count)
+                Rows.RemoveAt(Rows.Count - 1);
         }
-
-        while (Rows.Count > _desired.Count)
-            Rows.RemoveAt(Rows.Count - 1);
+        finally
+        {
+            IsPatchingRows = false;
+        }
     }
 
     /// <summary>How many nodes pass the current filter. Equals <see cref="Count"/> when there is none.</summary>
