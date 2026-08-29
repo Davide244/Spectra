@@ -90,6 +90,106 @@ public static class NodeInspector
         }
     }
 
+    /// <summary>
+    /// Fills <paramref name="into"/> with the rows for a whole selection,
+    /// merged.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The UNION of the selection's properties, not the intersection.</b> A
+    /// row carried by only some of the selected nodes is still shown and still
+    /// editable, and the edit reaches the nodes that have it. Hiding it would
+    /// mean that selecting one extra object silently removed the field somebody
+    /// was about to type into.
+    /// </para>
+    /// <para>
+    /// <b>Disagreement is tracked PER AXIS, which is what makes a bulk edit
+    /// useful.</b> "Put all of these on the floor" sets y and must leave x and
+    /// z alone. A row that could only say "these vectors differ", and only
+    /// write all three back, would turn that gesture into a way to stack the
+    /// whole selection at one point.
+    /// </para>
+    /// <para>
+    /// <b>The merged order is <see cref="PropertyId"/>'s declaration order,
+    /// which is deliberately the display order.</b> Merging in first-seen order
+    /// would make the sections depend on which node happened to be selected
+    /// first, so a selection of a light and a brush would lay itself out
+    /// differently depending on click order, and the panel's group-by-run
+    /// assumption would break with it.
+    /// </para>
+    /// </remarks>
+    public static void Describe(IReadOnlyList<SceneNode> nodes, List<PropertyRow> into)
+    {
+        ArgumentNullException.ThrowIfNull(nodes);
+        ArgumentNullException.ThrowIfNull(into);
+
+        into.Clear();
+        if (nodes.Count == 0)
+            return;
+
+        if (nodes.Count == 1)
+        {
+            Describe(nodes[0], into);
+            return;
+        }
+
+        var merged = new SortedDictionary<PropertyId, PropertyRow>();
+        var scratch = new List<PropertyRow>();
+
+        foreach (SceneNode node in nodes)
+        {
+            ArgumentNullException.ThrowIfNull(node);
+            Describe(node, scratch);
+
+            foreach (PropertyRow row in scratch)
+            {
+                if (!merged.TryGetValue(row.Id, out PropertyRow existing))
+                {
+                    merged[row.Id] = row with { PresentCount = 1, SelectionCount = nodes.Count };
+                    continue;
+                }
+
+                merged[row.Id] = existing with
+                {
+                    PresentCount = existing.PresentCount + 1,
+                    MixedAxes = existing.MixedAxes | Disagreement(existing, row),
+                };
+            }
+        }
+
+        foreach (PropertyRow row in merged.Values)
+            into.Add(row);
+    }
+
+    /// <summary>
+    /// Which parts of two rows for the same property disagree.
+    /// </summary>
+    /// <remarks>
+    /// <b>Exact comparison, on purpose.</b> Two positions that differ in the
+    /// last ulp really are different positions, and a tolerance here would
+    /// report them as settled and then quietly write one of them over the
+    /// other on the next bulk edit. The panel is free to round what it DISPLAYS;
+    /// what it must not do is round what it compares.
+    /// </remarks>
+    private static PropertyAxes Disagreement(in PropertyRow a, in PropertyRow b) => a.Kind switch
+    {
+        PropertyKind.Vector3 or PropertyKind.Color =>
+            (a.Vector.X == b.Vector.X ? PropertyAxes.None : PropertyAxes.X)
+            | (a.Vector.Y == b.Vector.Y ? PropertyAxes.None : PropertyAxes.Y)
+            | (a.Vector.Z == b.Vector.Z ? PropertyAxes.None : PropertyAxes.Z),
+
+        PropertyKind.Number => a.Number == b.Number ? PropertyAxes.None : PropertyAxes.All,
+        PropertyKind.Boolean => a.Flag == b.Flag ? PropertyAxes.None : PropertyAxes.All,
+
+        // Text, Choice and ReadOnlyText all compare their string. An id is
+        // read-only and always differs across a multi-selection, which is
+        // correct and is why the panel renders a mixed read-only row as a
+        // placeholder rather than as one node's value.
+        _ => string.Equals(a.Text, b.Text, StringComparison.Ordinal)
+            ? PropertyAxes.None
+            : PropertyAxes.All,
+    };
+
     private static void DescribeBrush(SceneNode node, Brush brush, List<PropertyRow> into)
     {
         // Kind is on the NODE and operation is on the BRUSH, and they are shown

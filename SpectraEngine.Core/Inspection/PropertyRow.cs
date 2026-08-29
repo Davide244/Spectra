@@ -75,6 +75,26 @@ public enum PropertyKind
 }
 
 /// <summary>
+/// Which components of a three-number value a row or an edit refers to.
+/// </summary>
+/// <remarks>
+/// <b>Per component, because that is the bulk edit people actually reach
+/// for.</b> "Put all of these on the floor" sets y and must leave x and z
+/// alone; a row that could only report "these vectors differ" and only write
+/// all three would turn that gesture into a way to stack every selected object
+/// at one point.
+/// </remarks>
+[Flags]
+public enum PropertyAxes
+{
+    None = 0,
+    X = 1 << 0,
+    Y = 1 << 1,
+    Z = 1 << 2,
+    All = X | Y | Z,
+}
+
+/// <summary>
 /// One row of the inspector: what it is, which group it belongs to, and its
 /// current value.
 /// </summary>
@@ -135,28 +155,59 @@ public readonly record struct PropertyRow
     /// </remarks>
     public IReadOnlyList<string> Choices { get; init; }
 
+    /// <summary>
+    /// How many of the selected nodes carry this property at all.
+    /// </summary>
+    /// <remarks>
+    /// Less than <see cref="SelectionCount"/> means the property is unique to
+    /// part of the selection: a brush field with a light also selected, say.
+    /// Such a row is still shown and still editable, and the edit reaches only
+    /// the nodes that have it.
+    /// </remarks>
+    public int PresentCount { get; init; }
+
+    /// <summary>How many nodes the selection held when this row was built.</summary>
+    public int SelectionCount { get; init; }
+
+    /// <summary>
+    /// Which parts of the value differ across the nodes that carry it.
+    /// </summary>
+    /// <remarks>
+    /// For a three-number value these are the axes that disagree, so a row can
+    /// show two settled components and one mixed one. For every other kind it
+    /// is <see cref="PropertyAxes.All"/> or nothing, since there is only one
+    /// value to disagree about.
+    /// </remarks>
+    public PropertyAxes MixedAxes { get; init; }
+
+    /// <summary>Whether anything about this value differs across the selection.</summary>
+    public bool IsMixed => MixedAxes != PropertyAxes.None;
+
+    /// <summary>Whether only part of the selection carries this property.</summary>
+    public bool IsPartial => PresentCount < SelectionCount;
+
     /// <summary>Whether this row can be edited at all.</summary>
     public bool IsEditable => Kind != PropertyKind.ReadOnlyText;
 
     internal static PropertyRow ReadOnly(string group, string name, PropertyId id, string text) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.ReadOnlyText, Text = text, Choices = [] };
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.ReadOnlyText, Text = text, Choices = [], PresentCount = 1, SelectionCount = 1 };
 
     internal static PropertyRow OfText(string group, string name, PropertyId id, string text) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Text, Text = text, Choices = [] };
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Text, Text = text, Choices = [], PresentCount = 1, SelectionCount = 1 };
 
     internal static PropertyRow OfNumber(string group, string name, PropertyId id, float value) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Number, Number = value, Choices = [] };
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Number, Number = value, Choices = [], PresentCount = 1, SelectionCount = 1 };
 
     internal static PropertyRow OfVector(string group, string name, PropertyId id, Vector3 value) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Vector3, Vector = value, Choices = [] };
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Vector3, Vector = value, Choices = [], PresentCount = 1, SelectionCount = 1 };
 
     internal static PropertyRow OfColor(string group, string name, PropertyId id, Vector3 value) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Color, Vector = value, Choices = [] };
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Color, Vector = value, Choices = [], PresentCount = 1, SelectionCount = 1 };
 
     internal static PropertyRow OfFlag(string group, string name, PropertyId id, bool value) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Boolean, Flag = value, Choices = [] };
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Boolean, Flag = value, Choices = [], PresentCount = 1, SelectionCount = 1 };
 
     internal static PropertyRow OfChoice(
         string group, string name, PropertyId id, string value, IReadOnlyList<string> choices) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Choice, Text = value, Choices = choices };
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Choice, Text = value, Choices = choices, PresentCount = 1, SelectionCount = 1 };
 }
