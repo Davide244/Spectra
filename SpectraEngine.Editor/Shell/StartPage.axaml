@@ -61,22 +61,20 @@
               CornerRadius="{StaticResource SpectraRadius2}">
         <DockPanel>
 
-          <!-- The panel-header motif: a category chip and a monospace name
-               that refers to something real. -->
+          <!-- A plain header, in words: labels here name what a thing IS for
+               the person reading it, never a code-flavoured identifier. -->
           <Border DockPanel.Dock="Top"
                   Height="{StaticResource SpectraPanelHeaderHeight}"
                   BorderBrush="{StaticResource SpectraBorderStrong}"
                   BorderThickness="0,0,0,1"
-                  Padding="10,0">
-            <Grid ColumnDefinitions="Auto,*,Auto">
-              <Border Grid.Column="0" Width="9" Height="9" CornerRadius="2"
-                      Background="{StaticResource SpectraAccent}" VerticalAlignment="Center" />
-              <TextBlock Grid.Column="1" Text="projects.recent" Margin="8,0,0,0"
-                         FontFamily="{StaticResource SpectraFontMono}"
+                  Padding="12,0">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Grid.Column="0" Text="Recent projects"
                          FontSize="{StaticResource SpectraFontSecondary}"
+                         FontWeight="SemiBold"
                          Foreground="{StaticResource SpectraTextBody}"
                          VerticalAlignment="Center" />
-              <TextBlock Grid.Column="2" x:Name="RecentCountLabel"
+              <TextBlock Grid.Column="1" x:Name="RecentCountLabel"
                          FontFamily="{StaticResource SpectraFontMono}"
                          FontSize="{StaticResource SpectraFontSmall}"
                          Foreground="{StaticResource SpectraTextMuted}"

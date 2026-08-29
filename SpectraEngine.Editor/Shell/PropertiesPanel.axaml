@@ -11,24 +11,13 @@
 
   <DockPanel>
 
-    <Border DockPanel.Dock="Top"
-            Height="{StaticResource SpectraPanelHeaderHeight}"
-            BorderBrush="{StaticResource SpectraBorderStrong}"
-            BorderThickness="0,0,0,1"
-            Padding="10,0">
-      <Grid ColumnDefinitions="Auto,*,Auto">
-        <Border Grid.Column="0" Width="9" Height="9" CornerRadius="2"
-                Background="{StaticResource SpectraAccent}" VerticalAlignment="Center" />
-        <TextBlock Grid.Column="1" Text="node.properties" Margin="8,0,0,0"
-                   VerticalAlignment="Center"
-                   FontFamily="{StaticResource SpectraFontMono}"
-                   FontSize="{StaticResource SpectraFontSmall}"
-                   Foreground="{StaticResource SpectraTextEmphasis}" />
-        <TextBlock Grid.Column="2" Classes="value" VerticalAlignment="Center"
-                   Text="{Binding SelectionLabel}"
-                   Foreground="{StaticResource SpectraTextMuted}" />
-      </Grid>
-    </Border>
+    <!-- No panel header: the dock's tool chrome already names this
+         "Properties". The selection count is the one fact worth a line here,
+         because it is what a bulk edit's reach depends on. -->
+    <TextBlock DockPanel.Dock="Top" Margin="10,8,10,0"
+               Classes="value" Text="{Binding SelectionLabel}"
+               Foreground="{StaticResource SpectraTextMuted}"
+               IsVisible="{Binding Properties.HasSelection}" />
 
     <TextBlock DockPanel.Dock="Top" Margin="12,16"
                Text="{Binding Properties.EmptyLabel}"

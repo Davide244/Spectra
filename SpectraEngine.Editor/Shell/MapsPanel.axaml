@@ -12,24 +12,7 @@
        dropdown would cross the viewport, where it is invisible. -->
 
   <DockPanel>
-    <Border DockPanel.Dock="Top"
-            Height="{StaticResource SpectraPanelHeaderHeight}"
-            BorderBrush="{StaticResource SpectraBorderStrong}"
-            BorderThickness="0,0,0,1"
-            Padding="10,0">
-      <Grid ColumnDefinitions="Auto,*,Auto">
-        <Border Grid.Column="0" Width="9" Height="9" CornerRadius="2"
-                Background="{StaticResource SpectraAccent}" VerticalAlignment="Center" />
-        <TextBlock Grid.Column="1" Text="project.maps" Margin="8,0,0,0"
-                   FontFamily="{StaticResource SpectraFontMono}"
-                   FontSize="{StaticResource SpectraFontSecondary}"
-                   Foreground="{StaticResource SpectraTextBody}"
-                   VerticalAlignment="Center" />
-        <TextBlock Grid.Column="2" Classes="value" Text="{Binding ProjectMaps.Count}"
-                   Foreground="{StaticResource SpectraTextMuted}" />
-      </Grid>
-    </Border>
-
+    <!-- No panel header: the dock's tool chrome already names this "Maps". -->
     <ScrollViewer MaxHeight="132" HorizontalScrollBarVisibility="Disabled"
                   VerticalAlignment="Top">
       <ItemsControl ItemsSource="{Binding ProjectMaps}" Margin="8,6">

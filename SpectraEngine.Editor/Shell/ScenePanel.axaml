@@ -135,27 +135,11 @@
 
   <DockPanel>
 
-    <!-- The panel header carries the site's motif honestly: a category chip
-         and a monospace name that refers to something real. -->
-    <Border DockPanel.Dock="Top"
-            Height="{StaticResource SpectraPanelHeaderHeight}"
-            BorderBrush="{StaticResource SpectraBorderStrong}"
-            BorderThickness="0,0,0,1"
-            Padding="10,0">
-      <Grid ColumnDefinitions="Auto,*,Auto">
-        <Border Grid.Column="0" Width="9" Height="9" CornerRadius="2"
-                Background="{StaticResource SpectraAccent}" VerticalAlignment="Center" />
-        <TextBlock Grid.Column="1" Text="scene.tree" Margin="8,0,0,0"
-                   FontFamily="{StaticResource SpectraFontMono}"
-                   FontSize="{StaticResource SpectraFontSecondary}"
-                   Foreground="{StaticResource SpectraTextBody}"
-                   VerticalAlignment="Center" />
-        <TextBlock Grid.Column="2" Classes="value" Text="{Binding TreeCountLabel}"
-                   Foreground="{StaticResource SpectraTextMuted}" />
-      </Grid>
-    </Border>
-
-    <Grid DockPanel.Dock="Top" Margin="8,8,8,6" ColumnDefinitions="*,Auto">
+    <!-- No panel header: the dock's own tool chrome already names this
+         "Scene", and a second decorative title row was vertical cost for no
+         information. The count rides the filter row instead, where it is
+         also the filter's own feedback. -->
+    <Grid DockPanel.Dock="Top" Margin="8,8,8,6" ColumnDefinitions="*,Auto,Auto">
       <TextBox Grid.Column="0" x:Name="FilterBox" Classes="filter"
                Text="{Binding FilterText, Mode=TwoWay}"
                PlaceholderText="Filter, or t:light"
@@ -165,6 +149,10 @@
               ToolTip.Tip="Clear filter  (Esc)">
         <Path Data="{StaticResource IconClear}" Width="11" Height="11" />
       </Button>
+      <TextBlock Grid.Column="2" Classes="value" Text="{Binding TreeCountLabel}"
+                 Foreground="{StaticResource SpectraTextMuted}"
+                 Margin="6,0,0,0" VerticalAlignment="Center"
+                 ToolTip.Tip="Nodes shown / nodes in the scene" />
     </Grid>
 
     <!--
