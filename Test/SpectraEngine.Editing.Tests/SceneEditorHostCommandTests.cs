@@ -227,6 +227,94 @@ public sealed class SceneEditorHostCommandTests
         scene.Selection.Count.ShouldBe(0);
     }
 
+    // --- Insert --------------------------------------------------------------
+
+    [Fact]
+    public void Insert_creates_selects_and_is_one_undo_entry()
+    {
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+
+        host.Insert(InsertKind.WorldBrush);
+
+        scene.Root.Children.Count.ShouldBe(1);
+        SceneNode node = scene.Root.Children[0];
+        node.Name.ShouldBe("Brush");
+        node.Brush.ShouldNotBeNull();
+        node.BrushKind.ShouldBe(BrushKind.World);
+        scene.Selection.Items.ShouldBe([node]);
+        host.UndoDepth.ShouldBe(1);
+
+        Guid id = node.Id;
+        host.Apply(EditorHostCommand.Undo);
+        scene.Root.Children.ShouldBeEmpty();
+
+        // Redo brings it back under the same id, like every structural verb,
+        // so a shell holding the id keeps working.
+        host.Apply(EditorHostCommand.Redo);
+        scene.Root.Children.Count.ShouldBe(1);
+        scene.Root.Children[0].Id.ShouldBe(id);
+    }
+
+    [Fact]
+    public void An_inserted_hole_is_subtractive_and_world_kind()
+    {
+        // The one pairing that cancels: a subtractive PART carves nothing and
+        // draws nothing, so the insert must never produce one.
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+
+        host.Insert(InsertKind.SubtractiveBrush);
+
+        SceneNode node = scene.Root.Children[0];
+        node.Brush.ShouldNotBeNull();
+        node.Brush.Operation.ShouldBe(SpectraEngine.Core.Bsp.BrushOperation.Subtractive);
+        node.BrushKind.ShouldBe(BrushKind.World);
+    }
+
+    [Fact]
+    public void An_inserted_part_leaves_the_carve()
+    {
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+
+        host.Insert(InsertKind.PartBrush);
+
+        scene.Root.Children[0].BrushKind.ShouldBe(BrushKind.Part);
+    }
+
+    [Fact]
+    public void An_inserted_light_carries_a_valid_point_light()
+    {
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+
+        host.Insert(InsertKind.PointLight);
+
+        SceneNode node = scene.Root.Children[0];
+        node.Light.ShouldNotBeNull();
+        node.Light.Kind.ShouldBe(LightKind.Point);
+        node.Light.Intensity.ShouldBeGreaterThan(0f);
+        node.Light.Range.ShouldBeGreaterThan(0f);
+    }
+
+    [Fact]
+    public void Inserts_land_on_the_move_grid_while_snap_is_on()
+    {
+        // Snap defaults on with a grid of one world unit, so a fresh insert
+        // starts life aligned instead of needing a corrective nudge.
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+        host.SnapEnabled.ShouldBeTrue();
+
+        host.Insert(InsertKind.WorldBrush);
+
+        System.Numerics.Vector3 position = scene.Root.Children[0].LocalPosition;
+        position.X.ShouldBe(MathF.Round(position.X));
+        position.Y.ShouldBe(MathF.Round(position.Y));
+        position.Z.ShouldBe(MathF.Round(position.Z));
+    }
+
     // --- Structural verbs ----------------------------------------------------
 
     [Fact]

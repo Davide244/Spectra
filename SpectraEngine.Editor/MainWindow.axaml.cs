@@ -804,7 +804,14 @@ public partial class MainWindow : Window
     // --- Driving the editor --------------------------------------------------
 
     private void OnHomeTabClicked(object? sender, RoutedEventArgs e) => _shell.ActiveTab = "home";
+    private void OnModelTabClicked(object? sender, RoutedEventArgs e) => _shell.ActiveTab = "model";
     private void OnViewTabClicked(object? sender, RoutedEventArgs e) => _shell.ActiveTab = "view";
+
+    private void OnInsertWorldBrushClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.WorldBrush);
+    private void OnInsertPartBrushClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.PartBrush);
+    private void OnInsertSubtractiveBrushClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.SubtractiveBrush);
+    private void OnInsertLightClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.PointLight);
+    private void OnInsertGroupClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.Group);
 
     // Set semantics against the displayed state, never a toggle verb: a
     // toggle sent against a snapshot one publish stale flips the wrong way

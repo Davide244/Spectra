@@ -125,12 +125,16 @@ public sealed class ShellModel : ObservableObject
                 return;
 
             Raise(nameof(IsHomeTab));
+            Raise(nameof(IsModelTab));
             Raise(nameof(IsViewTab));
         }
     }
 
     /// <summary>Whether the Home strip is showing.</summary>
     public bool IsHomeTab => _activeTab == "home";
+
+    /// <summary>Whether the Model strip is showing.</summary>
+    public bool IsModelTab => _activeTab == "model";
 
     /// <summary>Whether the View strip is showing.</summary>
     public bool IsViewTab => _activeTab == "view";

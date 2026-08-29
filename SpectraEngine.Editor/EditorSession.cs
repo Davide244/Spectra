@@ -168,6 +168,13 @@ public sealed class EditorSession : IDisposable
         Host.EnqueueCommand(_ => Editor?.SetSnapIncrement(tool, increment));
 
     /// <summary>
+    /// Creates one thing where the user is looking — the Model strip's insert
+    /// buttons.
+    /// </summary>
+    public void Insert(InsertKind kind) =>
+        Host.EnqueueCommand(_ => Editor?.Insert(kind));
+
+    /// <summary>
     /// Selects the node with this id. An id the scene no longer has is
     /// ordinary: a UI's view of the graph is a frame or two behind.
     /// </summary>

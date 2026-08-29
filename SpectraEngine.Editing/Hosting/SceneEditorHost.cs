@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
@@ -705,6 +706,140 @@ public sealed class SceneEditorHost : ISceneEditor
         _logger.LogInformation(
             "{Label}: {Selected} node(s) in, {Now} selected now (undo {UndoDepth} / redo {RedoDepth})",
             label, selection.Count, _scene.Selection.Count, _undo.UndoCount, _undo.RedoCount);
+    }
+
+    // --- Insert --------------------------------------------------------------
+
+    // A fresh brush is 2x2x2: big enough to grab a Studio handle on, small
+    // enough that a doorway does not vanish the moment a hole lands in a wall.
+    private const float InsertHalfExtent = 1f;
+
+    // How far ahead an insert lands when the centre ray hits nothing: close
+    // enough to be inside the working view, far enough that it is not inside
+    // the camera.
+    private const float InsertFallbackDistance = 12f;
+
+    // How far the centre ray looks for a surface before giving up.
+    private const float InsertRayReach = 200f;
+
+    /// <summary>
+    /// Creates one thing where the user is looking, as one history entry, and
+    /// selects it.
+    /// </summary>
+    /// <remarks>
+    /// <b>Placement is the centre-of-view ray against the static world</b>,
+    /// which is what Studio trained everyone to expect: the new thing rests on
+    /// the surface in the middle of the screen, pushed out along the surface
+    /// normal so it sits flush rather than buried, and falls back to a fixed
+    /// distance ahead when the ray hits nothing. The position snaps to the
+    /// move grid when snapping is on, so inserted geometry starts life
+    /// aligned instead of needing a corrective nudge.
+    /// <para>
+    /// Render thread only, like every other verb; a UI arrives through
+    /// <c>EngineHost.EnqueueCommand</c>.
+    /// </para>
+    /// </remarks>
+    public void Insert(InsertKind kind)
+    {
+        // Same refusal as the structural verbs: a transaction is open
+        // mid-drag, and transactions do not nest.
+        if (_gizmos.Active.State == GizmoInteractionState.Dragging)
+        {
+            _logger.LogDebug("Insert: refused, a manipulation is in progress");
+            return;
+        }
+
+        // Lights float clear of the surface instead of resting on it: a light
+        // AT a surface lights half of nothing.
+        float clearance = kind == InsertKind.PointLight ? 1.5f : InsertHalfExtent;
+        Vector3 position = FindInsertPosition(clearance);
+
+        SceneNode node = BuildInsert(kind);
+        node.LocalPosition = position;
+
+        // Appended at the end of the root, which is where a person expects a
+        // new thing to show up in the tree.
+        _undo.Execute(new AddNodesCommand(
+            [new NodePlacement(node, _scene.Root.Id, _scene.Root.Children.Count)])
+        {
+            Name = $"Insert {node.Name}",
+        });
+
+        _scene.Selection.Select(node);
+
+        _logger.LogInformation(
+            "Insert {Kind}: '{Name}' at ({X:0.##}, {Y:0.##}, {Z:0.##}) (undo {UndoDepth})",
+            kind, node.Name, position.X, position.Y, position.Z, _undo.UndoCount);
+    }
+
+    private Vector3 FindInsertPosition(float clearance)
+    {
+        // A degenerate viewport (minimised) has no centre ray worth casting;
+        // fall back to straight ahead of the camera.
+        Vector3 point;
+        if (_viewportSize.X > 0f && _viewportSize.Y > 0f)
+        {
+            // StaticWorld is derived data and null until the first compile
+            // lands — which is exactly the state a brand-new map is in when
+            // its first brush is inserted.
+            Ray3 ray = _scene.Camera.ScreenPointToRay(_viewportSize * 0.5f, _viewportSize);
+            point = _scene.StaticWorld is { } world &&
+                world.Raycast(ray.Origin, ray.Direction, InsertRayReach, out BspRaycastHit hit)
+                ? hit.Point + hit.Normal * clearance
+                : ray.PointAt(InsertFallbackDistance);
+        }
+        else
+        {
+            point = _scene.Camera.Position + _scene.Camera.Forward * InsertFallbackDistance;
+        }
+
+        SnapSettings snap = _gizmos.Translate.Snap;
+        if (!snap.Enabled)
+            return point;
+
+        return new Vector3(
+            snap.SnapScalar(point.X), snap.SnapScalar(point.Y), snap.SnapScalar(point.Z));
+    }
+
+    private static SceneNode BuildInsert(InsertKind kind)
+    {
+        var half = new Vector3(InsertHalfExtent);
+        switch (kind)
+        {
+            case InsertKind.PartBrush:
+            {
+                var node = new SceneNode("Part") { Brush = Brush.CreateBox(-half, half) };
+                node.BrushKind = BrushKind.Part;
+                return node;
+            }
+
+            case InsertKind.SubtractiveBrush:
+                // World kind, never part: a subtractive part carves nothing
+                // and draws nothing — the inert pairing the engine counts
+                // rather than throws on.
+                return new SceneNode("Hole")
+                {
+                    Brush = Brush.CreateBox(-half, half).WithOperation(BrushOperation.Subtractive),
+                };
+
+            case InsertKind.PointLight:
+                return new SceneNode("Light")
+                {
+                    Light = new Light
+                    {
+                        Kind = LightKind.Point,
+                        Color = ColorSpace.SrgbToLinear(new Vector3(1f, 0.95f, 0.85f)),
+                        Intensity = 40f,
+                        Range = 8f,
+                    },
+                };
+
+            case InsertKind.Group:
+                return new SceneNode("Group");
+
+            default:
+                return new SceneNode("Brush") { Brush = Brush.CreateBox(-half, half) };
+        }
     }
 
     // Top-level nodes only — see the verb's own remarks for why the whole

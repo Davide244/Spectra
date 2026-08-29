@@ -233,6 +233,7 @@
         <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="4,0,0,0"
                     IsVisible="{Binding HasSession}">
           <Button Classes="tab" Classes.active="{Binding IsHomeTab}" Content="Home" Click="OnHomeTabClicked" />
+          <Button Classes="tab" Classes.active="{Binding IsModelTab}" Content="Model" Click="OnModelTabClicked" />
           <Button Classes="tab" Classes.active="{Binding IsViewTab}" Content="View" Click="OnViewTabClicked" />
         </StackPanel>
 
@@ -340,6 +341,64 @@
             <Button Classes="tool" Click="OnToggleBrushKindClicked" IsEnabled="{Binding HasSelection}"
                     ToolTip.Tip="Convert between world geometry and part  (Ctrl+T)">
               <Path Data="{StaticResource IconBrushPart}" />
+            </Button>
+          </StackPanel>
+
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+            <Button Classes="tool" Click="OnFrameClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Frame selection  (F)">
+              <Path Data="{StaticResource IconFrame}" />
+            </Button>
+          </StackPanel>
+        </Grid>
+
+        <!-- ─── Model ────────────────────────────────────── -->
+        <Grid ColumnDefinitions="Auto,*,Auto" IsVisible="{Binding IsModelTab}">
+          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+            <!-- The insert group: what a scene is built from. Each lands on
+                 the surface in the middle of the view, snapped to the move
+                 grid, selected, one undo entry. -->
+            <TextBlock Classes="label" Text="insert" Margin="0,0,6,0" />
+            <Button Classes="tool" Click="OnInsertWorldBrushClicked"
+                    ToolTip.Tip="Insert a world brush: fused into the static world">
+              <Path Data="{StaticResource IconBrushWorld}" />
+            </Button>
+            <Button Classes="tool" Click="OnInsertPartBrushClicked"
+                    ToolTip.Tip="Insert a part: outside the carve, cheap to move and animate">
+              <Path Data="{StaticResource IconBrushPart}" />
+            </Button>
+            <Button Classes="tool" Click="OnInsertSubtractiveBrushClicked"
+                    ToolTip.Tip="Insert a hole: subtracts from the world geometry it overlaps">
+              <Path Data="{StaticResource IconBrushSubtractive}" />
+            </Button>
+            <Button Classes="tool" Click="OnInsertLightClicked"
+                    ToolTip.Tip="Insert a point light">
+              <Path Data="{StaticResource IconLight}" />
+            </Button>
+            <Button Classes="tool" Click="OnInsertGroupClicked"
+                    ToolTip.Tip="Insert an empty group">
+              <Path Data="{StaticResource IconGroup}" />
+            </Button>
+
+            <Border Classes="groupsep" />
+
+            <Button Classes="tool" Click="OnToggleBrushKindClicked" IsEnabled="{Binding HasSelection}"
+                    ToolTip.Tip="Convert between world geometry and part  (Ctrl+T)">
+              <Path Data="{StaticResource IconBrushPart}" />
+            </Button>
+
+            <Border Classes="groupsep" />
+
+            <Button Classes="tool" Click="OnDuplicateClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Duplicate  (Ctrl+D)">
+              <Path Data="{StaticResource IconDuplicate}" />
+            </Button>
+            <Button Classes="tool" Click="OnGroupClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Group  (Ctrl+G)">
+              <Path Data="{StaticResource IconGroupNodes}" />
+            </Button>
+            <Button Classes="tool" Click="OnUngroupClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Ungroup  (Ctrl+Shift+G)">
+              <Path Data="{StaticResource IconUngroupNodes}" />
+            </Button>
+            <Button Classes="tool" Click="OnDeleteClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Delete  (Del)">
+              <Path Data="{StaticResource IconDelete}" />
             </Button>
           </StackPanel>
 
