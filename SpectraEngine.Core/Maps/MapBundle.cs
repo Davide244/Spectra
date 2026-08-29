@@ -9,8 +9,8 @@ namespace SpectraEngine.Core.Maps;
 /// <remarks>
 /// <para>
 /// <b>A map is a folder because a game is made of maps and a person edits them
-/// outside the editor.</b> The bundle holds <c>map.json</c> — the scene
-/// document — and, once scripting lands, <c>scripts/*.luau</c> as real files, so
+/// outside the editor.</b> The bundle holds <c>map.json</c> - the scene
+/// document - and, once scripting lands, <c>scripts/*.luau</c> as real files, so
 /// git, VS Code and <c>luau-lsp</c> work on them directly with no sync layer in
 /// between. That is the Rojo lesson made native: the alternative, a single
 /// opaque place file, is what forced an entire third-party tool to exist on the
@@ -22,8 +22,8 @@ namespace SpectraEngine.Core.Maps;
 /// written at all, so a save with no edits in it does not churn mtimes, file
 /// watchers or build systems. Every write is a temp file plus a rename, so a
 /// crash mid-save cannot leave half a document where a whole one was. And the
-/// save never touches a file it does not reference — a README, a <c>.blend</c>
-/// source, notes, anything — because the bundle is a folder the user owns and
+/// save never touches a file it does not reference - a README, a <c>.blend</c>
+/// source, notes, anything - because the bundle is a folder the user owns and
 /// an editor that tidies it is an editor that deletes things.
 /// </para>
 /// </remarks>
@@ -79,8 +79,8 @@ public static class MapBundle
     /// <b>The read-back is the point, not an optimisation.</b> The codec
     /// guarantees that saving an unedited document reproduces its bytes, and
     /// this is what turns that guarantee into observable behaviour: the file's
-    /// timestamp does not move, so nothing downstream — a watcher, a cook, a
-    /// git status — sees a change that did not happen.
+    /// timestamp does not move, so nothing downstream - a watcher, a cook, a
+    /// git status - sees a change that did not happen.
     /// </remarks>
     private static bool WriteIfChanged(string path, byte[] content)
     {

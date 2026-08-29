@@ -18,7 +18,7 @@ namespace SpectraEngine.Core.Maps;
 /// <b>Every rule here exists to make a diff small.</b> The file is reviewed,
 /// merged and hand-edited, so the writer's job is not merely to produce valid
 /// JSON but to produce the <i>same</i> JSON for the same document, on every
-/// platform and every run — otherwise a save with no edits in it lands in
+/// platform and every run - otherwise a save with no edits in it lands in
 /// someone's pull request as a thousand changed lines.
 /// </para>
 /// <para>
@@ -27,7 +27,7 @@ namespace SpectraEngine.Core.Maps;
 /// lines, which turns a six-plane brush into forty of them and makes a changed
 /// plane a multi-line hunk. The fix is to render those records through a
 /// <i>second</i>, un-indented writer and emit the result with
-/// <see cref="Utf8JsonWriter.WriteRawValue(ReadOnlySpan{byte}, bool)"/> — which
+/// <see cref="Utf8JsonWriter.WriteRawValue(ReadOnlySpan{byte}, bool)"/> - which
 /// is documented not to re-indent or re-encode raw content. Doing it that way
 /// rather than concatenating strings means escaping and float formatting stay
 /// the library's problem, so the compact path and the indented path cannot
@@ -201,7 +201,7 @@ public static class MapWriter
     /// <para>
     /// <b>The array's layout is built here because
     /// <see cref="Utf8JsonWriter.WriteRawValue(ReadOnlySpan{byte}, bool)"/> does
-    /// not indent raw content at all</b> — which is the same documented
+    /// not indent raw content at all</b> - which is the same documented
     /// behaviour that makes preserved members round-trip, seen from the other
     /// side. Left to the writer, six planes come out on one line with their
     /// closing bracket alone on the next, which is neither compact nor
@@ -210,7 +210,7 @@ public static class MapWriter
     /// <para>
     /// <b>One record per line is a merge decision.</b> A plane and a face are
     /// each the unit a person edits, so a resized brush or a retextured face
-    /// should be a one-line diff rather than a rewritten block — the same
+    /// should be a one-line diff rather than a rewritten block - the same
     /// reasoning that makes a script payload an array of lines instead of one
     /// string with newlines in it. Only whitespace is hand-written; every
     /// record still comes from the library, so escaping and float formatting

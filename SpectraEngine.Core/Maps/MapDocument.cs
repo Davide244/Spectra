@@ -18,15 +18,15 @@ namespace SpectraEngine.Core.Maps;
 /// obvious design reads JSON straight into <see cref="SceneNode"/>s, and it
 /// cannot work, for two independent reasons. First, unknown-member
 /// preservation: a map written by a newer engine carries members this one has
-/// never heard of, and they must survive a load and save unchanged — which
+/// never heard of, and they must survive a load and save unchanged - which
 /// would mean parking a byte blob on <c>SceneNode</c>, where it would then have
 /// to survive clone, reparent, undo and the id index, none of which have any
 /// business knowing what a file format is. Second, and more decisively,
 /// <b>a scene is a lossy image of a document</b>: <c>Brush</c>'s constructor
 /// re-normalises every plane it is handed, so a hand-authored
 /// <c>[2, 0, 0, -64]</c> comes back out of a <c>Scene</c> as
-/// <c>[1, 0, 0, -32]</c>. That is correct — it is the same plane, canonicalised
-/// — but it means a scene can never promise to reproduce the bytes it was built
+/// <c>[1, 0, 0, -32]</c>. That is correct - it is the same plane, canonicalised
+/// - but it means a scene can never promise to reproduce the bytes it was built
 /// from, and the document can.
 /// </para>
 /// <para>
@@ -41,9 +41,9 @@ namespace SpectraEngine.Core.Maps;
 /// The format specification is deliberately ahead of the tree: entities,
 /// scripts, realms and node state are all designed and none exist in
 /// <c>SpectraEngine.Core</c>. Rather than write a reader that silently discards
-/// them, this document sorts every member into one of three tiers — bound to
+/// them, this document sorts every member into one of three tiers - bound to
 /// engine state, validated-and-carried (the reserved keys), or preserved
-/// opaquely — so a map may travel through an older engine without losing what
+/// opaquely - so a map may travel through an older engine without losing what
 /// that engine could not understand.
 /// </para>
 /// </remarks>
@@ -78,7 +78,7 @@ public sealed class MapDocument
     /// unknown member is opaque text a future engine might need; <c>editor</c>
     /// is a member the cook must be free to drop <i>by name</i>, wholesale,
     /// without inspecting it. It is carried as raw bytes here only because its
-    /// v1 content — the shared grid size — belongs to
+    /// v1 content - the shared grid size - belongs to
     /// <c>SpectraEngine.Editing</c>, an assembly Core cannot reference by
     /// design.
     /// </remarks>
@@ -141,7 +141,7 @@ public sealed class MapNode
     /// <b>Carried so that a failure raised while BUILDING the scene can still
     /// point into the file.</b> A hand-edited plane set that is duplicated or
     /// unbounded is perfectly well-formed JSON, so the reader accepts it and
-    /// <c>Brush</c>'s constructor is what rejects it — one whole stage later,
+    /// <c>Brush</c>'s constructor is what rejects it - one whole stage later,
     /// by which time the byte offset would otherwise be gone and the complaint
     /// would name plane indices in a map with hundreds of brushes.
     /// </remarks>
@@ -205,7 +205,7 @@ public sealed class MapNode
 
 /// <summary>The authored 10-float transform, exactly as stored.</summary>
 /// <remarks>
-/// Never a composed world matrix — a standing invariant of the format. The
+/// Never a composed world matrix - a standing invariant of the format. The
 /// identity value is spelled out rather than left to <c>default</c> because
 /// <c>default(Transform)</c> has a zero scale and a zero quaternion, which is
 /// not the identity and would load every node collapsed to a point.
@@ -232,7 +232,7 @@ public struct MapTransform
 /// <para>
 /// <b><see cref="Transform"/> is carried even though a node-attached brush
 /// ignores it.</b> The scene places a brush from the node's world matrix and
-/// never reads <c>Brush.Transform</c> — but <c>Brush.CreateBox</c> puts the
+/// never reads <c>Brush.Transform</c> - but <c>Brush.CreateBox</c> puts the
 /// centering translation there, and the standalone <c>Csg.Carve</c> and
 /// <c>CsgWorld.Build</c> overloads do read it. It is a public settable member
 /// of the brush value; dropping it because the common path ignores it is how a
@@ -318,8 +318,8 @@ public sealed class MapLight
     /// <remarks>
     /// <b>Never written as zero and never defaulted to zero on read.</b>
     /// <c>Light.Range</c> refuses any value that is not strictly positive, so
-    /// the natural shortcut — omit it for a directional light, let the missing
-    /// number default to <c>0f</c> — throws out of the property setter in the
+    /// the natural shortcut - omit it for a directional light, let the missing
+    /// number default to <c>0f</c> - throws out of the property setter in the
     /// middle of a load. The default here is the field initialiser's 10, which
     /// is the value the setter would have accepted.
     /// </remarks>
@@ -357,7 +357,7 @@ public sealed class PreservedValue
 /// canonical member order, of the last known member that preceded it
 /// (<c>-1</c> for "before all of them"). The writer flushes anchored members
 /// after emitting each canonical slot, which reproduces the original
-/// interleaving exactly and degrades predictably — an unknown anchored to a
+/// interleaving exactly and degrades predictably - an unknown anchored to a
 /// member that is now omitted simply lands at that member's slot, which is
 /// where it was.
 /// </para>

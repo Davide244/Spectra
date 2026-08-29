@@ -16,12 +16,12 @@ namespace SpectraEngine.Core.Maps;
 /// <b>This is the lossy half of the round trip, and what it loses is stated
 /// rather than discovered.</b> The document round trip is exact; this one is
 /// not, in two directions. Going out, a <see cref="MeshRenderer"/> cannot be
-/// written at all — see <see cref="MapSaveReport"/>. Coming back,
+/// written at all - see <see cref="MapSaveReport"/>. Coming back,
 /// <c>Brush</c>'s constructor re-normalises every plane, so a hand-authored
 /// <c>[2, 0, 0, -64]</c> becomes <c>[1, 0, 0, -32]</c> on the next save. That
-/// second one is a canonicalisation rather than a defect — it is the same plane
-/// — but it is why byte identity is a claim about documents and never about
-/// scenes.
+/// second one is a canonicalisation rather than a defect, since it is the same
+/// plane, but it is why byte identity is a claim about documents and never
+/// about scenes.
 /// </para>
 /// <para>
 /// <b>Every brush gets its own instance, and that is not an implementation
@@ -277,9 +277,9 @@ public static class MapSceneBinder
 /// <b>Mesh nodes are the one real gap in v1, and it is structural rather than
 /// unfinished.</b> <c>MeshRenderer</c> holds a <c>Mesh</c> and a
 /// <c>Material</c>, both live objects. <c>Mesh</c> carries no name, no path and
-/// no owning-asset reference — <c>Renderer.CreateMesh</c> takes raw vertex and
+/// no owning-asset reference - <c>Renderer.CreateMesh</c> takes raw vertex and
 /// index spans, so nothing at creation time could record an origin even if
-/// there were a field for it — and <c>ModelInstantiator</c> writes only a name,
+/// there were a field for it - and <c>ModelInstantiator</c> writes only a name,
 /// a transform and the renderer onto each node it builds. So a saved mesh node
 /// keeps its identity, name, placement and children, and loses its geometry.
 /// </para>
@@ -287,7 +287,7 @@ public static class MapSceneBinder
 /// Closing it means recording <c>(model path, submesh index, import options)</c>
 /// on the node at instantiation time, and all three parts are needed: the index
 /// is positional into <c>ModelAsset.Meshes</c>, and the options reshape that
-/// list — while being pinned to whichever caller loaded the path first. That is
+/// list - while being pinned to whichever caller loaded the path first. That is
 /// a scene-graph change with a real design in front of it, not something to
 /// guess at inside a codec.
 /// </para>

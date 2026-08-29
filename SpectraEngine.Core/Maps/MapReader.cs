@@ -18,7 +18,7 @@ namespace SpectraEngine.Core.Maps;
 /// by slicing the original bytes between
 /// <see cref="Utf8JsonReader.TokenStartIndex"/> and
 /// <see cref="Utf8JsonReader.BytesConsumed"/>, and both are relative to the
-/// reader's own input — so a multi-segment sequence, or a reader fed in chunks
+/// reader's own input - so a multi-segment sequence, or a reader fed in chunks
 /// with <c>isFinalBlock: false</c>, would slice the wrong bytes silently rather
 /// than fail. A map is a hand-sized text file; reading it whole costs nothing
 /// and removes the entire failure mode.

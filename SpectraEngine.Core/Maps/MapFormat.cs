@@ -128,7 +128,7 @@ public static class MapFormat
     /// </para>
     /// <para>
     /// <b><c>NewLine</c> is set explicitly because its default is
-    /// <see cref="Environment.NewLine"/></b>, which is CRLF on Windows — so a
+    /// <see cref="Environment.NewLine"/></b>, which is CRLF on Windows - so a
     /// writer that left it alone would emit a different file on Windows than on
     /// Linux, and byte identity would hold only within one operating system.
     /// That is a silent, platform-shaped defect in a format designed to be
