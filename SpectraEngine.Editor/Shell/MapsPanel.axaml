@@ -10,6 +10,19 @@
        panel rather than a menu, and not only for reachability: a menu's
        dropdown would cross the viewport, where it is invisible. -->
 
+  <UserControl.Resources>
+    <!-- Shared by every row; DataContext arrives from the row that opened it.
+         Only verbs that work: "set as startup" disappears on the row that
+         already is, instead of sitting disabled. -->
+    <ContextMenu x:Key="MapMenu" x:DataType="shell:ProjectMapRow">
+      <MenuItem Header="Open" Click="OnMenuOpen" />
+      <MenuItem Header="Set as startup map" Click="OnMenuSetStartup"
+                IsVisible="{Binding !IsStartup}" />
+      <Separator />
+      <MenuItem Header="Show in Explorer" Click="OnMenuReveal" />
+    </ContextMenu>
+  </UserControl.Resources>
+
   <DockPanel>
     <!-- No panel header: the dock's tool chrome already names this "Maps".
          With no project open the pane cannot collapse (its dock reserves the
@@ -26,6 +39,7 @@
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="shell:ProjectMapRow">
             <Button Classes="card" Margin="0,0,0,4" Click="OnMapClicked"
+                    ContextMenu="{StaticResource MapMenu}"
                     ToolTip.Tip="{Binding RelativePath}">
               <Grid ColumnDefinitions="Auto,*,Auto" Margin="8,4">
                 <!-- The startup dot: which map the project boots. -->

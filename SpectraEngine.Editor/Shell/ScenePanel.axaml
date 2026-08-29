@@ -16,6 +16,27 @@
     <shell:SceneNodeKindIconConverter x:Key="KindIcon" />
     <shell:SceneNodeKindBrushConverter x:Key="KindTint" />
     <shell:TreeDepthIndentConverter x:Key="DepthIndent" />
+
+    <!-- One menu, shared by every row: a menu can only be open over one row at
+         a time, and its DataContext arrives from whichever row opened it. The
+         verbs act on the SELECTION, not the row - the right-press handler has
+         already made sure the row is part of it, which is the rule every
+         editor shares. Gestures are display text; the real bindings live in
+         the tree keyboard and the engine keymap. -->
+    <ContextMenu x:Key="RowMenu" x:DataType="local:SceneTreeNode">
+      <MenuItem Header="Rename" InputGesture="F2" Click="OnMenuRename" />
+      <MenuItem Header="Frame in viewport" InputGesture="F" Click="OnMenuFrame" />
+      <Separator />
+      <MenuItem Header="Duplicate" InputGesture="Ctrl+D" Click="OnMenuDuplicate" />
+      <MenuItem Header="Delete" InputGesture="Delete" Click="OnMenuDelete" />
+      <Separator />
+      <MenuItem Header="Group" InputGesture="Ctrl+G" Click="OnMenuGroup" />
+      <MenuItem Header="Ungroup" InputGesture="Ctrl+Shift+G" Click="OnMenuUngroup" />
+      <MenuItem Header="Convert part / world" InputGesture="Ctrl+T" Click="OnMenuConvertKind" />
+      <Separator IsVisible="{Binding HasChildren}" />
+      <MenuItem Header="Expand all" Click="OnMenuExpandAll" IsVisible="{Binding HasChildren}" />
+      <MenuItem Header="Collapse all" Click="OnMenuCollapseAll" IsVisible="{Binding HasChildren}" />
+    </ContextMenu>
   </UserControl.Resources>
 
   <UserControl.Styles>
@@ -93,6 +114,23 @@
       <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
       <Setter Property="Height" Value="{StaticResource SpectraTreeRowHeight}" />
     </Style>
+
+    <!-- Drop indicators. INTO outlines the whole row (it becomes the parent);
+         BEFORE/AFTER draw the insertion edge. An edge line, not highlighting,
+         because sibling order is placement order here and the drop position
+         must read exactly. -->
+    <Style Selector="Border.row.dropinto">
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="Border.row.dropbefore">
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+      <Setter Property="BorderThickness" Value="0,2,0,0" />
+    </Style>
+    <Style Selector="Border.row.dropafter">
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+      <Setter Property="BorderThickness" Value="0,0,0,2" />
+    </Style>
     <Style Selector="Border.row:pointerover">
       <Setter Property="Background" Value="{StaticResource SpectraRowHover}" />
     </Style>
@@ -131,6 +169,23 @@
     <Style Selector="Border.row.context TextBlock.rowname">
       <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
     </Style>
+
+    <!-- The in-place rename editor: the same footprint as the name it
+         replaces, so nothing in the row moves when editing starts. -->
+    <Style Selector="TextBox.renamebox">
+      <Setter Property="Height" Value="20" />
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="Padding" Value="3,1" />
+      <Setter Property="Margin" Value="4,0,4,0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontBase}" />
+      <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    </Style>
   </UserControl.Styles>
 
   <DockPanel>
@@ -165,6 +220,7 @@
     -->
     <ListBox x:Name="SceneTree"
              ItemsSource="{Binding Tree.Rows}"
+             SelectionMode="Multiple"
              SelectionChanged="OnTreeSelectionChanged"
              Background="Transparent"
              BorderThickness="0"
@@ -185,7 +241,12 @@
                   Classes.selected="{Binding IsSelected}"
                   Classes.dim="{Binding IsDimmed}"
                   Classes.context="{Binding IsContext}"
-                  Margin="{Binding Depth, Converter={StaticResource DepthIndent}}">
+                  Classes.dropbefore="{Binding IsDropBefore}"
+                  Classes.dropinto="{Binding IsDropInto}"
+                  Classes.dropafter="{Binding IsDropAfter}"
+                  Margin="{Binding Depth, Converter={StaticResource DepthIndent}}"
+                  ContextMenu="{StaticResource RowMenu}"
+                  DoubleTapped="OnRowDoubleTapped">
             <Grid ColumnDefinitions="2,14,Auto,*">
               <Border Grid.Column="0" Classes="selbar" Margin="0,3" CornerRadius="1" />
               <Button Grid.Column="1" Classes="chevron"
@@ -200,7 +261,15 @@
                     StrokeThickness="1.2" StrokeLineCap="Round" StrokeJoin="Round"
                     Fill="Transparent" Width="14" Height="14" Stretch="Uniform"
                     Margin="2,0,0,0" VerticalAlignment="Center" />
-              <TextBlock Grid.Column="3" Classes="rowname" Text="{Binding Name}" Margin="6,0,4,0" />
+              <TextBlock Grid.Column="3" Classes="rowname" Text="{Binding Name}" Margin="6,0,4,0"
+                         IsVisible="{Binding !IsRenaming}" />
+              <!-- Text is set imperatively when editing begins, never bound:
+                   a binding would let a ~30 Hz snapshot republish rewrite the
+                   box mid-keystroke, which reads as a broken keyboard. -->
+              <TextBox Grid.Column="3" Classes="renamebox"
+                       IsVisible="{Binding IsRenaming}"
+                       KeyDown="OnRenameKeyDown"
+                       LostFocus="OnRenameBlurred" />
             </Grid>
           </Border>
         </DataTemplate>

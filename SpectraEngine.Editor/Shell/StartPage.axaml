@@ -11,6 +11,18 @@
     lay out freely.
   -->
 
+  <UserControl.Resources>
+    <!-- Shared by every recent card. Remove is list hygiene, not deletion:
+         it forgets the entry and touches nothing on disk, and the wording
+         says so. -->
+    <ContextMenu x:Key="RecentMenu" x:DataType="shell:RecentProjectRow">
+      <MenuItem Header="Open" Click="OnRecentMenuOpen" />
+      <MenuItem Header="Show in Explorer" Click="OnRecentMenuReveal" />
+      <Separator />
+      <MenuItem Header="Remove from list" Click="OnRecentMenuForget" />
+    </ContextMenu>
+  </UserControl.Resources>
+
   <Grid>
     <Grid HorizontalAlignment="Center" VerticalAlignment="Center"
           ColumnDefinitions="320,56,440" MaxHeight="560">
@@ -92,7 +104,8 @@
             <ItemsControl x:Name="RecentList" Margin="8">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="shell:RecentProjectRow">
-                  <Button Classes="card" Margin="0,0,0,6" Click="OnRecentClicked">
+                  <Button Classes="card" Margin="0,0,0,6" Click="OnRecentClicked"
+                          ContextMenu="{StaticResource RecentMenu}">
                     <StackPanel Margin="12,8" Spacing="2">
                       <Grid ColumnDefinitions="*,Auto">
                         <TextBlock Grid.Column="0" Text="{Binding Name}"

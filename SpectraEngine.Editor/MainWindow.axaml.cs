@@ -22,6 +22,7 @@ using SpectraEngine.Editor.Viewport;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -123,7 +124,9 @@ public partial class MainWindow : Window
         StartView.OpenProjectRequested += () => _ = OpenProjectFlowAsync();
         StartView.OpenMapRequested += () => _ = OpenLooseMapFlowAsync();
         StartView.RecentProjectPicked += recent => _ = OpenRecentProjectAsync(recent);
-        StartView.ShowRecents(_settings.RecentProjects);
+        StartView.RecentProjectForgotten += ForgetRecent;
+        StartView.RecentProjectRevealRequested += recent => RevealInExplorer(recent.Path);
+        RefreshRecents();
 
         // ONE factory, shared by both dock controls, assigned before the
         // window attaches. All three clauses are load-bearing: without any
@@ -148,7 +151,11 @@ public partial class MainWindow : Window
             DataContext = _shell,
             Logger = _loggerFactory.CreateLogger<ScenePanel>(),
         };
-        _sceneView.NodeSelected += id => _session?.Select(id);
+        _sceneView.SelectionRequested += ids => _session?.SelectMany(ids);
+        _sceneView.RenameRequested += (id, name) => _session?.Rename(id, name);
+        _sceneView.CommandRequested += command => _session?.Post(command);
+        _sceneView.FrameRequested += () => _session?.Post(EditorCameraCommand.FrameSelection);
+        _sceneView.ReparentRequested += (ids, parentId, index) => _session?.Reparent(ids, parentId, index);
         SceneTool.Content = _sceneView;
 
         _propertiesView = new PropertiesPanel { DataContext = _shell };
@@ -157,6 +164,12 @@ public partial class MainWindow : Window
 
         _mapsView = new MapsPanel { DataContext = _shell };
         _mapsView.MapClicked += row => _ = OpenProjectMapAsync(row);
+        _mapsView.SetStartupRequested += SetStartupMap;
+        _mapsView.RevealRequested += row =>
+        {
+            if (_document.Project is { } project)
+                RevealInExplorer(project.Resolve(row.RelativePath));
+        };
         MapsTool.Content = _mapsView;
 
         // The title is the only place the shell says what is open and whether
@@ -363,7 +376,7 @@ public partial class MainWindow : Window
 
         EditorView.IsVisible = false;
         StartView.IsVisible = true;
-        StartView.ShowRecents(_settings.RecentProjects);
+        RefreshRecents();
     }
 
     private void OnSurfaceCreated(IRenderSurface surface)
@@ -975,6 +988,147 @@ public partial class MainWindow : Window
         OpenProjectAt(picked[0].Path.LocalPath);
     }
 
+    /// <summary>
+    /// Repaints every surface the recents feed: the start page's cards and the
+    /// File menu's submenu. One method so the two can never disagree.
+    /// </summary>
+    private void RefreshRecents()
+    {
+        StartView.ShowRecents(_settings.RecentProjects);
+
+        // Rebuild the submenu's dynamic items: everything before the pinned
+        // empty label / separator / clear entries declared in XAML.
+        for (int i = RecentProjectsMenu.Items.Count - 1; i >= 0; i--)
+        {
+            if (RecentProjectsMenu.Items[i] is MenuItem { DataContext: RecentProject })
+                RecentProjectsMenu.Items.RemoveAt(i);
+        }
+
+        IReadOnlyList<RecentProject> recents = _settings.RecentProjects;
+        RecentProjectsEmptyItem.IsVisible = recents.Count == 0;
+        RecentProjectsSeparator.IsVisible = recents.Count > 0;
+        RecentProjectsClearItem.IsVisible = recents.Count > 0;
+
+        for (int i = 0; i < recents.Count; i++)
+        {
+            RecentProject recent = recents[i];
+            var item = new MenuItem
+            {
+                Header = recent.Name,
+                DataContext = recent,
+            };
+            ToolTip.SetTip(item, recent.Path);
+            item.Click += (_, _) => _ = OpenRecentProjectAsync(recent);
+            RecentProjectsMenu.Items.Insert(i, item);
+        }
+    }
+
+    private void ForgetRecent(RecentProject recent)
+    {
+        _settings.ForgetProject(recent.Path);
+        _settings.Save(_logger);
+        RefreshRecents();
+    }
+
+    private void OnClearRecentsClicked(object? sender, RoutedEventArgs e)
+    {
+        foreach (RecentProject recent in _settings.RecentProjects.ToArray())
+            _settings.ForgetProject(recent.Path);
+
+        _settings.Save(_logger);
+        RefreshRecents();
+    }
+
+    /// <summary>
+    /// Opens the OS file browser with the given file or folder selected. The
+    /// escape hatch every editor owes its users: the shell manages folders on
+    /// disk, and "where IS that" must never require retyping a path.
+    /// </summary>
+    private void RevealInExplorer(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        string full;
+        try
+        {
+            full = Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException)
+        {
+            _shell.SetError($"Not a usable path: {path}");
+            return;
+        }
+
+        if (!File.Exists(full) && !Directory.Exists(full))
+        {
+            _shell.SetError($"'{full}' is not on disk any more.");
+            return;
+        }
+
+        try
+        {
+            // /select shows the item IN its parent rather than opening it,
+            // which for a map bundle (a folder) is the difference between
+            // "here it is" and being dropped inside it.
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{full}\"")
+            {
+                UseShellExecute = false,
+            });
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
+        {
+            _logger.LogWarning(ex, "Could not open Explorer at {Path}", full);
+            _shell.SetError("Could not open the file browser.");
+        }
+    }
+
+    /// <summary>
+    /// Makes a map the project's startup map, through the same re-read-edit-save
+    /// discipline every manifest write uses: the file on disk is the author's,
+    /// and the copy in memory may be behind their hand edits.
+    /// </summary>
+    private void SetStartupMap(ProjectMapRow row)
+    {
+        if (_document.Project is not { } stale)
+            return;
+
+        ProjectLayout project;
+        try
+        {
+            project = ProjectLayout.Open(stale.ManifestPath);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or ProjectFormatException)
+        {
+            _logger.LogWarning(ex, "Could not re-read the project manifest");
+            _shell.SetError("The project manifest could not be read.");
+            return;
+        }
+
+        // An unlisted map that becomes the startup map is listed as part of
+        // the same write: a manifest whose startupMap names a map its own
+        // list does not is a file that reads as a mistake.
+        if (!project.Project.Maps.Any(m => ManifestPathsEqual(m, row.RelativePath)))
+            project.Project.Maps.Add(row.RelativePath);
+
+        project.Project.StartupMap = row.RelativePath;
+
+        try
+        {
+            project.Save();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Could not write the project manifest");
+            _shell.SetError("The project manifest could not be written.");
+            return;
+        }
+
+        _document.SetProject(project);
+        RefreshProjectMaps();
+        _shell.SetMessage($"{row.Name} is now the startup map.");
+    }
+
     private async Task OpenRecentProjectAsync(RecentProject recent)
     {
         if (!Directory.Exists(recent.Path))
@@ -984,7 +1138,7 @@ public partial class MainWindow : Window
             // than one that says goodbye once.
             _settings.ForgetProject(recent.Path);
             _settings.Save(_logger);
-            StartView.ShowRecents(_settings.RecentProjects);
+            RefreshRecents();
             _shell.SetError($"'{recent.Path}' is gone; removed it from the recent list.");
             return;
         }
@@ -1039,7 +1193,7 @@ public partial class MainWindow : Window
 
         _settings.TouchProject(layout.Root, layout.Project.Name, DateTime.UtcNow);
         _settings.Save(_logger);
-        StartView.ShowRecents(_settings.RecentProjects);
+        RefreshRecents();
 
         // Opening a project opens its startup map, because a project with a
         // level in it and an empty viewport is a state nobody asked for. A

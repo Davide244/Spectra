@@ -9,6 +9,22 @@ using SpectraEngine.Editor.Shell;
 
 namespace SpectraEngine.Editor;
 
+/// <summary>Where a drag hovering over a row would drop, for the indicator.</summary>
+public enum SceneTreeDropZone
+{
+    /// <summary>Not a drop target right now.</summary>
+    None,
+
+    /// <summary>Insert as the row's earlier sibling.</summary>
+    Before,
+
+    /// <summary>Reparent into the row's node.</summary>
+    Into,
+
+    /// <summary>Insert as the row's later sibling.</summary>
+    After,
+}
+
 /// <summary>How a node stands against the tree's current filter.</summary>
 public enum SceneTreeMatch
 {
@@ -130,6 +146,50 @@ public sealed class SceneTreeNode(Guid id, string name) : ObservableObject
         get => _hasChildren;
         internal set => Set(ref _hasChildren, value);
     }
+
+    /// <summary>
+    /// Whether the row is showing its in-place rename editor. Pure view state:
+    /// it lives on the node because virtualization recycles containers, so a
+    /// flag on the container would follow the recycling rather than the row.
+    /// The panel keeps at most one node renaming at a time.
+    /// </summary>
+    public bool IsRenaming
+    {
+        get => _isRenaming;
+        set => Set(ref _isRenaming, value);
+    }
+
+    private bool _isRenaming;
+
+    /// <summary>
+    /// Where a drag hovering this row would drop. View state like
+    /// <see cref="IsRenaming"/>; the panel keeps at most one row indicating.
+    /// Raises the three class-bound booleans below.
+    /// </summary>
+    public SceneTreeDropZone DropZone
+    {
+        get => _dropZone;
+        set
+        {
+            if (Set(ref _dropZone, value))
+            {
+                Raise(nameof(IsDropBefore));
+                Raise(nameof(IsDropInto));
+                Raise(nameof(IsDropAfter));
+            }
+        }
+    }
+
+    private SceneTreeDropZone _dropZone;
+
+    /// <summary>Style-class views of <see cref="DropZone"/>.</summary>
+    public bool IsDropBefore => _dropZone == SceneTreeDropZone.Before;
+
+    /// <inheritdoc cref="IsDropBefore"/>
+    public bool IsDropInto => _dropZone == SceneTreeDropZone.Into;
+
+    /// <inheritdoc cref="IsDropBefore"/>
+    public bool IsDropAfter => _dropZone == SceneTreeDropZone.After;
 
     /// <summary>Whether the filter excludes this node. Bound as a style class.</summary>
     public bool IsDimmed => _match == SceneTreeMatch.None;
@@ -377,6 +437,75 @@ public sealed class SceneTreeModel
 
         node.IsExpanded = !node.IsExpanded;
         RebuildRows();
+    }
+
+    /// <summary>
+    /// Resolves an id to its row object, for the panel's gesture arithmetic.
+    /// Returns false for an id the tree has never heard of.
+    /// </summary>
+    public bool TryGetNode(Guid nodeId, out SceneTreeNode node)
+    {
+        if (_index.TryGetValue(nodeId, out SceneTreeNode? found))
+        {
+            node = found;
+            return true;
+        }
+
+        node = null!;
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a node currently has a visible row (no collapsed ancestor).
+    /// </summary>
+    public bool IsRowVisible(SceneTreeNode node) => _desiredSet.Contains(node);
+
+    /// <summary>
+    /// The node's parent in the mirrored hierarchy, or null for a top-level
+    /// row. What the panel's drop arithmetic walks: "before this row" means an
+    /// index under this row's parent, and a drop that would land inside the
+    /// dragged subtree is found by walking up from the target.
+    /// </summary>
+    public SceneTreeNode? ParentOf(SceneTreeNode node) =>
+        _parents.TryGetValue(node, out SceneTreeNode? parent) ? parent : null;
+
+    /// <summary>
+    /// Collects the engine-selected ids whose rows are currently hidden under a
+    /// collapsed parent. A Ctrl-click in the list can only report the rows the
+    /// list can see, so an additive gesture unions these back in — without
+    /// that, extending a selection would silently deselect everything folded
+    /// away.
+    /// </summary>
+    public void CollectHiddenSelected(List<Guid> into)
+    {
+        ArgumentNullException.ThrowIfNull(into);
+
+        foreach (Guid id in _selectedIds)
+        {
+            if (_index.TryGetValue(id, out SceneTreeNode? node) && !_desiredSet.Contains(node))
+                into.Add(id);
+        }
+    }
+
+    /// <summary>
+    /// Expands or collapses a node and everything under it, recomputing the
+    /// rows once — the context menu's "expand all" / "collapse all". UI thread.
+    /// </summary>
+    public void SetSubtreeExpanded(SceneTreeNode node, bool expanded)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+
+        SetExpandedRecursive(node, expanded);
+        RebuildRows();
+    }
+
+    private static void SetExpandedRecursive(SceneTreeNode node, bool expanded)
+    {
+        if (node.Children.Count > 0)
+            node.IsExpanded = expanded;
+
+        for (int i = 0; i < node.Children.Count; i++)
+            SetExpandedRecursive(node.Children[i], expanded);
     }
 
     /// <summary>Recomputes the visible rows and patches the difference in.</summary>

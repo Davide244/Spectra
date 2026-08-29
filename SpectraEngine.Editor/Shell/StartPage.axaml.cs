@@ -41,6 +41,12 @@ public partial class StartPage : UserControl
     /// <summary>The user clicked a recent-project card.</summary>
     public event Action<RecentProject>? RecentProjectPicked;
 
+    /// <summary>The user asked to drop a recent entry from the list.</summary>
+    public event Action<RecentProject>? RecentProjectForgotten;
+
+    /// <summary>The user asked to see a recent project in the OS file browser.</summary>
+    public event Action<RecentProject>? RecentProjectRevealRequested;
+
     public StartPage()
     {
         InitializeComponent();
@@ -87,5 +93,28 @@ public partial class StartPage : UserControl
     {
         if (sender is Button { DataContext: RecentProjectRow row })
             RecentProjectPicked?.Invoke(row.Source);
+    }
+
+    // Menu handlers read the row from the item's DataContext, inherited from
+    // the card the shared menu was opened over.
+    private static RecentProjectRow? MenuRow(object? sender) =>
+        (sender as Control)?.DataContext as RecentProjectRow;
+
+    private void OnRecentMenuOpen(object? sender, RoutedEventArgs e)
+    {
+        if (MenuRow(sender) is { } row)
+            RecentProjectPicked?.Invoke(row.Source);
+    }
+
+    private void OnRecentMenuReveal(object? sender, RoutedEventArgs e)
+    {
+        if (MenuRow(sender) is { } row)
+            RecentProjectRevealRequested?.Invoke(row.Source);
+    }
+
+    private void OnRecentMenuForget(object? sender, RoutedEventArgs e)
+    {
+        if (MenuRow(sender) is { } row)
+            RecentProjectForgotten?.Invoke(row.Source);
     }
 }

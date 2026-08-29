@@ -80,6 +80,53 @@
     <Setter Property="MinHeight" Value="26" />
   </Style>
 
+  <!-- ─── Popup menus (dropdowns and context menus) ─────────
+       The raised-overlay treatment every floating surface gets: raised
+       surface, strong 1px border, the 4px radius reserved for things that
+       float. Context menus are real OS popups, which is why they may legally
+       cross the viewport when nothing drawn inside the shell can. -->
+  <Style Selector="ContextMenu">
+    <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius4}" />
+    <Setter Property="Padding" Value="3" />
+  </Style>
+
+  <Style Selector="Menu MenuItem /template/ Popup > Border, ContextMenu MenuItem /template/ Popup > Border">
+    <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius4}" />
+  </Style>
+
+  <Style Selector="ContextMenu MenuItem, Menu MenuItem MenuItem">
+    <Setter Property="Padding" Value="10,4" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+  </Style>
+
+  <Style Selector="ContextMenu MenuItem:pointerover, Menu MenuItem MenuItem:pointerover">
+    <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
+
+  <!-- The gesture column: a VALUE, so it wears mono like every other value in
+       the shell, one point down and muted so the verb stays the loud half. -->
+  <Style Selector="MenuItem /template/ TextBlock#PART_InputGestureText">
+    <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+    <Setter Property="Margin" Value="18,0,2,0" />
+  </Style>
+
+  <Style Selector="ContextMenu Separator, Menu MenuItem Separator">
+    <Setter Property="Background" Value="{StaticResource SpectraBorderSoft}" />
+    <Setter Property="Height" Value="1" />
+    <Setter Property="Margin" Value="6,3" />
+  </Style>
+
   <!-- ─── Toolbar buttons ──────────────────────────────────
        One square footprint for every control in the row, so the eye reads a
        rhythm rather than a queue of differently sized things. The glyph, not

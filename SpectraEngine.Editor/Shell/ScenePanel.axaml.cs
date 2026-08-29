@@ -1,11 +1,15 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Microsoft.Extensions.Logging;
 using SpectraEngine.Core.Hosting;
+using SpectraEngine.Editing.Hosting;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace SpectraEngine.Editor.Shell;
 
@@ -25,8 +29,26 @@ namespace SpectraEngine.Editor.Shell;
 /// </remarks>
 public partial class ScenePanel : UserControl
 {
-    /// <summary>The user selected a row; the id goes to the engine.</summary>
-    public event Action<Guid>? NodeSelected;
+    /// <summary>
+    /// The user changed the tree's selection; the whole id set goes to the
+    /// engine as one replace batch.
+    /// </summary>
+    public event Action<IReadOnlyList<Guid>>? SelectionRequested;
+
+    /// <summary>An in-place rename was committed: id and the new name.</summary>
+    public event Action<Guid, string>? RenameRequested;
+
+    /// <summary>A tree key or context-menu verb that maps to a host command.</summary>
+    public event Action<EditorHostCommand>? CommandRequested;
+
+    /// <summary>Frame the selection in the viewport (double-click, F, menu).</summary>
+    public event Action? FrameRequested;
+
+    /// <summary>
+    /// A drag-and-drop asked for a reparent: the dragged ids, the new parent,
+    /// and the child index to insert at (-1 appends).
+    /// </summary>
+    public event Action<IReadOnlyList<Guid>, Guid, int>? ReparentRequested;
 
     /// <summary>Where the panel's own diagnostics go. Set by the host window.</summary>
     public ILogger? Logger { get; set; }
@@ -44,6 +66,37 @@ public partial class ScenePanel : UserControl
     private Guid _revealedId;
     private Guid _treeRequestedId;
 
+    // The modifiers of the most recent gesture that could change the list's
+    // selection. SelectionChanged itself carries none, and the difference
+    // decides whether engine-selected nodes hidden under a collapsed parent
+    // survive the change: a plain click means "the selection is now exactly
+    // this", a Ctrl/Shift gesture means "extend", and dropping the hidden part
+    // of a selection because the list cannot see it would be silent data loss.
+    private KeyModifiers _gestureModifiers;
+
+    // The row being renamed in place, if any. At most one; view state only.
+    private SceneTreeNode? _renaming;
+
+    // Drag state: the in-process payload format, the movement that separates a
+    // click from a drag, and the rows involved on either end. The press args
+    // are kept because Avalonia 12's DoDragDropAsync wants the PRESS that
+    // started the gesture, while the threshold is only crossed during a move.
+    private static readonly DataFormat<Guid[]> DragFormat =
+        DataFormat.CreateInProcessFormat<Guid[]>("spectra-scene-nodes");
+
+    private const double DragThresholdPixels = 4.0;
+    private SceneTreeNode? _pressedRow;
+    private PointerPressedEventArgs? _pressEvent;
+    private Point _pressPoint;
+    private bool _dragInProgress;
+    private SceneTreeNode? _deferredCollapse;
+    private SceneTreeNode? _dropRow;
+
+    // Scratch collections reused per sync, because this runs at the snapshot
+    // rate against a selection that is usually unchanged.
+    private readonly HashSet<SceneTreeNode> _listSelectionScratch = [];
+    private readonly List<SceneTreeNode> _desiredListSelection = [];
+
     public ScenePanel()
     {
         InitializeComponent();
@@ -54,6 +107,22 @@ public partial class ScenePanel : UserControl
         // on, returns true, and marks the event handled. A bubbling handler for
         // the tree's own collapse/expand would therefore never run at all.
         SceneTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
+
+        // Tunnel as well: this observes the gesture (its modifiers, which row
+        // a right-press landed on, whether a drag might start) before the list
+        // runs its own selection logic and before a context menu opens. It
+        // claims the press in exactly one case, the deferred multi-selection
+        // collapse.
+        SceneTree.AddHandler(PointerPressedEvent, OnTreePointerPressed, RoutingStrategies.Tunnel);
+        SceneTree.AddHandler(PointerMovedEvent, OnTreePointerMoved, RoutingStrategies.Tunnel);
+        SceneTree.AddHandler(PointerReleasedEvent, OnTreePointerReleased, RoutingStrategies.Tunnel);
+
+        // The drop side: rows accept sibling and reparent drops, with the
+        // indicator drawn from model state like every other row visual.
+        DragDrop.SetAllowDrop(SceneTree, true);
+        SceneTree.AddHandler(DragDrop.DragOverEvent, OnTreeDragOver);
+        SceneTree.AddHandler(DragDrop.DropEvent, OnTreeDrop);
+        SceneTree.AddHandler(DragDrop.DragLeaveEvent, OnTreeDragLeave);
     }
 
     private ShellModel? Model => DataContext as ShellModel;
@@ -70,6 +139,7 @@ public partial class ScenePanel : UserControl
     {
         _revealedId = Guid.Empty;
         _treeRequestedId = Guid.Empty;
+        CancelRename();
     }
 
     /// <summary>
@@ -86,9 +156,55 @@ public partial class ScenePanel : UserControl
 
         _syncingSelection = true;
         tree.ApplySelection(snapshot.SelectedIds);
+        SyncListSelection(tree, snapshot.SelectedIds);
         _syncingSelection = false;
 
         RevealSelection(tree, snapshot.SelectedIds);
+    }
+
+    /// <summary>
+    /// Reconciles the ListBox's own selection with the engine's. The row
+    /// highlight comes from model flags, but the LIST's selection is the input
+    /// to the next Ctrl/Shift gesture, and left stale it makes that gesture
+    /// compute against a selection nobody has any more (a viewport pick
+    /// followed by a Ctrl-click would drop the picked node silently).
+    /// </summary>
+    private void SyncListSelection(SceneTreeModel tree, IReadOnlyList<Guid> selected)
+    {
+        if (SceneTree.SelectedItems is not { } items)
+            return;
+
+        _desiredListSelection.Clear();
+        for (int i = 0; i < selected.Count; i++)
+        {
+            // Only rows the list can see: an item outside ItemsSource cannot
+            // be selected, and hidden nodes keep their model flag instead.
+            if (tree.TryGetNode(selected[i], out SceneTreeNode node) && tree.IsRowVisible(node))
+                _desiredListSelection.Add(node);
+        }
+
+        // Usually identical to last time; compare before mutating, because
+        // clearing and re-adding fires selection-changed churn per row.
+        if (items.Count == _desiredListSelection.Count)
+        {
+            _listSelectionScratch.Clear();
+            foreach (object? item in items)
+            {
+                if (item is SceneTreeNode node)
+                    _listSelectionScratch.Add(node);
+            }
+
+            bool same = true;
+            for (int i = 0; i < _desiredListSelection.Count && same; i++)
+                same = _listSelectionScratch.Contains(_desiredListSelection[i]);
+
+            if (same)
+                return;
+        }
+
+        items.Clear();
+        for (int i = 0; i < _desiredListSelection.Count; i++)
+            items.Add(_desiredListSelection[i]);
     }
 
     /// <summary>
@@ -144,27 +260,17 @@ public partial class ScenePanel : UserControl
         }
 
         // Posted rather than done here: expanding a parent is a change to the
-        // MODEL, and the containers it brings into existence do not exist until
-        // the layout pass that follows. Setting the control's selection now
-        // would be aiming at a row that has not been built.
+        // MODEL, and the rows it brings into existence have no extent until the
+        // layout pass that follows — an offset written now is computed against
+        // an estimate the panel has not finished. The list's own selection is
+        // deliberately NOT touched: under multi-select, assigning SelectedItem
+        // would collapse a marquee's fifty rows to one.
         Dispatcher.UIThread.Post(() =>
         {
             if (Model?.Tree is not { } current || !ReferenceEquals(current, tree))
                 return;
 
-            // Avalonia scrolls the selected item into view on its own; what it
-            // must not do is treat this as the user selecting something and
-            // post it straight back to the engine.
-            _syncingSelection = true;
-            SceneTree.SelectedItem = node;
-            _syncingSelection = false;
-
-            // A second hop, and not one to skip. Selecting an item starts the
-            // framework's own scroll AND realises the row; both land in the
-            // layout pass after this callback, and an offset written before
-            // that is computed against an extent the panel has not finished
-            // estimating.
-            Dispatcher.UIThread.Post(() => ScrollWithContext(tree, node), DispatcherPriority.Loaded);
+            ScrollWithContext(tree, node);
         }, DispatcherPriority.Loaded);
     }
 
@@ -230,14 +336,352 @@ public partial class ScenePanel : UserControl
         if (_syncingSelection)
             return;
 
-        if (SceneTree.SelectedItem is not SceneTreeNode node)
-            return;
+        var ids = new List<Guid>();
+        if (SceneTree.SelectedItems is { } items)
+        {
+            foreach (object? item in items)
+            {
+                if (item is SceneTreeNode node)
+                    ids.Add(node.Id);
+            }
+        }
+
+        // The list can only report rows it can SEE. Under an additive gesture
+        // (Ctrl or Shift held), engine-selected nodes folded away under a
+        // collapsed parent are still part of what the user means, so they are
+        // unioned back in; a plain click really does mean "exactly this".
+        if ((_gestureModifiers & (KeyModifiers.Control | KeyModifiers.Shift)) != 0)
+            Model?.Tree?.CollectHiddenSelected(ids);
 
         // Remembered so the echo of this selection, arriving from the engine a
         // frame later, does not scroll the panel to a row that is already under
         // the user's cursor.
-        _treeRequestedId = node.Id;
-        NodeSelected?.Invoke(node.Id);
+        _treeRequestedId = ids.Count > 0 ? ids[^1] : Guid.Empty;
+        SelectionRequested?.Invoke(ids);
+    }
+
+    /// <summary>
+    /// Observes each press before the list acts on it: records the gesture's
+    /// modifiers, arms a possible drag, and gives a right-press the
+    /// select-before-menu behaviour every editor shares (an unselected row
+    /// becomes the selection; a selected one keeps the whole set for the menu
+    /// to act on).
+    /// </summary>
+    private void OnTreePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        _gestureModifiers = e.KeyModifiers;
+        PointerPointProperties props = e.GetCurrentPoint(SceneTree).Properties;
+
+        if (props.IsRightButtonPressed)
+        {
+            if (RowNodeFrom(e.Source) is not { } node)
+                return;
+
+            if (!node.IsSelected && SceneTree.SelectedItems is { } items)
+            {
+                // Through the list's own selection, so the ordinary
+                // changed-event path posts it exactly like a left click would.
+                items.Clear();
+                items.Add(node);
+            }
+
+            return;
+        }
+
+        if (!props.IsLeftButtonPressed || _renaming is not null)
+            return;
+
+        // Only a press on the row body arms a drag: the chevron and the rename
+        // editor are controls in their own right, and a drag that starts from
+        // an expander click is how trees grow accidental reparents.
+        if (RowNodeForDrag(e.Source) is not { } row)
+            return;
+
+        _pressedRow = row;
+        _pressEvent = e;
+        _pressPoint = e.GetPosition(SceneTree);
+
+        // Deferred collapse, the same trick the viewport's press arbitration
+        // uses: a plain press on one row of a multi-selection must NOT collapse
+        // the selection yet, or dragging three rows would always drag one. The
+        // press is claimed, and the collapse happens on release if no drag
+        // began.
+        if (row.IsSelected && e.KeyModifiers == KeyModifiers.None &&
+            SceneTree.SelectedItems is { Count: > 1 })
+        {
+            _deferredCollapse = row;
+            SceneTree.Focus();
+            e.Handled = true;
+        }
+    }
+
+    private void OnTreePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (_pressedRow is not { } origin || _pressEvent is not { } press || _dragInProgress)
+            return;
+
+        if (!e.GetCurrentPoint(SceneTree).Properties.IsLeftButtonPressed)
+        {
+            _pressedRow = null;
+            _pressEvent = null;
+            return;
+        }
+
+        Point position = e.GetPosition(SceneTree);
+        if (Math.Abs(position.X - _pressPoint.X) < DragThresholdPixels &&
+            Math.Abs(position.Y - _pressPoint.Y) < DragThresholdPixels)
+        {
+            return;
+        }
+
+        StartDrag(press, origin);
+    }
+
+    private void OnTreePointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _pressedRow = null;
+        _pressEvent = null;
+
+        if (_deferredCollapse is not { } node)
+            return;
+
+        _deferredCollapse = null;
+
+        // No drag happened, so the press means what a press means: select
+        // exactly this row.
+        if (!_dragInProgress && ReferenceEquals(RowNodeFrom(e.Source), node) &&
+            SceneTree.SelectedItems is { } items)
+        {
+            items.Clear();
+            items.Add(node);
+        }
+    }
+
+    private async void StartDrag(PointerPressedEventArgs trigger, SceneTreeNode origin)
+    {
+        _dragInProgress = true;
+        _deferredCollapse = null;
+        _pressedRow = null;
+        _pressEvent = null;
+
+        // Dragging a selected row drags the whole selection, hidden rows
+        // included; dragging an unselected one drags just it (the list will
+        // have selected it on press anyway, but the drag must not depend on
+        // that race).
+        var ids = new List<Guid>();
+        if (origin.IsSelected)
+        {
+            if (SceneTree.SelectedItems is { } items)
+            {
+                foreach (object? item in items)
+                {
+                    if (item is SceneTreeNode node)
+                        ids.Add(node.Id);
+                }
+            }
+
+            Model?.Tree?.CollectHiddenSelected(ids);
+        }
+
+        if (!ids.Contains(origin.Id))
+            ids.Add(origin.Id);
+
+        var transfer = new DataTransfer();
+        transfer.Add(DataTransferItem.Create(DragFormat, ids.ToArray()));
+
+        try
+        {
+            await DragDrop.DoDragDropAsync(trigger, transfer, DragDropEffects.Move);
+        }
+        finally
+        {
+            _dragInProgress = false;
+            ClearDropIndicator();
+        }
+    }
+
+    private void OnTreeDragOver(object? sender, DragEventArgs e)
+    {
+        e.DragEffects = DragDropEffects.None;
+        e.Handled = true;
+
+        if (TryResolveDrop(e, out SceneTreeNode? row, out SceneTreeDropZone zone, out _, out _))
+        {
+            SetDropIndicator(row, zone);
+            e.DragEffects = DragDropEffects.Move;
+        }
+        else
+        {
+            ClearDropIndicator();
+        }
+    }
+
+    private void OnTreeDragLeave(object? sender, DragEventArgs e) => ClearDropIndicator();
+
+    private void OnTreeDrop(object? sender, DragEventArgs e)
+    {
+        e.Handled = true;
+
+        bool valid = TryResolveDrop(e, out _, out _, out Guid parentId, out int index);
+        ClearDropIndicator();
+        if (!valid)
+            return;
+
+        if (e.DataTransfer.TryGetValue(DragFormat) is { Length: > 0 } ids)
+            ReparentRequested?.Invoke(ids, parentId, index);
+    }
+
+    /// <summary>
+    /// Turns a drag position into a drop decision: which row indicates, and
+    /// which (parent, index) the engine would be asked for. Returns false for
+    /// anything that must not drop — foreign data, a target inside the dragged
+    /// subtree, a sibling slot beside a top-level row.
+    /// </summary>
+    private bool TryResolveDrop(
+        DragEventArgs e, out SceneTreeNode? row, out SceneTreeDropZone zone, out Guid parentId, out int index)
+    {
+        row = null;
+        zone = SceneTreeDropZone.None;
+        parentId = Guid.Empty;
+        index = -1;
+
+        if (Model?.Tree is not { } tree ||
+            e.DataTransfer.TryGetValue(DragFormat) is not { Length: > 0 } ids)
+        {
+            return false;
+        }
+
+        if (RowBorderFrom(e.Source) is not { } border || border.DataContext is not SceneTreeNode target)
+        {
+            // Empty space below the rows: append into the scene root, which is
+            // where an insert puts new things too.
+            if (tree.Roots.Count != 1 || ContainsId(ids, tree.Roots[0].Id))
+                return false;
+
+            parentId = tree.Roots[0].Id;
+            return true;
+        }
+
+        double y = e.GetPosition(border).Y;
+        double height = border.Bounds.Height;
+        zone = y < height * 0.3 ? SceneTreeDropZone.Before
+            : y > height * 0.7 ? SceneTreeDropZone.After
+            : SceneTreeDropZone.Into;
+
+        SceneTreeNode? parent = zone == SceneTreeDropZone.Into ? target : tree.ParentOf(target);
+        if (parent is null)
+        {
+            // Beside a top-level row there is no sibling slot to name: the
+            // scene root is not a row and its children ARE the top level.
+            return false;
+        }
+
+        // A drop anywhere inside the dragged subtree is a cycle; the engine
+        // refuses it too, but the cursor must already say no.
+        for (SceneTreeNode? ancestor = parent; ancestor is not null; ancestor = tree.ParentOf(ancestor))
+        {
+            if (ContainsId(ids, ancestor.Id))
+                return false;
+        }
+
+        row = target;
+        parentId = parent.Id;
+        index = zone switch
+        {
+            SceneTreeDropZone.Before => parent.Children.IndexOf(target),
+            SceneTreeDropZone.After => parent.Children.IndexOf(target) + 1,
+            _ => -1,
+        };
+
+        return true;
+    }
+
+    private static bool ContainsId(Guid[] ids, Guid id)
+    {
+        for (int i = 0; i < ids.Length; i++)
+        {
+            if (ids[i] == id)
+                return true;
+        }
+
+        return false;
+    }
+
+    private void SetDropIndicator(SceneTreeNode? row, SceneTreeDropZone zone)
+    {
+        if (!ReferenceEquals(_dropRow, row))
+            ClearDropIndicator();
+
+        _dropRow = row;
+        if (row is not null)
+            row.DropZone = zone;
+    }
+
+    private void ClearDropIndicator()
+    {
+        if (_dropRow is { } row)
+            row.DropZone = SceneTreeDropZone.None;
+
+        _dropRow = null;
+    }
+
+    /// <summary>The row a visual-tree event source belongs to, or null.</summary>
+    private static SceneTreeNode? RowNodeFrom(object? source)
+    {
+        for (Visual? current = source as Visual; current is not null; current = current.GetVisualParent())
+        {
+            if (current is Control { DataContext: SceneTreeNode node })
+                return node;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Like <see cref="RowNodeFrom"/> but refuses a press that started inside
+    /// an interactive child (the chevron, the rename editor).
+    /// </summary>
+    private static SceneTreeNode? RowNodeForDrag(object? source)
+    {
+        for (Visual? current = source as Visual; current is not null; current = current.GetVisualParent())
+        {
+            if (current is Button or TextBox)
+                return null;
+
+            if (current is Border { Classes: { } classes, DataContext: SceneTreeNode node } &&
+                classes.Contains("row"))
+            {
+                return node;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The row's root Border, for position arithmetic within it.</summary>
+    private static Border? RowBorderFrom(object? source)
+    {
+        for (Visual? current = source as Visual; current is not null; current = current.GetVisualParent())
+        {
+            if (current is Border border && border.Classes.Contains("row") &&
+                border.DataContext is SceneTreeNode)
+            {
+                return border;
+            }
+        }
+
+        return null;
+    }
+
+    private void OnRowDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        // Unity's muscle memory: double-click means "take me there". Expansion
+        // has the chevron and the keyboard; rename has F2 and the menu.
+        if (_renaming is not null)
+            return;
+
+        FrameRequested?.Invoke();
+        e.Handled = true;
     }
 
     // Claimed before the row can act on it: clicking an expander is not a way
@@ -290,8 +734,56 @@ public partial class ScenePanel : UserControl
     /// </remarks>
     private void OnTreeKeyDown(object? sender, KeyEventArgs e)
     {
+        _gestureModifiers = e.KeyModifiers;
+
+        // A rename in progress owns the keyboard: this tunnel handler fires
+        // before the TextBox sees anything, and claiming Left/Right here would
+        // break the caret.
+        if (_renaming is not null)
+            return;
+
         if (Model?.Tree is not { } tree || SceneTree.SelectedItem is not SceneTreeNode node)
             return;
+
+        // The verbs every outliner owes its keyboard. They fire here, with the
+        // tree focused, because the engine keymap only hears keys the native
+        // viewport receives.
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            EditorHostCommand? chord = e.Key switch
+            {
+                Key.D => EditorHostCommand.Duplicate,
+                Key.G when e.KeyModifiers.HasFlag(KeyModifiers.Shift) => EditorHostCommand.Ungroup,
+                Key.G => EditorHostCommand.Group,
+                Key.T => EditorHostCommand.ToggleBrushKind,
+                _ => null,
+            };
+
+            if (chord is { } command)
+            {
+                CommandRequested?.Invoke(command);
+                e.Handled = true;
+                return;
+            }
+        }
+
+        switch (e.Key)
+        {
+            case Key.Delete:
+                CommandRequested?.Invoke(EditorHostCommand.Delete);
+                e.Handled = true;
+                return;
+
+            case Key.F2:
+                BeginRename(node);
+                e.Handled = true;
+                return;
+
+            case Key.F when e.KeyModifiers == KeyModifiers.None:
+                FrameRequested?.Invoke();
+                e.Handled = true;
+                return;
+        }
 
         if (e.Key == Key.Right)
         {
@@ -334,4 +826,137 @@ public partial class ScenePanel : UserControl
     }
 
     private void OnClearFilterClicked(object? sender, RoutedEventArgs e) => Model?.ClearFilter();
+
+    // --- In-place rename -----------------------------------------------------
+
+    /// <summary>
+    /// Puts a row into rename mode: F2, and the context menu's Rename.
+    /// </summary>
+    private void BeginRename(SceneTreeNode node)
+    {
+        CancelRename();
+
+        _renaming = node;
+        node.IsRenaming = true;
+
+        // The editor only exists after the visibility change lays out; focus
+        // aimed at an invisible control lands nowhere and the edit looks dead.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!ReferenceEquals(_renaming, node))
+                return;
+
+            if (SceneTree.ContainerFromItem(node) is not Control container)
+                return;
+
+            if (container.GetVisualDescendants().OfType<TextBox>().FirstOrDefault() is not { } box)
+                return;
+
+            // Set imperatively, never bound: a binding would let the ~30 Hz
+            // snapshot republish rewrite the text mid-keystroke.
+            box.Text = node.Name;
+            box.Focus();
+            box.SelectAll();
+        }, DispatcherPriority.Loaded);
+    }
+
+    private void CancelRename()
+    {
+        if (_renaming is not { } node)
+            return;
+
+        _renaming = null;
+        node.IsRenaming = false;
+    }
+
+    private void CommitRename(TextBox box)
+    {
+        if (_renaming is not { } node)
+            return;
+
+        _renaming = null;
+        node.IsRenaming = false;
+
+        // The empty and unchanged refusals live in the engine verb; repeating
+        // them here would just be a second copy to keep honest. Whitespace is
+        // filtered because raising a request that is certain to be refused
+        // reads as a rename that silently failed.
+        string text = (box.Text ?? string.Empty).Trim();
+        if (text.Length > 0 && !string.Equals(text, node.Name, StringComparison.Ordinal))
+            RenameRequested?.Invoke(node.Id, text);
+    }
+
+    private void OnRenameKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox box)
+            return;
+
+        if (e.Key == Key.Enter)
+        {
+            CommitRename(box);
+            SceneTree.Focus();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            // Cancel FIRST: the focus change fires LostFocus, whose commit
+            // must find nothing to commit.
+            CancelRename();
+            SceneTree.Focus();
+            e.Handled = true;
+        }
+    }
+
+    private void OnRenameBlurred(object? sender, RoutedEventArgs e)
+    {
+        // Blur commits, exactly like the property panel's fields: Escape is
+        // what abandoning a half-typed name looks like, not clicking away.
+        if (sender is TextBox box)
+            CommitRename(box);
+    }
+
+    // --- Context menu --------------------------------------------------------
+
+    // Each handler reads the row that opened the menu from its own
+    // DataContext, which Avalonia inherits from the row the menu was attached
+    // to. The verbs act on the engine's selection; the right-press handler has
+    // already ensured the row is part of it.
+
+    private static SceneTreeNode? MenuNode(object? sender) =>
+        (sender as Control)?.DataContext as SceneTreeNode;
+
+    private void OnMenuRename(object? sender, RoutedEventArgs e)
+    {
+        if (MenuNode(sender) is { } node)
+            BeginRename(node);
+    }
+
+    private void OnMenuFrame(object? sender, RoutedEventArgs e) => FrameRequested?.Invoke();
+
+    private void OnMenuDuplicate(object? sender, RoutedEventArgs e) =>
+        CommandRequested?.Invoke(EditorHostCommand.Duplicate);
+
+    private void OnMenuDelete(object? sender, RoutedEventArgs e) =>
+        CommandRequested?.Invoke(EditorHostCommand.Delete);
+
+    private void OnMenuGroup(object? sender, RoutedEventArgs e) =>
+        CommandRequested?.Invoke(EditorHostCommand.Group);
+
+    private void OnMenuUngroup(object? sender, RoutedEventArgs e) =>
+        CommandRequested?.Invoke(EditorHostCommand.Ungroup);
+
+    private void OnMenuConvertKind(object? sender, RoutedEventArgs e) =>
+        CommandRequested?.Invoke(EditorHostCommand.ToggleBrushKind);
+
+    private void OnMenuExpandAll(object? sender, RoutedEventArgs e)
+    {
+        if (MenuNode(sender) is { } node)
+            Model?.Tree?.SetSubtreeExpanded(node, expanded: true);
+    }
+
+    private void OnMenuCollapseAll(object? sender, RoutedEventArgs e)
+    {
+        if (MenuNode(sender) is { } node)
+            Model?.Tree?.SetSubtreeExpanded(node, expanded: false);
+    }
 }

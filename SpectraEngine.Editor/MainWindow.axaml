@@ -94,6 +94,14 @@
           <MenuItem Header="_File">
             <MenuItem Header="New _project..." Click="OnNewProjectClicked" />
             <MenuItem Header="Open p_roject..." Click="OnOpenProjectClicked" />
+            <!-- Populated in code from the same recents the start page shows:
+                 a menu built from settings at open time cannot drift from the
+                 cards. Items land BEFORE the trailing clear entry. -->
+            <MenuItem Header="Recen_t projects" x:Name="RecentProjectsMenu">
+              <MenuItem Header="(nothing yet)" IsEnabled="False" x:Name="RecentProjectsEmptyItem" />
+              <Separator x:Name="RecentProjectsSeparator" />
+              <MenuItem Header="Clear list" Click="OnClearRecentsClicked" x:Name="RecentProjectsClearItem" />
+            </MenuItem>
             <MenuItem Header="_Close project" Click="OnCloseProjectClicked" IsEnabled="{Binding HasSession}" />
             <Separator />
             <MenuItem Header="_New map" InputGesture="Ctrl+N" Click="OnNewMapClicked" IsEnabled="{Binding HasSession}" />
