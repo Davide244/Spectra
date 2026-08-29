@@ -32,6 +32,15 @@ namespace SpectraEngine.Core
         public const int TextureFormatVersion = 1;
         public const int MapFormatVersion = 1;
 
+        // The oldest reader that can still make sense of a map this engine writes.
+        // Source formats version asymmetrically from cooked ones: a cooked artifact
+        // demands an exact match and says "recook", because it is a build output that
+        // can always be regenerated, while a map is the user's own data and has to
+        // survive an engine older or newer than itself. A reader refuses a document
+        // whose minimumReadableVersion exceeds MapFormatVersion, and otherwise carries
+        // members it does not recognise through untouched.
+        public const int MinimumReadableMapVersion = 1;
+
         // Shader format version — must match CompiledShaderFile.FormatVersion to load
         public const ushort ShaderFormatVersion = 1;
     }

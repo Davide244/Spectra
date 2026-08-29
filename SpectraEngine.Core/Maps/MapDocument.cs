@@ -1,0 +1,365 @@
+using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Scene;
+using System;
+using System.Collections.Generic;
+using System.Numerics;
+
+namespace SpectraEngine.Core.Maps;
+
+/// <summary>
+/// An authored map, exactly as it sits on disk: the round-trip unit that
+/// <see cref="MapReader"/> and <see cref="MapWriter"/> move between bytes and
+/// memory, and that <see cref="MapSceneBinder"/> projects to and from a live
+/// <see cref="Scene.Scene"/>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>This type exists so that byte identity has somewhere to live.</b> The
+/// obvious design reads JSON straight into <see cref="SceneNode"/>s, and it
+/// cannot work, for two independent reasons. First, unknown-member
+/// preservation: a map written by a newer engine carries members this one has
+/// never heard of, and they must survive a load and save unchanged — which
+/// would mean parking a byte blob on <c>SceneNode</c>, where it would then have
+/// to survive clone, reparent, undo and the id index, none of which have any
+/// business knowing what a file format is. Second, and more decisively,
+/// <b>a scene is a lossy image of a document</b>: <c>Brush</c>'s constructor
+/// re-normalises every plane it is handed, so a hand-authored
+/// <c>[2, 0, 0, -64]</c> comes back out of a <c>Scene</c> as
+/// <c>[1, 0, 0, -32]</c>. That is correct — it is the same plane, canonicalised
+/// — but it means a scene can never promise to reproduce the bytes it was built
+/// from, and the document can.
+/// </para>
+/// <para>
+/// <b>So the two round trips are separate claims, tested separately.</b>
+/// <c>Write(Read(bytes)) == bytes</c> is exact and is the promise that makes a
+/// hand edit in VS Code show up as a two-line diff instead of a whole-file
+/// rewrite. Scene projection is the lossy half, and what it may lose is stated
+/// per member below rather than discovered later.
+/// </para>
+/// <para>
+/// <b>Members the engine does not implement yet are carried, not dropped.</b>
+/// The format specification is deliberately ahead of the tree: entities,
+/// scripts, realms and node state are all designed and none exist in
+/// <c>SpectraEngine.Core</c>. Rather than write a reader that silently discards
+/// them, this document sorts every member into one of three tiers — bound to
+/// engine state, validated-and-carried (the reserved keys), or preserved
+/// opaquely — so a map may travel through an older engine without losing what
+/// that engine could not understand.
+/// </para>
+/// </remarks>
+public sealed class MapDocument
+{
+    /// <summary>Canonical top-level member order. Indices are anchors for preserved members.</summary>
+    internal static readonly string[] MemberOrder =
+        [MapFormat.FormatVersionMember, MapFormat.MinimumReadableMember, MapFormat.EngineMember,
+         MapFormat.SceneMember, MapFormat.EditorMember, MapFormat.NodesMember];
+
+    /// <summary>The document's own format version, from <c>EngineInfo.MapFormatVersion</c>.</summary>
+    public int FormatVersion { get; set; } = EngineInfo.MapFormatVersion;
+
+    /// <summary>
+    /// The oldest reader that can still make sense of this document. A reader
+    /// refuses a document whose value here exceeds what it implements, and
+    /// tolerates any <see cref="FormatVersion"/> at or above it.
+    /// </summary>
+    public int MinimumReadableVersion { get; set; } = EngineInfo.MinimumReadableMapVersion;
+
+    /// <summary>Engine version that last wrote this document. Informational; never a load gate.</summary>
+    public string Engine { get; set; } = EngineInfo.VersionString;
+
+    /// <summary>Scene-level settings: the name, plus anything preserved.</summary>
+    public MapSceneInfo Scene { get; set; } = new();
+
+    /// <summary>
+    /// The reserved <c>editor</c> key, carried verbatim.
+    /// </summary>
+    /// <remarks>
+    /// Reserved rather than preserved, and the distinction is the cook's. An
+    /// unknown member is opaque text a future engine might need; <c>editor</c>
+    /// is a member the cook must be free to drop <i>by name</i>, wholesale,
+    /// without inspecting it. It is carried as raw bytes here only because its
+    /// v1 content — the shared grid size — belongs to
+    /// <c>SpectraEngine.Editing</c>, an assembly Core cannot reference by
+    /// design.
+    /// </remarks>
+    public PreservedValue? Editor { get; set; }
+
+    /// <summary>
+    /// The root's children, in order. Depth is expressed by nesting.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not a flat list with parent ids, and not a record for the root
+    /// itself.</b> Sibling order is traversal order is static-world placement
+    /// order, which breaks ties in the carve, so a format that could lose it
+    /// would rebuild a level that is valid, different and bit-unequal. A JSON
+    /// array expresses that order exactly and a moved subtree stays one diff
+    /// hunk. The root is omitted because <c>Scene.Root</c> is get-only and
+    /// mints its own id, so a record for it could not be restored anyway.
+    /// </remarks>
+    public List<MapNode> Nodes { get; } = [];
+
+    /// <summary>Top-level members this engine version does not recognise.</summary>
+    public List<PreservedMember> Unknown { get; } = [];
+}
+
+/// <summary>Scene-level settings.</summary>
+/// <remarks>
+/// <c>scene.spawn</c> is specified and deliberately absent here: nothing on
+/// <c>Scene</c> carries a gameplay spawn (what exists is
+/// <c>SceneManager.PlayerSpawn</c>, a demo-side <c>Vector3</c> plus a yaw
+/// scalar, not the position-and-quaternion pair the format names). It therefore
+/// arrives as a preserved member and round-trips untouched rather than being
+/// invented here, because a format member with no engine concept behind it is a
+/// value that silently means nothing.
+/// </remarks>
+public sealed class MapSceneInfo
+{
+    internal static readonly string[] MemberOrder = [MapFormat.NameMember];
+
+    public string Name { get; set; } = "Scene";
+
+    public List<PreservedMember> Unknown { get; } = [];
+}
+
+/// <summary>One authored node.</summary>
+public sealed class MapNode
+{
+    internal static readonly string[] MemberOrder =
+        [MapFormat.IdMember, MapFormat.NameMember, MapFormat.RealmMember, MapFormat.StateMember,
+         MapFormat.KindMember, MapFormat.TransformMember, MapFormat.BrushMember, MapFormat.LightMember,
+         MapFormat.EditorMember, MapFormat.ChildrenMember];
+
+    public Guid Id { get; set; }
+
+    public string Name { get; set; } = "Node";
+
+    /// <summary>
+    /// The node's own declared realm, or null when omitted (meaning inherit).
+    /// </summary>
+    /// <remarks>
+    /// <b>Validated against the closed vocabulary on read even though no realm
+    /// enum exists in Core yet.</b> That is the whole reason <c>realm</c> is a
+    /// reserved key: if a mistyped <c>"sever"</c> survived as an opaque
+    /// preserved member, the node would load as having declared nothing and
+    /// fall through to <c>shared</c>, which is a data leak on load rather than
+    /// a lost setting. Validating the string without binding it to an enum
+    /// keeps that guarantee today and costs one lookup.
+    /// </remarks>
+    public string? Realm { get; set; }
+
+    /// <summary>The node's own declared state, or null when omitted. Validated like <see cref="Realm"/>.</summary>
+    public string? State { get; set; }
+
+    /// <summary>
+    /// Declared brush kind, or null when omitted (meaning <c>World</c>).
+    /// </summary>
+    /// <remarks>
+    /// Reserved for the same mechanism as <see cref="Realm"/> and with a worse
+    /// consequence: a preserved-and-ignored <c>kind</c> falls through to
+    /// <c>World</c>, which re-admits a part brush to the carve and changes
+    /// world topology on load.
+    /// </remarks>
+    public BrushKind? Kind { get; set; }
+
+    public MapTransform Transform { get; set; } = MapTransform.Identity;
+
+    public MapBrush? Brush { get; set; }
+
+    /// <summary>
+    /// The node's light, if any.
+    /// </summary>
+    /// <remarks>
+    /// Not named anywhere in the format specification, which predates nothing
+    /// in particular and simply omits it; the engine has had lights throughout.
+    /// Placed after <c>brush</c> in the member order because that is where a
+    /// second payload belongs, and recorded as an amendment rather than
+    /// inferred.
+    /// </remarks>
+    public MapLight? Light { get; set; }
+
+    /// <summary>The reserved per-node <c>editor</c> key, carried verbatim.</summary>
+    public PreservedValue? Editor { get; set; }
+
+    public List<MapNode> Children { get; } = [];
+
+    /// <summary>
+    /// Members this engine version does not recognise, including the specified
+    /// but unbuilt <c>entity</c> and <c>script</c> payloads.
+    /// </summary>
+    public List<PreservedMember> Unknown { get; } = [];
+}
+
+/// <summary>The authored 10-float transform, exactly as stored.</summary>
+/// <remarks>
+/// Never a composed world matrix — a standing invariant of the format. The
+/// identity value is spelled out rather than left to <c>default</c> because
+/// <c>default(Transform)</c> has a zero scale and a zero quaternion, which is
+/// not the identity and would load every node collapsed to a point.
+/// </remarks>
+public struct MapTransform
+{
+    public Vector3 Position;
+    public Quaternion Rotation;
+    public Vector3 Scale;
+
+    public static MapTransform Identity =>
+        new() { Position = Vector3.Zero, Rotation = Quaternion.Identity, Scale = Vector3.One };
+}
+
+/// <summary>A brush: planes, per-plane surfaces, and the sign.</summary>
+/// <remarks>
+/// <para>
+/// <b>A closed vocabulary.</b> Every member here is load-bearing geometry, so
+/// an unrecognised member inside a brush record is a reader error naming the
+/// node and the offset, not a preserved unknown. The reasoning is the same one
+/// that makes <c>operation</c> a reserved-style closed value: a brush member
+/// that is quietly ignored is a wall where a doorway was.
+/// </para>
+/// <para>
+/// <b><see cref="Transform"/> is carried even though a node-attached brush
+/// ignores it.</b> The scene places a brush from the node's world matrix and
+/// never reads <c>Brush.Transform</c> — but <c>Brush.CreateBox</c> puts the
+/// centering translation there, and the standalone <c>Csg.Carve</c> and
+/// <c>CsgWorld.Build</c> overloads do read it. It is a public settable member
+/// of the brush value; dropping it because the common path ignores it is how a
+/// format loses data that nothing reports.
+/// </para>
+/// </remarks>
+public sealed class MapBrush
+{
+    public BrushOperation Operation { get; set; } = BrushOperation.Additive;
+
+    public Matrix4x4 Transform { get; set; } = Matrix4x4.Identity;
+
+    /// <summary>Planes as <c>[nx, ny, nz, d]</c>, matching <c>System.Numerics.Plane</c>'s field order. Normals point out of the solid.</summary>
+    public List<Vector4> Planes { get; } = [];
+
+    /// <summary>Per-plane surfaces, indexed by plane index. Length must equal <see cref="Planes"/>.</summary>
+    public List<MapFace> Faces { get; } = [];
+
+    /// <summary>Whether the cook keeps this brush's authored planes in the compiled map.</summary>
+    public bool KeepSource { get; set; }
+}
+
+/// <summary>One brush face's material and texture projection.</summary>
+/// <remarks>
+/// An <i>open</i> record, unlike <see cref="MapBrush"/>: a face payload is
+/// where per-surface authoring grows (smoothing groups, lightmap scale,
+/// per-face flags), and none of those change what the solid is, so preserving
+/// an unrecognised one is safe where preserving an unrecognised brush member
+/// would not be.
+/// </remarks>
+public sealed class MapFace
+{
+    internal static readonly string[] MemberOrder =
+        [MapFormat.MaterialMember, MapFormat.UAxisMember, MapFormat.VAxisMember,
+         MapFormat.UOffsetMember, MapFormat.VOffsetMember, MapFormat.UScaleMember, MapFormat.VScaleMember];
+
+    /// <summary>
+    /// Content-root-relative path of a <c>.spectramat</c>, or null for the
+    /// engine default material.
+    /// </summary>
+    /// <remarks>
+    /// <b>The path, never <c>MaterialRef.Id</c>.</b> Ids are handed out in
+    /// first-intern order within one process, so the same map loaded second
+    /// instead of first gets different ids for the same files. A standing
+    /// invariant of the format states it, and the failure it prevents is a
+    /// world that textures itself differently depending on load order.
+    /// </remarks>
+    public string? Material { get; set; }
+
+    /// <summary>Explicit U axis, or null for world-aligned (the dominant-axis rule).</summary>
+    public Vector3? UAxis { get; set; }
+
+    /// <summary>Explicit V axis, or null for world-aligned.</summary>
+    public Vector3? VAxis { get; set; }
+
+    public float UOffset { get; set; }
+    public float VOffset { get; set; }
+
+    /// <summary>World units per texture repeat. Defaults to 1; zero is refused by <c>FaceSurface</c>.</summary>
+    public float UScale { get; set; } = 1f;
+    public float VScale { get; set; } = 1f;
+
+    public List<PreservedMember> Unknown { get; } = [];
+}
+
+/// <summary>A light payload.</summary>
+public sealed class MapLight
+{
+    internal static readonly string[] MemberOrder =
+        [MapFormat.KindMember, MapFormat.ColorMember, MapFormat.IntensityMember,
+         MapFormat.RangeMember, MapFormat.EnabledMember];
+
+    public LightKind Kind { get; set; } = LightKind.Directional;
+
+    /// <summary>Linear RGB, not a display colour.</summary>
+    public Vector3 Color { get; set; } = Vector3.One;
+
+    public float Intensity { get; set; } = 1f;
+
+    /// <summary>
+    /// Falloff range. Defaults to 10 and is written whenever it differs.
+    /// </summary>
+    /// <remarks>
+    /// <b>Never written as zero and never defaulted to zero on read.</b>
+    /// <c>Light.Range</c> refuses any value that is not strictly positive, so
+    /// the natural shortcut — omit it for a directional light, let the missing
+    /// number default to <c>0f</c> — throws out of the property setter in the
+    /// middle of a load. The default here is the field initialiser's 10, which
+    /// is the value the setter would have accepted.
+    /// </remarks>
+    public float Range { get; set; } = 10f;
+
+    public bool Enabled { get; set; } = true;
+
+    public List<PreservedMember> Unknown { get; } = [];
+}
+
+/// <summary>Raw JSON carried through a round trip untouched.</summary>
+public sealed class PreservedValue
+{
+    public PreservedValue(byte[] raw) => Raw = raw;
+
+    /// <summary>The value's exact bytes as they appeared in the source document.</summary>
+    public byte[] Raw { get; }
+}
+
+/// <summary>
+/// An unrecognised member, and where in the canonical member order it sat.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b><see cref="Anchor"/> is what makes preservation byte-identical rather
+/// than merely lossless.</b> The specification says to capture unknown members
+/// into an ordered list and replay them on write, and never says <i>where</i>.
+/// Replaying them all at the end satisfies every stated rule and still produces
+/// different bytes from the document that was read, for exactly the case
+/// preservation exists to serve: a newer engine wrote its own members
+/// interleaved among the ones this engine knows.
+/// </para>
+/// <para>
+/// So each preserved member records the index, into the owning object's
+/// canonical member order, of the last known member that preceded it
+/// (<c>-1</c> for "before all of them"). The writer flushes anchored members
+/// after emitting each canonical slot, which reproduces the original
+/// interleaving exactly and degrades predictably — an unknown anchored to a
+/// member that is now omitted simply lands at that member's slot, which is
+/// where it was.
+/// </para>
+/// </remarks>
+public sealed class PreservedMember
+{
+    public PreservedMember(string name, byte[] raw, int anchor)
+    {
+        Name = name;
+        Raw = raw;
+        Anchor = anchor;
+    }
+
+    public string Name { get; }
+
+    public byte[] Raw { get; }
+
+    public int Anchor { get; }
+}
