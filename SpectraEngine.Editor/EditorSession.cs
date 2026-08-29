@@ -7,6 +7,7 @@ using SpectraEngine.Core.Graphics.D3D11;
 using SpectraEngine.Core.Graphics.D3D12;
 using SpectraEngine.Core.Hosting;
 using SpectraEngine.Core.Input;
+using SpectraEngine.Core.Maps;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Editing.Cameras;
 using SpectraEngine.Editing.Gizmos;
@@ -14,6 +15,7 @@ using SpectraEngine.Editing.Hosting;
 using SpectraEngine.Physics.Box3D;
 using SpectraShade.Compiler;
 using System;
+using System.IO;
 
 namespace SpectraEngine.Editor;
 
@@ -148,6 +150,118 @@ public sealed class EditorSession : IDisposable
     // Render thread only. Null before the scene has loaded, and null for a host
     // that installed no editing layer at all.
     private SceneEditorHost? Editor => SceneManager.Editor as SceneEditorHost;
+
+    // --- Documents -----------------------------------------------------------
+    //
+    // Both of these run on the RENDER thread, which is not a detail: the scene
+    // graph, the static-world compile and every GPU resource belong to it, and
+    // a UI thread that touched any of them would be racing the frame it is
+    // watching. The completion callback is invoked there too, so a caller that
+    // wants to touch its own UI has to marshal back deliberately rather than by
+    // accident.
+
+    /// <summary>
+    /// Writes the live scene into a map bundle.
+    /// </summary>
+    /// <param name="bundlePath">The <c>.smap</c> directory to write.</param>
+    /// <param name="done">
+    /// Called on the render thread with the save report, or the failure. A
+    /// report that is not complete is still a successful save: it means the
+    /// scene held something the format cannot name, such as a mesh built in
+    /// code.
+    /// </param>
+    public void SaveMap(string bundlePath, Action<MapSaveReport?, Exception?> done)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bundlePath);
+        ArgumentNullException.ThrowIfNull(done);
+
+        Host.EnqueueCommand(scene =>
+        {
+            try
+            {
+                var report = new MapSaveReport();
+                MapBundle.Save(bundlePath, MapSceneBinder.FromScene(scene, report));
+                done(report, null);
+            }
+            catch (Exception ex) when (ex is MapFormatException or IOException or UnauthorizedAccessException)
+            {
+                done(null, ex);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Replaces the live scene's graph with a map bundle's.
+    /// </summary>
+    /// <remarks>
+    /// <b>The editor is reset BEFORE the graph is replaced, and the world is
+    /// recompiled after.</b> The reset is not housekeeping: an open gesture
+    /// would be manipulating nodes that are about to leave the graph, the
+    /// selection holds live node references that would outlive their scene, and
+    /// the undo history addresses the old graph by id, where undo no-ops on a
+    /// missing target rather than failing. The recompile uses the synchronous
+    /// cache-free path, which is what a load is for: the incremental compiler
+    /// carries caches from a previous world and a world just replaced wholesale
+    /// has none worth carrying.
+    /// </remarks>
+    public void OpenMap(string bundlePath, Action<MapLoadReport?, Exception?> done)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bundlePath);
+        ArgumentNullException.ThrowIfNull(done);
+
+        Host.EnqueueCommand(scene =>
+        {
+            try
+            {
+                MapDocument document = MapBundle.Load(bundlePath);
+
+                Editor?.OnSceneReplaced();
+
+                var report = new MapLoadReport();
+                MapSceneBinder.ApplyTo(document, scene, report);
+                scene.RebuildStaticWorld(_renderer);
+
+                done(report, null);
+            }
+            catch (Exception ex) when (
+                ex is MapFormatException or IOException or UnauthorizedAccessException)
+            {
+                done(null, ex);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Empties the scene, leaving a graph with nothing but the root in it.
+    /// </summary>
+    /// <remarks>
+    /// The same reset as a load, because it is the same event from the editor's
+    /// point of view: every node the selection, the history and any open
+    /// gesture referred to is about to be gone.
+    /// </remarks>
+    public void NewMap(string name, Action<Exception?> done)
+    {
+        ArgumentNullException.ThrowIfNull(done);
+
+        Host.EnqueueCommand(scene =>
+        {
+            try
+            {
+                Editor?.OnSceneReplaced();
+
+                var empty = new MapDocument();
+                empty.Scene.Name = string.IsNullOrWhiteSpace(name) ? "Scene" : name;
+                MapSceneBinder.ApplyTo(empty, scene);
+                scene.RebuildStaticWorld(_renderer);
+
+                done(null);
+            }
+            catch (Exception ex) when (ex is MapFormatException or IOException)
+            {
+                done(ex);
+            }
+        });
+    }
 
     /// <summary>
     /// Stops the engine and waits for the render thread. Safe to call twice.

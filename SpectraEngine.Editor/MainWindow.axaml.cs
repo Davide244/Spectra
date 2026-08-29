@@ -2,6 +2,7 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.Logging;
@@ -9,6 +10,8 @@ using Serilog.Extensions.Logging;
 using Silk.NET.Maths;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Hosting;
+using SpectraEngine.Core.Maps;
+using SpectraEngine.Core.Projects;
 using SpectraEngine.Editing.Cameras;
 using SpectraEngine.Editing.Gizmos;
 using SpectraEngine.Editing.Hosting;
@@ -16,8 +19,11 @@ using SpectraEngine.Editor.Shell;
 using SpectraEngine.Editor.Viewport;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace SpectraEngine.Editor;
 
@@ -44,6 +50,7 @@ public partial class MainWindow : Window
     private readonly ILogger<MainWindow> _logger;
     private readonly DispatcherTimer _pump;
     private readonly ShellModel _shell = new();
+    private readonly EditorDocument _document = new();
 
     // Every published snapshot, not just the newest. The engine's contract is
     // that a structural change rides the NEXT snapshot out and is then gone, so
@@ -66,6 +73,8 @@ public partial class MainWindow : Window
     private IRenderSurface? _surface;
     private FrameSnapshot _latest = FrameSnapshot.Empty;
     private bool _stopping;
+    private int _lastUndoDepth;
+    private int _lastRedoDepth;
 
     // Guards tree -> engine -> tree. Without it a click sets the engine's
     // selection, the next snapshot writes it back into the tree, and the tree
@@ -99,6 +108,20 @@ public partial class MainWindow : Window
         // on, returns true, and marks the event handled. A bubbling handler for
         // the tree's own collapse/expand would therefore never run at all.
         SceneTree.AddHandler(KeyDownEvent, OnTreeKeyDown, RoutingStrategies.Tunnel);
+
+        // The title is the only place the shell says what is open and whether
+        // it is saved, so it follows the document rather than being set once.
+        _document.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(EditorDocument.Title))
+                Title = _document.Title;
+        };
+        Title = _document.Title;
+
+        // The viewport hands up the document chords it intercepted, because
+        // while it has focus the OS gives it the keyboard and Avalonia never
+        // sees the menu accelerators at all.
+        Viewport.ShellChord += OnShellChord;
 
         _pump = new DispatcherTimer(
             TimeSpan.FromMilliseconds(16), DispatcherPriority.Normal, OnPump);
@@ -249,8 +272,37 @@ public partial class MainWindow : Window
         _syncingSelection = false;
 
         RevealSelection(snapshot.SelectedIds);
+        TrackDirty(snapshot);
 
         _shell.ApplySnapshot(snapshot);
+    }
+
+    /// <summary>
+    /// Marks the document edited when the undo history has moved at all.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Any movement, rather than a comparison against the depth at save
+    /// time.</b> Depth alone cannot tell the two apart: undo one entry, then
+    /// make a different edit, and the depth returns to what it was with entirely
+    /// different content behind it. So this errs towards dirty, which costs a
+    /// redundant write, instead of towards clean, which costs the work.
+    /// </para>
+    /// <para>
+    /// The history is the right signal because it is the only thing that moves
+    /// for an edit and stays still for everything else: the demo scene animates
+    /// a brush every frame, the world recompiles hundreds of times a second,
+    /// and neither goes through a command.
+    /// </para>
+    /// </remarks>
+    private void TrackDirty(FrameSnapshot snapshot)
+    {
+        if (snapshot.UndoDepth == _lastUndoDepth && snapshot.RedoDepth == _lastRedoDepth)
+            return;
+
+        _lastUndoDepth = snapshot.UndoDepth;
+        _lastRedoDepth = snapshot.RedoDepth;
+        _document.MarkDirty();
     }
 
     /// <summary>
@@ -539,6 +591,226 @@ public partial class MainWindow : Window
     private void OnExitClicked(object? sender, RoutedEventArgs e) => Close();
 
     private void OnFocusViewportClicked(object? sender, RoutedEventArgs e) => Viewport.Focus();
+
+    private void OnShellChord(ShellChord chord)
+    {
+        switch (chord)
+        {
+            case ShellChord.NewMap: OnNewMapClicked(this, new RoutedEventArgs()); break;
+            case ShellChord.OpenMap: OnOpenMapClicked(this, new RoutedEventArgs()); break;
+            case ShellChord.SaveMap: OnSaveClicked(this, new RoutedEventArgs()); break;
+            case ShellChord.SaveMapAs: OnSaveAsClicked(this, new RoutedEventArgs()); break;
+        }
+    }
+
+    // --- File ----------------------------------------------------------------
+    //
+    // Every one of these runs the filesystem work on the UI thread and the
+    // SCENE work on the render thread, through EditorSession. That split is the
+    // whole contract: a map bundle is ordinary file I/O and belongs where the
+    // dialogs are, while the graph, the static-world compile and the GPU
+    // resources belong to the thread that owns the frame.
+
+    private async void OnNewMapClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_session is not { } session) return;
+        if (!await ConfirmDiscardAsync("starting a new map")) return;
+
+        string? name = await NameDialog.AskAsync(
+            this, "New map", "Name for the new scene:", "Untitled");
+        if (name is null) return;
+
+        session.NewMap(name, error => Dispatcher.UIThread.Post(() =>
+        {
+            if (error is not null)
+            {
+                _shell.SetError($"Could not start a new map: {error.Message}");
+                return;
+            }
+
+            _document.MarkNew();
+            ResetDirtyBaseline();
+            _shell.SetMessage($"New map: {name}");
+        }));
+    }
+
+    private async void OnOpenMapClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_session is null) return;
+        if (!await ConfirmDiscardAsync("opening another map")) return;
+
+        // A FOLDER picker, because a map bundle is a directory. Pointing a file
+        // picker at map.json would work and would then show the same file name
+        // for every level anybody ever opened.
+        IReadOnlyList<IStorageFolder> picked = await StorageProvider.OpenFolderPickerAsync(
+            new FolderPickerOpenOptions
+            {
+                Title = "Open map bundle",
+                AllowMultiple = false,
+                SuggestedStartLocation = await SuggestedStartAsync(_document.SuggestedMapFolder),
+            });
+
+        if (picked.Count == 0) return;
+        OpenMapAt(picked[0].Path.LocalPath);
+    }
+
+    private void OpenMapAt(string bundlePath)
+    {
+        if (_session is not { } session) return;
+
+        if (!MapBundle.IsBundle(bundlePath))
+        {
+            _shell.SetError(
+                $"That folder is not a map bundle: it has no {MapFormat.DocumentFileName}.");
+            return;
+        }
+
+        session.OpenMap(bundlePath, (report, error) => Dispatcher.UIThread.Post(() =>
+        {
+            if (error is not null)
+            {
+                _shell.SetError($"Could not open the map: {error.Message}");
+                return;
+            }
+
+            _document.MarkOpened(bundlePath);
+            ResetDirtyBaseline();
+
+            // A map that names a model this project does not have still loads,
+            // with that node standing where it belongs and drawing nothing. It
+            // has to be said out loud, or the level looks subtly wrong with
+            // nothing anywhere explaining why.
+            _shell.SetMessage(report?.Describe() is { } missing
+                ? $"Opened {_document.MapLabel}. {missing}"
+                : $"Opened {_document.MapLabel}");
+        }));
+    }
+
+    private async void OnOpenProjectClicked(object? sender, RoutedEventArgs e)
+    {
+        IReadOnlyList<IStorageFolder> picked = await StorageProvider.OpenFolderPickerAsync(
+            new FolderPickerOpenOptions { Title = "Open project folder", AllowMultiple = false });
+
+        if (picked.Count == 0) return;
+
+        ProjectLayout layout;
+        try
+        {
+            layout = ProjectLayout.Open(picked[0].Path.LocalPath);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or ProjectFormatException)
+        {
+            _shell.SetError($"Could not open the project: {ex.Message}");
+            return;
+        }
+
+        _document.SetProject(layout);
+
+        // Opening a project opens its startup map, because a project with a
+        // level in it and an empty viewport is a state nobody asked for.
+        if (layout.Project.StartupMap is { } startup)
+        {
+            OpenMapAt(layout.Resolve(startup));
+            return;
+        }
+
+        int found = layout.DiscoverMaps().Count;
+        _shell.SetMessage(found == 0
+            ? $"Opened project {layout.Project.Name}; it has no maps yet"
+            : $"Opened project {layout.Project.Name}; it names no startup map, but {found} are on disk");
+    }
+
+    private void OnSaveClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_document.MapPath is { } path)
+            SaveMapTo(path);
+        else
+            OnSaveAsClicked(sender, e);
+    }
+
+    private async void OnSaveAsClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_session is null) return;
+
+        IReadOnlyList<IStorageFolder> picked = await StorageProvider.OpenFolderPickerAsync(
+            new FolderPickerOpenOptions
+            {
+                Title = "Folder to save the map bundle into",
+                AllowMultiple = false,
+                SuggestedStartLocation = await SuggestedStartAsync(_document.SuggestedMapFolder),
+            });
+
+        if (picked.Count == 0) return;
+
+        string? name = await NameDialog.AskAsync(
+            this, "Save map as", "Name for the map bundle:", _document.MapLabel);
+        if (name is null) return;
+
+        SaveMapTo(Path.Combine(picked[0].Path.LocalPath, name + MapFormat.BundleExtension));
+    }
+
+    private void SaveMapTo(string bundlePath)
+    {
+        if (_session is not { } session) return;
+
+        session.SaveMap(bundlePath, (report, error) => Dispatcher.UIThread.Post(() =>
+        {
+            if (error is not null)
+            {
+                _shell.SetError($"Could not save the map: {error.Message}");
+                return;
+            }
+
+            _document.MarkSaved(bundlePath);
+            ResetDirtyBaseline();
+
+            // An incomplete save is still a save: the scene held something the
+            // format cannot name, such as a mesh built in code. Reported rather
+            // than silent, because the alternative is a map that quietly forgets
+            // a prop.
+            _shell.SetMessage(report?.Describe() is { } lost
+                ? $"Saved {_document.MapLabel}. {lost}"
+                : $"Saved {_document.MapLabel}");
+        }));
+    }
+
+    /// <summary>
+    /// Asks before throwing away unsaved work, and returns whether to go ahead.
+    /// </summary>
+    /// <remarks>
+    /// Typed confirmation rather than a Yes/No pair, because this is the one
+    /// dialog in the shell whose wrong answer destroys work that cannot be
+    /// recovered: the undo history goes with the scene. A button people learn
+    /// to dismiss without reading is exactly what should not guard it.
+    /// </remarks>
+    private async Task<bool> ConfirmDiscardAsync(string what)
+    {
+        if (!_document.IsDirty) return true;
+
+        string? answer = await NameDialog.AskAsync(
+            this, "Unsaved changes",
+            $"{_document.MapLabel} has unsaved changes, and {what} will discard them. "
+            + "Type discard to continue.", string.Empty);
+
+        return string.Equals(answer, "discard", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<IStorageFolder?> SuggestedStartAsync(string? path)
+    {
+        if (path is null || !Directory.Exists(path)) return null;
+        try { return await StorageProvider.TryGetFolderFromPathAsync(path); }
+        catch (IOException) { return null; }
+    }
+
+    /// <summary>
+    /// Re-baselines the dirty tracker after a save or a load, so the history
+    /// movement those cause does not immediately mark the document dirty again.
+    /// </summary>
+    private void ResetDirtyBaseline()
+    {
+        _lastUndoDepth = _latest.UndoDepth;
+        _lastRedoDepth = _latest.RedoDepth;
+    }
 
     // --- Startup -------------------------------------------------------------
 

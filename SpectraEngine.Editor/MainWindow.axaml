@@ -185,7 +185,24 @@
     <!-- ═══ Menu ═════════════════════════════════════════ -->
     <Border Grid.Row="0" Background="{StaticResource SpectraBgPanel}">
       <Menu VerticalAlignment="Center">
+        <!--
+          The File dropdown falls over the SCENE TREE, not the viewport, because
+          the menu bar sits at the left of the window and the tree column is 280
+          wide. That is load-bearing rather than lucky: the viewport is a native
+          child window that composites above anything Avalonia draws, so a
+          dropdown that reached across it would be invisible from wherever it
+          crossed the edge. Anything wider than the tree column has to become a
+          modal window instead.
+        -->
         <MenuItem Header="_File">
+          <MenuItem Header="_New map" InputGesture="Ctrl+N" Click="OnNewMapClicked" />
+          <Separator />
+          <MenuItem Header="_Open map..." InputGesture="Ctrl+O" Click="OnOpenMapClicked" />
+          <MenuItem Header="Open _project..." Click="OnOpenProjectClicked" />
+          <Separator />
+          <MenuItem Header="_Save" InputGesture="Ctrl+S" Click="OnSaveClicked" />
+          <MenuItem Header="Save _as..." InputGesture="Ctrl+Shift+S" Click="OnSaveAsClicked" />
+          <Separator />
           <MenuItem Header="E_xit" Click="OnExitClicked" />
         </MenuItem>
         <MenuItem Header="_Edit">

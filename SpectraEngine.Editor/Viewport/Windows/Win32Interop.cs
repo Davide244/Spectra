@@ -121,6 +121,22 @@ internal static partial class Win32Interop
     [LibraryImport("user32.dll", EntryPoint = "DefWindowProcW")]
     internal static partial nint DefWindowProc(nint hwnd, uint message, nint wParam, nint lParam);
 
+    /// <summary>
+    /// The keyboard state as of the message being processed, not as of now.
+    /// </summary>
+    /// <remarks>
+    /// <c>GetKeyState</c> rather than <c>GetAsyncKeyState</c>, deliberately:
+    /// the async form reports the physical keyboard at the instant it is
+    /// called, which for a message pulled off the queue is a different moment
+    /// from the one that generated it. Reading a chord that way loses the
+    /// modifier whenever the user releases it quickly.
+    /// </remarks>
+    [LibraryImport("user32.dll", EntryPoint = "GetKeyState")]
+    internal static partial short GetKeyState(int virtualKey);
+
+    /// <summary>Whether a virtual key was down for the message being processed.</summary>
+    internal static bool IsKeyDown(int virtualKey) => (GetKeyState(virtualKey) & 0x8000) != 0;
+
     [LibraryImport("user32.dll", EntryPoint = "SetFocus")]
     internal static partial nint SetFocus(nint hwnd);
 

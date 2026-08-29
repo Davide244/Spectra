@@ -123,6 +123,29 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
     public event Action<Vector2D<int>>? Resized;
 
     /// <summary>
+    /// Raised on the UI thread for a Ctrl chord the shell owns rather than the
+    /// engine.
+    /// </summary>
+    /// <remarks>
+    /// <b>Deliberately a short, closed list.</b> Every chord added here is one
+    /// the engine can no longer see, so this is not a general keyboard hook: it
+    /// is the handful of document verbs that have no meaning inside a viewport
+    /// and every meaning outside one. Anything about the SCENE stays with the
+    /// engine, where the editor's own keymap already owns it.
+    /// </remarks>
+    public event Action<ShellChord>? ShellChord;
+
+    private static ShellChord? ShellChordFor(int virtualKey) => virtualKey switch
+    {
+        0x4E => Viewport.ShellChord.NewMap,   // N
+        0x4F => Viewport.ShellChord.OpenMap,  // O
+        0x53 => Win32Interop.IsKeyDown(Win32Interop.VK_SHIFT)
+            ? Viewport.ShellChord.SaveMapAs
+            : Viewport.ShellChord.SaveMap,    // S
+        _ => null,
+    };
+
+    /// <summary>
     /// Where submitted input goes, once the engine exists. Null before then, and
     /// input that arrives in that window is dropped rather than queued: a
     /// keystroke into a viewport that has no scene yet has nothing to mean.
@@ -268,6 +291,20 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
 
             case Win32Interop.WM_KEYDOWN:
             case Win32Interop.WM_SYSKEYDOWN:
+                // A Ctrl chord the SHELL owns never reaches the engine. The
+                // viewport is a native child window, so while it has focus
+                // Avalonia sees no keyboard at all and a menu accelerator is
+                // simply inert - which for Ctrl+S is the worst possible
+                // failure, because it is the one chord people press without
+                // looking and trust to have worked.
+                if (Win32Interop.IsKeyDown(Win32Interop.VK_CONTROL)
+                    && ShellChordFor((int)wParam) is { } chord)
+                {
+                    ShellChord?.Invoke(chord);
+                    result = 0;
+                    return true;
+                }
+
                 Submit(InputEvent.KeyDown(Win32Keys.ToInputKey((int)wParam, lParam)));
 
                 // Claimed so the OS does not also treat it as a menu accelerator:

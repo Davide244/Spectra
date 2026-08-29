@@ -52,6 +52,16 @@ public sealed class EngineViewport : NativeControlHost
     /// </summary>
     public event Action? SurfaceDestroying;
 
+    /// <summary>
+    /// Raised for a Ctrl chord the shell owns rather than the engine.
+    /// </summary>
+    /// <remarks>
+    /// Forwarded from the native child window, which is where the OS delivers
+    /// the keyboard while the viewport has focus. Without this the File menu's
+    /// accelerators are inert exactly while somebody is working in the scene.
+    /// </remarks>
+    public event Action<ShellChord>? ShellChord;
+
     /// <summary>Whether this platform can host the engine at all.</summary>
     public static bool IsSupported => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
@@ -89,6 +99,7 @@ public sealed class EngineViewport : NativeControlHost
             return base.CreateNativeControlCore(parent);
 
         _window = new Win32ViewportWindow(parent.Handle) { Host = _host };
+        _window.ShellChord += chord => ShellChord?.Invoke(chord);
 
         // After the handle exists and before anything can render: a host that
         // started the engine any earlier would be initialising a renderer

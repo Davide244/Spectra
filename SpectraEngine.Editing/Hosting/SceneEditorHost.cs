@@ -381,6 +381,37 @@ public sealed class SceneEditorHost : ISceneEditor
         _camera.SuspendNavigation();
     }
 
+    /// <summary>
+    /// Resets the editor after the scene's graph has been replaced wholesale,
+    /// as a map load does.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A lifecycle hook, deliberately not an <c>EditorHostCommand</c>.</b>
+    /// Every other way a UI drives this host is a verb a key chord also uses,
+    /// which is what keeps the two from drifting. This is not one of those: no
+    /// user presses "the scene was replaced", and dressing it up as a verb
+    /// would put something on the command enum that must never be bound to a
+    /// key.
+    /// </para>
+    /// <para>
+    /// <b>All three parts are needed, and each fails silently on its own.</b>
+    /// An open gesture is manipulating nodes that are about to leave the graph,
+    /// so it is rolled back first. The selection holds live <c>SceneNode</c>
+    /// references, and one that outlives its scene keeps a detached subtree
+    /// alive and draws a highlight around nothing. And the history addresses
+    /// nodes by id in the old graph, where <c>Undo</c> no-ops on a missing
+    /// target rather than failing, so the user would press Ctrl+Z and watch
+    /// nothing happen.
+    /// </para>
+    /// </remarks>
+    public void OnSceneReplaced()
+    {
+        Suspend();
+        _scene.Selection.Clear();
+        _undo.Clear();
+    }
+
     /// <inheritdoc/>
     public void Draw(DebugDraw output)
     {

@@ -1,0 +1,47 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="SpectraEngine.Editor.Shell.NameDialog"
+        Width="380" SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource SpectraBgApp}"
+        Title="Name">
+
+  <!--
+    A real modal WINDOW, not an in-window overlay, and that distinction is the
+    airspace rule rather than a style choice: the viewport is a native child
+    window that composites above anything Avalonia draws, so a panel floated
+    over the shell would be invisible wherever it crossed the viewport. A
+    separate top-level window has its own surface and is unaffected.
+  -->
+  <Border Padding="16" BorderThickness="1" BorderBrush="{StaticResource SpectraBorderSoft}">
+    <StackPanel Spacing="12">
+      <TextBlock x:Name="PromptText"
+                 Foreground="{StaticResource SpectraTextBody}"
+                 FontSize="{StaticResource SpectraFontBase}"
+                 TextWrapping="Wrap" />
+
+      <TextBox x:Name="Input"
+               Background="{StaticResource SpectraBgInput}"
+               Foreground="{StaticResource SpectraTextEmphasis}"
+               BorderBrush="{StaticResource SpectraBorderStrong}"
+               BorderThickness="1"
+               Padding="8,6"
+               FontSize="{StaticResource SpectraFontBase}"
+               KeyDown="OnInputKeyDown" />
+
+      <TextBlock x:Name="ErrorText"
+                 Foreground="{StaticResource SpectraWarning}"
+                 FontSize="{StaticResource SpectraFontSmall}"
+                 TextWrapping="Wrap"
+                 IsVisible="False" />
+
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+        <Button Classes="chip" Content="Cancel" Click="OnCancel" MinWidth="72" />
+        <Button Classes="chip" Content="OK" Click="OnAccept" MinWidth="72"
+                Background="{StaticResource SpectraAccentRest}" />
+      </StackPanel>
+    </StackPanel>
+  </Border>
+</Window>
