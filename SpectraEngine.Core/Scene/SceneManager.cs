@@ -3,10 +3,12 @@ using Silk.NET.Maths;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
+using SpectraEngine.Core.Maps;
 using SpectraEngine.Core.Physics;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Numerics;
 
 namespace SpectraEngine.Core.Scene;
@@ -77,6 +79,31 @@ public sealed class SceneManager
     /// </para>
     /// </remarks>
     public static int? PropCountOverride { get; set; }
+
+    /// <summary>
+    /// A <c>.smap</c> bundle to run instead of the authored demo scene, or null
+    /// for the demo. The graph is replaced after the demo builds, so the
+    /// camera, the asset manager and the fallback material are already in
+    /// place.
+    /// </summary>
+    /// <remarks>
+    /// <b>A bad bundle logs and falls back rather than taking the run down.</b>
+    /// The authored scene is still standing at that point, and a host that
+    /// exits on a content error is a host nobody can debug a content error in.
+    /// </remarks>
+    public static string? LoadMapPathOverride { get; set; }
+
+    /// <summary>
+    /// A <c>.smap</c> bundle to write the finished scene into, or null to write
+    /// nothing.
+    /// </summary>
+    /// <remarks>
+    /// Off unless a switch names a path, for the same reason the editing
+    /// self-test is: a demo that wrote files to disk without being asked is a
+    /// surprise, and this one writes a directory.
+    /// </remarks>
+    public static string? SaveMapPathOverride { get; set; }
+
     private const float PropHalfExtent = 0.4f;   // a crate, near enough
     private const float PropSpacing = 3f;        // world units between grid sites
     private const float PropStackHeight = 6f;    // vertical jitter, so it reads as a cloud
@@ -388,6 +415,16 @@ public sealed class SceneManager
 
         double worldMs = BuildStaticWorld(scene, renderer, worldMaterial);
 
+        // Host overrides, both off unless a switch names a path. Load first, so
+        // that naming both paths copies one bundle to another through the
+        // engine's own reader and writer, which is the cheapest end-to-end check
+        // the format has.
+        if (LoadMapPathOverride is { } loadPath)
+            worldMs += LoadMapInto(scene, renderer, loadPath);
+
+        if (SaveMapPathOverride is { } savePath)
+            SaveMapFrom(scene, savePath);
+
         ActiveScene = scene;
 
         // Last, and only once the scene is complete: the editing layer adopts
@@ -413,6 +450,109 @@ public sealed class SceneManager
             scene.Name, loadClock.Elapsed.TotalMilliseconds, assetClock.Elapsed.TotalMilliseconds,
             surfaceMs, modelMs, worldMs,
             assets.ContentRootPath, assets.MaterialCount, assets.TextureCount, _modelsRequested, _modelsPlaced);
+    }
+
+    /// <summary>
+    /// Replaces the scene's graph with a bundle from disk and recompiles.
+    /// </summary>
+    /// <returns>Milliseconds spent, so the load line still accounts for it.</returns>
+    private double LoadMapInto(Scene scene, Renderer renderer, string bundlePath)
+    {
+        var clock = Stopwatch.StartNew();
+
+        // Captured BEFORE the graph is replaced. Both of these are live node
+        // references held by the authored demo, and a replaced graph leaves
+        // them pointing at detached nodes: the bob would then write a pose
+        // every frame to a node nothing renders, and the editing self-test
+        // would pick against one, neither of which fails or reports anything.
+        //
+        // Rebound by NAME rather than by id, which looks backwards and is not.
+        // Ids are identity and they round-trip through the map perfectly - but
+        // the demo AUTHORS its scene procedurally, so every run mints fresh
+        // Guids, and the ids in a saved bundle belong to the run that wrote it.
+        // The names are literals in this file, which makes them the only stable
+        // key the demo actually has for its own content.
+        string? bobName = _pillarBob?.Node.Name;
+        string? selfTestName = SelfTestNode?.Name;
+
+        try
+        {
+            MapSceneBinder.ApplyTo(MapBundle.Load(bundlePath), scene);
+
+            // The synchronous cache-free path, which is exactly what a load is
+            // for: the incremental compiler carries caches from a previous
+            // world, and a world that was just replaced wholesale has none worth
+            // carrying.
+            scene.RebuildStaticWorld(renderer);
+
+            // A foreign map carries neither name, both bindings drop, and that
+            // is correct rather than a degradation: the authored scene they
+            // belonged to is not loaded any more.
+            SceneNode? bobNode = FindDemoNode(scene, bobName);
+            _pillarBob = bobNode is null
+                ? null
+                : new DemoBobAnimation(bobNode, PillarBobAmplitude, PillarBobPeriodSeconds);
+            SelfTestNode = FindDemoNode(scene, selfTestName);
+
+            clock.Stop();
+
+            _logger.LogInformation(
+                "Loaded map bundle '{Path}' in {Ms:0.0} ms: scene '{Name}', {Nodes} root node(s); "
+                + "demo animation {Bob}, self-test node {Test}",
+                bundlePath, clock.Elapsed.TotalMilliseconds, scene.Name, scene.Root.Children.Count,
+                _pillarBob is null ? "dropped" : "rebound", SelfTestNode is null ? "dropped" : "rebound");
+        }
+        catch (Exception ex) when (ex is MapFormatException or IOException or UnauthorizedAccessException)
+        {
+            clock.Stop();
+            _logger.LogError(ex,
+                "Could not load map bundle '{Path}'; running the authored demo scene instead", bundlePath);
+        }
+
+        return clock.Elapsed.TotalMilliseconds;
+    }
+
+    /// <summary>
+    /// Finds one of the demo's own root-level nodes by name after a map load.
+    /// </summary>
+    /// <remarks>
+    /// Root children only, and deliberately: the two nodes this exists for are
+    /// authored at the root, and a name is not unique anywhere else in a scene
+    /// graph. A general find-by-name would be a worse API pretending to be a
+    /// better one.
+    /// </remarks>
+    private static SceneNode? FindDemoNode(Scene scene, string? name)
+    {
+        if (name is null) return null;
+
+        foreach (SceneNode child in scene.Root.Children)
+        {
+            if (string.Equals(child.Name, name, StringComparison.Ordinal))
+                return child;
+        }
+        return null;
+    }
+
+    /// <summary>Writes the finished scene out as a bundle.</summary>
+    private void SaveMapFrom(Scene scene, string bundlePath)
+    {
+        try
+        {
+            var report = new MapSaveReport();
+            bool wrote = MapBundle.Save(bundlePath, MapSceneBinder.FromScene(scene, report));
+
+            _logger.LogInformation("Saved map bundle '{Path}' ({State})",
+                bundlePath, wrote ? "written" : "unchanged, byte for byte");
+
+            // Never at Information: a map that quietly forgot the props would be
+            // a map somebody trusts.
+            if (report.Describe() is { } lost)
+                _logger.LogWarning("Map save is incomplete. {What}", lost);
+        }
+        catch (Exception ex) when (ex is MapFormatException or IOException or UnauthorizedAccessException)
+        {
+            _logger.LogError(ex, "Could not save map bundle '{Path}'", bundlePath);
+        }
     }
 
     // Load-time prop: synchronous, so it is in the scene on the very first

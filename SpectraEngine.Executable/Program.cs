@@ -69,6 +69,8 @@ try
 
     SceneManager.ScatterGridOverride = options.ScatterGrid;
     SceneManager.PropCountOverride = options.PropCount;
+    SceneManager.LoadMapPathOverride = options.LoadMapPath;
+    SceneManager.SaveMapPathOverride = options.SaveMapPath;
     var sceneManager = new SceneManager(loggerFactory.CreateLogger<SceneManager>());
     var assetManager = new AssetManager(loggerFactory.CreateLogger<AssetManager>());
     var audioManager = new AudioManager(loggerFactory.CreateLogger<AudioManager>());

@@ -71,6 +71,32 @@ public sealed class MapSceneRoundTripTests
     }
 
     [Fact]
+    public void A_loaded_node_is_findable_by_its_id()
+    {
+        // The id index is what every editor command resolves through, and it is
+        // maintained from NodeAdded/NodeRemoved rather than by walking the
+        // graph. A load builds each subtree DETACHED and attaches it in one
+        // AddChild, so this asks whether that one event indexes the descendants
+        // too - which the graph assertions above cannot see, because they read
+        // the child lists directly.
+        Scene source = NewScene();
+        SceneNode parent = source.Root.CreateChild("Parent");
+        SceneNode child = parent.CreateChild("Child");
+        SceneNode grandchild = child.CreateChild("Grandchild");
+        Guid parentId = parent.Id, childId = child.Id, grandchildId = grandchild.Id;
+
+        Scene loaded = NewScene();
+        MapSceneBinder.ApplyTo(MapReader.Read(MapWriter.Write(MapSceneBinder.FromScene(source))), loaded);
+
+        loaded.TryFindById(parentId, out SceneNode? foundParent).ShouldBeTrue("root child");
+        foundParent!.Name.ShouldBe("Parent");
+        loaded.TryFindById(childId, out SceneNode? foundChild).ShouldBeTrue("one level down");
+        foundChild!.Name.ShouldBe("Child");
+        loaded.TryFindById(grandchildId, out SceneNode? foundGrandchild).ShouldBeTrue("two levels down");
+        foundGrandchild!.Name.ShouldBe("Grandchild");
+    }
+
+    [Fact]
     public void Sibling_order_survives_a_round_trip()
     {
         // Child order is traversal order is static-world placement order, and

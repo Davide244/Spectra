@@ -62,7 +62,9 @@ internal sealed record DemoStartupOptions(
     string? Adapter = null,
     (int Width, int Height)? WindowSize = null,
     int? ScatterGrid = null,
-    int? PropCount = null)
+    int? PropCount = null,
+    string? LoadMapPath = null,
+    string? SaveMapPath = null)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -76,7 +78,7 @@ internal sealed record DemoStartupOptions(
         "[--fullscreen-cycle[=seconds]] [--play[=true|false]] [--offscreen-probe[=true|false]] " +
         "[--pipeline=<name>] [--shadows[=true|false]] [--profile[=true|false]] " +
         "[--debug-layer[=true|false]] [--adapter=<name>] [--size=WxH] [--parts=<grid>] " +
-        "[--props=<count>].";
+        "[--props=<count>] [--map=<bundle.smap>] [--save-map=<bundle.smap>].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -110,6 +112,8 @@ internal sealed record DemoStartupOptions(
         (int, int)? windowSize = null;
         int? scatterGrid = null;
         int? propCount = null;
+        string? loadMapPath = null;
+        string? saveMapPath = null;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -214,6 +218,20 @@ internal sealed record DemoStartupOptions(
                 case "props":
                     propCount = ParseCount(value, token);
                     continue;
+
+                // Run a .smap bundle from disk instead of the authored demo
+                // scene. The path names a DIRECTORY, because a map is a folder
+                // of text: map.json now, scripts beside it later.
+                case "map" or "load-map" or "loadmap":
+                    loadMapPath = ParseName(value, token);
+                    continue;
+
+                // Write the finished scene out as a bundle. Naming both paths
+                // copies one map to another through the engine's own reader and
+                // writer, which is the cheapest end-to-end check the format has.
+                case "save-map" or "savemap":
+                    saveMapPath = ParseName(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -228,7 +246,8 @@ internal sealed record DemoStartupOptions(
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
-                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount);
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount,
+                loadMapPath, saveMapPath);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -236,12 +255,14 @@ internal sealed record DemoStartupOptions(
                 selfTestEnvironmentValue.Trim(), SelfTestEnvironmentVariable);
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
-                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount);
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount,
+                loadMapPath, saveMapPath);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
-            fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount);
+            fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount,
+                loadMapPath, saveMapPath);
     }
 
     // A switch that takes a name needs one: a bare --pipeline says nothing

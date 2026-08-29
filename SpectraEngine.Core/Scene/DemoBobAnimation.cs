@@ -73,6 +73,14 @@ internal sealed class DemoBobAnimation
     /// running total rather than a delta keeps the phase independent of frame
     /// pacing, so a stalled frame does not shift the animation.
     /// </param>
+    /// <summary>
+    /// The node this drives. Exposed so a host that replaces the graph (loading
+    /// a map over the authored scene) can rebind by id rather than leave the
+    /// animation writing to a detached node every frame, which stops nothing
+    /// and reports nothing.
+    /// </summary>
+    public SceneNode Node => _node;
+
     public void Advance(double elapsedSeconds)
     {
         Vector3 current = _node.LocalPosition;
