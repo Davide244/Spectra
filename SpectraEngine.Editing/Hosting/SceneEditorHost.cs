@@ -405,6 +405,131 @@ public sealed class SceneEditorHost : ISceneEditor
         }
     }
 
+    /// <summary>
+    /// Selects a whole set of ids in one operation — how a multi-select tree
+    /// view reports its selection. Ids the scene no longer has are skipped;
+    /// under <see cref="SelectionUpdate.Replace"/> the selection becomes
+    /// exactly the resolvable set, empty included.
+    /// </summary>
+    /// <remarks>
+    /// One batch, not N <see cref="SelectById"/> calls: the selection raises
+    /// one change event and the property panel unions once, instead of N
+    /// times for a Ctrl-click spree reported as a set.
+    /// </remarks>
+    public void SelectByIds(IReadOnlyList<Guid> nodeIds, SelectionUpdate mode = SelectionUpdate.Replace)
+    {
+        ArgumentNullException.ThrowIfNull(nodeIds);
+
+        _viewport.Reset();
+
+        var nodes = new List<SceneNode>(nodeIds.Count);
+        for (int i = 0; i < nodeIds.Count; i++)
+        {
+            if (_scene.TryFindById(nodeIds[i], out SceneNode? node))
+                nodes.Add(node);
+        }
+
+        _scene.Selection.Apply(nodes, mode);
+    }
+
+    /// <summary>
+    /// Renames one node, addressed by id, as one history entry. Returns false
+    /// (writing nothing) for an unknown id, an empty name after trimming, or a
+    /// name the node already has.
+    /// </summary>
+    /// <remarks>
+    /// The per-node sibling of the property panel's bulk
+    /// <see cref="PropertyId.NodeName"/> edit, for the tree's in-place rename:
+    /// the tree names exactly the row being edited, while the panel writes to
+    /// whatever is selected when the edit lands.
+    /// </remarks>
+    public bool RenameById(Guid nodeId, string name)
+    {
+        if (!_scene.TryFindById(nodeId, out SceneNode? node))
+            return false;
+
+        string trimmed = name?.Trim() ?? string.Empty;
+        if (trimmed.Length == 0 || string.Equals(node.Name, trimmed, StringComparison.Ordinal))
+            return false;
+
+        _undo.BeginTransaction("Rename");
+        _undo.Execute(SetNodeNameCommand.Capture(node, trimmed));
+        _undo.CommitTransaction();
+
+        _logger.LogInformation("Rename: '{Id}' is now '{Name}'", nodeId, trimmed);
+        return true;
+    }
+
+    /// <summary>
+    /// Moves nodes, addressed by id, under a new parent at the given index
+    /// (<c>-1</c> appends), keeping world transforms, as one history entry.
+    /// What a tree drag-and-drop lands on.
+    /// </summary>
+    public void ReparentByIds(IReadOnlyList<Guid> nodeIds, Guid newParentId, int insertIndex)
+    {
+        ArgumentNullException.ThrowIfNull(nodeIds);
+
+        // Same refusal as the structural verbs: a transaction is open
+        // mid-drag, and transactions do not nest.
+        if (_gizmos.Active.State == GizmoInteractionState.Dragging)
+        {
+            _logger.LogDebug("Reparent: refused, a manipulation is in progress");
+            return;
+        }
+
+        _viewport.Reset();
+
+        if (!_scene.TryFindById(newParentId, out SceneNode? newParent))
+        {
+            _logger.LogInformation("Reparent: target parent {Id} is not in the scene", newParentId);
+            return;
+        }
+
+        var nodes = new List<SceneNode>(nodeIds.Count);
+        for (int i = 0; i < nodeIds.Count; i++)
+        {
+            if (_scene.TryFindById(nodeIds[i], out SceneNode? node))
+                nodes.Add(node);
+        }
+
+        if (!StructuralEditor.TryReparent(_scene, _undo, nodes, newParent, insertIndex))
+        {
+            // Never a silent no-op: a drop that does nothing reads as a broken
+            // gesture, so say why nothing moved.
+            _logger.LogInformation(
+                "Reparent: nothing to move ({Count} node(s) in, target '{Parent}')",
+                nodes.Count, newParent.Name);
+            return;
+        }
+
+        _logger.LogInformation(
+            "Reparent: {Count} node(s) under '{Parent}' at {Index} (undo {UndoDepth})",
+            nodes.Count, newParent.Name, insertIndex, _undo.UndoCount);
+    }
+
+    /// <summary>
+    /// Selects whatever is under the given viewport point, the way a left-click
+    /// pick would, unless it is already part of the selection — the
+    /// right-click-before-a-context-menu rule every editor shares: clicking a
+    /// selected object keeps the set (the menu acts on all of it), clicking an
+    /// unselected one retargets to it, and clicking empty space keeps the
+    /// selection so the menu's verbs still have their subject.
+    /// </summary>
+    public void SelectAtPoint(Vector2 viewportPoint)
+    {
+        if (_viewportSize.X <= 0f || _viewportSize.Y <= 0f)
+            return;
+
+        _viewport.Reset();
+
+        Ray3 ray = _scene.Camera.ScreenPointToRay(viewportPoint, _viewportSize);
+        if (!_scene.Raycast(in ray, out SceneRaycastHit hit, SceneQueryFilter.EditorPicking, InsertRayReach))
+            return;
+
+        if (!_scene.Selection.Contains(hit.Node))
+            _scene.Selection.Select(hit.Node);
+    }
+
     /// <inheritdoc/>
     public void Suspend()
     {
@@ -739,7 +864,14 @@ public sealed class SceneEditorHost : ISceneEditor
     /// <c>EngineHost.EnqueueCommand</c>.
     /// </para>
     /// </remarks>
-    public void Insert(InsertKind kind)
+    /// <param name="kind">What to create.</param>
+    /// <param name="viewportPoint">
+    /// Where to aim, in viewport pixels; null means the centre of the view.
+    /// A viewport context menu passes the right-click position, so "insert
+    /// here" means where the menu was opened rather than where the camera
+    /// happens to point.
+    /// </param>
+    public void Insert(InsertKind kind, Vector2? viewportPoint = null)
     {
         // Same refusal as the structural verbs: a transaction is open
         // mid-drag, and transactions do not nest.
@@ -770,7 +902,7 @@ public sealed class SceneEditorHost : ISceneEditor
 
             _ => InsertHalfExtent,
         };
-        Vector3 position = FindInsertPosition(clearance);
+        Vector3 position = FindInsertPosition(clearance, viewportPoint);
 
         SceneNode node = BuildInsert(kind);
         node.LocalPosition = position;
@@ -790,14 +922,14 @@ public sealed class SceneEditorHost : ISceneEditor
             kind, node.Name, position.X, position.Y, position.Z, _undo.UndoCount);
     }
 
-    private Vector3 FindInsertPosition(float clearance)
+    private Vector3 FindInsertPosition(float clearance, Vector2? viewportPoint)
     {
         // A degenerate viewport (minimised) has no centre ray worth casting;
         // fall back to straight ahead of the camera.
         if (_viewportSize.X <= 0f || _viewportSize.Y <= 0f)
             return SnapAllAxes(_scene.Camera.Position + _scene.Camera.Forward * InsertFallbackDistance);
 
-        Ray3 ray = _scene.Camera.ScreenPointToRay(_viewportSize * 0.5f, _viewportSize);
+        Ray3 ray = _scene.Camera.ScreenPointToRay(viewportPoint ?? _viewportSize * 0.5f, _viewportSize);
 
         // The same query PICKING uses — part brushes and meshes included —
         // so the insert lands on the surface the user is looking at, not on

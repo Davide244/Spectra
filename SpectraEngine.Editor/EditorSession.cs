@@ -17,7 +17,9 @@ using SpectraEngine.Editing.Hosting;
 using SpectraEngine.Physics.Box3D;
 using SpectraShade.Compiler;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Numerics;
 
 namespace SpectraEngine.Editor;
 
@@ -169,10 +171,11 @@ public sealed class EditorSession : IDisposable
 
     /// <summary>
     /// Creates one thing where the user is looking — the Model strip's insert
-    /// buttons.
+    /// buttons, and the viewport context menu's "insert here" (which passes
+    /// the right-click position instead of the view centre).
     /// </summary>
-    public void Insert(InsertKind kind) =>
-        Host.EnqueueCommand(_ => Editor?.Insert(kind));
+    public void Insert(InsertKind kind, Vector2? viewportPoint = null) =>
+        Host.EnqueueCommand(_ => Editor?.Insert(kind, viewportPoint));
 
     /// <summary>
     /// Selects the node with this id. An id the scene no longer has is
@@ -180,6 +183,31 @@ public sealed class EditorSession : IDisposable
     /// </summary>
     public void Select(Guid nodeId, SelectionUpdate mode = SelectionUpdate.Replace) =>
         Host.EnqueueCommand(_ => Editor?.SelectById(nodeId, mode));
+
+    /// <summary>
+    /// Selects a whole set of ids in one batch — how the tree reports a
+    /// multi-select. Unresolvable ids are skipped on the render thread.
+    /// </summary>
+    public void SelectMany(IReadOnlyList<Guid> nodeIds, SelectionUpdate mode = SelectionUpdate.Replace) =>
+        Host.EnqueueCommand(_ => Editor?.SelectByIds(nodeIds, mode));
+
+    /// <summary>
+    /// Selects whatever sits under a viewport point unless it is already
+    /// selected — the right-click rule, run before a context menu opens.
+    /// </summary>
+    public void SelectAtPoint(Vector2 viewportPoint) =>
+        Host.EnqueueCommand(_ => Editor?.SelectAtPoint(viewportPoint));
+
+    /// <summary>Renames one node, addressed by id, as one history entry.</summary>
+    public void Rename(Guid nodeId, string name) =>
+        Host.EnqueueCommand(_ => Editor?.RenameById(nodeId, name));
+
+    /// <summary>
+    /// Moves nodes under a new parent at an index (-1 appends), keeping world
+    /// transforms — what a tree drag-and-drop posts.
+    /// </summary>
+    public void Reparent(IReadOnlyList<Guid> nodeIds, Guid newParentId, int insertIndex) =>
+        Host.EnqueueCommand(_ => Editor?.ReparentByIds(nodeIds, newParentId, insertIndex));
 
     /// <summary>Applies one property-panel edit to the current selection.</summary>
     public void ApplyProperty(PropertyEdit edit) =>

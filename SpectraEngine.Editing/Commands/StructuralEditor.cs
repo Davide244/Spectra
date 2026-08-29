@@ -240,6 +240,82 @@ public static class StructuralEditor
     }
 
     /// <summary>
+    /// Moves the roots of <paramref name="selection"/> under
+    /// <paramref name="newParent"/> at <paramref name="insertIndex"/>
+    /// (<c>-1</c> appends), keeping every world transform, as one history
+    /// entry. The verb a scene-tree drag lands on. Returns false, changing
+    /// nothing, when nothing can legally move.
+    /// </summary>
+    /// <remarks>
+    /// <b>A drop that would make a cycle is filtered out, never attempted.</b>
+    /// Dragging a group onto its own child is an ordinary slip, and
+    /// <c>SceneNode.InsertChild</c> answers it with a throw, which from inside
+    /// an open transaction would leave the history open and the scene
+    /// half-moved. Offending roots are dropped from the move (the rest of a
+    /// multi-drag still lands); when everything offends, the verb refuses.
+    /// <para>
+    /// <b>The insert index is adjusted for same-parent moves.</b> A node
+    /// dropped later under its own parent leaves its old slot first, which
+    /// shifts every later sibling down by one; naming the pre-removal index
+    /// would land it one row past where the drop indicator pointed.
+    /// </para>
+    /// </remarks>
+    public static bool TryReparent(
+        Scene scene, UndoStack undo, IReadOnlyList<SceneNode> selection, SceneNode newParent, int insertIndex)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        ArgumentNullException.ThrowIfNull(undo);
+        ArgumentNullException.ThrowIfNull(newParent);
+
+        // The target must be this scene's; a stale reference (the parent was
+        // deleted between gesture and apply) refuses cleanly.
+        if (!scene.TryFindById(newParent.Id, out SceneNode? liveParent) ||
+            !ReferenceEquals(liveParent, newParent))
+        {
+            return false;
+        }
+
+        List<SceneNode> roots = SelectionRoots(scene, selection);
+
+        // Every node on the target's own ancestor chain (itself included) is a
+        // cycle waiting to happen; one walk up collects them all.
+        for (SceneNode? ancestor = newParent; ancestor is not null; ancestor = ancestor.Parent)
+        {
+            for (int i = roots.Count - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(roots[i], ancestor))
+                    roots.RemoveAt(i);
+            }
+        }
+
+        if (roots.Count == 0)
+            return false;
+
+        int firstIndex = insertIndex < 0 ? newParent.Children.Count : insertIndex;
+
+        // Same-parent moves vacate a slot before the insert happens.
+        foreach (SceneNode root in roots)
+        {
+            if (ReferenceEquals(root.Parent, newParent) && root.IndexInParent < firstIndex)
+                firstIndex--;
+        }
+
+        if (firstIndex < 0)
+            firstIndex = 0;
+
+        undo.BeginTransaction("Reparent");
+        if (!TryReparentPreservingWorld(scene, undo, roots, newParent, firstIndex, "Reparent"))
+        {
+            undo.CancelTransaction();
+            return false;
+        }
+
+        undo.CommitTransaction();
+        scene.Selection.SetRange(roots);
+        return true;
+    }
+
+    /// <summary>
     /// The nodes in <paramref name="selection"/> that no other selected node
     /// carries: the set a structural edit actually operates on. Excludes the
     /// scene root, which has no placement and cannot be removed.

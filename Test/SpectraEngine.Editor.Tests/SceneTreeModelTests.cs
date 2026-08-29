@@ -104,6 +104,43 @@ public sealed class SceneTreeModelTests
         tree.Roots[0].Name.ShouldBe("Orphan");
     }
 
+    // --- Rename --------------------------------------------------------------
+
+    [Fact]
+    public void A_rename_updates_the_row_in_place_without_moving_it()
+    {
+        // Same node object, same position, new name: an expanded subtree and
+        // the row's identity survive a rename, which is what makes the tree's
+        // patched projection cheap and the selection stable through one.
+        SceneTreeModel tree = NewTree();
+        tree.ApplyChanges(Batch(1,
+            Added(Root, Guid.Empty, "Root", -1),
+            Added(ChildA, Root, "Before", 0),
+            Added(ChildB, Root, "B", 1)));
+        SceneTreeNode row = tree.Roots[0].Children[0];
+
+        tree.ApplyChanges(Batch(2,
+            new SceneChange(SceneChangeKind.Renamed, ChildA, Root, "After", 0)));
+
+        tree.Roots[0].Children[0].ShouldBeSameAs(row);
+        row.Name.ShouldBe("After");
+        tree.Count.ShouldBe(3);
+    }
+
+    [Fact]
+    public void A_rename_for_an_id_the_tree_never_heard_of_is_ignored()
+    {
+        // Ordinary lag, not corruption: the node's Added change may ride a
+        // later snapshot than the rename that followed it on the render thread.
+        SceneTreeModel tree = NewTree();
+        tree.ApplyChanges(Batch(1, Added(Root, Guid.Empty, "Root", -1)));
+
+        Should.NotThrow(() => tree.ApplyChanges(Batch(2,
+            new SceneChange(SceneChangeKind.Renamed, Guid.NewGuid(), Root, "Ghost", 0))));
+
+        tree.Count.ShouldBe(1);
+    }
+
     // --- Removal -------------------------------------------------------------
 
     [Fact]

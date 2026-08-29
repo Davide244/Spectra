@@ -572,6 +572,17 @@ public sealed class SceneTreeModel
                     Attach(change);
                 }
                 break;
+
+            case SceneChangeKind.Renamed:
+                // In-place: same node object, same position, new name. The row
+                // updates through the node's change notification; nothing
+                // structural moves, so no detach/insert.
+                if (_index.TryGetValue(change.NodeId, out SceneTreeNode? renamed))
+                {
+                    renamed.Name = change.Name;
+                    renamed.Kind = change.NodeKind;
+                }
+                break;
         }
     }
 

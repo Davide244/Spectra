@@ -81,7 +81,29 @@ public class SceneNode
     /// </summary>
     public Guid Id { get; }
 
-    public string Name { get; set; }
+    // Backing field for Name so the setter can notify the owning scene. The
+    // early-out matters: replaying an absolute-value rename command (undo/redo)
+    // writes the same string again, and that must not re-raise the event.
+    private string _name = "Node";
+
+    /// <summary>
+    /// The node's display name. Renaming an attached node raises
+    /// <see cref="Scene.NodeRenamed"/> so a mirror (the editor's tree) learns
+    /// about it: a rename is neither a membership change nor a reparent, so
+    /// without its own event the tree keeps showing the old name until the next
+    /// structural change happens to rewrite the row.
+    /// </summary>
+    public string Name
+    {
+        get => _name;
+        set
+        {
+            if (string.Equals(_name, value, StringComparison.Ordinal))
+                return;
+            _name = value;
+            Owner?.OnNodeRenamed(this);
+        }
+    }
 
     public SceneNode? Parent { get; private set; }
 

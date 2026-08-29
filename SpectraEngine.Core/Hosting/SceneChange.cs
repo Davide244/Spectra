@@ -17,6 +17,12 @@ public enum SceneChangeKind
     /// the same one, without leaving the graph.
     /// </summary>
     Reparented,
+
+    /// <summary>
+    /// The node's name changed. Carries the NEW name; everything structural
+    /// (parent, sibling index) describes where the node already was.
+    /// </summary>
+    Renamed,
 }
 
 /// <summary>

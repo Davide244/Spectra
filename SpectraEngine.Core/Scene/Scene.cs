@@ -143,6 +143,18 @@ public sealed partial class Scene
     /// </remarks>
     public event Action<SceneNode>? NodeReparented;
 
+    /// <summary>
+    /// Raised when an owned node's <see cref="SceneNode.Name"/> actually
+    /// changes (the setter filters equal writes). A rename is neither a
+    /// membership change nor a reparent, so without this event a mirror of the
+    /// graph (the editor's scene tree) keeps showing the old name until an
+    /// unrelated structural change happens to rewrite the row. Render thread
+    /// only; handlers must not mutate the graph (see the re-entrancy rule
+    /// above). Does not bump the graph-structure version: a name is not
+    /// traversal order and no placement changes.
+    /// </summary>
+    public event Action<SceneNode>? NodeRenamed;
+
     // Raise helpers for SceneNode: the graph notifies its owning scene through
     // these instead of exposing public raise entry points. Membership and
     // reparent notifications also bump the graph-structure version — the
@@ -321,6 +333,8 @@ public sealed partial class Scene
         Bvh.OnSubtreeMoved(node);
         NodeReparented?.Invoke(node);
     }
+
+    internal void OnNodeRenamed(SceneNode node) => NodeRenamed?.Invoke(node);
 
     // --- Node identity index ------------------------------------------------
 

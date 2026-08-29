@@ -385,6 +385,49 @@ public sealed class EngineHostTests
     }
 
     [Fact]
+    public void A_rename_is_reported_even_though_nothing_structural_moved()
+    {
+        // A rename is neither a membership change nor a reparent, so before
+        // Renamed existed a tree view kept showing the old name until an
+        // unrelated structural change happened to rewrite the row.
+        var scene = new Scene("Host");
+        SceneNode node = scene.Root.CreateChild("Before");
+
+        EngineHost host = NewHost();
+        host.SnapshotInterval = TimeSpan.Zero;
+        host.ObserveScene(scene);
+        host.PublishFrame(TimeSpan.Zero, Build);
+
+        node.Name = "After";
+
+        FrameSnapshot snapshot = host.PublishFrame(TimeSpan.FromMilliseconds(1), Build)!;
+        snapshot.Changes.Count.ShouldBe(1);
+
+        SceneChange change = snapshot.Changes[0];
+        change.Kind.ShouldBe(SceneChangeKind.Renamed);
+        change.NodeId.ShouldBe(node.Id);
+        change.Name.ShouldBe("After");
+    }
+
+    [Fact]
+    public void Writing_the_name_a_node_already_has_reports_nothing()
+    {
+        // Absolute-value commands replay the same value on redo, and the
+        // setter's equality filter is what keeps those replays out of the log.
+        var scene = new Scene("Host");
+        SceneNode node = scene.Root.CreateChild("Same");
+
+        EngineHost host = NewHost();
+        host.SnapshotInterval = TimeSpan.Zero;
+        host.ObserveScene(scene);
+        host.PublishFrame(TimeSpan.Zero, Build);
+
+        node.Name = "Same";
+
+        host.PublishFrame(TimeSpan.FromMilliseconds(1), Build)!.Changes.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void An_attached_subtree_is_reported_once_per_node_parents_first()
     {
         var scene = new Scene("Host");

@@ -96,6 +96,7 @@ public sealed class SceneChangeLog
             previous.NodeAdded -= OnNodeAdded;
             previous.NodeRemoved -= OnNodeRemoved;
             previous.NodeReparented -= OnNodeReparented;
+            previous.NodeRenamed -= OnNodeRenamed;
         }
 
         _scene = scene;
@@ -105,6 +106,7 @@ public sealed class SceneChangeLog
             scene.NodeAdded += OnNodeAdded;
             scene.NodeRemoved += OnNodeRemoved;
             scene.NodeReparented += OnNodeReparented;
+            scene.NodeRenamed += OnNodeRenamed;
         }
 
         // Whatever was queued described a graph that is no longer on screen.
@@ -139,6 +141,8 @@ public sealed class SceneChangeLog
     private void OnNodeRemoved(SceneNode node) => Record(SceneChangeKind.Removed, node);
 
     private void OnNodeReparented(SceneNode node) => Record(SceneChangeKind.Reparented, node);
+
+    private void OnNodeRenamed(SceneNode node) => Record(SceneChangeKind.Renamed, node);
 
     private void Record(SceneChangeKind kind, SceneNode node)
     {
