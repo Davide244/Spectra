@@ -41,6 +41,13 @@ namespace SpectraEngine.Core
         // members it does not recognise through untouched.
         public const int MinimumReadableMapVersion = 1;
 
+        // A game project is data too: a text manifest naming the maps, the display
+        // defaults and the backends, read once at boot. Same asymmetric versioning
+        // as the map, and for the same reason - it is authored by a person and has
+        // to survive an engine older or newer than itself.
+        public const int ProjectFormatVersion = 1;
+        public const int MinimumReadableProjectVersion = 1;
+
         // Shader format version — must match CompiledShaderFile.FormatVersion to load
         public const ushort ShaderFormatVersion = 1;
     }

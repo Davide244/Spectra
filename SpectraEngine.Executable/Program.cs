@@ -9,6 +9,7 @@ using SpectraEngine.Core.Graphics.D3D12;
 using SpectraEngine.Core.Graphics.OpenGL;
 using SpectraEngine.Core.Graphics.Shaders;
 using SpectraEngine.Core.Input;
+using SpectraEngine.Core.Projects;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Executable;
 using SpectraEngine.Editing.Hosting;
@@ -71,8 +72,32 @@ try
     SceneManager.PropCountOverride = options.PropCount;
     SceneManager.LoadMapPathOverride = options.LoadMapPath;
     SceneManager.SaveMapPathOverride = options.SaveMapPath;
+    SceneManager.SaveProjectPathOverride = options.SaveProjectPath;
+
+    // A project supplies its own content root, so it has to be opened BEFORE the
+    // asset manager is built rather than after the scene is. Everything else the
+    // project decides (which map boots) is just a path handed to the map switch,
+    // which is why there is no separate project-loading machinery below.
+    ProjectLayout? project = null;
+    if (options.ProjectPath is { } projectPath)
+    {
+        project = ProjectLayout.Open(projectPath);
+        Log.Information(
+            "Project '{Name}' opened from {Path}; content root {Assets}, {Maps} map(s) listed",
+            project.Project.Name, project.ManifestPath, project.AssetsPath, project.Project.Maps.Count);
+
+        // An explicit --map wins: naming both means "this project, that level",
+        // which is what a level designer testing one map wants.
+        if (options.LoadMapPath is null && project.Project.StartupMap is { } startup)
+            SceneManager.LoadMapPathOverride = project.Resolve(startup);
+        else if (options.LoadMapPath is null)
+            Log.Warning("Project '{Name}' names no startup map; running the demo scene", project.Project.Name);
+    }
+
     var sceneManager = new SceneManager(loggerFactory.CreateLogger<SceneManager>());
-    var assetManager = new AssetManager(loggerFactory.CreateLogger<AssetManager>());
+    var assetManager = project is null
+        ? new AssetManager(loggerFactory.CreateLogger<AssetManager>())
+        : new AssetManager(loggerFactory.CreateLogger<AssetManager>(), project.AssetsPath);
     var audioManager = new AudioManager(loggerFactory.CreateLogger<AudioManager>());
     var inputManager = new InputManager(loggerFactory.CreateLogger<InputManager>());
 

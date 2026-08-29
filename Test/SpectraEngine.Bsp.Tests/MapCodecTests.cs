@@ -2,6 +2,7 @@ using SpectraEngine.Core;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Maps;
 using SpectraEngine.Core.Scene;
+using SpectraEngine.Core.Serialization;
 using System;
 using System.Numerics;
 using System.Text;

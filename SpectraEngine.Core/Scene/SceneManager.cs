@@ -5,6 +5,7 @@ using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Maps;
 using SpectraEngine.Core.Physics;
+using SpectraEngine.Core.Projects;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -103,6 +104,12 @@ public sealed class SceneManager
     /// surprise, and this one writes a directory.
     /// </remarks>
     public static string? SaveMapPathOverride { get; set; }
+
+    /// <summary>
+    /// A folder to export the finished scene into as a standalone project, or
+    /// null to export nothing.
+    /// </summary>
+    public static string? SaveProjectPathOverride { get; set; }
 
     private const float PropHalfExtent = 0.4f;   // a crate, near enough
     private const float PropSpacing = 3f;        // world units between grid sites
@@ -425,6 +432,9 @@ public sealed class SceneManager
         if (SaveMapPathOverride is { } savePath)
             SaveMapFrom(scene, savePath);
 
+        if (SaveProjectPathOverride is { } projectPath)
+            SaveProjectFrom(scene, assets, projectPath);
+
         ActiveScene = scene;
 
         // Last, and only once the scene is complete: the editing layer adopts
@@ -538,6 +548,82 @@ public sealed class SceneManager
                 return child;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Exports the scene as a standalone project folder: the layout, the
+    /// content it references, one map, and a manifest naming it.
+    /// </summary>
+    /// <remarks>
+    /// <b>The whole content root is copied, and that is deliberately blunt.</b>
+    /// Working out which files a map actually needs means parsing every
+    /// material for its textures and every model for its material library,
+    /// which is the cook's dependency walk and is a real piece of work with its
+    /// own correctness rules. A worse guess at it here would ship projects
+    /// missing one texture nobody noticed; copying everything is obviously
+    /// wrong in a way that costs disk rather than correctness.
+    /// </remarks>
+    private void SaveProjectFrom(Scene scene, AssetManager assets, string projectPath)
+    {
+        try
+        {
+            string name = SanitiseProjectName(scene.Name);
+            ProjectLayout project = ProjectLayout.Create(projectPath, name);
+
+            int copied = CopyTree(assets.ContentRootPath, project.AssetsPath);
+
+            string mapRelative = $"{ProjectFormat.MapsFolder}/{name}{MapFormat.BundleExtension}";
+            var report = new MapSaveReport();
+            MapBundle.Save(project.Resolve(mapRelative), MapSceneBinder.FromScene(scene, report));
+
+            if (!project.Project.Maps.Contains(mapRelative))
+                project.Project.Maps.Add(mapRelative);
+            project.Project.StartupMap = mapRelative;
+            project.Save();
+
+            _logger.LogInformation(
+                "Exported project '{Name}' to {Path}: {Map}, {Files} content file(s) copied",
+                name, project.Root, mapRelative, copied);
+
+            if (report.Describe() is { } lost)
+                _logger.LogWarning("Project export is incomplete. {What}", lost);
+        }
+        catch (Exception ex) when (ex is MapFormatException or ProjectFormatException
+                                      or IOException or UnauthorizedAccessException)
+        {
+            _logger.LogError(ex, "Could not export a project to '{Path}'", projectPath);
+        }
+    }
+
+    // A scene name reaches a file name here, so anything a path cannot carry
+    // has to go. Falls back rather than throwing: an awkward name is not a
+    // reason to refuse an export.
+    private static string SanitiseProjectName(string sceneName)
+    {
+        Span<char> buffer = stackalloc char[sceneName.Length];
+        int length = 0;
+        foreach (char c in sceneName)
+        {
+            if (char.IsLetterOrDigit(c) || c is '_' or '-')
+                buffer[length++] = c;
+        }
+        return length == 0 ? "Project" : new string(buffer[..length]);
+    }
+
+    private static int CopyTree(string from, string to)
+    {
+        if (!Directory.Exists(from)) return 0;
+
+        int copied = 0;
+        foreach (string source in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(from, source);
+            string destination = Path.Combine(to, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(source, destination, overwrite: true);
+            copied++;
+        }
+        return copied;
     }
 
     /// <summary>Writes the finished scene out as a bundle.</summary>

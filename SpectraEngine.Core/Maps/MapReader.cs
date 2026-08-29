@@ -1,5 +1,6 @@
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Scene;
+using SpectraEngine.Core.Serialization;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
@@ -37,12 +38,7 @@ public static class MapReader
     /// <exception cref="MapFormatException">The document is malformed, or names a value outside a closed vocabulary.</exception>
     public static MapDocument Read(ReadOnlySpan<byte> utf8)
     {
-        // A hand-edited file saved by an editor that insists on a BOM is still
-        // a file someone wants to open. Strip it and move on; the next save
-        // writes it back canonically, which is a one-time diff rather than a
-        // refusal.
-        if (utf8.Length >= 3 && utf8[0] == 0xEF && utf8[1] == 0xBB && utf8[2] == 0xBF)
-            utf8 = utf8[3..];
+        utf8 = CanonicalJson.StripBom(utf8);
 
         var reader = new Utf8JsonReader(utf8, MapFormat.ReaderOptions);
         var state = new ReadState();
@@ -111,7 +107,7 @@ public static class MapReader
                     break;
 
                 case MapFormat.EditorMember:
-                    document.Editor = new PreservedValue(CaptureValue(ref reader, utf8));
+                    document.Editor = new PreservedValue(CanonicalJson.CaptureValue(ref reader, utf8));
                     anchor = 4;
                     break;
 
@@ -247,7 +243,7 @@ public static class MapReader
                     break;
 
                 case MapFormat.EditorMember:
-                    node.Editor = new PreservedValue(CaptureValue(ref reader, utf8));
+                    node.Editor = new PreservedValue(CanonicalJson.CaptureValue(ref reader, utf8));
                     anchor = 9;
                     break;
 
@@ -579,15 +575,7 @@ public static class MapReader
     /// </remarks>
     private static PreservedMember Preserve(
         ref Utf8JsonReader reader, ReadOnlySpan<byte> utf8, string member, int anchor) =>
-        new(member, CaptureValue(ref reader, utf8), anchor);
-
-    private static byte[] CaptureValue(ref Utf8JsonReader reader, ReadOnlySpan<byte> utf8)
-    {
-        reader.Read();
-        long start = reader.TokenStartIndex;
-        reader.Skip();
-        return utf8[(int)start..(int)reader.BytesConsumed].ToArray();
-    }
+        new(member, CanonicalJson.CaptureValue(ref reader, utf8), anchor);
 
     // --- primitives ---------------------------------------------------------
 

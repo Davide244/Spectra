@@ -64,7 +64,9 @@ internal sealed record DemoStartupOptions(
     int? ScatterGrid = null,
     int? PropCount = null,
     string? LoadMapPath = null,
-    string? SaveMapPath = null)
+    string? SaveMapPath = null,
+    string? ProjectPath = null,
+    string? SaveProjectPath = null)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -78,7 +80,8 @@ internal sealed record DemoStartupOptions(
         "[--fullscreen-cycle[=seconds]] [--play[=true|false]] [--offscreen-probe[=true|false]] " +
         "[--pipeline=<name>] [--shadows[=true|false]] [--profile[=true|false]] " +
         "[--debug-layer[=true|false]] [--adapter=<name>] [--size=WxH] [--parts=<grid>] " +
-        "[--props=<count>] [--map=<bundle.smap>] [--save-map=<bundle.smap>].";
+        "[--props=<count>] [--map=<bundle.smap>] [--save-map=<bundle.smap>] " +
+        "[--project=<folder>] [--save-project=<folder>].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -114,6 +117,8 @@ internal sealed record DemoStartupOptions(
         int? propCount = null;
         string? loadMapPath = null;
         string? saveMapPath = null;
+        string? projectPath = null;
+        string? saveProjectPath = null;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -232,6 +237,19 @@ internal sealed record DemoStartupOptions(
                 case "save-map" or "savemap":
                     saveMapPath = ParseName(value, token);
                     continue;
+
+                // Open a project folder: its Assets become the content root and
+                // its startup map is what runs. The path names the .spectraproj
+                // file or the folder containing it, because both are what a
+                // person means.
+                case "project":
+                    projectPath = ParseName(value, token);
+                    continue;
+
+                // Export the running scene as a standalone project folder.
+                case "save-project" or "saveproject":
+                    saveProjectPath = ParseName(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -247,7 +265,7 @@ internal sealed record DemoStartupOptions(
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
                 fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -256,13 +274,13 @@ internal sealed record DemoStartupOptions(
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
                 fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
             fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath);
     }
 
     // A switch that takes a name needs one: a bare --pipeline says nothing

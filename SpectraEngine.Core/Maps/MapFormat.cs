@@ -1,7 +1,7 @@
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Scene;
 using System;
-using System.Text.Encodings.Web;
+using SpectraEngine.Core.Serialization;
 using System.Text.Json;
 
 namespace SpectraEngine.Core.Maps;
@@ -21,6 +21,12 @@ namespace SpectraEngine.Core.Maps;
 /// </remarks>
 public static class MapFormat
 {
+    /// <summary>Canonical encoding, shared with every other authored document.</summary>
+    public static JsonWriterOptions WriterOptions => CanonicalJson.WriterOptions;
+
+    /// <summary>Reader settings, shared with every other authored document.</summary>
+    public static JsonReaderOptions ReaderOptions => CanonicalJson.ReaderOptions;
+
     /// <summary>The bundle's scene document, inside a <c>.smap</c> folder.</summary>
     public const string DocumentFileName = "map.json";
 
@@ -120,47 +126,6 @@ public static class MapFormat
 
     /// <summary>Node states, validated for the same reason as <see cref="Realms"/>.</summary>
     public static readonly string[] States = ["active", "dormant"];
-
-    /// <summary>
-    /// The canonical writer settings. Every one of these is load-bearing.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <b><c>Encoder</c> is not a preference.</b> The default
-    /// <see cref="JavaScriptEncoder"/> escapes <c>+ &lt; &gt; &amp;</c> and every
-    /// non-ASCII character to <c>\uXXXX</c>, which would turn every inline
-    /// script and every non-ASCII node name into unmergeable noise in a file
-    /// whose entire purpose is being read and merged by people.
-    /// </para>
-    /// <para>
-    /// <b><c>NewLine</c> is set explicitly because its default is
-    /// <see cref="Environment.NewLine"/></b>, which is CRLF on Windows - so a
-    /// writer that left it alone would emit a different file on Windows than on
-    /// Linux, and byte identity would hold only within one operating system.
-    /// That is a silent, platform-shaped defect in a format designed to be
-    /// diffed across a team.
-    /// </para>
-    /// </remarks>
-    public static JsonWriterOptions WriterOptions => new()
-    {
-        Indented = true,
-        IndentCharacter = ' ',
-        IndentSize = 2,
-        NewLine = "\n",
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        SkipValidation = false,
-    };
-
-    /// <summary>
-    /// Reader settings. Comments are disallowed and trailing commas refused,
-    /// because both would be dropped on the next save and a round trip that
-    /// silently deletes a reviewer's comment is worse than one that refuses it.
-    /// </summary>
-    public static JsonReaderOptions ReaderOptions => new()
-    {
-        CommentHandling = JsonCommentHandling.Disallow,
-        AllowTrailingCommas = false,
-    };
 
     internal static string ToWire(BrushKind kind) => kind == BrushKind.Part ? PartKind : WorldKind;
 
