@@ -242,25 +242,42 @@
                  the surface in the middle of the view, snapped to the move
                  grid, selected, one undo entry. -->
             <TextBlock Classes="label" Text="insert" Margin="0,0,6,0" />
-            <Button Classes="tool" Click="OnInsertWorldBrushClicked" IsEnabled="{Binding !IsPlaying}"
+            <!-- Labeled, not icon-only: these are the buttons a first session
+                 hunts for, and Studio's own insert row spells its words out. -->
+            <Button Classes="toollabel" Click="OnInsertWorldBrushClicked" IsEnabled="{Binding !IsPlaying}"
                     ToolTip.Tip="Insert a world brush: fused into the static world">
-              <Path Data="{StaticResource IconBrushWorld}" />
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <Path Data="{StaticResource IconBrushWorld}" />
+                <TextBlock Text="World brush" />
+              </StackPanel>
             </Button>
-            <Button Classes="tool" Click="OnInsertPartBrushClicked" IsEnabled="{Binding !IsPlaying}"
+            <Button Classes="toollabel" Click="OnInsertPartBrushClicked" IsEnabled="{Binding !IsPlaying}"
                     ToolTip.Tip="Insert a part: outside the carve, cheap to move and animate">
-              <Path Data="{StaticResource IconBrushPart}" />
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <Path Data="{StaticResource IconBrushPart}" />
+                <TextBlock Text="Part" />
+              </StackPanel>
             </Button>
-            <Button Classes="tool" Click="OnInsertSubtractiveBrushClicked" IsEnabled="{Binding !IsPlaying}"
+            <Button Classes="toollabel" Click="OnInsertSubtractiveBrushClicked" IsEnabled="{Binding !IsPlaying}"
                     ToolTip.Tip="Insert a hole: subtracts from the world geometry it overlaps">
-              <Path Data="{StaticResource IconBrushSubtractive}" />
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <Path Data="{StaticResource IconBrushSubtractive}" />
+                <TextBlock Text="Hole" />
+              </StackPanel>
             </Button>
-            <Button Classes="tool" Click="OnInsertLightClicked" IsEnabled="{Binding !IsPlaying}"
+            <Button Classes="toollabel" Click="OnInsertLightClicked" IsEnabled="{Binding !IsPlaying}"
                     ToolTip.Tip="Insert a point light">
-              <Path Data="{StaticResource IconLight}" />
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <Path Data="{StaticResource IconLight}" />
+                <TextBlock Text="Light" />
+              </StackPanel>
             </Button>
-            <Button Classes="tool" Click="OnInsertGroupClicked" IsEnabled="{Binding !IsPlaying}"
+            <Button Classes="toollabel" Click="OnInsertGroupClicked" IsEnabled="{Binding !IsPlaying}"
                     ToolTip.Tip="Insert an empty group">
-              <Path Data="{StaticResource IconGroup}" />
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <Path Data="{StaticResource IconGroup}" />
+                <TextBlock Text="Group" />
+              </StackPanel>
             </Button>
 
             <Border Classes="groupsep" />
@@ -441,6 +458,9 @@
           <TextBlock Classes="value" Text="{Binding Orientation}" Foreground="{StaticResource SpectraTextMuted}" MinWidth="42" />
           <TextBlock Classes="sep" />
           <TextBlock Classes="value" Text="{Binding SnapLabel}" MinWidth="86" />
+          <TextBlock Classes="sep" />
+          <TextBlock Classes="value" Text="{Binding NodeCountLabel}" Foreground="{StaticResource SpectraTextMuted}" MinWidth="72"
+                     ToolTip.Tip="Nodes in the scene" />
           <TextBlock Classes="sep" />
           <TextBlock Classes="value" Text="{Binding ViewportLabel}" Foreground="{StaticResource SpectraTextMuted}" MinWidth="76" />
           <TextBlock Classes="sep" />

@@ -428,9 +428,15 @@ public sealed class ShellModel : ObservableObject
         private set
         {
             if (Set(ref _nodeCount, value))
+            {
                 Raise(nameof(TreeCountLabel));
+                Raise(nameof(NodeCountLabel));
+            }
         }
     }
+
+    /// <summary>The scene's population, for the status bar.</summary>
+    public string NodeCountLabel => _nodeCount == 1 ? "1 node" : $"{_nodeCount} nodes";
 
     /// <summary>How many nodes pass the filter.</summary>
     public int MatchCount
