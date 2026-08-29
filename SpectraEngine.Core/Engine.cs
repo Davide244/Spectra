@@ -141,10 +141,18 @@ public sealed class Engine
                 GizmoOrientationName = editor?.GizmoOrientationName,
                 SnapEnabled = editor?.SnapEnabled ?? false,
                 SnapIncrement = editor?.SnapIncrement ?? 0f,
+                MoveSnapIncrement = editor?.MoveSnapIncrement ?? 0f,
+                RotateSnapIncrement = editor?.RotateSnapIncrement ?? 0f,
+                ResizeSnapIncrement = editor?.ResizeSnapIncrement ?? 0f,
                 NavigationModeName = editor?.NavigationModeName,
                 UndoDepth = editor?.UndoDepth ?? 0,
                 RedoDepth = editor?.RedoDepth ?? 0,
                 StaticWorldCompileCount = _sceneManager.ActiveScene?.StaticWorldCompileCount ?? 0,
+                IsPlaying = _character is { Active: true },
+                CanPlay = _character is not null,
+                DebugFlags = _debugFlags,
+                PipelineName = _renderer.CurrentPipelineName,
+                PipelineNames = _renderer.PipelineNames,
                 SelectionProperties = CaptureProperties(),
             };
         });
@@ -759,6 +767,17 @@ public sealed class Engine
                 // toggle key: play mode captures the cursor, and the one key
                 // every user tries when a window will not give the mouse back is
                 // Escape.
+                //
+                // A host's request is taken at the same site the key is read, so
+                // a Play button and F8 cannot disagree about what entering
+                // means; Enter/Exit are already idempotent, so a request for
+                // the current state is a no-op rather than a flicker.
+                if (Host.TryTakePlayModeRequest(out bool enterPlay))
+                {
+                    if (enterPlay) EnterPlayMode();
+                    else ExitPlayMode();
+                }
+
                 if (_inputManager.WasKeyPressed(PlayModeKey))
                     TogglePlayMode();
                 else if (_character is { Active: true } && _inputManager.WasKeyPressed(InputKey.Escape))
@@ -884,16 +903,32 @@ public sealed class Engine
                 if (playing)
                     _character!.UpdateView(deltaTime, _physicsTicks.Alpha);
 
-                // F1–F5 toggle debug visualisations on/off.
+                // F1–F5 toggle debug visualisations on/off. A host's requests
+                // land at the same site, set before clear (see
+                // TakeDebugVisualizationRequests for why that order).
                 if (_inputManager.WasKeyPressed(InputKey.F1)) _debugFlags ^= DebugVisualization.Wireframe;
                 if (_inputManager.WasKeyPressed(InputKey.F2)) _debugFlags ^= DebugVisualization.Vertices;
                 if (_inputManager.WasKeyPressed(InputKey.F3)) _debugFlags ^= DebugVisualization.Aabbs;
                 if (_inputManager.WasKeyPressed(InputKey.F4)) _debugFlags ^= DebugVisualization.Normals;
                 if (_inputManager.WasKeyPressed(InputKey.F5)) _debugFlags ^= DebugVisualization.SceneGraph;
 
-                // F6 cycles render pipelines (Forward, Wireframe, ...).
+                Host.TakeDebugVisualizationRequests(
+                    out DebugVisualization flagsToSet, out DebugVisualization flagsToClear);
+                _debugFlags = (_debugFlags | flagsToSet) & ~flagsToClear;
+
+                // F6 cycles render pipelines (Forward, Wireframe, ...); a host
+                // selects one by name instead, with the same
+                // warn-and-stay-put contract as the startup switch.
                 if (_inputManager.WasKeyPressed(InputKey.F6))
                     _renderer.NextPipeline();
+
+                if (Host.TakeRequestedPipeline() is { } requestedPipeline &&
+                    !_renderer.TrySelectPipeline(requestedPipeline))
+                {
+                    _logger.LogWarning(
+                        "No rendering pipeline named '{Requested}'; staying on {Pipeline}",
+                        requestedPipeline, _renderer.CurrentPipelineName);
+                }
 
                 // F11 toggles borderless fullscreen. Only the REQUEST happens
                 // here — the window itself is reshaped by the main thread in

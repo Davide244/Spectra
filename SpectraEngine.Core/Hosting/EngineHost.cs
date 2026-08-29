@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using SpectraEngine.Core.Input;
+using SpectraEngine.Core.Scene;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -180,6 +181,107 @@ public sealed class EngineHost
     /// thread, and idempotent.
     /// </summary>
     public void RequestShutdown() => _shutdownRequested = true;
+
+    // --- Engine-level requests ----------------------------------------------
+    //
+    // Play mode, debug visualisations and the pipeline are ENGINE state, not
+    // scene state, so EnqueueCommand's Action<Scene> cannot reach them — and
+    // handing a shell the Engine itself would hand it every render-thread-only
+    // member on it. Each is therefore a request latch in the exact shape of the
+    // title, cursor and window-mode latches: any thread writes the request,
+    // the render loop takes it at the same site the matching key press is read,
+    // so a button and a key cannot disagree about what the verb does.
+    //
+    // Latches rather than a queue, deliberately: every one of these is
+    // last-write-wins state ("be playing", "wireframe on", "use Deferred"),
+    // and a queue would replay a stale intermediate click for no benefit.
+
+    private int _playModeRequest = -1;
+    private int _debugFlagsToSet;
+    private int _debugFlagsToClear;
+    private string? _pipelineRequest;
+
+    /// <summary>
+    /// Asks the engine to enter (<c>true</c>) or leave (<c>false</c>) play
+    /// mode. Idempotent — requesting the state it is already in does nothing —
+    /// and safe from any thread.
+    /// </summary>
+    /// <remarks>
+    /// A request, not a switch: entering play is a transfer of the camera and
+    /// the cursor away from an editor that may be holding both mid-gesture, and
+    /// only the render loop can run that hand-off. Whether it happened is
+    /// reported by <see cref="FrameSnapshot.IsPlaying"/>; a scene with no
+    /// character (<see cref="FrameSnapshot.CanPlay"/> false) ignores the
+    /// request entirely.
+    /// </remarks>
+    public void RequestPlayMode(bool active) =>
+        Interlocked.Exchange(ref _playModeRequest, active ? 1 : 0);
+
+    /// <summary>
+    /// Asks the engine to turn the given debug visualisations on or off.
+    /// Idempotent, and safe from any thread; flags accumulate until the render
+    /// loop applies them, with the newest request winning where two conflict.
+    /// </summary>
+    /// <remarks>
+    /// Set semantics rather than toggle, because the caller is a checkbox
+    /// reading <see cref="FrameSnapshot.DebugFlags"/>: a toggle verb sent
+    /// against a snapshot one publish stale flips the wrong way exactly when
+    /// the user clicks fastest.
+    /// </remarks>
+    public void RequestDebugVisualization(DebugVisualization flags, bool enabled)
+    {
+        int bits = (int)flags;
+        if (enabled)
+        {
+            Interlocked.Or(ref _debugFlagsToSet, bits);
+            Interlocked.And(ref _debugFlagsToClear, ~bits);
+        }
+        else
+        {
+            Interlocked.Or(ref _debugFlagsToClear, bits);
+            Interlocked.And(ref _debugFlagsToSet, ~bits);
+        }
+    }
+
+    /// <summary>
+    /// Asks the engine to switch to the named rendering pipeline. A name the
+    /// backend does not offer is a logged warning and no change, exactly as
+    /// the startup switch behaves. Safe from any thread.
+    /// </summary>
+    public void RequestPipeline(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        Interlocked.Exchange(ref _pipelineRequest, name);
+    }
+
+    /// <summary>
+    /// Takes the pending play-mode request, if any. Render thread only, called
+    /// once per frame at the site the play-mode key is read.
+    /// </summary>
+    internal bool TryTakePlayModeRequest(out bool enter)
+    {
+        int request = Interlocked.Exchange(ref _playModeRequest, -1);
+        enter = request == 1;
+        return request >= 0;
+    }
+
+    /// <summary>
+    /// Takes the accumulated debug-visualisation requests. Render thread only.
+    /// The caller applies set before clear; the two are kept disjoint by
+    /// <see cref="RequestDebugVisualization"/>, so the order only matters for
+    /// a write that lands between the two exchanges, where clearing is the
+    /// safe direction — a visualisation that fails to appear is one more
+    /// click, a stuck one reads as a broken menu.
+    /// </summary>
+    internal void TakeDebugVisualizationRequests(out DebugVisualization set, out DebugVisualization clear)
+    {
+        set = (DebugVisualization)Interlocked.Exchange(ref _debugFlagsToSet, 0);
+        clear = (DebugVisualization)Interlocked.Exchange(ref _debugFlagsToClear, 0);
+    }
+
+    /// <summary>Takes the pending pipeline request, or null. Render thread only.</summary>
+    internal string? TakeRequestedPipeline() =>
+        Interlocked.Exchange(ref _pipelineRequest, null);
 
     // --- Render-thread side --------------------------------------------------
 

@@ -242,6 +242,15 @@ public sealed class SceneEditorHost : ISceneEditor
     };
 
     /// <inheritdoc/>
+    public float MoveSnapIncrement => _gizmos.Translate.Snap.Increment;
+
+    /// <inheritdoc/>
+    public float RotateSnapIncrement => _gizmos.Rotate.Snap.Increment;
+
+    /// <inheritdoc/>
+    public float ResizeSnapIncrement => _gizmos.Scale.Snap.Increment;
+
+    /// <inheritdoc/>
     /// <remarks>Interned literals, never a formatted enum — see <see cref="ISceneEditor"/>.</remarks>
     public string NavigationModeName => _editorNavigation ? EditorNavigationLabel : FlyCameraNavigationLabel;
 
@@ -323,6 +332,8 @@ public sealed class SceneEditorHost : ISceneEditor
             case EditorHostCommand.Ungroup: RunStructuralEdit("Ungroup", StructuralEditor.TryUngroup); break;
             case EditorHostCommand.ToggleBrushKind: ToggleSelectionBrushKind(); break;
             case EditorHostCommand.ToggleNavigation: ToggleNavigation(); break;
+            case EditorHostCommand.SelectAll: SelectAll(); break;
+            case EditorHostCommand.ClearSelection: ClearSelection(); break;
         }
     }
 
@@ -331,6 +342,29 @@ public sealed class SceneEditorHost : ISceneEditor
     /// drive snap, cancel a drag.
     /// </summary>
     public bool Apply(GizmoCommand command) => _gizmos.Apply(command);
+
+    /// <summary>
+    /// Sets one tool's snap increment — the payload-carrying sibling of the
+    /// snap verbs, for a field a user types a number into.
+    /// </summary>
+    /// <remarks>
+    /// Refused before anything is written, the property panel's rule: a
+    /// non-positive or non-finite increment would throw from inside
+    /// <see cref="SnapSettings.Increment"/> on the render thread, and clamping
+    /// instead would set a number nobody asked for and report nothing.
+    /// </remarks>
+    public void SetSnapIncrement(GizmoMode tool, float increment)
+    {
+        if (!float.IsFinite(increment) || increment <= 0f)
+        {
+            _logger.LogInformation(
+                "Snap increment {Value} for {Tool} refused: it must be a positive number",
+                increment, tool);
+            return;
+        }
+
+        _gizmos.SetSnapIncrement(tool, increment);
+    }
 
     /// <summary>
     /// Runs one camera verb, such as framing the selection.
@@ -488,6 +522,17 @@ public sealed class SceneEditorHost : ISceneEditor
         if ((modifiers & KeyModifiers.Control) != 0)
         {
             bool shift = (modifiers & KeyModifiers.Shift) != 0;
+
+            // Ctrl doubles as a camera's DESCEND key, so a chord whose letter
+            // is also a movement key would fire off ordinary flying — Ctrl+A
+            // is descend-plus-strafe-left, Ctrl+D descend-plus-strafe-right.
+            // Exactly those chords stand down while movement keys are feeding
+            // a camera (editor freelook only while the look button is held;
+            // the fly camera whenever it drives, because it reads the keyboard
+            // itself), the same rule the letter-row tool bindings follow.
+            // Chords on letters no camera reads stay live throughout.
+            bool movementClaimed = !_editorNavigation || IsLookButtonHeld();
+
             if (_input.WasKeyPressed(InputKey.Z))
             {
                 if (shift) Redo();
@@ -501,9 +546,13 @@ public sealed class SceneEditorHost : ISceneEditor
             {
                 ToggleSelectionBrushKind();
             }
-            else if (_input.WasKeyPressed(InputKey.D))
+            else if (!movementClaimed && _input.WasKeyPressed(InputKey.D))
             {
                 RunStructuralEdit("Duplicate", StructuralEditor.TryDuplicate);
+            }
+            else if (!movementClaimed && _input.WasKeyPressed(InputKey.A))
+            {
+                SelectAll();
             }
             else if (_input.WasKeyPressed(InputKey.G))
             {
@@ -656,6 +705,27 @@ public sealed class SceneEditorHost : ISceneEditor
         _logger.LogInformation(
             "{Label}: {Selected} node(s) in, {Now} selected now (undo {UndoDepth} / redo {RedoDepth})",
             label, selection.Count, _scene.Selection.Count, _undo.UndoCount, _undo.RedoCount);
+    }
+
+    // Top-level nodes only — see the verb's own remarks for why the whole
+    // graph would be the wrong selection three different ways.
+    private void SelectAll()
+    {
+        // A selection change under a live gesture would leave the manipulator
+        // holding a capture of nodes it is no longer editing — the same rule
+        // SelectById follows.
+        _viewport.Reset();
+
+        _scene.Selection.Clear();
+        _scene.Selection.AddRange(_scene.Root.Children);
+
+        _logger.LogInformation("Select all: {Count} top-level node(s)", _scene.Selection.Count);
+    }
+
+    private void ClearSelection()
+    {
+        _viewport.Reset();
+        _scene.Selection.Clear();
     }
 
     private void Undo()

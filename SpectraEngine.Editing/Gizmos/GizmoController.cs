@@ -252,6 +252,24 @@ public sealed class GizmoController
                 SnapEnabled = !SnapEnabled;
                 return true;
 
+            case GizmoCommand.UseWorldOrientation:
+                return SetOrientation(GizmoOrientation.World);
+
+            case GizmoCommand.UseLocalOrientation:
+                return SetOrientation(GizmoOrientation.Local);
+
+            case GizmoCommand.UseStudioStyle:
+                return SetStyle(GizmoStyle.Studio);
+
+            case GizmoCommand.UseClassicStyle:
+                return SetStyle(GizmoStyle.Classic);
+
+            case GizmoCommand.EnableSnap:
+                return SetSnapEnabled(true);
+
+            case GizmoCommand.DisableSnap:
+                return SetSnapEnabled(false);
+
             case GizmoCommand.FinerSnap:
                 CycleSnap(-1);
                 return true;
@@ -287,6 +305,58 @@ public sealed class GizmoController
 
         Mode = mode;
         return true;
+    }
+
+    // The idempotent halves report whether anything changed, like SetMode, so
+    // a host can fall through to another binding on a no-op.
+
+    private bool SetOrientation(GizmoOrientation orientation)
+    {
+        if (_orientation == orientation)
+            return false;
+
+        Orientation = orientation;
+        return true;
+    }
+
+    private bool SetStyle(GizmoStyle style)
+    {
+        if (ReferenceEquals(_style, style))
+            return false;
+
+        Style = style;
+        return true;
+    }
+
+    private bool SetSnapEnabled(bool enabled)
+    {
+        if (SnapEnabled == enabled)
+            return false;
+
+        SnapEnabled = enabled;
+        return true;
+    }
+
+    /// <summary>
+    /// Sets one tool's snap increment directly — the binding behind a
+    /// command-surface field, where the ladder keys step and this types.
+    /// </summary>
+    /// <remarks>
+    /// Per tool rather than "the live tool's", because a UI shows the move
+    /// grid and the rotate angle side by side and each field must edit its own
+    /// unit. The value is validated by <see cref="SnapSettings.Increment"/>
+    /// (positive only); callers refuse bad input before arriving here, the
+    /// same rule the property panel follows.
+    /// </remarks>
+    public void SetSnapIncrement(GizmoMode tool, float increment)
+    {
+        SnapSettings snap = tool switch
+        {
+            GizmoMode.Rotate => Rotate.Snap,
+            GizmoMode.Scale => Scale.Snap,
+            _ => Translate.Snap,
+        };
+        snap.Increment = increment;
     }
 
     // All three ladders move together: the user is expressing "finer" or

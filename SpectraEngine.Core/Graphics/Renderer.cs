@@ -3,6 +3,7 @@ using Silk.NET.Maths;
 using Silk.NET.Windowing;
 using SpectraEngine.Core.Graphics.Shaders;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -1581,6 +1582,20 @@ public abstract class Renderer
 
     /// <summary>Name of the rendering pipeline currently in use (e.g. "Forward", "Wireframe").</summary>
     public abstract string CurrentPipelineName { get; }
+
+    /// <summary>
+    /// Every registered pipeline's name, in registration order — what a UI
+    /// offers where the rotation key offers a blind cycle. Empty before
+    /// <see cref="Initialize"/>, and virtual rather than abstract so a test
+    /// fake with no pipelines has nothing to implement.
+    /// </summary>
+    /// <remarks>
+    /// The set is fixed once registration ends, so backends cache the list and
+    /// return the same instance every call: it rides every
+    /// <see cref="Hosting.FrameSnapshot"/>, where a fresh list per publish
+    /// would be render-thread garbage for a value that never changes.
+    /// </remarks>
+    public virtual IReadOnlyList<string> PipelineNames => Array.Empty<string>();
 
     /// <summary>Cycles to the next registered rendering pipeline. Returns the new pipeline's name.</summary>
     public abstract string NextPipeline();

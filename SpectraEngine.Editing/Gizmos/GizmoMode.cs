@@ -81,6 +81,30 @@ public enum GizmoCommand
     /// <summary>Turn snapping on or off for the tools that snap.</summary>
     ToggleSnap,
 
+    // The Use*/Enable*/Disable* verbs below are the toggles' idempotent
+    // halves, for controls that name a state rather than a flip: a dropdown, a
+    // segmented pair, a checkbox. A toggle sent against a snapshot one publish
+    // stale flips the wrong way exactly when the user clicks fastest; a verb
+    // that names its target state cannot. Keyboard chords keep the toggles.
+
+    /// <summary>Lay the handles along the world axes. Idempotent.</summary>
+    UseWorldOrientation,
+
+    /// <summary>Lay the handles along the reference node's own axes. Idempotent.</summary>
+    UseLocalOrientation,
+
+    /// <summary>Wear the Studio manipulator style. Idempotent. See <see cref="GizmoStyle"/>.</summary>
+    UseStudioStyle,
+
+    /// <summary>Wear the Classic manipulator style. Idempotent. See <see cref="GizmoStyle"/>.</summary>
+    UseClassicStyle,
+
+    /// <summary>Turn snapping on. Idempotent.</summary>
+    EnableSnap,
+
+    /// <summary>Turn snapping off. Idempotent.</summary>
+    DisableSnap,
+
     /// <summary>Step every snap increment one rung finer.</summary>
     FinerSnap,
 

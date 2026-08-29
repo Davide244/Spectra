@@ -118,6 +118,20 @@ public interface ISceneEditor
     /// </remarks>
     float SnapIncrement { get; }
 
+    /// <summary>The move tool's snap increment in world units, whichever tool is live.</summary>
+    /// <remarks>
+    /// All three tools' increments are exposed by name, beside the live-tool
+    /// value above, because a command surface shows the move grid and the
+    /// rotate angle side by side and cannot switch tools to read them.
+    /// </remarks>
+    float MoveSnapIncrement { get; }
+
+    /// <summary>The rotate tool's snap increment in degrees, whichever tool is live.</summary>
+    float RotateSnapIncrement { get; }
+
+    /// <summary>The resize tool's snap increment in world units, whichever tool is live.</summary>
+    float ResizeSnapIncrement { get; }
+
     /// <summary>
     /// A stable, allocation-free label for the navigation model currently
     /// driving the viewport camera ("freelook", "fly camera", …).

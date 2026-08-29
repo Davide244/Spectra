@@ -54,4 +54,20 @@ public enum EditorHostCommand
     /// camera.
     /// </summary>
     ToggleNavigation,
+
+    /// <summary>
+    /// Selects the root's direct children — everything in the scene, at the
+    /// granularity a group move wants.
+    /// </summary>
+    /// <remarks>
+    /// Top-level nodes rather than the whole graph, deliberately: moving them
+    /// moves everything anyway, a selection of every descendant would make the
+    /// structural verbs' root-filtering do the same reduction the slow way,
+    /// and the property union — rebuilt per publish while selected — would
+    /// scale with the graph instead of with what the user can see in the tree.
+    /// </remarks>
+    SelectAll,
+
+    /// <summary>Empties the selection.</summary>
+    ClearSelection,
 }

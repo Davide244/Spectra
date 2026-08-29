@@ -1,4 +1,5 @@
 using SpectraEngine.Core.Inspection;
+using SpectraEngine.Core.Scene;
 using System;
 using System.Collections.Generic;
 
@@ -68,8 +69,58 @@ public sealed class FrameSnapshot
     /// </summary>
     public float SnapIncrement { get; init; }
 
+    /// <summary>
+    /// The move tool's snap increment in world units, whichever tool is live.
+    /// </summary>
+    /// <remarks>
+    /// All three per-tool increments ride every snapshot, unlike
+    /// <see cref="SnapIncrement"/>, which reports only the live tool's. A
+    /// command surface shows the move grid and the rotate angle side by side —
+    /// Studio's own top bar does — and a UI that could only see the live tool's
+    /// value would have to switch tools to read the other one.
+    /// </remarks>
+    public float MoveSnapIncrement { get; init; }
+
+    /// <summary>The rotate tool's snap increment in degrees. See <see cref="MoveSnapIncrement"/>.</summary>
+    public float RotateSnapIncrement { get; init; }
+
+    /// <summary>The resize tool's snap increment in world units. See <see cref="MoveSnapIncrement"/>.</summary>
+    public float ResizeSnapIncrement { get; init; }
+
     /// <summary>Which camera is driving, as the editor names it, or null when there is no editor.</summary>
     public string? NavigationModeName { get; init; }
+
+    /// <summary>
+    /// Whether play mode is active: the character has the camera and the cursor,
+    /// and the editor is suspended.
+    /// </summary>
+    public bool IsPlaying { get; init; }
+
+    /// <summary>
+    /// Whether play mode can be entered at all — the engine built a character
+    /// over the active scene. False until the scene has loaded, so a Play
+    /// button can disable itself instead of silently doing nothing.
+    /// </summary>
+    public bool CanPlay { get; init; }
+
+    /// <summary>The debug visualisations currently drawn over the scene.</summary>
+    /// <remarks>
+    /// On the snapshot because the F1–F5 keys flip the same flags: a View menu
+    /// that tracked only its own clicks would drift from the keyboard the first
+    /// time somebody pressed one, and a checkbox that cannot show the real
+    /// state is worse than no checkbox.
+    /// </remarks>
+    public DebugVisualization DebugFlags { get; init; }
+
+    /// <summary>The rendering pipeline currently drawing the scene, or null before the renderer reported one.</summary>
+    public string? PipelineName { get; init; }
+
+    /// <summary>
+    /// Every pipeline the running backend registered, in registration order.
+    /// The set is fixed for the renderer's life, so the same list instance
+    /// rides every snapshot and costs nothing to carry.
+    /// </summary>
+    public IReadOnlyList<string> PipelineNames { get; init; } = Array.Empty<string>();
 
     /// <summary>How many edits can be undone.</summary>
     public int UndoDepth { get; init; }

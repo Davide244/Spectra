@@ -149,6 +149,107 @@ public sealed class EngineHostTests
         host.ShutdownRequested.ShouldBeTrue();
     }
 
+    // --- Engine-level requests -----------------------------------------------
+    //
+    // Play mode, debug visualisations and the pipeline are engine state, not
+    // scene state, so EnqueueCommand cannot reach them. Each is a request
+    // latch the render loop takes at the site the matching key press is read;
+    // what is pinned here is the latch semantics — deferred, taken once,
+    // newest wins — because every one of those is a thread-boundary claim.
+
+    [Fact]
+    public void A_play_mode_request_is_latched_until_the_engine_takes_it()
+    {
+        EngineHost host = NewHost();
+
+        host.TryTakePlayModeRequest(out _).ShouldBeFalse("nothing was requested");
+
+        host.RequestPlayMode(true);
+
+        host.TryTakePlayModeRequest(out bool enter).ShouldBeTrue();
+        enter.ShouldBeTrue();
+
+        // Taken exactly once: a latch that replayed would re-enter play mode
+        // on every following frame.
+        host.TryTakePlayModeRequest(out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void The_newest_play_mode_request_wins()
+    {
+        // Last-write-wins is the point of a latch over a queue: "be playing"
+        // then "stop" within one frame means stop, not a one-frame flicker
+        // through play mode.
+        EngineHost host = NewHost();
+
+        host.RequestPlayMode(true);
+        host.RequestPlayMode(false);
+
+        host.TryTakePlayModeRequest(out bool enter).ShouldBeTrue();
+        enter.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Debug_visualisation_requests_accumulate_until_taken()
+    {
+        EngineHost host = NewHost();
+
+        host.RequestDebugVisualization(DebugVisualization.Wireframe, enabled: true);
+        host.RequestDebugVisualization(DebugVisualization.Aabbs, enabled: true);
+        host.RequestDebugVisualization(DebugVisualization.Normals, enabled: false);
+
+        host.TakeDebugVisualizationRequests(out DebugVisualization set, out DebugVisualization clear);
+        set.ShouldBe(DebugVisualization.Wireframe | DebugVisualization.Aabbs);
+        clear.ShouldBe(DebugVisualization.Normals);
+
+        // Taken exactly once, like the play latch.
+        host.TakeDebugVisualizationRequests(out set, out clear);
+        set.ShouldBe(DebugVisualization.None);
+        clear.ShouldBe(DebugVisualization.None);
+    }
+
+    [Fact]
+    public void The_newest_debug_visualisation_request_wins_per_flag()
+    {
+        // The caller is a checkbox: on-then-off within one frame must land
+        // off, and must not leave the flag in BOTH masks for the engine to
+        // resolve by accident.
+        EngineHost host = NewHost();
+
+        host.RequestDebugVisualization(DebugVisualization.Wireframe, enabled: true);
+        host.RequestDebugVisualization(DebugVisualization.Wireframe, enabled: false);
+
+        host.TakeDebugVisualizationRequests(out DebugVisualization set, out DebugVisualization clear);
+        set.ShouldBe(DebugVisualization.None);
+        clear.ShouldBe(DebugVisualization.Wireframe);
+    }
+
+    [Fact]
+    public void A_pipeline_request_is_taken_once_and_the_newest_wins()
+    {
+        EngineHost host = NewHost();
+
+        host.TakeRequestedPipeline().ShouldBeNull();
+
+        host.RequestPipeline("Forward");
+        host.RequestPipeline("Deferred");
+
+        host.TakeRequestedPipeline().ShouldBe("Deferred");
+        host.TakeRequestedPipeline().ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_blank_pipeline_name_is_refused_at_the_boundary()
+    {
+        // A null or blank name would be latched, taken, and warned about as
+        // "no pipeline named ''" a frame later — a worse diagnostic than the
+        // immediate throw on the thread that made the mistake.
+        EngineHost host = NewHost();
+
+        Should.Throw<ArgumentException>(() => host.RequestPipeline(""));
+        Should.Throw<ArgumentException>(() => host.RequestPipeline("   "));
+    }
+
     // --- Snapshots -----------------------------------------------------------
 
     [Fact]

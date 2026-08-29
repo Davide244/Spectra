@@ -143,6 +143,13 @@ public sealed class EditorSession : IDisposable
         Host.EnqueueCommand(_ => Editor?.Apply(command));
 
     /// <summary>
+    /// Sets one tool's snap increment — the payload-carrying sibling of the
+    /// snap verbs, for the command surface's typed fields.
+    /// </summary>
+    public void SetSnapIncrement(GizmoMode tool, float increment) =>
+        Host.EnqueueCommand(_ => Editor?.SetSnapIncrement(tool, increment));
+
+    /// <summary>
     /// Selects the node with this id. An id the scene no longer has is
     /// ordinary: a UI's view of the graph is a frame or two behind.
     /// </summary>

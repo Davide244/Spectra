@@ -129,6 +129,104 @@ public sealed class SceneEditorHostCommandTests
         host.SnapEnabled.ShouldBeTrue();
     }
 
+    // --- Idempotent state verbs ----------------------------------------------
+    //
+    // The Use*/Enable*/Disable* verbs exist for controls that name a state
+    // rather than flip one: a toggle sent against a snapshot one publish stale
+    // flips the wrong way exactly when the user clicks fastest. What is pinned
+    // is that naming the current state changes nothing and says so.
+
+    [Fact]
+    public void An_idempotent_verb_names_a_state_and_reports_whether_it_changed()
+    {
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+
+        host.Apply(GizmoCommand.UseLocalOrientation).ShouldBeTrue();
+        host.GizmoOrientationName.ShouldBe("local");
+
+        host.Apply(GizmoCommand.UseLocalOrientation).ShouldBeFalse("already local");
+        host.GizmoOrientationName.ShouldBe("local");
+
+        host.Apply(GizmoCommand.UseStudioStyle).ShouldBeFalse("Studio is the default");
+        host.Apply(GizmoCommand.UseClassicStyle).ShouldBeTrue();
+        host.GizmoStyleName.ShouldBe("Classic");
+
+        host.Apply(GizmoCommand.EnableSnap).ShouldBeFalse("snap starts on");
+        host.Apply(GizmoCommand.DisableSnap).ShouldBeTrue();
+        host.SnapEnabled.ShouldBeFalse();
+    }
+
+    // --- Snap increments -----------------------------------------------------
+
+    [Fact]
+    public void Every_tools_increment_is_readable_without_switching_tools()
+    {
+        // A command surface shows the move grid and the rotate angle side by
+        // side, so the per-tool values are named properties rather than
+        // whatever the live tool happens to be.
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+
+        host.MoveSnapIncrement.ShouldBe(1f);
+        host.RotateSnapIncrement.ShouldBe(15f);
+        host.ResizeSnapIncrement.ShouldBe(1f);
+        host.GizmoModeName.ShouldBe("move", "reading them switched nothing");
+    }
+
+    [Fact]
+    public void Setting_an_increment_targets_one_tool_and_leaves_the_others_alone()
+    {
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+
+        host.SetSnapIncrement(GizmoMode.Rotate, 22.5f);
+
+        host.RotateSnapIncrement.ShouldBe(22.5f);
+        host.MoveSnapIncrement.ShouldBe(1f);
+        host.ResizeSnapIncrement.ShouldBe(1f);
+    }
+
+    [Fact]
+    public void A_bad_increment_is_refused_before_anything_is_written()
+    {
+        // The property panel's rule: a value the setting would throw on is
+        // refused up front, because clamping writes a number nobody asked for
+        // and reports nothing.
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+
+        Should.NotThrow(() => host.SetSnapIncrement(GizmoMode.Translate, 0f));
+        Should.NotThrow(() => host.SetSnapIncrement(GizmoMode.Translate, -2f));
+        Should.NotThrow(() => host.SetSnapIncrement(GizmoMode.Translate, float.NaN));
+
+        host.MoveSnapIncrement.ShouldBe(1f);
+    }
+
+    // --- Select all / clear --------------------------------------------------
+
+    [Fact]
+    public void Select_all_takes_the_top_level_not_the_whole_graph()
+    {
+        // Moving the top level moves everything anyway, and a selection of
+        // every descendant would make the property union scale with the graph
+        // instead of with what the user can see.
+        var scene = new Scene("Editor");
+        SceneNode a = AddChild(scene, "A");
+        a.CreateChild("Grandchild");
+        SceneNode b = AddChild(scene, "B");
+
+        SceneEditorHost host = NewHost(scene);
+        host.Apply(EditorHostCommand.SelectAll);
+
+        scene.Selection.Count.ShouldBe(2);
+        scene.Selection.Items.ShouldContain(a);
+        scene.Selection.Items.ShouldContain(b);
+
+        host.Apply(EditorHostCommand.ClearSelection);
+        scene.Selection.Count.ShouldBe(0);
+    }
+
     // --- Structural verbs ----------------------------------------------------
 
     [Fact]

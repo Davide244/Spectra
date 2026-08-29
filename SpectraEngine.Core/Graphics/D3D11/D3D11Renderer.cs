@@ -127,6 +127,26 @@ public sealed unsafe class D3D11Renderer : Renderer
     public override string CurrentPipelineName =>
         _pipelines.Count == 0 ? "None" : _pipelines[_pipelineIndex].Name;
 
+    // Cached because it rides every host snapshot; rebuilt only when the
+    // pipeline count moves, which is registration at Initialize and the clear
+    // at Shutdown.
+    private string[] _pipelineNames = [];
+
+    public override IReadOnlyList<string> PipelineNames
+    {
+        get
+        {
+            if (_pipelineNames.Length != _pipelines.Count)
+            {
+                var names = new string[_pipelines.Count];
+                for (int i = 0; i < names.Length; i++)
+                    names[i] = _pipelines[i].Name;
+                _pipelineNames = names;
+            }
+            return _pipelineNames;
+        }
+    }
+
     public override void AcquireContext(IRenderSurface surface) { /* D3D11 immediate context isn't thread-affine */ }
     public override void ReleaseContext(IRenderSurface surface) { }
 
