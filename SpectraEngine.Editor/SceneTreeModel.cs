@@ -767,6 +767,16 @@ public sealed class SceneTreeModel
         bool hasParent = parentId != Guid.Empty && _index.TryGetValue(parentId, out parent);
         ObservableCollection<SceneTreeNode> siblings = hasParent ? parent!.Children : Roots;
 
+        // A top-level row opens by default, and that is the difference between
+        // a panel that shows the scene and one that shows the word "Root". The
+        // engine reports the scene root as the only top-level node, so without
+        // this a freshly opened project presents a 253-node level as a single
+        // collapsed row somebody has to think to click. One level only: a
+        // scene is wide as well as deep, and expanding everything would put
+        // thousands of rows in a panel showing thirty-five.
+        if (!hasParent)
+            node.IsExpanded = true;
+
         // Clamped rather than trusted: a parent's add can legitimately arrive
         // in the same batch as a child's, and a child reported at index 3 of a
         // list the tree has only two of is a batch mid-replay, not a bug.

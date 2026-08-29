@@ -7,130 +7,219 @@
   <!--
     The launch experience: what shows instead of a viewport until a project is
     open. This page exists BEFORE any engine session, so it is ordinary
-    Avalonia with no airspace constraint — the one place in the shell that can
+    Avalonia with no airspace constraint - the one place in the shell that can
     lay out freely.
+
+    It lays out like the rest of the tool rather than like a landing page:
+    full-bleed columns instead of a centred island, a dense keyboard-navigable
+    list instead of a grid of tiles, and one slim header instead of a hero.
+    Every editor a Spectra user already knows (VS, Rider, Studio) opens onto a
+    list of things to reopen with the verbs beside it, because the common case
+    is "carry on with what I had", not "admire the logo".
   -->
 
   <UserControl.Resources>
-    <!-- Shared by every recent card. Remove is list hygiene, not deletion:
-         it forgets the entry and touches nothing on disk, and the wording
-         says so. -->
+    <!-- Shared by every recent row; DataContext arrives from the row that
+         opened it. Remove is list hygiene, not deletion: it forgets the entry
+         and touches nothing on disk, and the wording says so. -->
     <ContextMenu x:Key="RecentMenu" x:DataType="shell:RecentProjectRow">
       <MenuItem Header="Open" Click="OnRecentMenuOpen" />
       <MenuItem Header="Show in Explorer" Click="OnRecentMenuReveal" />
       <Separator />
-      <MenuItem Header="Remove from list" Click="OnRecentMenuForget" />
+      <MenuItem Header="Remove from list" InputGesture="Delete" Click="OnRecentMenuForget" />
     </ContextMenu>
   </UserControl.Resources>
 
-  <Grid>
-    <Grid HorizontalAlignment="Center" VerticalAlignment="Center"
-          ColumnDefinitions="320,56,440" MaxHeight="560">
+  <UserControl.Styles>
+    <!-- Dense list rows, the tool idiom: a fill on hover and selection, no
+         border and no card. A bordered rounded tile per entry is what a
+         marketing page does with a list of six things; it costs three times
+         the vertical space and still says less. -->
+    <Style Selector="ListBoxItem">
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Margin" Value="0" />
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="FocusAdorner" Value="{x:Null}" />
+    </Style>
+    <Style Selector="ListBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource SpectraRowHover}" />
+    </Style>
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource SpectraRowSelected}" />
+    </Style>
+    <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource SpectraRowSelected}" />
+    </Style>
 
-      <!-- ─── Identity and actions ─────────────────────── -->
-      <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="0">
+    <!-- The action rail. Left-aligned text with a leading glyph, full width:
+         a menu of verbs, not a row of call-to-action buttons. -->
+    <Style Selector="Button.action">
+      <Setter Property="Height" Value="30" />
+      <Setter Property="Padding" Value="8,0" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    </Style>
+    <Style Selector="Button.action /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    </Style>
+    <Style Selector="Button.action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
+    </Style>
+    <Style Selector="Button.action:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource SpectraControlPressed}" />
+    </Style>
+    <Style Selector="Button.action TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontBase}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.action:pointerover TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+    </Style>
+    <Style Selector="Button.action Path">
+      <Setter Property="Stroke" Value="{StaticResource SpectraTextMuted}" />
+      <Setter Property="StrokeThickness" Value="1.3" />
+      <Setter Property="StrokeLineCap" Value="Round" />
+      <Setter Property="StrokeJoin" Value="Round" />
+      <Setter Property="Fill" Value="Transparent" />
+      <Setter Property="Width" Value="15" />
+      <Setter Property="Height" Value="15" />
+      <Setter Property="Stretch" Value="Uniform" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.action:pointerover Path">
+      <Setter Property="Stroke" Value="{StaticResource SpectraAccent}" />
+    </Style>
 
-        <StackPanel Orientation="Horizontal" Spacing="10">
-          <!-- The one place the accent may be a shape rather than a state:
-               the mark. Well under the 5% pixel budget. -->
-          <Border Width="18" Height="18" CornerRadius="4"
-                  Background="{StaticResource SpectraAccent}"
-                  VerticalAlignment="Center" />
-          <TextBlock Text="Spectra"
-                     FontSize="28" FontWeight="SemiBold"
-                     Foreground="{StaticResource SpectraTextEmphasis}"
-                     VerticalAlignment="Center" />
-        </StackPanel>
+    <!-- Column headings: the quietest text on the page, because they are read
+         once and then never again. -->
+    <Style Selector="TextBlock.colhead">
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontMicro}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+  </UserControl.Styles>
 
-        <StackPanel Orientation="Horizontal" Spacing="8" Margin="28,6,0,0">
-          <TextBlock Text="editor"
-                     FontFamily="{StaticResource SpectraFontMono}"
-                     FontSize="{StaticResource SpectraFontSmall}"
-                     Foreground="{StaticResource SpectraTextMuted}" />
-          <TextBlock x:Name="VersionLabel"
-                     FontFamily="{StaticResource SpectraFontMono}"
-                     FontSize="{StaticResource SpectraFontSmall}"
-                     Foreground="{StaticResource SpectraTextMuted}" />
-        </StackPanel>
+  <!-- No header of its own: the window's own bar is directly above this page
+       and already carries the File menu, so identity goes there rather than
+       in a second bar under the first. -->
+  <DockPanel>
 
-        <StackPanel Margin="0,40,0,0" Spacing="8" HorizontalAlignment="Left">
-          <Button Classes="primary" Content="New project" Click="OnNewProjectClicked" />
-          <Button Classes="secondary" Content="Open project" Click="OnOpenProjectClicked" />
-          <Button Classes="secondary" Content="Open map bundle" Click="OnOpenMapClicked" />
-        </StackPanel>
+    <!-- ─── Action rail ────────────────────────────────
+         Fixed width on the left, where a tool's verbs live. -->
+    <Border DockPanel.Dock="Left" Width="236"
+            Background="{StaticResource SpectraBgPanel}"
+            BorderBrush="{StaticResource SpectraBorderStrong}"
+            BorderThickness="0,0,1,0">
+      <StackPanel Margin="8,10" Spacing="1">
+          <Button Classes="action" Click="OnNewProjectClicked">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Path Data="{StaticResource IconNewProject}" />
+              <TextBlock Text="New project" />
+            </StackPanel>
+          </Button>
+          <Button Classes="action" Click="OnOpenProjectClicked">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Path Data="{StaticResource IconOpenFolder}" />
+              <TextBlock Text="Open project" />
+            </StackPanel>
+          </Button>
+          <Button Classes="action" Click="OnOpenMapClicked">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Path Data="{StaticResource IconMap}" />
+              <TextBlock Text="Open map bundle" />
+            </StackPanel>
+          </Button>
 
-        <TextBlock Margin="0,28,0,0" MaxWidth="300" TextWrapping="Wrap"
-                   FontSize="{StaticResource SpectraFontSecondary}"
-                   Foreground="{StaticResource SpectraTextMuted}"
-                   Text="A project is a folder: its manifest, Assets, Maps and Scripts. Everything authored is text." />
-      </StackPanel>
+          <!-- Directly under the verbs it explains, not pinned to the far
+               bottom of a tall rail where it reads as unrelated small print. -->
+          <Border Height="1" Background="{StaticResource SpectraBorderSoft}" Margin="8,10,4,9" />
 
-      <!-- ─── Recent projects ──────────────────────────── -->
-      <Border Grid.Column="2"
-              Background="{StaticResource SpectraBgPanel}"
-              BorderBrush="{StaticResource SpectraBorderStrong}"
-              BorderThickness="1"
-              CornerRadius="{StaticResource SpectraRadius2}">
-        <DockPanel>
-
-          <!-- A plain header, in words: labels here name what a thing IS for
-               the person reading it, never a code-flavoured identifier. -->
-          <Border DockPanel.Dock="Top"
-                  Height="{StaticResource SpectraPanelHeaderHeight}"
-                  BorderBrush="{StaticResource SpectraBorderStrong}"
-                  BorderThickness="0,0,0,1"
-                  Padding="12,0">
-            <Grid ColumnDefinitions="*,Auto">
-              <TextBlock Grid.Column="0" Text="Recent projects"
-                         FontSize="{StaticResource SpectraFontSecondary}"
-                         FontWeight="SemiBold"
-                         Foreground="{StaticResource SpectraTextBody}"
-                         VerticalAlignment="Center" />
-              <TextBlock Grid.Column="1" x:Name="RecentCountLabel"
-                         FontFamily="{StaticResource SpectraFontMono}"
-                         FontSize="{StaticResource SpectraFontSmall}"
-                         Foreground="{StaticResource SpectraTextMuted}"
-                         VerticalAlignment="Center" />
-            </Grid>
-          </Border>
-
-          <TextBlock x:Name="EmptyLabel" DockPanel.Dock="Top" Margin="12,16"
-                     Text="Nothing yet. A created or opened project appears here."
+          <TextBlock TextWrapping="Wrap" Margin="8,0,4,0"
                      FontSize="{StaticResource SpectraFontSecondary}"
                      Foreground="{StaticResource SpectraTextMuted}"
-                     TextWrapping="Wrap" />
+                     Text="A project is a folder: its manifest, Assets, Maps and Scripts. Everything authored is text." />
+      </StackPanel>
+    </Border>
 
-          <ScrollViewer HorizontalScrollBarVisibility="Disabled">
-            <ItemsControl x:Name="RecentList" Margin="8">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="shell:RecentProjectRow">
-                  <Button Classes="card" Margin="0,0,0,6" Click="OnRecentClicked"
-                          ContextMenu="{StaticResource RecentMenu}">
-                    <StackPanel Margin="12,8" Spacing="2">
-                      <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Grid.Column="0" Text="{Binding Name}"
-                                   FontSize="{StaticResource SpectraFontBase}"
-                                   Foreground="{StaticResource SpectraTextEmphasis}"
-                                   TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="1" Text="{Binding OpenedLabel}"
-                                   FontFamily="{StaticResource SpectraFontMono}"
-                                   FontSize="{StaticResource SpectraFontMicro}"
-                                   Foreground="{StaticResource SpectraTextMuted}"
-                                   VerticalAlignment="Center" />
-                      </Grid>
-                      <TextBlock Text="{Binding Path}"
-                                 FontFamily="{StaticResource SpectraFontMono}"
-                                 FontSize="{StaticResource SpectraFontMicro}"
-                                 Foreground="{StaticResource SpectraTextMuted}"
-                                 TextTrimming="CharacterEllipsis" />
-                    </StackPanel>
-                  </Button>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </ScrollViewer>
-        </DockPanel>
-      </Border>
-    </Grid>
-  </Grid>
+    <!-- ─── Recents ────────────────────────────────────
+         The page's real content, and the reason it exists: reopen what you
+         were working on, by keyboard if you like. -->
+    <DockPanel Margin="14,10,14,12">
+
+      <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,8">
+        <TextBlock Grid.Column="0" Text="Recent projects"
+                   FontSize="{StaticResource SpectraFontBase}"
+                   Foreground="{StaticResource SpectraTextBody}"
+                   VerticalAlignment="Center" />
+        <TextBox Grid.Column="2" x:Name="FilterBox" Classes="filter" Width="180"
+                 PlaceholderText="Filter"
+                 TextChanged="OnFilterChanged" KeyDown="OnFilterKeyDown" />
+      </Grid>
+
+      <!-- Column headings sit outside the scroll, so they stay put. -->
+      <Grid DockPanel.Dock="Top" ColumnDefinitions="*,1.6*,Auto" Margin="8,0,10,4">
+        <TextBlock Grid.Column="0" Classes="colhead" Text="Name" />
+        <TextBlock Grid.Column="1" Classes="colhead" Text="Location" />
+        <TextBlock Grid.Column="2" Classes="colhead" Text="Opened" />
+      </Grid>
+
+      <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource SpectraBorderSoft}" Margin="0,0,0,2" />
+
+      <TextBlock x:Name="EmptyLabel" DockPanel.Dock="Top" Margin="8,14,0,0"
+                 Text="Nothing yet. A project you create or open appears here."
+                 FontSize="{StaticResource SpectraFontSecondary}"
+                 Foreground="{StaticResource SpectraTextMuted}"
+                 TextWrapping="Wrap" />
+
+      <ListBox x:Name="RecentList"
+               Background="Transparent"
+               BorderThickness="0"
+               Padding="0"
+               DoubleTapped="OnRecentActivated"
+               KeyDown="OnRecentKeyDown"
+               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="shell:RecentProjectRow">
+            <Border Height="26" Background="Transparent"
+                    ContextMenu="{StaticResource RecentMenu}"
+                    ToolTip.Tip="{Binding Path}">
+              <Grid ColumnDefinitions="*,1.6*,Auto" Margin="8,0,10,0">
+                <TextBlock Grid.Column="0" Text="{Binding Name}"
+                           FontSize="{StaticResource SpectraFontBase}"
+                           Foreground="{StaticResource SpectraTextEmphasis}"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center" />
+                <!-- The path is a VALUE, so it wears mono: it is the thing
+                     that tells two same-named projects apart. -->
+                <TextBlock Grid.Column="1" Text="{Binding Path}"
+                           FontFamily="{StaticResource SpectraFontMono}"
+                           FontSize="{StaticResource SpectraFontSmall}"
+                           Foreground="{StaticResource SpectraTextMuted}"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center" Margin="10,0,10,0" />
+                <TextBlock Grid.Column="2" Text="{Binding OpenedLabel}"
+                           FontFamily="{StaticResource SpectraFontMono}"
+                           FontSize="{StaticResource SpectraFontSmall}"
+                           Foreground="{StaticResource SpectraTextMuted}"
+                           VerticalAlignment="Center" />
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </DockPanel>
+  </DockPanel>
 </UserControl>

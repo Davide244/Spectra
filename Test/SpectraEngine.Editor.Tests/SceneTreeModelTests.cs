@@ -104,6 +104,26 @@ public sealed class SceneTreeModelTests
         tree.Roots[0].Name.ShouldBe("Orphan");
     }
 
+    [Fact]
+    public void A_top_level_row_opens_by_default_so_the_panel_shows_the_scene()
+    {
+        // The engine reports one top-level node - the scene root - so without
+        // this a freshly opened project presents a whole level as a single
+        // collapsed row reading "Root". One level only: expanding everything
+        // would put thousands of rows into a panel that shows thirty-five.
+        SceneTreeModel tree = NewTree();
+
+        tree.ApplyChanges(Batch(1,
+            Added(Root, Guid.Empty, "Root", -1),
+            Added(ChildA, Root, "A", 0),
+            Added(GrandChild, ChildA, "Deep", 0),
+            Added(ChildB, Root, "B", 1)));
+
+        tree.Rows.Select(r => r.Name).ShouldBe(["Root", "A", "B"]);
+        tree.Roots[0].IsExpanded.ShouldBeTrue();
+        tree.Roots[0].Children[0].IsExpanded.ShouldBeFalse("only the top level opens");
+    }
+
     // --- Row patching --------------------------------------------------------
 
     [Fact]

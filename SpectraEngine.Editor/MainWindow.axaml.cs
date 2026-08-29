@@ -117,6 +117,7 @@ public partial class MainWindow : Window
         _logger = _loggerFactory.CreateLogger<MainWindow>();
 
         _settings = EditorSettings.Load(_logger);
+        VersionLabel.Text = SpectraEngine.Core.EngineInfo.VersionString;
 
         // The start page raises intents; the window owns every consequence,
         // because it owns the storage provider, the dialogs and the session.
@@ -212,6 +213,32 @@ public partial class MainWindow : Window
         {
             Gesture = new KeyGesture(Key.S, KeyModifiers.Control | KeyModifiers.Shift),
             Command = new RelayCommand(() => { CommitFocusedEdit(); OnSaveAsClicked(this, new RoutedEventArgs()); }),
+        });
+
+        // History, window-wide. The engine keymap owns Ctrl+Z only while the
+        // native viewport has focus, and the tree owns it only while the tree
+        // does, which left the chord dead in the property panel and the maps
+        // list - the two places a person is most likely to have just made the
+        // edit they want back. A focused field commits first, so undo takes
+        // back the value that was typed rather than the one before it.
+        //
+        // Not blocked while a field is focused: a TextBox handles Ctrl+Z for
+        // its own text and marks the event handled, so its editing history
+        // still wins where it should.
+        KeyBindings.Add(new KeyBinding
+        {
+            Gesture = new KeyGesture(Key.Z, KeyModifiers.Control),
+            Command = new RelayCommand(() => { CommitFocusedEdit(); _session?.Post(EditorHostCommand.Undo); }),
+        });
+        KeyBindings.Add(new KeyBinding
+        {
+            Gesture = new KeyGesture(Key.Y, KeyModifiers.Control),
+            Command = new RelayCommand(() => { CommitFocusedEdit(); _session?.Post(EditorHostCommand.Redo); }),
+        });
+        KeyBindings.Add(new KeyBinding
+        {
+            Gesture = new KeyGesture(Key.Z, KeyModifiers.Control | KeyModifiers.Shift),
+            Command = new RelayCommand(() => { CommitFocusedEdit(); _session?.Post(EditorHostCommand.Redo); }),
         });
 
         _pump = new DispatcherTimer(

@@ -8,7 +8,11 @@
   <!-- The open project's maps: the manifest's order, then anything on disk
        the manifest does not name, marked instead of silently adopted. A
        panel rather than a menu, and not only for reachability: a menu's
-       dropdown would cross the viewport, where it is invisible. -->
+       dropdown would cross the viewport, where it is invisible.
+
+       Rows are dense and flat, the same idiom as the scene tree beneath it.
+       A bordered rounded tile per map is a card grid, which costs three times
+       the height and reads as a web page rather than a tool. -->
 
   <UserControl.Resources>
     <!-- Shared by every row; DataContext arrives from the row that opened it.
@@ -23,6 +27,35 @@
     </ContextMenu>
   </UserControl.Resources>
 
+  <UserControl.Styles>
+    <Style Selector="Button.maprow">
+      <Setter Property="Height" Value="24" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    </Style>
+    <Style Selector="Button.maprow /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    </Style>
+    <Style Selector="Button.maprow:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource SpectraRowHover}" />
+    </Style>
+    <Style Selector="Button.maprow:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource SpectraControlPressed}" />
+    </Style>
+    <Style Selector="Button.maprow TextBlock.mapname">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+    </Style>
+    <Style Selector="Button.maprow:pointerover TextBlock.mapname">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+    </Style>
+  </UserControl.Styles>
+
   <DockPanel>
     <!-- No panel header: the dock's tool chrome already names this "Maps".
          With no project open the pane cannot collapse (its dock reserves the
@@ -33,24 +66,24 @@
                Foreground="{StaticResource SpectraTextMuted}"
                IsVisible="{Binding !HasProject}" />
 
-    <ScrollViewer MaxHeight="132" HorizontalScrollBarVisibility="Disabled"
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                   VerticalAlignment="Top" IsVisible="{Binding HasProject}">
-      <ItemsControl ItemsSource="{Binding ProjectMaps}" Margin="8,6">
+      <ItemsControl ItemsSource="{Binding ProjectMaps}" Margin="4,4,4,6">
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="shell:ProjectMapRow">
-            <Button Classes="card" Margin="0,0,0,4" Click="OnMapClicked"
+            <Button Classes="maprow" Click="OnMapClicked"
                     ContextMenu="{StaticResource MapMenu}"
                     ToolTip.Tip="{Binding RelativePath}">
-              <Grid ColumnDefinitions="Auto,*,Auto" Margin="8,4">
+              <Grid ColumnDefinitions="10,*,Auto" Margin="4,0,8,0">
                 <!-- The startup dot: which map the project boots. -->
-                <Border Grid.Column="0" Width="6" Height="6" CornerRadius="3"
-                        VerticalAlignment="Center"
+                <Border Grid.Column="0" Width="5" Height="5"
+                        CornerRadius="{StaticResource SpectraRadius2}"
+                        HorizontalAlignment="Left" VerticalAlignment="Center"
+                        Margin="2,0,0,0"
                         Background="{StaticResource SpectraAccent}"
                         IsVisible="{Binding IsStartup}" />
-                <TextBlock Grid.Column="1" Text="{Binding Name}"
-                           Margin="6,0,0,0"
-                           FontSize="{StaticResource SpectraFontSecondary}"
-                           Foreground="{StaticResource SpectraTextBody}"
+                <TextBlock Grid.Column="1" Classes="mapname" Text="{Binding Name}"
+                           FontSize="{StaticResource SpectraFontBase}"
                            TextTrimming="CharacterEllipsis"
                            VerticalAlignment="Center" />
                 <TextBlock Grid.Column="2" Text="unlisted"

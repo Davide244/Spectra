@@ -47,6 +47,12 @@ public sealed class SceneTreeRowTests
             Added(Branch, Root, "Branch", 0),
             Added(Leaf, Branch, "Leaf", 0),
             Added(Sibling, Root, "Sibling", 1)));
+
+        // Closed deliberately. A top-level row now OPENS by default, so a
+        // freshly opened project shows its scene rather than the word "Root";
+        // these tests are about the projection's mechanics, so they start from
+        // the fully closed state and say which rows they opened.
+        tree.ToggleExpanded(tree.Roots[0]);
         return tree;
     }
 

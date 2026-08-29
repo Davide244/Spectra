@@ -1,6 +1,6 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
-using SpectraEngine.Core;
 using System;
 using System.Collections.Generic;
 
@@ -8,9 +8,9 @@ namespace SpectraEngine.Editor.Shell;
 
 /// <summary>
 /// One recent project as the start page shows it: the record, plus the labels
-/// the card binds.
+/// the row binds.
 /// </summary>
-/// <param name="Source">The stored entry, handed back on click.</param>
+/// <param name="Source">The stored entry, handed back on activation.</param>
 /// <param name="Name">The project's display name.</param>
 /// <param name="Path">The project folder, shown in full so two same-named projects tell apart.</param>
 /// <param name="OpenedLabel">When it was last opened, as a short phrase.</param>
@@ -26,6 +26,12 @@ public sealed record RecentProjectRow(RecentProject Source, string Name, string 
 /// to the window, which owns the storage provider and the engine. A page that
 /// opened projects itself would be a second copy of that logic, one modal
 /// dialog away from drifting.
+/// <para>
+/// <b>The filter is the page's own state, not the shell's.</b> It narrows a
+/// list of at most a handful of rows that nothing else in the app displays, so
+/// putting it on <c>ShellModel</c> beside the scene filter would be a second
+/// meaning for the same word in the same session.
+/// </para>
 /// </remarks>
 public partial class StartPage : UserControl
 {
@@ -38,7 +44,7 @@ public partial class StartPage : UserControl
     /// <summary>The user asked to open a loose map bundle, outside any project.</summary>
     public event Action? OpenMapRequested;
 
-    /// <summary>The user clicked a recent-project card.</summary>
+    /// <summary>The user activated a recent-project row.</summary>
     public event Action<RecentProject>? RecentProjectPicked;
 
     /// <summary>The user asked to drop a recent entry from the list.</summary>
@@ -47,28 +53,31 @@ public partial class StartPage : UserControl
     /// <summary>The user asked to see a recent project in the OS file browser.</summary>
     public event Action<RecentProject>? RecentProjectRevealRequested;
 
+    // Everything known, and the subset the filter admits. Kept apart so
+    // typing never loses entries: the filter is a view, and clearing it must
+    // bring the rest back without asking the shell to re-read its settings.
+    private readonly List<RecentProjectRow> _all = [];
+    private readonly List<RecentProjectRow> _shown = [];
+
     public StartPage()
     {
         InitializeComponent();
-        VersionLabel.Text = EngineInfo.VersionString;
     }
 
-    /// <summary>Rebuilds the recent list. Cheap: it is at most ten cards.</summary>
+    /// <summary>Rebuilds the recent list. Cheap: it is at most ten rows.</summary>
     public void ShowRecents(IReadOnlyList<RecentProject> recents)
     {
         ArgumentNullException.ThrowIfNull(recents);
 
-        var rows = new List<RecentProjectRow>(recents.Count);
+        _all.Clear();
         foreach (RecentProject recent in recents)
-            rows.Add(new RecentProjectRow(recent, recent.Name, recent.Path, OpenedLabel(recent.OpenedUtc)));
+            _all.Add(new RecentProjectRow(recent, recent.Name, recent.Path, OpenedLabel(recent.OpenedUtc)));
 
-        RecentList.ItemsSource = rows;
-        EmptyLabel.IsVisible = rows.Count == 0;
-        RecentCountLabel.Text = rows.Count == 0 ? string.Empty : rows.Count.ToString();
+        ApplyFilter();
     }
 
     // "today", "yesterday", or the date: precise enough to pick between two
-    // projects, short enough not to become the card's loudest text.
+    // projects, short enough not to become the row's loudest text.
     private static string OpenedLabel(DateTime openedUtc)
     {
         if (openedUtc == DateTime.MinValue)
@@ -85,18 +94,96 @@ public partial class StartPage : UserControl
         };
     }
 
+    private void ApplyFilter()
+    {
+        string query = (FilterBox.Text ?? string.Empty).Trim();
+
+        _shown.Clear();
+        foreach (RecentProjectRow row in _all)
+        {
+            // Name OR path: half of telling two projects apart is where they
+            // live, so a filter that only searched names would be useless for
+            // exactly the case a filter exists for.
+            if (query.Length == 0 ||
+                row.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                row.Path.Contains(query, StringComparison.OrdinalIgnoreCase))
+            {
+                _shown.Add(row);
+            }
+        }
+
+        // Assigned rather than patched: at most ten rows, rebuilt only when
+        // the settings change or a key is typed, and nothing here has scroll
+        // or selection worth preserving across a filter change.
+        RecentList.ItemsSource = null;
+        RecentList.ItemsSource = _shown;
+
+        RecentList.IsVisible = _shown.Count > 0;
+        EmptyLabel.IsVisible = _shown.Count == 0;
+        EmptyLabel.Text = _all.Count == 0
+            ? "Nothing yet. A project you create or open appears here."
+            : $"No recent project matches '{query}'.";
+    }
+
+    private void OnFilterChanged(object? sender, TextChangedEventArgs e) => ApplyFilter();
+
+    private void OnFilterKeyDown(object? sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Escape:
+                FilterBox.Text = string.Empty;
+                e.Handled = true;
+                break;
+
+            // Down out of the box and Enter both hand over to the list, so a
+            // filter-then-open is one uninterrupted keyboard gesture.
+            case Key.Down when _shown.Count > 0:
+                RecentList.SelectedIndex = 0;
+                RecentList.Focus();
+                e.Handled = true;
+                break;
+
+            case Key.Enter when _shown.Count > 0:
+                RecentProjectPicked?.Invoke(_shown[0].Source);
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void OnRecentActivated(object? sender, TappedEventArgs e)
+    {
+        if (RecentList.SelectedItem is RecentProjectRow row)
+            RecentProjectPicked?.Invoke(row.Source);
+    }
+
+    private void OnRecentKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (RecentList.SelectedItem is not RecentProjectRow row)
+            return;
+
+        switch (e.Key)
+        {
+            case Key.Enter:
+                RecentProjectPicked?.Invoke(row.Source);
+                e.Handled = true;
+                break;
+
+            // Forgetting an entry, not deleting a project: the list is the
+            // only thing this touches, which is why it needs no confirmation.
+            case Key.Delete:
+                RecentProjectForgotten?.Invoke(row.Source);
+                e.Handled = true;
+                break;
+        }
+    }
+
     private void OnNewProjectClicked(object? sender, RoutedEventArgs e) => NewProjectRequested?.Invoke();
     private void OnOpenProjectClicked(object? sender, RoutedEventArgs e) => OpenProjectRequested?.Invoke();
     private void OnOpenMapClicked(object? sender, RoutedEventArgs e) => OpenMapRequested?.Invoke();
 
-    private void OnRecentClicked(object? sender, RoutedEventArgs e)
-    {
-        if (sender is Button { DataContext: RecentProjectRow row })
-            RecentProjectPicked?.Invoke(row.Source);
-    }
-
     // Menu handlers read the row from the item's DataContext, inherited from
-    // the card the shared menu was opened over.
+    // the row the shared menu was opened over.
     private static RecentProjectRow? MenuRow(object? sender) =>
         (sender as Control)?.DataContext as RecentProjectRow;
 

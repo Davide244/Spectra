@@ -121,6 +121,25 @@
           <Button Classes="tab" Classes.active="{Binding IsViewTab}" Content="View" Click="OnViewTabClicked" />
         </StackPanel>
 
+        <!-- With nothing open the bar carries the product's identity where the
+             session cluster otherwise sits, so the start page needs no header
+             of its own and the bar never changes height. -->
+        <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8"
+                    VerticalAlignment="Center" Margin="0,0,12,0"
+                    IsVisible="{Binding !HasSession}">
+          <Border Width="11" Height="11"
+                  CornerRadius="{StaticResource SpectraRadius2}"
+                  Background="{StaticResource SpectraAccent}"
+                  VerticalAlignment="Center" />
+          <TextBlock Text="Spectra Editor"
+                     FontSize="{StaticResource SpectraFontBase}"
+                     Foreground="{StaticResource SpectraTextBody}"
+                     VerticalAlignment="Center" />
+          <TextBlock x:Name="VersionLabel" Classes="value"
+                     Foreground="{StaticResource SpectraTextMuted}"
+                     VerticalAlignment="Center" />
+        </StackPanel>
+
         <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="2"
                     VerticalAlignment="Center" Margin="0,0,6,0"
                     IsVisible="{Binding HasSession}">
@@ -396,11 +415,13 @@
                    Control assigned to Tool.Content is returned as-is by the
                    dock's builder — one live, event-wired panel instance that
                    survives every re-dock and float. -->
-              <dm:ToolDock Id="MapsDock" Alignment="Top" Proportion="0.28">
+              <!-- Small: a project has a handful of maps, and every pixel this
+                   pane does not need belongs to the scene tree under it. -->
+              <dm:ToolDock Id="MapsDock" Alignment="Top" Proportion="0.16">
                 <dm:Tool x:Name="MapsTool" Id="Maps" Title="Maps" CanClose="False" />
               </dm:ToolDock>
               <dm:ProportionalDockSplitter />
-              <dm:ToolDock Id="SceneDock" Alignment="Left" Proportion="0.72">
+              <dm:ToolDock Id="SceneDock" Alignment="Left" Proportion="0.84">
                 <dm:Tool x:Name="SceneTool" Id="Scene" Title="Scene" CanClose="False" />
               </dm:ToolDock>
             </dm:ProportionalDock>

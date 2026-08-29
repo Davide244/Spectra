@@ -49,6 +49,11 @@ public sealed class SceneTreeRevealTests
                 Added(Sibling, Root, "Sibling", 1),
             },
         });
+
+        // Closed deliberately: a top-level row now opens by default (so a
+        // freshly opened project shows its scene), and what these tests are
+        // about is what the REVEAL opens, which needs a known closed start.
+        tree.ToggleExpanded(tree.Roots[0]);
         return tree;
     }
 
