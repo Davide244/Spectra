@@ -159,6 +159,81 @@
     <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
   </Style>
 
+  <!-- ─── Command-bar tabs ─────────────────────────────────
+       A tab is text with a 2px bottom bar, never a lit icon: the bar says
+       "this strip is showing" without spending the accent on a fill. The
+       border rides the template presenter, which supports per-side
+       thickness, so the inactive state reserves the same 2px and nothing
+       jumps when the selection moves. -->
+  <Style Selector="Button.tab">
+    <Setter Property="Height" Value="30" />
+    <Setter Property="Padding" Value="12,0" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="0" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+    <Setter Property="VerticalAlignment" Value="Stretch" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button.tab /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0,0,0,2" />
+    <Setter Property="CornerRadius" Value="0" />
+  </Style>
+  <Style Selector="Button.tab:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
+  </Style>
+  <Style Selector="Button.tab:pointerover">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
+  <Style Selector="Button.tab.active /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+  </Style>
+  <Style Selector="Button.tab.active">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
+
+  <!-- The active state a chip can carry when it is a TOGGLE rather than a
+       two-way choice: the View strip's debug visualisations are genuinely
+       on/off, so they light the way tool buttons do. -->
+  <Style Selector="Button.chip.active /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraControlChecked}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+  </Style>
+  <Style Selector="Button.chip.active">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
+
+  <!-- ─── Snap increment fields ────────────────────────────
+       Typed entry beside the snap toggle: one number, one unit, committed on
+       Enter or blur exactly as a property field is. -->
+  <Style Selector="TextBox.snapfield">
+    <Setter Property="Width" Value="46" />
+    <Setter Property="Height" Value="{StaticResource SpectraControlHeight}" />
+    <Setter Property="MinHeight" Value="{StaticResource SpectraControlHeight}" />
+    <Setter Property="MinWidth" Value="0" />
+    <Setter Property="Padding" Value="4,2" />
+    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+    <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="TextBox.snapfield:pointerover /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
+  </Style>
+  <Style Selector="TextBox.snapfield:focus /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+  </Style>
+
   <!-- ─── Start-page buttons ───────────────────────────────
        The one filled-accent button in the shell, and the fill is
        SpectraAccentRest rather than the brand red: white on #E33A3A is 4.3:1

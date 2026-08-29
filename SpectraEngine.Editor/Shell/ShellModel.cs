@@ -1,6 +1,8 @@
 using Avalonia.Threading;
 using SpectraEngine.Core.Hosting;
+using SpectraEngine.Core.Scene;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 
 namespace SpectraEngine.Editor.Shell;
@@ -104,6 +106,115 @@ public sealed class ShellModel : ObservableObject
     /// ceremony here.
     /// </summary>
     public ObservableCollection<ProjectMapRow> ProjectMaps { get; } = [];
+
+    // ─── Command bar ─────────────────────────────────────
+
+    private string _activeTab = "home";
+
+    /// <summary>Which command strip is showing: <c>home</c> or <c>view</c>.</summary>
+    /// <remarks>
+    /// Purely a UI preference — nothing engine-side changes with the tab, so
+    /// it lives here rather than riding a snapshot.
+    /// </remarks>
+    public string ActiveTab
+    {
+        get => _activeTab;
+        set
+        {
+            if (!Set(ref _activeTab, value))
+                return;
+
+            Raise(nameof(IsHomeTab));
+            Raise(nameof(IsViewTab));
+        }
+    }
+
+    /// <summary>Whether the Home strip is showing.</summary>
+    public bool IsHomeTab => _activeTab == "home";
+
+    /// <summary>Whether the View strip is showing.</summary>
+    public bool IsViewTab => _activeTab == "view";
+
+    private bool _isPlaying;
+    private bool _canPlay;
+
+    /// <summary>Whether play mode is active, for the Play/Stop button's face.</summary>
+    public bool IsPlaying
+    {
+        get => _isPlaying;
+        private set
+        {
+            if (Set(ref _isPlaying, value))
+                Raise(nameof(PlayTip));
+        }
+    }
+
+    /// <summary>Whether play mode can be entered at all (the scene has a character).</summary>
+    public bool CanPlay
+    {
+        get => _canPlay;
+        private set => Set(ref _canPlay, value);
+    }
+
+    /// <summary>The play button's tooltip, which names the exit key while playing.</summary>
+    public string PlayTip => _isPlaying ? "Stop playing  (F8 or Esc)" : "Play  (F8)";
+
+    private DebugVisualization _debugFlags;
+
+    /// <summary>Whether the wireframe overlay is on.</summary>
+    public bool DebugWireframe => (_debugFlags & DebugVisualization.Wireframe) != 0;
+
+    /// <summary>Whether the vertex-marker overlay is on.</summary>
+    public bool DebugVertices => (_debugFlags & DebugVisualization.Vertices) != 0;
+
+    /// <summary>Whether the bounds overlay is on.</summary>
+    public bool DebugAabbs => (_debugFlags & DebugVisualization.Aabbs) != 0;
+
+    /// <summary>Whether the normals overlay is on.</summary>
+    public bool DebugNormals => (_debugFlags & DebugVisualization.Normals) != 0;
+
+    /// <summary>Whether the scene-graph overlay is on.</summary>
+    public bool DebugSceneGraph => (_debugFlags & DebugVisualization.SceneGraph) != 0;
+
+    private IReadOnlyList<string> _pipelineNames = Array.Empty<string>();
+    private string? _pipelineName;
+
+    /// <summary>Every pipeline the backend offers, for the View strip's dropdown.</summary>
+    public IReadOnlyList<string> PipelineNames
+    {
+        get => _pipelineNames;
+        private set => Set(ref _pipelineNames, value);
+    }
+
+    /// <summary>
+    /// The live pipeline. Two-way: the dropdown writes a USER choice here,
+    /// which raises <see cref="PipelineRequested"/>; the snapshot writes the
+    /// engine's answer back under the guard, which raises nothing.
+    /// </summary>
+    /// <remarks>
+    /// The guard is the checkbox rule from the property panel: assigning the
+    /// published value back looks exactly like a selection, and without the
+    /// flag every snapshot would re-request the pipeline it just reported.
+    /// </remarks>
+    public string? PipelineName
+    {
+        get => _pipelineName;
+        set
+        {
+            if (!Set(ref _pipelineName, value))
+                return;
+
+            // Null is the dropdown clearing itself while its items change,
+            // not a person choosing nothing; there is no "no pipeline".
+            if (!_applyingSnapshot && value is { Length: > 0 } requested)
+                PipelineRequested?.Invoke(requested);
+        }
+    }
+
+    /// <summary>Raised when the user picks a pipeline, with its name.</summary>
+    public event Action<string>? PipelineRequested;
+
+    private bool _applyingSnapshot;
 
     // ─── Tool state ──────────────────────────────────────
     // Mirrored as booleans as well as labels, because a toolbar needs to know
@@ -462,26 +573,52 @@ public sealed class ShellModel : ObservableObject
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
-        Fps = snapshot.Fps;
-        FrameTimeMs = snapshot.FrameTimeMs;
-        SelectionCount = snapshot.SelectedIds.Count;
-        UndoDepth = snapshot.UndoDepth;
-        RedoDepth = snapshot.RedoDepth;
-        CompileCount = snapshot.StaticWorldCompileCount;
-
-        GizmoMode = snapshot.GizmoModeName ?? "move";
-        GizmoStyle = snapshot.GizmoStyleName ?? "Studio";
-        Orientation = snapshot.GizmoOrientationName ?? "world";
-        SnapEnabled = snapshot.SnapEnabled;
-        SnapIncrement = snapshot.SnapIncrement;
-        Navigation = snapshot.NavigationModeName ?? "-";
-
-        _properties?.Apply(snapshot.SelectionProperties, snapshot.SelectedIds.Count);
-
-        if (_tree is { } tree)
+        // Guards the two-way bindings (the pipeline dropdown today): writing
+        // the engine's reported value back must not read as the user picking
+        // it and echo a request straight back at the engine.
+        _applyingSnapshot = true;
+        try
         {
-            NodeCount = tree.Count;
-            MatchCount = _filterText.Length == 0 ? tree.Count : tree.MatchCount;
+            Fps = snapshot.Fps;
+            FrameTimeMs = snapshot.FrameTimeMs;
+            SelectionCount = snapshot.SelectedIds.Count;
+            UndoDepth = snapshot.UndoDepth;
+            RedoDepth = snapshot.RedoDepth;
+            CompileCount = snapshot.StaticWorldCompileCount;
+
+            GizmoMode = snapshot.GizmoModeName ?? "move";
+            GizmoStyle = snapshot.GizmoStyleName ?? "Studio";
+            Orientation = snapshot.GizmoOrientationName ?? "world";
+            SnapEnabled = snapshot.SnapEnabled;
+            SnapIncrement = snapshot.SnapIncrement;
+            Navigation = snapshot.NavigationModeName ?? "-";
+
+            IsPlaying = snapshot.IsPlaying;
+            CanPlay = snapshot.CanPlay;
+            PipelineNames = snapshot.PipelineNames;
+            PipelineName = snapshot.PipelineName;
+
+            if (_debugFlags != snapshot.DebugFlags)
+            {
+                _debugFlags = snapshot.DebugFlags;
+                Raise(nameof(DebugWireframe));
+                Raise(nameof(DebugVertices));
+                Raise(nameof(DebugAabbs));
+                Raise(nameof(DebugNormals));
+                Raise(nameof(DebugSceneGraph));
+            }
+
+            _properties?.Apply(snapshot.SelectionProperties, snapshot.SelectedIds.Count);
+
+            if (_tree is { } tree)
+            {
+                NodeCount = tree.Count;
+                MatchCount = _filterText.Length == 0 ? tree.Count : tree.MatchCount;
+            }
+        }
+        finally
+        {
+            _applyingSnapshot = false;
         }
     }
 }

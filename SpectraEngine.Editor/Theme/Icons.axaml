@@ -73,4 +73,9 @@
   <StreamGeometry x:Key="IconSearch">M7,2.5 A4.5,4.5 0 1 0 7,11.5 A4.5,4.5 0 1 0 7,2.5 M10.5,10.5 L14,14</StreamGeometry>
   <StreamGeometry x:Key="IconClear">M4.5,4.5 L11.5,11.5 M11.5,4.5 L4.5,11.5</StreamGeometry>
 
+  <!-- ─── Play mode ────────────────────────────────────────
+       The universal pair, stroked like everything else here. -->
+  <StreamGeometry x:Key="IconPlay">M5.5,3.5 L12.5,8 L5.5,12.5 Z</StreamGeometry>
+  <StreamGeometry x:Key="IconStop">M4.5,4.5 L11.5,4.5 L11.5,11.5 L4.5,11.5 Z</StreamGeometry>
+
 </ResourceDictionary>

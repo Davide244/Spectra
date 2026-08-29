@@ -185,129 +185,211 @@
       <Setter Property="Margin" Value="8,0" />
       <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
+
+    <!-- The play button's two faces: go is the success green (the brand red
+         means selected here, and a red play button reads as record), stop is
+         the accent because stopping IS the loud state. The disabled override
+         comes LAST so it wins on order over both. -->
+    <Style Selector="Button.playbtn Path.playglyph">
+      <Setter Property="Stroke" Value="{StaticResource SpectraSuccess}" />
+    </Style>
+    <Style Selector="Button.playbtn Path.stopglyph">
+      <Setter Property="Stroke" Value="{StaticResource SpectraAccent}" />
+    </Style>
+    <Style Selector="Button.playbtn:disabled Path">
+      <Setter Property="Stroke" Value="{StaticResource SpectraTextDisabled}" />
+    </Style>
   </Window.Styles>
 
   <Grid RowDefinitions="Auto,Auto,*,Auto">
 
-    <!-- ═══ Menu ═════════════════════════════════════════ -->
+    <!-- ═══ Tab strip ════════════════════════════════════
+         The command surface is TABBED, the direction Studio itself converged
+         on: one slim strip of grouped controls per tab instead of a toolbar
+         with a control-count ceiling. File stays a real menu at the far left,
+         where its dropdown falls over the 280px tree column - the airspace
+         rule that retired the Edit and View menus, whose flyouts would have
+         opened past it and vanished into the viewport. Their verbs live in
+         the strips now. Play sits OUTSIDE the tabs: stopping a run must never
+         be two clicks away. -->
     <Border Grid.Row="0" Background="{StaticResource SpectraBgPanel}">
-      <Menu VerticalAlignment="Center">
-        <!--
-          The File dropdown falls over the SCENE TREE, not the viewport, because
-          the menu bar sits at the left of the window and the tree column is 280
-          wide. That is load-bearing rather than lucky: the viewport is a native
-          child window that composites above anything Avalonia draws, so a
-          dropdown that reached across it would be invisible from wherever it
-          crossed the edge. Anything wider than the tree column has to become a
-          modal window instead.
-        -->
-        <MenuItem Header="_File">
-          <MenuItem Header="New _project..." Click="OnNewProjectClicked" />
-          <MenuItem Header="Open p_roject..." Click="OnOpenProjectClicked" />
-          <MenuItem Header="_Close project" Click="OnCloseProjectClicked" IsEnabled="{Binding HasSession}" />
-          <Separator />
-          <MenuItem Header="_New map" InputGesture="Ctrl+N" Click="OnNewMapClicked" IsEnabled="{Binding HasSession}" />
-          <MenuItem Header="_Open map..." InputGesture="Ctrl+O" Click="OnOpenMapClicked" IsEnabled="{Binding HasSession}" />
-          <Separator />
-          <MenuItem Header="_Save" InputGesture="Ctrl+S" Click="OnSaveClicked" IsEnabled="{Binding HasSession}" />
-          <MenuItem Header="Save _as..." InputGesture="Ctrl+Shift+S" Click="OnSaveAsClicked" IsEnabled="{Binding HasSession}" />
-          <Separator />
-          <MenuItem Header="E_xit" Click="OnExitClicked" />
-        </MenuItem>
-        <MenuItem Header="_Edit">
-          <MenuItem Header="_Undo" InputGesture="Ctrl+Z" Click="OnUndoClicked" IsEnabled="{Binding CanUndo}" />
-          <MenuItem Header="_Redo" InputGesture="Ctrl+Y" Click="OnRedoClicked" IsEnabled="{Binding CanRedo}" />
-          <Separator />
-          <MenuItem Header="_Duplicate" InputGesture="Ctrl+D" Click="OnDuplicateClicked" IsEnabled="{Binding HasSelection}" />
-          <MenuItem Header="De_lete" InputGesture="Delete" Click="OnDeleteClicked" IsEnabled="{Binding HasSelection}" />
-          <Separator />
-          <MenuItem Header="_Group" InputGesture="Ctrl+G" Click="OnGroupClicked" IsEnabled="{Binding HasSelection}" />
-          <MenuItem Header="U_ngroup" InputGesture="Ctrl+Shift+G" Click="OnUngroupClicked" IsEnabled="{Binding HasSelection}" />
-          <Separator />
-          <MenuItem Header="Convert brush kind" InputGesture="Ctrl+T" Click="OnToggleBrushKindClicked" IsEnabled="{Binding HasSelection}" />
-        </MenuItem>
-        <MenuItem Header="_View">
-          <MenuItem Header="_Frame selection" InputGesture="F" Click="OnFrameClicked" IsEnabled="{Binding HasSelection}" />
-          <MenuItem Header="Toggle _navigation model" InputGesture="F7" Click="OnToggleNavigationClicked" IsEnabled="{Binding HasSession}" />
-          <Separator />
-          <MenuItem Header="Focus _viewport" Click="OnFocusViewportClicked" IsEnabled="{Binding HasSession}" />
-        </MenuItem>
-      </Menu>
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+        <Menu Grid.Column="0" VerticalAlignment="Center">
+          <MenuItem Header="_File">
+            <MenuItem Header="New _project..." Click="OnNewProjectClicked" />
+            <MenuItem Header="Open p_roject..." Click="OnOpenProjectClicked" />
+            <MenuItem Header="_Close project" Click="OnCloseProjectClicked" IsEnabled="{Binding HasSession}" />
+            <Separator />
+            <MenuItem Header="_New map" InputGesture="Ctrl+N" Click="OnNewMapClicked" IsEnabled="{Binding HasSession}" />
+            <MenuItem Header="_Open map..." InputGesture="Ctrl+O" Click="OnOpenMapClicked" IsEnabled="{Binding HasSession}" />
+            <Separator />
+            <MenuItem Header="_Save" InputGesture="Ctrl+S" Click="OnSaveClicked" IsEnabled="{Binding HasSession}" />
+            <MenuItem Header="Save _as..." InputGesture="Ctrl+Shift+S" Click="OnSaveAsClicked" IsEnabled="{Binding HasSession}" />
+            <Separator />
+            <MenuItem Header="E_xit" Click="OnExitClicked" />
+          </MenuItem>
+        </Menu>
+
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="4,0,0,0"
+                    IsVisible="{Binding HasSession}">
+          <Button Classes="tab" Classes.active="{Binding IsHomeTab}" Content="Home" Click="OnHomeTabClicked" />
+          <Button Classes="tab" Classes.active="{Binding IsViewTab}" Content="View" Click="OnViewTabClicked" />
+        </StackPanel>
+
+        <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="2"
+                    VerticalAlignment="Center" Margin="0,0,6,0"
+                    IsVisible="{Binding HasSession}">
+          <TextBlock Classes="value" Text="{Binding Navigation}"
+                     Foreground="{StaticResource SpectraTextMuted}"
+                     VerticalAlignment="Center" Margin="0,0,8,0" />
+          <Button Classes="tool playbtn" Click="OnPlayClicked"
+                  IsEnabled="{Binding CanPlay}" ToolTip.Tip="{Binding PlayTip}">
+            <Panel>
+              <Path Classes="playglyph" Data="{StaticResource IconPlay}" IsVisible="{Binding !IsPlaying}" />
+              <Path Classes="stopglyph" Data="{StaticResource IconStop}" IsVisible="{Binding IsPlaying}" />
+            </Panel>
+          </Button>
+        </StackPanel>
+      </Grid>
     </Border>
 
-    <!-- ═══ Toolbar ══════════════════════════════════════
-         Fourteen controls is the ceiling; nothing goes in without something
-         coming out. Space and style stay permanently visible because they are
-         silent modifiers: they change what the NEXT drag does with no other
-         signal, which makes them the top two sources of "why did it move like
-         that". -->
+    <!-- ═══ Command strips ═══════════════════════════════
+         One per tab, toggled by visibility so the row's height never moves.
+         Silent modifiers (frame, style, snap) stay on Home, permanently
+         visible while editing: they change what the NEXT drag does with no
+         other signal. -->
     <Border Grid.Row="1"
             Height="{StaticResource SpectraToolbarHeight}"
             Background="{StaticResource SpectraBgPanel}"
             BorderBrush="{StaticResource SpectraBorderStrong}"
             BorderThickness="0,1"
             IsVisible="{Binding HasSession}">
-      <Grid ColumnDefinitions="Auto,*,Auto" Margin="8,0">
+      <Panel Margin="8,0">
 
-        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
-          <Button Classes="tool" Classes.active="{Binding IsMoveActive}" Click="OnMoveClicked" ToolTip.Tip="Move  (2)">
-            <Path Data="{StaticResource IconMove}" />
-          </Button>
-          <Button Classes="tool" Classes.active="{Binding IsRotateActive}" Click="OnRotateClicked" ToolTip.Tip="Rotate  (4)">
-            <Path Data="{StaticResource IconRotate}" />
-          </Button>
-          <Button Classes="tool" Classes.active="{Binding IsResizeActive}" Click="OnResizeClicked" ToolTip.Tip="Resize  (3)">
-            <Path Data="{StaticResource IconResize}" />
-          </Button>
+        <!-- ─── Home ─────────────────────────────────────── -->
+        <Grid ColumnDefinitions="Auto,*,Auto" IsVisible="{Binding IsHomeTab}">
+          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+            <Button Classes="tool" Classes.active="{Binding IsMoveActive}" Click="OnMoveClicked" ToolTip.Tip="Move  (2)">
+              <Path Data="{StaticResource IconMove}" />
+            </Button>
+            <Button Classes="tool" Classes.active="{Binding IsRotateActive}" Click="OnRotateClicked" ToolTip.Tip="Rotate  (4)">
+              <Path Data="{StaticResource IconRotate}" />
+            </Button>
+            <Button Classes="tool" Classes.active="{Binding IsResizeActive}" Click="OnResizeClicked" ToolTip.Tip="Resize  (3)">
+              <Path Data="{StaticResource IconResize}" />
+            </Button>
 
-          <Border Classes="groupsep" />
+            <Border Classes="groupsep" />
 
-          <Button Classes="chip" Content="{Binding Orientation}" Click="OnOrientationClicked"
-                  ToolTip.Tip="Axis frame drags resolve against  (X)" />
-          <Button Classes="chip" Content="{Binding GizmoStyle}" Click="OnStyleClicked"
-                  ToolTip.Tip="Handle roster and what a resize holds still  (Y)" />
+            <Button Classes="chip" Content="{Binding Orientation}" Click="OnOrientationClicked"
+                    ToolTip.Tip="Axis frame drags resolve against  (X)" />
+            <Button Classes="chip" Content="{Binding GizmoStyle}" Click="OnStyleClicked"
+                    ToolTip.Tip="Handle roster and what a resize holds still  (Y)" />
 
-          <Border Classes="groupsep" />
+            <Border Classes="groupsep" />
 
-          <Button Classes="tool" Classes.active="{Binding SnapEnabled}" Click="OnSnapClicked"
-                  ToolTip.Tip="Snap  (G),  finer / coarser with [ and ]">
-            <Path Data="{StaticResource IconSnap}" />
-          </Button>
-          <TextBlock Classes="value" Text="{Binding SnapLabel}" Margin="2,0,0,0" MinWidth="86"
-                     Foreground="{StaticResource SpectraTextMuted}" />
+            <Button Classes="tool" Classes.active="{Binding SnapEnabled}" Click="OnSnapClicked"
+                    ToolTip.Tip="Snap  (G),  finer / coarser with [ and ]">
+              <Path Data="{StaticResource IconSnap}" />
+            </Button>
+            <!-- Typed increments, one per tool because the units differ: move
+                 and resize are world units, rotate is degrees. Enter or blur
+                 commits, Escape reverts - the property panel's contract. -->
+            <TextBlock Classes="label" Text="mv" Margin="6,0,3,0" />
+            <TextBox x:Name="SnapMoveBox" Classes="snapfield"
+                     GotFocus="OnSnapFieldFocused"
+                     LostFocus="OnSnapFieldBlurred" KeyDown="OnSnapFieldKeyDown"
+                     ToolTip.Tip="Move grid, world units" />
+            <TextBlock Classes="label" Text="rot" Margin="6,0,3,0" />
+            <TextBox x:Name="SnapRotateBox" Classes="snapfield"
+                     GotFocus="OnSnapFieldFocused"
+                     LostFocus="OnSnapFieldBlurred" KeyDown="OnSnapFieldKeyDown"
+                     ToolTip.Tip="Rotate step, degrees" />
+            <TextBlock Classes="label" Text="sz" Margin="6,0,3,0" />
+            <TextBox x:Name="SnapResizeBox" Classes="snapfield"
+                     GotFocus="OnSnapFieldFocused"
+                     LostFocus="OnSnapFieldBlurred" KeyDown="OnSnapFieldKeyDown"
+                     ToolTip.Tip="Resize step, world units" />
 
-          <Border Classes="groupsep" />
+            <Border Classes="groupsep" />
 
-          <Button Classes="tool" Click="OnUndoClicked" IsEnabled="{Binding CanUndo}" ToolTip.Tip="Undo  (Ctrl+Z)">
-            <Path Data="{StaticResource IconUndo}" />
-          </Button>
-          <Button Classes="tool" Click="OnRedoClicked" IsEnabled="{Binding CanRedo}" ToolTip.Tip="Redo  (Ctrl+Y)">
-            <Path Data="{StaticResource IconRedo}" />
-          </Button>
+            <Button Classes="tool" Click="OnUndoClicked" IsEnabled="{Binding CanUndo}" ToolTip.Tip="Undo  (Ctrl+Z)">
+              <Path Data="{StaticResource IconUndo}" />
+            </Button>
+            <Button Classes="tool" Click="OnRedoClicked" IsEnabled="{Binding CanRedo}" ToolTip.Tip="Redo  (Ctrl+Y)">
+              <Path Data="{StaticResource IconRedo}" />
+            </Button>
 
-          <Border Classes="groupsep" />
+            <Border Classes="groupsep" />
 
-          <Button Classes="tool" Click="OnDuplicateClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Duplicate  (Ctrl+D)">
-            <Path Data="{StaticResource IconDuplicate}" />
-          </Button>
-          <Button Classes="tool" Click="OnGroupClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Group  (Ctrl+G)">
-            <Path Data="{StaticResource IconGroupNodes}" />
-          </Button>
-          <Button Classes="tool" Click="OnUngroupClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Ungroup  (Ctrl+Shift+G)">
-            <Path Data="{StaticResource IconUngroupNodes}" />
-          </Button>
-          <Button Classes="tool" Click="OnDeleteClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Delete  (Del)">
-            <Path Data="{StaticResource IconDelete}" />
-          </Button>
-        </StackPanel>
+            <Button Classes="tool" Click="OnDuplicateClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Duplicate  (Ctrl+D)">
+              <Path Data="{StaticResource IconDuplicate}" />
+            </Button>
+            <Button Classes="tool" Click="OnGroupClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Group  (Ctrl+G)">
+              <Path Data="{StaticResource IconGroupNodes}" />
+            </Button>
+            <Button Classes="tool" Click="OnUngroupClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Ungroup  (Ctrl+Shift+G)">
+              <Path Data="{StaticResource IconUngroupNodes}" />
+            </Button>
+            <Button Classes="tool" Click="OnDeleteClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Delete  (Del)">
+              <Path Data="{StaticResource IconDelete}" />
+            </Button>
 
-        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
-          <TextBlock Classes="value" Text="{Binding Navigation}" Foreground="{StaticResource SpectraTextMuted}" Margin="0,0,8,0" />
-          <Button Classes="tool" Click="OnFrameClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Frame selection  (F)">
-            <Path Data="{StaticResource IconFrame}" />
-          </Button>
-        </StackPanel>
-      </Grid>
+            <Border Classes="groupsep" />
+
+            <Button Classes="tool" Click="OnToggleBrushKindClicked" IsEnabled="{Binding HasSelection}"
+                    ToolTip.Tip="Convert between world geometry and part  (Ctrl+T)">
+              <Path Data="{StaticResource IconBrushPart}" />
+            </Button>
+          </StackPanel>
+
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+            <Button Classes="tool" Click="OnFrameClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Frame selection  (F)">
+              <Path Data="{StaticResource IconFrame}" />
+            </Button>
+          </StackPanel>
+        </Grid>
+
+        <!-- ─── View ─────────────────────────────────────── -->
+        <Grid ColumnDefinitions="Auto,*,Auto" IsVisible="{Binding IsViewTab}">
+          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+            <!-- Leftmost on purpose: this is the strip's one dropdown, and
+                 from here its popup falls over the tree column rather than
+                 the viewport, where it would be invisible. -->
+            <TextBlock Classes="label" Text="pipeline" Margin="0,0,6,0" />
+            <ComboBox Width="110"
+                      ItemsSource="{Binding PipelineNames}"
+                      SelectedItem="{Binding PipelineName, Mode=TwoWay}"
+                      FontSize="{StaticResource SpectraFontSmall}"
+                      Background="{StaticResource SpectraBgInput}"
+                      ToolTip.Tip="Rendering pipeline  (F6 cycles)" />
+
+            <Border Classes="groupsep" />
+
+            <Button Classes="chip" Classes.active="{Binding DebugWireframe}" Content="wire"
+                    Click="OnDebugWireClicked" ToolTip.Tip="Wireframe overlay  (F1)" />
+            <Button Classes="chip" Classes.active="{Binding DebugVertices}" Content="verts"
+                    Click="OnDebugVerticesClicked" ToolTip.Tip="CSG vertex markers  (F2)" />
+            <Button Classes="chip" Classes.active="{Binding DebugAabbs}" Content="aabbs"
+                    Click="OnDebugAabbsClicked" ToolTip.Tip="Bounds overlay  (F3)" />
+            <Button Classes="chip" Classes.active="{Binding DebugNormals}" Content="normals"
+                    Click="OnDebugNormalsClicked" ToolTip.Tip="Face normals  (F4)" />
+            <Button Classes="chip" Classes.active="{Binding DebugSceneGraph}" Content="graph"
+                    Click="OnDebugSceneGraphClicked" ToolTip.Tip="Node axes and parent links  (F5)" />
+
+            <Border Classes="groupsep" />
+
+            <Button Classes="chip" Content="{Binding Navigation}" Click="OnToggleNavigationClicked"
+                    ToolTip.Tip="Which camera drives the viewport  (F7)" />
+          </StackPanel>
+
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+            <Button Classes="tool" Click="OnFrameClicked" IsEnabled="{Binding HasSelection}" ToolTip.Tip="Frame selection  (F)">
+              <Path Data="{StaticResource IconFrame}" />
+            </Button>
+          </StackPanel>
+        </Grid>
+      </Panel>
     </Border>
 
     <!-- ═══ Start page | editor ═══════════════════════════

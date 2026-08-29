@@ -12,6 +12,7 @@ using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Hosting;
 using SpectraEngine.Core.Maps;
 using SpectraEngine.Core.Projects;
+using SpectraEngine.Core.Scene;
 using SpectraEngine.Editing.Cameras;
 using SpectraEngine.Editing.Gizmos;
 using SpectraEngine.Editing.Commands;
@@ -143,6 +144,37 @@ public partial class MainWindow : Window
         Title = _document.Title;
 
         _shell.Properties = new PropertyPanelModel(OnPropertyEdit);
+
+        // The pipeline dropdown's user choice, forwarded as a request. Wired
+        // once: the session is resolved when the event fires, so it follows
+        // whichever session is live.
+        _shell.PipelineRequested += name => _session?.Host.RequestPipeline(name);
+
+        // Document chords as real key bindings, so they also work while an
+        // Avalonia control has focus - the tree, the filter, a property field.
+        // The viewport intercepts the same four itself (ShellChord), because
+        // while IT has focus Avalonia sees no keyboard at all; two routes, one
+        // handler each, is what makes Ctrl+S work everywhere.
+        KeyBindings.Add(new KeyBinding
+        {
+            Gesture = new KeyGesture(Key.N, KeyModifiers.Control),
+            Command = new RelayCommand(() => OnNewMapClicked(this, new RoutedEventArgs())),
+        });
+        KeyBindings.Add(new KeyBinding
+        {
+            Gesture = new KeyGesture(Key.O, KeyModifiers.Control),
+            Command = new RelayCommand(() => OnOpenMapClicked(this, new RoutedEventArgs())),
+        });
+        KeyBindings.Add(new KeyBinding
+        {
+            Gesture = new KeyGesture(Key.S, KeyModifiers.Control),
+            Command = new RelayCommand(() => OnSaveClicked(this, new RoutedEventArgs())),
+        });
+        KeyBindings.Add(new KeyBinding
+        {
+            Gesture = new KeyGesture(Key.S, KeyModifiers.Control | KeyModifiers.Shift),
+            Command = new RelayCommand(() => OnSaveAsClicked(this, new RoutedEventArgs())),
+        });
 
         _pump = new DispatcherTimer(
             TimeSpan.FromMilliseconds(16), DispatcherPriority.Normal, OnPump);
@@ -508,7 +540,93 @@ public partial class MainWindow : Window
         TrackDirty(snapshot);
 
         _shell.ApplySnapshot(snapshot);
+        RefreshSnapFields(snapshot);
     }
+
+    // --- Snap increment fields -----------------------------------------------
+    //
+    // Three small boxes with the property panel's commit contract: a focused
+    // field stops taking refreshes, Enter and blur commit, Escape reverts, and
+    // unparseable or non-positive text reverts rather than sticking. Plain
+    // code-behind over the controls, like the scroll offsets: the state is two
+    // floats and a focus flag, and a model would be ceremony.
+
+    private void RefreshSnapFields(FrameSnapshot snapshot)
+    {
+        RefreshSnapField(SnapMoveBox, snapshot.MoveSnapIncrement);
+        RefreshSnapField(SnapRotateBox, snapshot.RotateSnapIncrement);
+        RefreshSnapField(SnapResizeBox, snapshot.ResizeSnapIncrement);
+    }
+
+    private static void RefreshSnapField(TextBox box, float value)
+    {
+        // A focused field is being typed into; writing the published value
+        // back would delete characters as they arrive, which reads as a broken
+        // keyboard. The blur or Enter that ends the edit commits it.
+        if (box.IsFocused)
+            return;
+
+        string text = PropertyFieldModel.Format(value);
+        if (box.Text != text)
+            box.Text = text;
+    }
+
+    private void OnSnapFieldFocused(object? sender, FocusChangedEventArgs e)
+    {
+        if (sender is TextBox box)
+            box.SelectAll();
+    }
+
+    private void OnSnapFieldBlurred(object? sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox box)
+            CommitSnapField(box);
+    }
+
+    private void OnSnapFieldKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox box)
+            return;
+
+        switch (e.Key)
+        {
+            case Key.Enter:
+                CommitSnapField(box);
+                e.Handled = true;
+                break;
+
+            case Key.Escape:
+                RevertSnapField(box);
+                _viewport?.Focus();
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void CommitSnapField(TextBox box)
+    {
+        // Refused before anything is posted, the panel's rule: zero and
+        // negative would throw inside the setting on the render thread, and
+        // clamping would write a number nobody asked for.
+        if (PropertyFieldModel.TryParseNumber(box.Text ?? string.Empty, out float value) && value > 0f)
+            _session?.SetSnapIncrement(SnapToolFor(box), value);
+        else
+            RevertSnapField(box);
+    }
+
+    private void RevertSnapField(TextBox box)
+    {
+        FrameSnapshot latest = _latest;
+        float value = ReferenceEquals(box, SnapRotateBox) ? latest.RotateSnapIncrement
+            : ReferenceEquals(box, SnapResizeBox) ? latest.ResizeSnapIncrement
+            : latest.MoveSnapIncrement;
+        box.Text = PropertyFieldModel.Format(value);
+    }
+
+    private GizmoMode SnapToolFor(TextBox box) =>
+        ReferenceEquals(box, SnapRotateBox) ? GizmoMode.Rotate
+            : ReferenceEquals(box, SnapResizeBox) ? GizmoMode.Scale
+            : GizmoMode.Translate;
 
     /// <summary>
     /// Marks the document edited when the undo history has moved at all.
@@ -685,6 +803,27 @@ public partial class MainWindow : Window
 
     // --- Driving the editor --------------------------------------------------
 
+    private void OnHomeTabClicked(object? sender, RoutedEventArgs e) => _shell.ActiveTab = "home";
+    private void OnViewTabClicked(object? sender, RoutedEventArgs e) => _shell.ActiveTab = "view";
+
+    // Set semantics against the displayed state, never a toggle verb: a
+    // toggle sent against a snapshot one publish stale flips the wrong way
+    // exactly when the user clicks fastest, while re-requesting the state
+    // already shown is a no-op.
+    private void OnPlayClicked(object? sender, RoutedEventArgs e) =>
+        _session?.Host.RequestPlayMode(!_shell.IsPlaying);
+
+    private void OnDebugWireClicked(object? sender, RoutedEventArgs e) =>
+        _session?.Host.RequestDebugVisualization(DebugVisualization.Wireframe, !_shell.DebugWireframe);
+    private void OnDebugVerticesClicked(object? sender, RoutedEventArgs e) =>
+        _session?.Host.RequestDebugVisualization(DebugVisualization.Vertices, !_shell.DebugVertices);
+    private void OnDebugAabbsClicked(object? sender, RoutedEventArgs e) =>
+        _session?.Host.RequestDebugVisualization(DebugVisualization.Aabbs, !_shell.DebugAabbs);
+    private void OnDebugNormalsClicked(object? sender, RoutedEventArgs e) =>
+        _session?.Host.RequestDebugVisualization(DebugVisualization.Normals, !_shell.DebugNormals);
+    private void OnDebugSceneGraphClicked(object? sender, RoutedEventArgs e) =>
+        _session?.Host.RequestDebugVisualization(DebugVisualization.SceneGraph, !_shell.DebugSceneGraph);
+
     private void OnMoveClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.UseTranslate);
     private void OnRotateClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.UseRotate);
     private void OnResizeClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.UseScale);
@@ -822,8 +961,6 @@ public partial class MainWindow : Window
     // --- Menu ----------------------------------------------------------------
 
     private void OnExitClicked(object? sender, RoutedEventArgs e) => Close();
-
-    private void OnFocusViewportClicked(object? sender, RoutedEventArgs e) => _viewport?.Focus();
 
     private void OnShellChord(ShellChord chord)
     {
