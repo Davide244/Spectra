@@ -26,6 +26,17 @@
     <PackageVersion Include="Avalonia.Desktop" Version="12.1.1" />
     <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.1" />
     <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.1.1" />
+    <!--
+      Docking. Dock.Avalonia is MIT and did NOT go the commercial route
+      TreeDataGrid 12.x took (verified 2026-08: licence in repo and NuGet).
+      Dock.Model.Avalonia rather than .Mvvm/.ReactiveUI, because its dockables
+      carry Content directly, which is what lets the shell keep its live,
+      event-wired panel controls instead of templating fresh ones per layout
+      change.
+    -->
+    <PackageVersion Include="Dock.Avalonia" Version="12.1.0.6" />
+    <PackageVersion Include="Dock.Avalonia.Themes.Fluent" Version="12.1.0.6" />
+    <PackageVersion Include="Dock.Model.Avalonia" Version="12.1.0.6" />
 
     <!-- Language Server -->
     <PackageVersion Include="OmniSharp.Extensions.LanguageServer" Version="0.19.9" />

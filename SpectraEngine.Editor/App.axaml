@@ -1,5 +1,6 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:dockFluent="clr-namespace:Dock.Avalonia.Themes.Fluent;assembly=Dock.Avalonia.Themes.Fluent"
              x:Class="SpectraEngine.Editor.App"
              RequestedThemeVariant="Dark">
 
@@ -18,12 +19,19 @@
       <ResourceDictionary.MergedDictionaries>
         <ResourceInclude Source="avares://SpectraEngine.Editor/Theme/Tokens.axaml" />
         <ResourceInclude Source="avares://SpectraEngine.Editor/Theme/Icons.axaml" />
+        <!-- After Tokens, whose brushes it aliases: re-points Dock.Avalonia's
+             semantic keys at the Spectra palette. Application.Resources
+             outranks the theme's own dictionary at DynamicResource time. -->
+        <ResourceInclude Source="avares://SpectraEngine.Editor/Theme/DockTokens.axaml" />
       </ResourceDictionary.MergedDictionaries>
     </ResourceDictionary>
   </Application.Resources>
 
   <Application.Styles>
     <FluentTheme />
+    <!-- Dock's chrome, before Controls.axaml so the shell's own styles win
+         where they overlap. -->
+    <dockFluent:DockFluentTheme />
     <StyleInclude Source="avares://SpectraEngine.Editor/Theme/Controls.axaml" />
   </Application.Styles>
 </Application>

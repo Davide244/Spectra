@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -94,6 +94,13 @@ public partial class MainWindow : Window
     private sealed record SessionLaunch(ProjectLayout? Project, string? ContentRoot, string? OpenMapPath);
     private SessionLaunch? _pendingLaunch;
 
+    // The live panels, one instance each for the window's whole life. Fields
+    // rather than XAML names, because their dock tools would template XAML
+    // children instead of keeping an instance.
+    private readonly ScenePanel _sceneView;
+    private readonly PropertiesPanel _propertiesView;
+    private readonly MapsPanel _mapsView;
+
     /// <summary>Creates the window and wires the viewport's lifetime to the engine's.</summary>
     public MainWindow()
     {
@@ -114,11 +121,27 @@ public partial class MainWindow : Window
         StartView.RecentProjectPicked += recent => _ = OpenRecentProjectAsync(recent);
         StartView.ShowRecents(_settings.RecentProjects);
 
-        // The panels raise intents; the window owns the session they reach.
-        SceneView.Logger = _loggerFactory.CreateLogger<ScenePanel>();
-        SceneView.NodeSelected += id => _session?.Select(id);
-        PropertiesView.EscapePressed += () => _viewport?.Focus();
-        MapsView.MapClicked += row => _ = OpenProjectMapAsync(row);
+        // The panels are built HERE and handed to the dock tools as live
+        // controls: the dock's builder returns a Control content instance
+        // as-is, so one event-wired panel survives every re-dock and float.
+        // DataContext is set explicitly rather than inherited, because a
+        // floated panel leaves this window's logical tree and inherited
+        // bindings would go quietly null.
+        _sceneView = new ScenePanel
+        {
+            DataContext = _shell,
+            Logger = _loggerFactory.CreateLogger<ScenePanel>(),
+        };
+        _sceneView.NodeSelected += id => _session?.Select(id);
+        SceneTool.Content = _sceneView;
+
+        _propertiesView = new PropertiesPanel { DataContext = _shell };
+        _propertiesView.EscapePressed += () => _viewport?.Focus();
+        PropertiesTool.Content = _propertiesView;
+
+        _mapsView = new MapsPanel { DataContext = _shell };
+        _mapsView.MapClicked += row => _ = OpenProjectMapAsync(row);
+        MapsTool.Content = _mapsView;
 
         // The title is the only place the shell says what is open and whether
         // it is saved, so it follows the document rather than being set once.
@@ -462,7 +485,7 @@ public partial class MainWindow : Window
         _droppedSnapshots = false;
         _lastUndoDepth = 0;
         _lastRedoDepth = 0;
-        SceneView.ResetSelectionMemory();
+        _sceneView.ResetSelectionMemory();
 
         _stopping = false;
     }
@@ -518,7 +541,7 @@ public partial class MainWindow : Window
         // Selection is a state rather than a history, so it is applied once
         // from the newest snapshot instead of once per drained one; the panel
         // owns the sync guards and the reveal choreography.
-        SceneView.SyncSelection(snapshot);
+        _sceneView.SyncSelection(snapshot);
         TrackDirty(snapshot);
 
         _shell.ApplySnapshot(snapshot);
@@ -1120,7 +1143,7 @@ public partial class MainWindow : Window
     /// the author's ordered list and what a cook bakes; a map saved into
     /// <c>Maps/</c> and never listed would run in the editor and silently miss
     /// the shipped game. A map saved OUTSIDE the project folder is legal and
-    /// deliberately not listed — <see cref="EditorDocument.MapPathWithinProject"/>
+    /// deliberately not listed â€” <see cref="EditorDocument.MapPathWithinProject"/>
     /// answers that. Removal stays a hand edit: the editor adds what you save
     /// and never deletes an entry, because the manifest is the author's file.
     /// </remarks>
@@ -1133,8 +1156,8 @@ public partial class MainWindow : Window
             return string.Empty;
 
         // Re-read from DISK and edit that, never the in-memory copy. The
-        // manifest is the author's file — the format's whole promise is that a
-        // person edits it in VS Code and the editor does not fight them — and
+        // manifest is the author's file â€” the format's whole promise is that a
+        // person edits it in VS Code and the editor does not fight them â€” and
         // writing the copy loaded at open time would silently revert every
         // hand edit made since. Re-reading also makes a retry work after a
         // failed write: the fresh read still lacks the entry, so it is added

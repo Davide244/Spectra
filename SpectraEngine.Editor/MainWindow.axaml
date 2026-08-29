@@ -3,6 +3,8 @@
         xmlns:viewport="clr-namespace:SpectraEngine.Editor.Viewport"
         xmlns:local="clr-namespace:SpectraEngine.Editor"
         xmlns:shell="clr-namespace:SpectraEngine.Editor.Shell"
+        xmlns:dock="clr-namespace:Dock.Avalonia.Controls;assembly=Dock.Avalonia"
+        xmlns:dm="clr-namespace:Dock.Model.Avalonia.Controls;assembly=Dock.Model.Avalonia"
         x:Class="SpectraEngine.Editor.MainWindow"
         x:DataType="shell:ShellModel"
         Title="Spectra Editor"
@@ -353,13 +355,36 @@
            none of them intersect the viewport's. -->
       <Grid x:Name="EditorView" IsVisible="False" ColumnDefinitions="280,1,*,1,300">
 
-        <!-- The left column stacks the project's maps over the scene tree;
-             each panel is self-contained (styles, templates, handlers), which
-             is what lets a docking layout later host them anywhere. -->
-        <Grid Grid.Column="0" RowDefinitions="Auto,*">
-          <shell:MapsPanel x:Name="MapsView" Grid.Row="0" IsVisible="{Binding HasProject}" />
-          <shell:ScenePanel x:Name="SceneView" Grid.Row="1" />
-        </Grid>
+        <!-- ─── Docked panels ──────────────────────────────
+             Two DockControls, one per side, with the viewport PINNED between
+             them in a plain grid cell. That pinning is not taste: the
+             viewport is a NativeControlHost, and any dock arrangement that
+             re-parents it destroys the HWND and the whole engine session
+             with it, so it never enters a dock. The panels do: they can be
+             re-stacked, tabbed and floated (a floated panel is a real OS
+             window, which is exactly why it may cross the viewport when
+             nothing drawn IN this window can). Drop targets only appear over
+             the dock controls themselves, safely off the viewport's cell. -->
+        <dock:DockControl Grid.Column="0" InitializeLayout="True" InitializeFactory="True">
+          <dm:RootDock x:Name="LeftRoot" Id="LeftRoot" IsCollapsable="False"
+                       DefaultDockable="{Binding #LeftLayout}">
+            <dm:ProportionalDock x:Name="LeftLayout" Id="LeftLayout" Orientation="Vertical">
+              <!-- The tools' CONTENT is assigned in code, deliberately: XAML
+                   element content of a Tool compiles to a deferred template
+                   that builds fresh controls per layout change, while a
+                   Control assigned to Tool.Content is returned as-is by the
+                   dock's builder — one live, event-wired panel instance that
+                   survives every re-dock and float. -->
+              <dm:ToolDock Id="MapsDock" Alignment="Top" Proportion="0.28">
+                <dm:Tool x:Name="MapsTool" Id="Maps" Title="Maps" CanClose="False" />
+              </dm:ToolDock>
+              <dm:ProportionalDockSplitter />
+              <dm:ToolDock Id="SceneDock" Alignment="Left" Proportion="0.72">
+                <dm:Tool x:Name="SceneTool" Id="Scene" Title="Scene" CanClose="False" />
+              </dm:ToolDock>
+            </dm:ProportionalDock>
+          </dm:RootDock>
+        </dock:DockControl>
 
         <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
 
@@ -373,7 +398,16 @@
 
         <GridSplitter Grid.Column="3" ResizeDirection="Columns" />
 
-        <shell:PropertiesPanel x:Name="PropertiesView" Grid.Column="4" />
+        <dock:DockControl Grid.Column="4" InitializeLayout="True" InitializeFactory="True">
+          <dm:RootDock x:Name="RightRoot" Id="RightRoot" IsCollapsable="False"
+                       DefaultDockable="{Binding #RightLayout}">
+            <dm:ProportionalDock x:Name="RightLayout" Id="RightLayout" Orientation="Vertical">
+              <dm:ToolDock Id="PropertiesDock" Alignment="Right" Proportion="1">
+                <dm:Tool x:Name="PropertiesTool" Id="Properties" Title="Properties" CanClose="False" />
+              </dm:ToolDock>
+            </dm:ProportionalDock>
+          </dm:RootDock>
+        </dock:DockControl>
       </Grid>
     </Panel>
 

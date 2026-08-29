@@ -3,6 +3,7 @@
              xmlns:shell="clr-namespace:SpectraEngine.Editor.Shell"
              x:Class="SpectraEngine.Editor.Shell.MapsPanel"
              x:DataType="shell:ShellModel"
+             IsVisible="{Binding HasProject}"
              Background="{StaticResource SpectraBgPanel}">
 
   <!-- The open project's maps: the manifest's order, then anything on disk
