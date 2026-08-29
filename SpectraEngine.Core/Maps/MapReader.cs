@@ -191,7 +191,7 @@ public static class MapReader
 
     private static MapNode ReadNode(ref Utf8JsonReader reader, ReadOnlySpan<byte> utf8, ReadState state)
     {
-        var node = new MapNode();
+        var node = new MapNode { SourceOffset = reader.TokenStartIndex };
         string? outerName = state.NodeName;
         int anchor = -1;
 

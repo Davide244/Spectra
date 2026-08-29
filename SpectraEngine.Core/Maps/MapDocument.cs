@@ -134,6 +134,20 @@ public sealed class MapNode
     public string Name { get; set; } = "Node";
 
     /// <summary>
+    /// Byte offset this node started at in the source document, or 0 when it
+    /// was built in code. Not persisted; not part of the document's content.
+    /// </summary>
+    /// <remarks>
+    /// <b>Carried so that a failure raised while BUILDING the scene can still
+    /// point into the file.</b> A hand-edited plane set that is duplicated or
+    /// unbounded is perfectly well-formed JSON, so the reader accepts it and
+    /// <c>Brush</c>'s constructor is what rejects it — one whole stage later,
+    /// by which time the byte offset would otherwise be gone and the complaint
+    /// would name plane indices in a map with hundreds of brushes.
+    /// </remarks>
+    public long SourceOffset { get; set; }
+
+    /// <summary>
     /// The node's own declared realm, or null when omitted (meaning inherit).
     /// </summary>
     /// <remarks>

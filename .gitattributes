@@ -3,6 +3,18 @@
 ###############################################################################
 * text=auto
 
+# A .smap map is a FOLDER bundle of text (map.json plus scripts/*.luau), and the
+# codec's whole promise is that save/load/save is byte-identical so a hand edit
+# stays a two-line diff. Under `* text=auto` above, a Windows checkout rewrites
+# those files to CRLF underneath you and the next no-op save becomes a
+# whole-file diff.
+#
+# The pattern needs BOTH stars. Attribute patterns use gitignore syntax, where a
+# separator in the middle anchors the pattern to this file's directory — so
+# `*.smap/**` would match only a bundle sitting in the repo root and miss
+# `MyGame/Maps/Lobby.smap/map.json`, which is the only place maps actually live.
+**/*.smap/** text eol=lf
+
 # Verify snapshot files are byte-exact golden outputs — pin them to LF so
 # CRLF normalization on Windows doesn't cause phantom diffs.
 *.verified.* text eol=lf
