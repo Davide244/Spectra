@@ -118,4 +118,60 @@ public sealed class EditorSettingsTests
         settings.RecentProjects.Count.ShouldBe(1);
         settings.RecentProjects[0].Name.ShouldBe("Beta");
     }
+
+    [Fact]
+    public void A_wrong_typed_member_is_an_empty_list_not_a_crash()
+    {
+        // Valid JSON of the wrong SHAPE is a different exception class from
+        // invalid JSON, and a settings cache must survive both: it is a
+        // convenience, not a dependency the shell can refuse to start over.
+        string path = TempPath();
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """{ "recentProjects": [ { "path": 5, "name": true } ] }""");
+
+        EditorSettings loaded = EditorSettings.Load(path, NullLogger.Instance);
+        loaded.RecentProjects.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Two_shells_merge_on_save_rather_than_clobbering_each_other()
+    {
+        // Both shells load the same (empty) file, each opens its own project,
+        // each saves. Last-writer-wins would erase the first shell's entry;
+        // the save-time merge keeps both, newest touch first.
+        string path = TempPath();
+
+        var first = EditorSettings.Load(path, NullLogger.Instance);
+        var second = EditorSettings.Load(path, NullLogger.Instance);
+
+        first.TouchProject(@"C:\Games\Alpha", "Alpha", new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc));
+        first.Save(path, NullLogger.Instance);
+
+        second.TouchProject(@"C:\Games\Beta", "Beta", new DateTime(2026, 8, 2, 0, 0, 0, DateTimeKind.Utc));
+        second.Save(path, NullLogger.Instance);
+
+        EditorSettings merged = EditorSettings.Load(path, NullLogger.Instance);
+        merged.RecentProjects.Count.ShouldBe(2);
+        merged.RecentProjects[0].Name.ShouldBe("Beta");
+        merged.RecentProjects[1].Name.ShouldBe("Alpha");
+    }
+
+    [Fact]
+    public void A_forgotten_project_is_not_resurrected_by_the_merge()
+    {
+        // Forgetting happens because the folder is gone; the copy of the file
+        // on disk still lists it, and the merge folding it back in would make
+        // the dead card immortal.
+        string path = TempPath();
+
+        var settings = new EditorSettings();
+        settings.TouchProject(@"C:\Games\Gone", "Gone", DateTime.UtcNow);
+        settings.Save(path, NullLogger.Instance);
+
+        settings.ForgetProject(@"C:\Games\Gone");
+        settings.Save(path, NullLogger.Instance);
+
+        EditorSettings loaded = EditorSettings.Load(path, NullLogger.Instance);
+        loaded.RecentProjects.ShouldBeEmpty();
+    }
 }

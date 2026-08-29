@@ -297,7 +297,15 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
                 // simply inert - which for Ctrl+S is the worst possible
                 // failure, because it is the one chord people press without
                 // looking and trust to have worked.
-                if (Win32Interop.IsKeyDown(Win32Interop.VK_CONTROL)
+                //
+                // Never while the cursor is locked: during a freelook Ctrl is
+                // the descend key and S flies backwards, so the chord fires
+                // from the ordinary descend-while-reversing gesture, pops a
+                // save dialog mid-flight and eats the movement key. The same
+                // rule the editor's own Ctrl chords follow while a camera
+                // claims the letters.
+                if (!_cursorLocked
+                    && Win32Interop.IsKeyDown(Win32Interop.VK_CONTROL)
                     && ShellChordFor((int)wParam) is { } chord)
                 {
                     ShellChord?.Invoke(chord);

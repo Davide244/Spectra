@@ -162,6 +162,13 @@
       <Setter Property="Margin" Value="10,0" />
       <Setter Property="Text" Value="│" />
     </Style>
+    <!-- The resting tint is a CLASS, not a local attribute: a local Foreground
+         outranks every style, so the overbudget colour below could never
+         apply through it. Declared before .overbudget so the threshold state
+         wins on order. -->
+    <Style Selector="TextBlock.frametime">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+    </Style>
     <Style Selector="TextBlock.overbudget">
       <Setter Property="Foreground" Value="{StaticResource SpectraAccent}" />
     </Style>
@@ -636,8 +643,8 @@
           <TextBlock Classes="value" Text="{Binding ViewportLabel}" Foreground="{StaticResource SpectraTextMuted}" MinWidth="76" />
           <TextBlock Classes="sep" />
           <TextBlock Classes="value" Text="{Binding FpsLabel}" Foreground="{StaticResource SpectraTextMuted}" MinWidth="58" />
-          <TextBlock Classes="value" Classes.overbudget="{Binding FrameTimeOverBudget}"
-                     Text="{Binding FrameTimeLabel}" Foreground="{StaticResource SpectraTextMuted}" MinWidth="66" />
+          <TextBlock Classes="value frametime" Classes.overbudget="{Binding FrameTimeOverBudget}"
+                     Text="{Binding FrameTimeLabel}" MinWidth="66" />
         </StackPanel>
       </Grid>
     </Border>

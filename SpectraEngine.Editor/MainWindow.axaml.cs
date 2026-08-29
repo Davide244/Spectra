@@ -289,6 +289,13 @@ public partial class MainWindow : Window
         _shell.HasProject = false;
         _shell.ProjectMaps.Clear();
 
+        // The readouts and the filter describe a scene that no longer exists;
+        // left alone, a stale "3 selected / undo 12" keeps verbs enabled on
+        // the start page and the next session's tree opens pre-filtered by a
+        // search nobody typed into it.
+        _shell.ClearFilter();
+        _shell.ApplySnapshot(FrameSnapshot.Empty);
+
         EditorView.IsVisible = false;
         StartView.IsVisible = true;
         StartView.ShowRecents(_settings.RecentProjects);
@@ -334,15 +341,32 @@ public partial class MainWindow : Window
             else
             {
                 _document.MarkNew();
-                _shell.SetMessage(_document.HasProject
-                    ? $"New baseplate scene. Save it to add a first map to {_document.ProjectLabel}."
-                    : "Ready.");
+
+                // The greeting must not stomp a standing failure: a missing
+                // startup map was reported moments ago, and overwriting it
+                // with "New baseplate scene" hides the one line that explains
+                // why the level is not on screen.
+                if (!_shell.IsError)
+                {
+                    _shell.SetMessage(_document.HasProject
+                        ? $"New baseplate scene. Save it to add a first map to {_document.ProjectLabel}."
+                        : "Ready.");
+                }
             }
         }
         catch (Exception ex)
         {
             _logger.LogCritical(ex, "The editor session could not start");
             _shell.SetError($"The engine could not start: {ex.Message}");
+
+            // Rolled back to the start page, not left half-open: without this
+            // the shell sits in the editor view with HasSession true and no
+            // session behind it, where every enabled verb silently does
+            // nothing and LaunchSession's own guard refuses a retry. Posted,
+            // because this handler runs during the native child's attach and
+            // tearing the child out from inside its own attach is asking the
+            // framework a question nobody needs answered.
+            Dispatcher.UIThread.Post(CloseSessionView);
         }
     }
 
@@ -353,11 +377,38 @@ public partial class MainWindow : Window
         StopSession();
     }
 
+    // Set once the typed confirmation has been given, so the programmatic
+    // Close that follows it is not asked again.
+    private bool _closeConfirmed;
+
     /// <inheritdoc/>
+    /// <remarks>
+    /// The close button gets the same typed confirmation every menu route
+    /// gets: it is the one gesture people reach for fastest, and the undo
+    /// history goes with the scene. The dialog is async and window closing is
+    /// not, so a dirty close is cancelled, asked, and re-issued.
+    /// </remarks>
     protected override void OnClosing(WindowClosingEventArgs e)
     {
-        StopSession();
+        if (_document.IsDirty && !_closeConfirmed)
+        {
+            e.Cancel = true;
+            _ = ConfirmCloseAsync();
+        }
+        else
+        {
+            StopSession();
+        }
+
         base.OnClosing(e);
+    }
+
+    private async Task ConfirmCloseAsync()
+    {
+        if (!await ConfirmDiscardAsync("closing the editor")) return;
+
+        _closeConfirmed = true;
+        Close();
     }
 
     private void StopSession()
@@ -862,6 +913,14 @@ public partial class MainWindow : Window
 
         session.NewMap(name, error => Dispatcher.UIThread.Post(() =>
         {
+            // The session boundary guard: this callback was produced by the
+            // render thread of a PARTICULAR session, and by the time the post
+            // runs that session can be dead and another live. A stale post
+            // rebinding the fresh document is how the next Ctrl+S overwrites a
+            // different project's bundle.
+            if (!ReferenceEquals(session, _session))
+                return;
+
             if (error is not null)
             {
                 _shell.SetError($"Could not start a new map: {error.Message}");
@@ -907,6 +966,12 @@ public partial class MainWindow : Window
 
         session.OpenMap(bundlePath, (report, error) => Dispatcher.UIThread.Post(() =>
         {
+            // See NewMap for the session boundary guard: a stale post from a
+            // torn-down session must not mark ITS bundle open on the document
+            // the next session is editing.
+            if (!ReferenceEquals(session, _session))
+                return;
+
             if (error is not null)
             {
                 _shell.SetError($"Could not open the map: {error.Message}");
@@ -939,7 +1004,10 @@ public partial class MainWindow : Window
 
     private async void OnCloseProjectClicked(object? sender, RoutedEventArgs e)
     {
-        if (_session is null) return;
+        // Guarded on the VIEWPORT, not the session: a session that failed to
+        // start leaves the viewport up with no session behind it, and this is
+        // the verb that has to work in exactly that state.
+        if (_viewport is null) return;
         if (!await ConfirmDiscardAsync("closing the project")) return;
 
         CloseSessionView();
@@ -968,12 +1036,14 @@ public partial class MainWindow : Window
         }
 
         string root = Path.Combine(picked[0].Path.LocalPath, name);
-        if (Directory.Exists(root) &&
-            Directory.GetFiles(root, "*" + ProjectFormat.Extension).Length > 0)
+        if (Directory.Exists(root) && Directory.EnumerateFileSystemEntries(root).Any())
         {
-            // Scaffolding into an existing project would adopt its folders and
-            // write a second manifest beside its own, which Open then refuses.
-            _shell.SetError($"'{root}' already holds a project; open it instead.");
+            // Refused for ANY non-empty folder, not just one with a manifest:
+            // scaffolding adopts whatever it finds, so pointing "create" at an
+            // existing folder of files would quietly claim them as a project
+            // (and beside an existing manifest it writes a second one, which
+            // Open then refuses). Creating means creating.
+            _shell.SetError($"'{root}' already exists and is not empty; open it as a project, or pick another name.");
             return;
         }
 
@@ -1103,21 +1173,24 @@ public partial class MainWindow : Window
 
         _shell.HasProject = true;
         string? startup = project.Project.StartupMap;
+
+        // Keyed on the normalised form, so a hand-authored backslash spelling
+        // and the discovered forward-slash one are one row, not two.
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (string relative in project.Project.Maps)
         {
-            if (!seen.Add(relative)) continue;
+            if (!seen.Add(relative.Replace('\\', '/'))) continue;
             _shell.ProjectMaps.Add(new ProjectMapRow(
                 relative,
                 MapDisplayName(relative),
-                IsStartup: string.Equals(relative, startup, StringComparison.OrdinalIgnoreCase),
+                IsStartup: startup is not null && ManifestPathsEqual(relative, startup),
                 IsUnlisted: false));
         }
 
         foreach (string relative in project.DiscoverMaps())
         {
-            if (!seen.Add(relative)) continue;
+            if (!seen.Add(relative.Replace('\\', '/'))) continue;
             _shell.ProjectMaps.Add(new ProjectMapRow(
                 relative, MapDisplayName(relative), IsStartup: false, IsUnlisted: true));
         }
@@ -1185,6 +1258,10 @@ public partial class MainWindow : Window
 
         session.SaveMap(bundlePath, (report, error) => Dispatcher.UIThread.Post(() =>
         {
+            // See NewMap for the session boundary guard.
+            if (!ReferenceEquals(session, _session))
+                return;
+
             if (error is not null)
             {
                 _shell.SetError($"Could not save the map: {error.Message}");
@@ -1222,14 +1299,32 @@ public partial class MainWindow : Window
     /// </remarks>
     private string UpdateManifestAfterSave()
     {
-        if (_document.Project is not { } project)
+        if (_document.Project is not { } stale)
             return string.Empty;
 
         if (_document.MapPathWithinProject() is not { } relative)
             return string.Empty;
 
-        bool listed = project.Project.Maps.Any(m =>
-            string.Equals(m, relative, StringComparison.OrdinalIgnoreCase));
+        // Re-read from DISK and edit that, never the in-memory copy. The
+        // manifest is the author's file — the format's whole promise is that a
+        // person edits it in VS Code and the editor does not fight them — and
+        // writing the copy loaded at open time would silently revert every
+        // hand edit made since. Re-reading also makes a retry work after a
+        // failed write: the fresh read still lacks the entry, so it is added
+        // and saved again rather than assumed done.
+        ProjectLayout project;
+        try
+        {
+            project = ProjectLayout.Open(stale.ManifestPath);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or ProjectFormatException)
+        {
+            _logger.LogWarning(ex, "Saved the map but could not re-read the project manifest");
+            _shell.SetError("The map saved, but the project manifest could not be read to list it.");
+            return string.Empty;
+        }
+
+        bool listed = project.Project.Maps.Any(m => ManifestPathsEqual(m, relative));
         bool becameStartup = false;
 
         if (!listed)
@@ -1241,11 +1336,10 @@ public partial class MainWindow : Window
             becameStartup = true;
         }
 
-        if (listed && !becameStartup)
-            return string.Empty;
-
         try
         {
+            // A byte-identical manifest is left untouched by Save itself, so
+            // calling it when nothing changed costs a read and writes nothing.
             project.Save();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -1255,9 +1349,20 @@ public partial class MainWindow : Window
             return string.Empty;
         }
 
+        // The shell adopts the fresh layout: the maps panel now reflects the
+        // file as it is, hand edits included.
+        _document.SetProject(project);
         RefreshProjectMaps();
-        return becameStartup ? " Added to the project as its startup map." : " Added to the project.";
+        return !listed
+            ? becameStartup ? " Added to the project as its startup map." : " Added to the project."
+            : string.Empty;
     }
+
+    // Manifest paths are authored text: the codec writes forward slashes but a
+    // hand edit legitimately arrives with backslashes or different case, and
+    // treating those as a different map duplicates the entry.
+    private static bool ManifestPathsEqual(string a, string b) =>
+        string.Equals(a.Replace('\\', '/'), b.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Asks before throwing away unsaved work, and returns whether to go ahead.

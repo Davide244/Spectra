@@ -3,6 +3,7 @@ using SpectraEngine.Core.Serialization;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace SpectraEngine.Editor.Shell;
@@ -72,6 +73,7 @@ public sealed class EditorSettings
             string.Equals(p.Path, full, StringComparison.OrdinalIgnoreCase));
 
         _recentProjects.Insert(0, new RecentProject(full, name, openedUtc));
+        _forgotten.Remove(full);
         if (_recentProjects.Count > MaxRecentProjects)
             _recentProjects.RemoveRange(MaxRecentProjects, _recentProjects.Count - MaxRecentProjects);
     }
@@ -83,7 +85,16 @@ public sealed class EditorSettings
         string full = Path.GetFullPath(path);
         _recentProjects.RemoveAll(p =>
             string.Equals(p.Path, full, StringComparison.OrdinalIgnoreCase));
+
+        // Remembered so the save-time merge cannot resurrect it from another
+        // shell's stale copy of the file: forgetting is this session's
+        // deliberate decision. Touching the same project again clears it,
+        // because opening IS the new information.
+        _forgotten.Add(full);
     }
+
+    // Paths this session explicitly forgot, exempt from the save-time merge.
+    private readonly HashSet<string> _forgotten = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Loads the settings, or returns empty ones when there is nothing to load.</summary>
     public static EditorSettings Load(ILogger logger) => Load(DefaultPath, logger);
@@ -101,7 +112,7 @@ public sealed class EditorSettings
         {
             settings.Read(File.ReadAllBytes(path));
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (IsSettingsReadFailure(ex))
         {
             // Said out loud, then started fresh: silently losing the list looks
             // identical to a bug in the list.
@@ -111,6 +122,14 @@ public sealed class EditorSettings
 
         return settings;
     }
+
+    // Everything a damaged file can throw, in one place so the load and the
+    // merge agree. InvalidOperationException and FormatException are the
+    // reader's answers to a member holding the WRONG TYPE ("path": 5), which
+    // is exactly as recoverable as invalid JSON and must not crash a startup.
+    private static bool IsSettingsReadFailure(Exception ex) =>
+        ex is JsonException or IOException or UnauthorizedAccessException
+            or InvalidOperationException or FormatException;
 
     /// <summary>Writes the settings, creating the folder on first use.</summary>
     /// <remarks>
@@ -129,12 +148,57 @@ public sealed class EditorSettings
             if (Path.GetDirectoryName(path) is { Length: > 0 } folder)
                 Directory.CreateDirectory(folder);
 
+            MergeFromDisk(path);
             File.WriteAllBytes(path, CanonicalJson.Write(Write));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             logger.LogWarning(ex, "Could not write editor settings to {Path}", path);
         }
+    }
+
+    /// <summary>
+    /// Folds in whatever another shell wrote since this one loaded, newest
+    /// touch per project winning, so two editors do not take turns erasing
+    /// each other's history.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort, like everything else here: an unreadable file merges
+    /// nothing and the write proceeds, because the alternative is a recents
+    /// cache that can block saving itself.
+    /// </remarks>
+    private void MergeFromDisk(string path)
+    {
+        if (!File.Exists(path))
+            return;
+
+        var onDisk = new EditorSettings();
+        try
+        {
+            onDisk.Read(File.ReadAllBytes(path));
+        }
+        catch (Exception ex) when (IsSettingsReadFailure(ex))
+        {
+            return;
+        }
+
+        foreach (RecentProject theirs in onDisk._recentProjects)
+        {
+            if (_forgotten.Contains(theirs.Path))
+                continue;
+
+            int mine = _recentProjects.FindIndex(p =>
+                string.Equals(p.Path, theirs.Path, StringComparison.OrdinalIgnoreCase));
+
+            if (mine < 0)
+                _recentProjects.Add(theirs);
+            else if (theirs.OpenedUtc > _recentProjects[mine].OpenedUtc)
+                _recentProjects[mine] = theirs;
+        }
+
+        _recentProjects.Sort((a, b) => b.OpenedUtc.CompareTo(a.OpenedUtc));
+        if (_recentProjects.Count > MaxRecentProjects)
+            _recentProjects.RemoveRange(MaxRecentProjects, _recentProjects.Count - MaxRecentProjects);
     }
 
     private void Write(Utf8JsonWriter writer)
