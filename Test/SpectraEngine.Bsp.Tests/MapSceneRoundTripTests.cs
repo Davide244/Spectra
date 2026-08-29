@@ -260,27 +260,154 @@ public sealed class MapSceneRoundTripTests
     // -- what it cannot do, said out loud ------------------------------------
 
     [Fact]
-    public void A_mesh_node_is_reported_rather_than_dropped_in_silence()
+    public void A_mesh_built_in_code_is_reported_rather_than_dropped_in_silence()
     {
-        // Mesh carries no name, no path and no owning-asset reference, and
-        // ModelInstantiator records nothing on the node it builds, so there is
-        // genuinely nothing to write. The node keeps its identity, name,
-        // placement and children; a map that quietly forgot the props would be
-        // worse than one that says it did.
+        // A mesh handed straight to Renderer.CreateMesh as raw arrays has no
+        // file behind it, so there is nothing for a map to name. Permanent
+        // rather than unfinished. The node keeps its identity, name, placement
+        // and children; a map that quietly forgot a prop would be worse than
+        // one that says it did.
         Scene source = NewScene();
-        source.Root.CreateChild("Crate").MeshRenderer = new MeshRenderer(new FakeMesh(), new Material(null));
+        source.Root.CreateChild("Procedural").MeshRenderer =
+            new MeshRenderer(new FakeMesh(), new Material(null));
         source.Root.CreateChild("Wall").Brush = Box();
 
         var report = new MapSaveReport();
         MapDocument document = MapSceneBinder.FromScene(source, report);
 
         report.IsComplete.ShouldBeFalse();
-        report.MeshRendererNodes.ShouldBe(["Crate"]);
+        report.UnsourcedMeshNodes.ShouldBe(["Procedural"]);
         report.Describe().ShouldNotBeNull();
 
         // The node itself still round-trips - it is only the geometry that is lost.
         document.Nodes.Count.ShouldBe(2);
-        document.Nodes[0].Name.ShouldBe("Crate");
+        document.Nodes[0].Name.ShouldBe("Procedural");
+        document.Nodes[0].Mesh.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_mesh_from_a_model_is_written_as_a_reference()
+    {
+        // The reference, never the geometry: vertices belong in the cooked
+        // artifact, and an authored map names the source file exactly as a face
+        // names a material path.
+        Scene source = NewScene();
+        SceneNode prop = source.Root.CreateChild("Crate");
+        prop.MeshRenderer = new MeshRenderer(new FakeMesh(), new Material(null));
+        prop.MeshSource = new MeshSource("Models/crate.obj", 2);
+
+        var report = new MapSaveReport();
+        byte[] bytes = MapWriter.Write(MapSceneBinder.FromScene(source, report));
+
+        report.IsComplete.ShouldBeTrue("a node that names a model is fully writable");
+        string text = Encoding.UTF8.GetString(bytes);
+        text.ShouldContain("""{"model":"Models/crate.obj","submesh":2}""");
+
+        MapDocument reread = MapReader.Read(bytes);
+        reread.Nodes[0].Mesh.ShouldNotBeNull();
+        reread.Nodes[0].Mesh!.Model.ShouldBe("Models/crate.obj");
+        reread.Nodes[0].Mesh.Submesh.ShouldBe(2);
+    }
+
+    [Fact]
+    public void A_single_submesh_prop_omits_the_index()
+    {
+        // Index 0 is the overwhelmingly common case and the one where the
+        // number carries no information.
+        Scene source = NewScene();
+        SceneNode prop = source.Root.CreateChild("Crate");
+        prop.MeshRenderer = new MeshRenderer(new FakeMesh(), new Material(null));
+        prop.MeshSource = new MeshSource("Models/crate.obj", 0);
+
+        Encoding.UTF8.GetString(MapWriter.Write(MapSceneBinder.FromScene(source)))
+            .ShouldContain("""{"model":"Models/crate.obj"}""");
+    }
+
+    [Fact]
+    public void Detaching_the_renderer_clears_the_source_it_described()
+    {
+        // Otherwise a save names a model that has nothing to do with the mesh
+        // the node is actually drawing, which is worse than naming none.
+        var node = new SceneNode("Prop")
+        {
+            MeshRenderer = new MeshRenderer(new FakeMesh(), new Material(null)),
+        };
+        node.MeshSource = new MeshSource("Models/crate.obj", 0);
+
+        node.MeshRenderer = null;
+
+        node.MeshSource.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_map_naming_a_model_the_project_does_not_have_still_loads()
+    {
+        // A content error must not reach the draw loop: the rest of the level is
+        // perfectly good and a level designer needs to see it in order to fix
+        // the prop. That is deliberately the opposite of the brush path, which
+        // throws, because a brush that cannot be built is a hole in the world.
+        byte[] bytes = Encoding.UTF8.GetBytes("""
+            {
+              "spectramap": 1,
+              "minimumReadableVersion": 1,
+              "engine": "1.0.0",
+              "scene": {
+                "name": "S"
+              },
+              "nodes": [
+                {
+                  "id": "3f2a1c88-4b6d-4a19-9d0e-77c1f0a2b3e4",
+                  "name": "GhostProp",
+                  "transform": {"p":[1,2,3]},
+                  "mesh": {"model":"Models/does_not_exist.obj"},
+                  "children": []
+                }
+              ]
+            }
+            """);
+
+        Scene loaded = NewScene();
+        var report = new MapLoadReport();
+        Should.NotThrow(() => MapSceneBinder.ApplyTo(MapReader.Read(bytes), loaded, report));
+
+        loaded.Root.Children.Count.ShouldBe(1);
+        loaded.Root.Children[0].Name.ShouldBe("GhostProp");
+        loaded.Root.Children[0].LocalPosition.ShouldBe(new Vector3(1f, 2f, 3f));
+        loaded.Root.Children[0].MeshRenderer.ShouldBeNull();
+
+        report.IsComplete.ShouldBeFalse();
+        report.UnresolvedMeshes.Count.ShouldBe(1);
+        report.UnresolvedMeshes[0].ShouldContain("GhostProp");
+        report.UnresolvedMeshes[0].ShouldContain("Models/does_not_exist.obj");
+    }
+
+    [Fact]
+    public void A_mesh_record_with_no_model_is_refused()
+    {
+        // Naming nothing is not the same as naming no mesh: a node that
+        // silently loses its geometry looks exactly like one that never had any.
+        var thrown = Should.Throw<MapFormatException>(() => MapReader.Read(Encoding.UTF8.GetBytes("""
+            {
+              "spectramap": 1,
+              "minimumReadableVersion": 1,
+              "engine": "1.0.0",
+              "scene": {
+                "name": "S"
+              },
+              "nodes": [
+                {
+                  "id": "3f2a1c88-4b6d-4a19-9d0e-77c1f0a2b3e4",
+                  "name": "Nameless",
+                  "transform": {"p":[0,0,0]},
+                  "mesh": {"submesh":1},
+                  "children": []
+                }
+              ]
+            }
+            """)));
+
+        thrown.NodeName.ShouldBe("Nameless");
+        thrown.Message.ShouldContain("model");
     }
 
     [Fact]

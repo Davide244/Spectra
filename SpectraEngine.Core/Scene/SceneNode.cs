@@ -109,11 +109,30 @@ public class SceneNode
             if (ReferenceEquals(_meshRenderer, value))
                 return;
             _meshRenderer = value;
+            // A source describes the renderer that was there; it cannot survive
+            // one being swapped out from under it. Clearing here rather than
+            // trusting callers is what keeps a save from naming a model that has
+            // nothing to do with the mesh the node is actually drawing.
+            if (value is null)
+                MeshSource = null;
             // The node just became spatial, stopped being spatial, or changed
             // its renderable bounds — the owning scene's BVH must follow.
             Owner?.OnNodeSpatialComponentChanged(this);
         }
     }
+
+    /// <summary>
+    /// Where <see cref="MeshRenderer"/> came from, when it came from a model
+    /// file, or null when it was built in code or there is no renderer.
+    /// </summary>
+    /// <remarks>
+    /// <b>Set alongside the renderer, never on its own.</b> It is provenance,
+    /// not a payload: nothing in the engine reads it to draw anything, and its
+    /// one consumer is the map codec, which cannot otherwise recover a mesh
+    /// node's geometry at all. Detaching the renderer clears it, so the two
+    /// cannot drift into describing different meshes.
+    /// </remarks>
+    public MeshSource? MeshSource { get; set; }
 
     /// <summary>
     /// The light this node emits, or null. Attaching one registers the node with
@@ -636,6 +655,10 @@ public class SceneNode
         // subtree counters. The scene-side hooks they also call are all
         // null-guarded on Owner, which a detached copy does not have.
         copy.MeshRenderer = _meshRenderer;
+        // After the renderer, never before: the renderer's setter clears the
+        // source when it is handed a null, so an earlier assignment would be
+        // wiped on any node whose renderer is null.
+        copy.MeshSource = MeshSource;
         copy.Brush = _brush?.CloneShape();
         copy.Light = _light?.Clone();
 

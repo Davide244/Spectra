@@ -115,7 +115,7 @@ public static class ModelInstantiator
 
         if (meshIndices.Count == 1)
         {
-            node.MeshRenderer = CreateRenderer(model, data, meshIndices[0]);
+            Attach(node, model, data, meshIndices[0]);
             return;
         }
 
@@ -124,8 +124,25 @@ public static class ModelInstantiator
             int meshIndex = meshIndices[i];
             ModelMesh mesh = data.Meshes[meshIndex];
             SceneNode part = node.CreateChild(FirstNonEmpty(null, mesh.Name, $"Submesh{i}"));
-            part.MeshRenderer = CreateRenderer(model, data, meshIndex);
+            Attach(part, model, data, meshIndex);
         }
+    }
+
+    /// <summary>
+    /// Attaches the renderer and records where it came from.
+    /// </summary>
+    /// <remarks>
+    /// <b>The pair is written here because here is the only place that knows
+    /// it.</b> A <c>Mesh</c> carries no origin and <c>Renderer.CreateMesh</c>
+    /// takes raw spans, so once this method returns, the link between the node
+    /// and the file its geometry came from exists nowhere else in the process.
+    /// Order matters: the renderer's setter clears the source when handed a
+    /// null, so the source is written second.
+    /// </remarks>
+    private static void Attach(SceneNode node, ModelAsset model, ModelData data, int meshIndex)
+    {
+        node.MeshRenderer = CreateRenderer(model, data, meshIndex);
+        node.MeshSource = new MeshSource(model.RelativePath, meshIndex);
     }
 
     private static MeshRenderer CreateRenderer(ModelAsset model, ModelData data, int meshIndex)

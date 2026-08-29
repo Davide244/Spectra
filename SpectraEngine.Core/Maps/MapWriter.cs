@@ -138,26 +138,33 @@ public static class MapWriter
         }
         Flush(writer, node.Unknown, 6);
 
+        if (node.Mesh is { } mesh)
+        {
+            writer.WritePropertyName(MapFormat.MeshMember);
+            writer.WriteRawValue(CompactMesh(mesh));
+        }
+        Flush(writer, node.Unknown, 7);
+
         if (node.Light is { } light)
         {
             writer.WritePropertyName(MapFormat.LightMember);
             writer.WriteRawValue(CompactLight(light));
         }
-        Flush(writer, node.Unknown, 7);
+        Flush(writer, node.Unknown, 8);
 
         if (node.Editor is { } editor)
         {
             writer.WritePropertyName(MapFormat.EditorMember);
             writer.WriteRawValue(editor.Raw);
         }
-        Flush(writer, node.Unknown, 8);
+        Flush(writer, node.Unknown, 9);
 
         writer.WritePropertyName(MapFormat.ChildrenMember);
         writer.WriteStartArray();
         foreach (MapNode child in node.Children)
             WriteNode(writer, child);
         writer.WriteEndArray();
-        Flush(writer, node.Unknown, 9);
+        Flush(writer, node.Unknown, 10);
 
         writer.WriteEndObject();
     }
@@ -313,6 +320,23 @@ public static class MapWriter
 
         if (face.VScale != 1f) WriteFinite(w, MapFormat.VScaleMember, face.VScale);
         Flush(w, face.Unknown, 6);
+
+        w.WriteEndObject();
+    });
+
+    private static byte[] CompactMesh(MapMeshSource mesh) => Compact(w =>
+    {
+        w.WriteStartObject();
+        Flush(w, mesh.Unknown, -1);
+
+        w.WriteString(MapFormat.ModelMember, mesh.Model);
+        Flush(w, mesh.Unknown, 0);
+
+        // Omitted at zero, which is the single-submesh prop: the overwhelmingly
+        // common case, and the one where the number carries no information.
+        if (mesh.Submesh != 0)
+            w.WriteNumber(MapFormat.SubmeshMember, mesh.Submesh);
+        Flush(w, mesh.Unknown, 1);
 
         w.WriteEndObject();
     });

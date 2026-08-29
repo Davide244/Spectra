@@ -236,19 +236,24 @@ public static class MapReader
                     anchor = 6;
                     break;
 
+                case MapFormat.MeshMember:
+                    node.Mesh = ReadMeshSource(ref reader, utf8, state);
+                    anchor = 7;
+                    break;
+
                 case MapFormat.LightMember:
                     node.Light = ReadLight(ref reader, utf8, state);
-                    anchor = 7;
+                    anchor = 8;
                     break;
 
                 case MapFormat.EditorMember:
                     node.Editor = new PreservedValue(CaptureValue(ref reader, utf8));
-                    anchor = 8;
+                    anchor = 9;
                     break;
 
                 case MapFormat.ChildrenMember:
                     ReadNodeArray(ref reader, utf8, node.Children, state);
-                    anchor = 9;
+                    anchor = 10;
                     break;
 
                 default:
@@ -471,6 +476,45 @@ public static class MapReader
         }
 
         return face;
+    }
+
+    private static MapMeshSource ReadMeshSource(
+        ref Utf8JsonReader reader, ReadOnlySpan<byte> utf8, ReadState state)
+    {
+        var mesh = new MapMeshSource();
+        bool sawModel = false;
+        int anchor = -1;
+        Expect(ref reader, JsonTokenType.StartObject, "'mesh' must be an object", state);
+
+        while (NextMember(ref reader, out string member))
+        {
+            switch (member)
+            {
+                case MapFormat.ModelMember:
+                    mesh.Model = ReadString(ref reader, member, state);
+                    sawModel = true;
+                    anchor = 0;
+                    break;
+                case MapFormat.SubmeshMember:
+                    mesh.Submesh = ReadInt(ref reader, member, state);
+                    anchor = 1;
+                    break;
+                default:
+                    mesh.Unknown.Add(Preserve(ref reader, utf8, member, anchor));
+                    break;
+            }
+        }
+
+        // A mesh record with no model names nothing. Refused rather than
+        // dropped, because a node that silently loses its geometry looks
+        // exactly like a node that never had any.
+        if (!sawModel || string.IsNullOrWhiteSpace(mesh.Model))
+            throw Fail(ref reader, $"'mesh' needs a '{MapFormat.ModelMember}' path", state);
+
+        if (mesh.Submesh < 0)
+            throw Fail(ref reader, $"'{MapFormat.SubmeshMember}' cannot be negative", state);
+
+        return mesh;
     }
 
     private static MapLight ReadLight(ref Utf8JsonReader reader, ReadOnlySpan<byte> utf8, ReadState state)

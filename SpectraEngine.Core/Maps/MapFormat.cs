@@ -50,8 +50,14 @@ public static class MapFormat
     public const string KindMember = "kind";
     public const string TransformMember = "transform";
     public const string BrushMember = "brush";
+    public const string MeshMember = "mesh";
     public const string LightMember = "light";
     public const string ChildrenMember = "children";
+
+    // --- mesh ---------------------------------------------------------------
+
+    public const string ModelMember = "model";
+    public const string SubmeshMember = "submesh";
 
     /// <summary>
     /// Reserved at top level and per node.

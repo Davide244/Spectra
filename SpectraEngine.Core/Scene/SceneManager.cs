@@ -477,7 +477,8 @@ public sealed class SceneManager
 
         try
         {
-            MapSceneBinder.ApplyTo(MapBundle.Load(bundlePath), scene);
+            var report = new MapLoadReport();
+            MapSceneBinder.ApplyTo(MapBundle.Load(bundlePath), scene, report);
 
             // The synchronous cache-free path, which is exactly what a load is
             // for: the incremental compiler carries caches from a previous
@@ -501,6 +502,12 @@ public sealed class SceneManager
                 + "demo animation {Bob}, self-test node {Test}",
                 bundlePath, clock.Elapsed.TotalMilliseconds, scene.Name, scene.Root.Children.Count,
                 _pillarBob is null ? "dropped" : "rebound", SelfTestNode is null ? "dropped" : "rebound");
+
+            // A map naming a model this project does not have still loads, with
+            // that node standing where it belongs and drawing nothing. The
+            // level designer needs to see the level in order to fix the prop.
+            if (report.Describe() is { } missing)
+                _logger.LogWarning("Map load is incomplete. {What}", missing);
         }
         catch (Exception ex) when (ex is MapFormatException or IOException or UnauthorizedAccessException)
         {

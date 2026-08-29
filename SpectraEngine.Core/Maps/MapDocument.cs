@@ -126,8 +126,8 @@ public sealed class MapNode
 {
     internal static readonly string[] MemberOrder =
         [MapFormat.IdMember, MapFormat.NameMember, MapFormat.RealmMember, MapFormat.StateMember,
-         MapFormat.KindMember, MapFormat.TransformMember, MapFormat.BrushMember, MapFormat.LightMember,
-         MapFormat.EditorMember, MapFormat.ChildrenMember];
+         MapFormat.KindMember, MapFormat.TransformMember, MapFormat.BrushMember, MapFormat.MeshMember,
+         MapFormat.LightMember, MapFormat.EditorMember, MapFormat.ChildrenMember];
 
     public Guid Id { get; set; }
 
@@ -178,6 +178,18 @@ public sealed class MapNode
     public MapTransform Transform { get; set; } = MapTransform.Identity;
 
     public MapBrush? Brush { get; set; }
+
+    /// <summary>
+    /// Where this node's mesh came from, when it came from a model file.
+    /// </summary>
+    /// <remarks>
+    /// <b>A reference, never the geometry.</b> Vertices belong in the cooked
+    /// artifact; an authored map names the source file and lets the asset
+    /// system resolve it, which is the same rule that makes a face carry a
+    /// material path rather than a material. A node whose mesh was built in
+    /// code has none of this, permanently, because there is no file to name.
+    /// </remarks>
+    public MapMeshSource? Mesh { get; set; }
 
     /// <summary>
     /// The node's light, if any.
@@ -294,6 +306,25 @@ public sealed class MapFace
     /// <summary>World units per texture repeat. Defaults to 1; zero is refused by <c>FaceSurface</c>.</summary>
     public float UScale { get; set; } = 1f;
     public float VScale { get; set; } = 1f;
+
+    public List<PreservedMember> Unknown { get; } = [];
+}
+
+/// <summary>A reference to one submesh of a model file.</summary>
+/// <remarks>
+/// Open, like a face record: this is where a model reference grows (an
+/// authored material override, a LOD choice, a collision hint), and none of it
+/// changes which geometry is named.
+/// </remarks>
+public sealed class MapMeshSource
+{
+    internal static readonly string[] MemberOrder = [MapFormat.ModelMember, MapFormat.SubmeshMember];
+
+    /// <summary>Content-root-relative path of the model file.</summary>
+    public string Model { get; set; } = string.Empty;
+
+    /// <summary>Index into the model's submesh list. Omitted iff zero.</summary>
+    public int Submesh { get; set; }
 
     public List<PreservedMember> Unknown { get; } = [];
 }
