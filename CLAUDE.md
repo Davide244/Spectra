@@ -14,6 +14,8 @@ dotnet run --project SpectraEngine.Executable       # Run the demo (args: opengl
 dotnet run --project SpectraEngine.Executable -- d3d11 --selftest   # ...with the editing self-test on (default OFF)
 dotnet run --project SpectraEngine.Executable -- d3d12 --fullscreen-cycle=2   # ...toggling fullscreen every 2 s (default OFF)
 dotnet run --project SpectraEngine.Executable -- d3d11 --play          # ...starting in first-person play mode (default OFF; F8 toggles it)
+dotnet run --project SpectraEngine.Executable -- d3d11 --save-map=Out.smap   # ...writing the scene out as a .smap bundle (a FOLDER of text)
+dotnet run --project SpectraEngine.Executable -- d3d11 --map=Out.smap        # ...running that bundle instead of the authored demo scene
 dotnet run --project Test/SpectraShade.Compiler.Tests    # Compiler tests (xUnit v3 on MTP)
 dotnet run --project Test/SpectraEngine.Bsp.Tests        # CSG/BSP + scene (events, BVH, id index) tests
 dotnet run --project Test/SpectraEngine.Editing.Tests     # Editor input frame, commands, undo/transactions, gizmos
