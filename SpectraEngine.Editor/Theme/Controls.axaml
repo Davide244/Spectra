@@ -43,6 +43,22 @@
     <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
   </Style>
 
+  <!-- ─── Readout text ─────────────────────────────────────
+       App-scoped rather than window-scoped, because the dockable panels use
+       these and a floated panel leaves the main window's style scope. -->
+  <Style Selector="TextBlock.value">
+    <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="TextBlock.label">
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
   <!-- ─── Menu ─────────────────────────────────────────────-->
   <Style Selector="Menu">
     <Setter Property="Background" Value="Transparent" />

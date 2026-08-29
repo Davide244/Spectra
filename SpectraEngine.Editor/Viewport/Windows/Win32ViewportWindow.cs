@@ -179,6 +179,13 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
         host.ApplyPendingCursorMode();
     }
 
+    /// <summary>Gives this window Win32 keyboard focus, as a click on it would.</summary>
+    internal void FocusKeyboard()
+    {
+        if (_hwnd != 0)
+            Win32Interop.SetFocus(_hwnd);
+    }
+
     /// <summary>Destroys the child window.</summary>
     public void Dispose()
     {

@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -30,8 +30,8 @@ using System.Threading.Tasks;
 namespace SpectraEngine.Editor;
 
 /// <summary>
-/// The shell window: a menu, a toolbar, a scene tree, the viewport, and a
-/// status bar.
+/// The shell window: the start page, the tabbed command bar, the docked
+/// panels around a pinned viewport, and the status bar.
 /// </summary>
 /// <remarks>
 /// <b>Everything crossing between the two threads crosses here, and only in two
@@ -108,6 +108,10 @@ public partial class MainWindow : Window
 
         DataContext = _shell;
 
+        // The neutral place focus can land when a field must blur before a
+        // document chord runs — see CommitFocusedEdit.
+        Focusable = true;
+
         _loggerFactory = new SerilogLoggerFactory(Serilog.Log.Logger, dispose: false);
         _logger = _loggerFactory.CreateLogger<MainWindow>();
 
@@ -120,6 +124,18 @@ public partial class MainWindow : Window
         StartView.OpenMapRequested += () => _ = OpenLooseMapFlowAsync();
         StartView.RecentProjectPicked += recent => _ = OpenRecentProjectAsync(recent);
         StartView.ShowRecents(_settings.RecentProjects);
+
+        // ONE factory, shared by both dock controls, assigned before the
+        // window attaches. All three clauses are load-bearing: without any
+        // factory, DockControl.Initialize returns before InitLayout and both
+        // dock columns render EMPTY with every docking gesture dead (proven
+        // with a headless repro against the shipped package); with one
+        // factory per control, a drag's target list is that factory's own
+        // DockControls, so a panel could never cross from the left dock to
+        // the right one.
+        var dockFactory = new Dock.Model.Avalonia.Factory();
+        LeftDock.Factory = dockFactory;
+        RightDock.Factory = dockFactory;
 
         // The panels are built HERE and handed to the dock tools as live
         // controls: the dock's builder returns a Control content instance
@@ -136,7 +152,7 @@ public partial class MainWindow : Window
         SceneTool.Content = _sceneView;
 
         _propertiesView = new PropertiesPanel { DataContext = _shell };
-        _propertiesView.EscapePressed += () => _viewport?.Focus();
+        _propertiesView.EscapePressed += () => _viewport?.FocusEngine();
         PropertiesTool.Content = _propertiesView;
 
         _mapsView = new MapsPanel { DataContext = _shell };
@@ -167,22 +183,22 @@ public partial class MainWindow : Window
         KeyBindings.Add(new KeyBinding
         {
             Gesture = new KeyGesture(Key.N, KeyModifiers.Control),
-            Command = new RelayCommand(() => OnNewMapClicked(this, new RoutedEventArgs())),
+            Command = new RelayCommand(() => { CommitFocusedEdit(); OnNewMapClicked(this, new RoutedEventArgs()); }),
         });
         KeyBindings.Add(new KeyBinding
         {
             Gesture = new KeyGesture(Key.O, KeyModifiers.Control),
-            Command = new RelayCommand(() => OnOpenMapClicked(this, new RoutedEventArgs())),
+            Command = new RelayCommand(() => { CommitFocusedEdit(); OnOpenMapClicked(this, new RoutedEventArgs()); }),
         });
         KeyBindings.Add(new KeyBinding
         {
             Gesture = new KeyGesture(Key.S, KeyModifiers.Control),
-            Command = new RelayCommand(() => OnSaveClicked(this, new RoutedEventArgs())),
+            Command = new RelayCommand(() => { CommitFocusedEdit(); OnSaveClicked(this, new RoutedEventArgs()); }),
         });
         KeyBindings.Add(new KeyBinding
         {
             Gesture = new KeyGesture(Key.S, KeyModifiers.Control | KeyModifiers.Shift),
-            Command = new RelayCommand(() => OnSaveAsClicked(this, new RoutedEventArgs())),
+            Command = new RelayCommand(() => { CommitFocusedEdit(); OnSaveAsClicked(this, new RoutedEventArgs()); }),
         });
 
         _pump = new DispatcherTimer(
@@ -298,9 +314,11 @@ public partial class MainWindow : Window
         _shell.HasSession = true;
 
         // Attach last: creating the native child is what eventually raises
-        // SurfaceCreated, and everything above must be in place by then.
+        // SurfaceCreated, and everything above must be in place by then. The
+        // engine focus makes the tool keys live from the first frame instead
+        // of after a first click into the scene.
         ViewportHost.Child = viewport;
-        viewport.Focus();
+        viewport.FocusEngine();
     }
 
     /// <summary>
@@ -323,6 +341,12 @@ public partial class MainWindow : Window
         viewport.ShellChord -= OnShellChord;
         _viewport = null;
         _pendingLaunch = null;
+
+        // A panel floated into its own OS window is not inside EditorView, so
+        // hiding the grid would leave it standing over the start page showing
+        // a dead session's data. The root docks close their own windows.
+        LeftRoot.ExitWindows?.Execute(null);
+        RightRoot.ExitWindows?.Execute(null);
 
         _tree = null;
         _shell.Tree = null;
@@ -602,7 +626,7 @@ public partial class MainWindow : Window
 
             case Key.Escape:
                 RevertSnapField(box);
-                _viewport?.Focus();
+                _viewport?.FocusEngine();
                 e.Handled = true;
                 break;
         }
@@ -619,12 +643,40 @@ public partial class MainWindow : Window
             RevertSnapField(box);
     }
 
+    /// <summary>
+    /// Commits whatever editable field currently holds keyboard focus, by
+    /// blurring it, before a document chord runs.
+    /// </summary>
+    /// <remarks>
+    /// The menu route gets this for free — clicking File moves focus, the
+    /// field's LostFocus commits — but a key binding fires with focus still in
+    /// the box, so Ctrl+S would write the bundle WITHOUT the value the user
+    /// just typed while reporting "Saved". One blur closes the gap for the
+    /// property fields and the snap fields alike, on their own commit paths.
+    /// </remarks>
+    private void CommitFocusedEdit()
+    {
+        // Blur by taking focus, not by a ClearFocus API (Avalonia 12 has
+        // none): the window is made focusable in the constructor exactly so
+        // it can be the neutral place focus lands, which raises the field's
+        // LostFocus and runs its commit.
+        if (FocusManager?.GetFocusedElement() is TextBox)
+            Focus();
+    }
+
     private void RevertSnapField(TextBox box)
     {
+        // Before the first snapshot there is nothing published to revert TO,
+        // and formatting FrameSnapshot.Empty's zeros into the box would show
+        // an increment the engine never had; the editor's defaults are the
+        // honest resting value.
         FrameSnapshot latest = _latest;
-        float value = ReferenceEquals(box, SnapRotateBox) ? latest.RotateSnapIncrement
-            : ReferenceEquals(box, SnapResizeBox) ? latest.ResizeSnapIncrement
-            : latest.MoveSnapIncrement;
+        bool empty = ReferenceEquals(latest, FrameSnapshot.Empty);
+        float value = ReferenceEquals(box, SnapRotateBox)
+            ? (empty ? 15f : latest.RotateSnapIncrement)
+            : ReferenceEquals(box, SnapResizeBox)
+                ? (empty ? 1f : latest.ResizeSnapIncrement)
+                : (empty ? 1f : latest.MoveSnapIncrement);
         box.Text = PropertyFieldModel.Format(value);
     }
 
@@ -1143,7 +1195,7 @@ public partial class MainWindow : Window
     /// the author's ordered list and what a cook bakes; a map saved into
     /// <c>Maps/</c> and never listed would run in the editor and silently miss
     /// the shipped game. A map saved OUTSIDE the project folder is legal and
-    /// deliberately not listed â€” <see cref="EditorDocument.MapPathWithinProject"/>
+    /// deliberately not listed - <see cref="EditorDocument.MapPathWithinProject"/>
     /// answers that. Removal stays a hand edit: the editor adds what you save
     /// and never deletes an entry, because the manifest is the author's file.
     /// </remarks>
@@ -1156,8 +1208,8 @@ public partial class MainWindow : Window
             return string.Empty;
 
         // Re-read from DISK and edit that, never the in-memory copy. The
-        // manifest is the author's file â€” the format's whole promise is that a
-        // person edits it in VS Code and the editor does not fight them â€” and
+        // manifest is the author's file - the format's whole promise is that a
+        // person edits it in VS Code and the editor does not fight them - and
         // writing the copy loaded at open time would silently revert every
         // hand edit made since. Re-reading also makes a retry work after a
         // failed write: the fresh read still lacks the entry, so it is added

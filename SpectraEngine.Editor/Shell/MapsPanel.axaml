@@ -3,7 +3,6 @@
              xmlns:shell="clr-namespace:SpectraEngine.Editor.Shell"
              x:Class="SpectraEngine.Editor.Shell.MapsPanel"
              x:DataType="shell:ShellModel"
-             IsVisible="{Binding HasProject}"
              Background="{StaticResource SpectraBgPanel}">
 
   <!-- The open project's maps: the manifest's order, then anything on disk
@@ -12,9 +11,17 @@
        dropdown would cross the viewport, where it is invisible. -->
 
   <DockPanel>
-    <!-- No panel header: the dock's tool chrome already names this "Maps". -->
+    <!-- No panel header: the dock's tool chrome already names this "Maps".
+         With no project open the pane cannot collapse (its dock reserves the
+         space), so it says why it is empty instead of being blank. -->
+    <TextBlock DockPanel.Dock="Top" Margin="12,10" TextWrapping="Wrap"
+               Text="No project open. Maps saved into a project's Maps folder are listed here."
+               FontSize="{StaticResource SpectraFontSecondary}"
+               Foreground="{StaticResource SpectraTextMuted}"
+               IsVisible="{Binding !HasProject}" />
+
     <ScrollViewer MaxHeight="132" HorizontalScrollBarVisibility="Disabled"
-                  VerticalAlignment="Top">
+                  VerticalAlignment="Top" IsVisible="{Binding HasProject}">
       <ItemsControl ItemsSource="{Binding ProjectMaps}" Margin="8,6">
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="shell:ProjectMapRow">

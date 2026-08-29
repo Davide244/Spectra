@@ -111,7 +111,7 @@ public sealed class ShellModel : ObservableObject
 
     private string _activeTab = "home";
 
-    /// <summary>Which command strip is showing: <c>home</c> or <c>view</c>.</summary>
+    /// <summary>Which command strip is showing: <c>home</c>, <c>model</c> or <c>view</c>.</summary>
     /// <remarks>
     /// Purely a UI preference — nothing engine-side changes with the tab, so
     /// it lives here rather than riding a snapshot.

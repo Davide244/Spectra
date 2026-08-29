@@ -299,6 +299,42 @@ public sealed class SceneEditorHostCommandTests
     }
 
     [Fact]
+    public void A_brush_rests_on_the_aimed_surface_and_a_hole_bites_into_it()
+    {
+        // The two clearances are one decision each: an additive brush pushed
+        // out by its half extent rests flush, while a subtractive one pushed
+        // out the same way would share only the boundary plane with the solid
+        // and the carve treats a resting negative as a no-op - a hole that
+        // never cuts. The hole's centre therefore lands ON the surface,
+        // half-buried, and the snap must not disturb either (it aligns along
+        // the surface and never along the normal).
+        var scene = new Scene("Editor");
+        SceneNode plate = scene.Root.CreateChild("Plate");
+        plate.Brush = SpectraEngine.Core.Bsp.Brush.CreateBox(
+            new System.Numerics.Vector3(-8f, -1f, -8f), new System.Numerics.Vector3(8f, 1f, 8f));
+
+        // The centre ray hits exactly the look target when the target sits on
+        // the plate's top plane (y = 1).
+        scene.Camera.Position = new System.Numerics.Vector3(0.5f, 8f, 4f);
+        scene.Camera.LookAt(new System.Numerics.Vector3(0.5f, 1f, 0.5f));
+
+        SceneEditorHost host = NewHost(scene);
+
+        host.Insert(InsertKind.SubtractiveBrush);
+        SceneNode hole = scene.Root.Children[^1];
+        hole.LocalPosition.Y.ShouldBe(1f, 0.001f, "a hole starts half-buried in the surface");
+
+        // Undone first, because the placement ray sees every pickable node -
+        // deliberately, that is the fix this test pins - and the second
+        // insert would otherwise rest on the first one.
+        host.Apply(EditorHostCommand.Undo);
+
+        host.Insert(InsertKind.WorldBrush);
+        SceneNode brush = scene.Root.Children[^1];
+        brush.LocalPosition.Y.ShouldBe(2f, 0.001f, "an additive brush rests flush on the surface");
+    }
+
+    [Fact]
     public void Inserts_land_on_the_move_grid_while_snap_is_on()
     {
         // Snap defaults on with a grid of one world unit, so a fresh insert

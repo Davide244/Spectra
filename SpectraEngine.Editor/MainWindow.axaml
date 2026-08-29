@@ -27,18 +27,9 @@
        without the window donating styles. -->
 
   <Window.Styles>
-    <Style Selector="TextBlock.value">
-      <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
-      <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
-      <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
-      <Setter Property="VerticalAlignment" Value="Center" />
-    </Style>
-    <Style Selector="TextBlock.label">
-      <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
-      <Setter Property="FontWeight" Value="SemiBold" />
-      <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
-      <Setter Property="VerticalAlignment" Value="Center" />
-    </Style>
+    <!-- .value and .label live app-wide in Controls.axaml: the panels use
+         them, and a panel floated into its own dock window leaves this
+         window's style scope. -->
     <Style Selector="TextBlock.sep">
       <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
       <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
@@ -243,23 +234,23 @@
                  the surface in the middle of the view, snapped to the move
                  grid, selected, one undo entry. -->
             <TextBlock Classes="label" Text="insert" Margin="0,0,6,0" />
-            <Button Classes="tool" Click="OnInsertWorldBrushClicked"
+            <Button Classes="tool" Click="OnInsertWorldBrushClicked" IsEnabled="{Binding !IsPlaying}"
                     ToolTip.Tip="Insert a world brush: fused into the static world">
               <Path Data="{StaticResource IconBrushWorld}" />
             </Button>
-            <Button Classes="tool" Click="OnInsertPartBrushClicked"
+            <Button Classes="tool" Click="OnInsertPartBrushClicked" IsEnabled="{Binding !IsPlaying}"
                     ToolTip.Tip="Insert a part: outside the carve, cheap to move and animate">
               <Path Data="{StaticResource IconBrushPart}" />
             </Button>
-            <Button Classes="tool" Click="OnInsertSubtractiveBrushClicked"
+            <Button Classes="tool" Click="OnInsertSubtractiveBrushClicked" IsEnabled="{Binding !IsPlaying}"
                     ToolTip.Tip="Insert a hole: subtracts from the world geometry it overlaps">
               <Path Data="{StaticResource IconBrushSubtractive}" />
             </Button>
-            <Button Classes="tool" Click="OnInsertLightClicked"
+            <Button Classes="tool" Click="OnInsertLightClicked" IsEnabled="{Binding !IsPlaying}"
                     ToolTip.Tip="Insert a point light">
               <Path Data="{StaticResource IconLight}" />
             </Button>
-            <Button Classes="tool" Click="OnInsertGroupClicked"
+            <Button Classes="tool" Click="OnInsertGroupClicked" IsEnabled="{Binding !IsPlaying}"
                     ToolTip.Tip="Insert an empty group">
               <Path Data="{StaticResource IconGroup}" />
             </Button>
@@ -365,8 +356,13 @@
              window, which is exactly why it may cross the viewport when
              nothing drawn IN this window can). Drop targets only appear over
              the dock controls themselves, safely off the viewport's cell. -->
-        <dock:DockControl Grid.Column="0" InitializeLayout="True" InitializeFactory="True">
+        <dock:DockControl x:Name="LeftDock" Grid.Column="0" InitializeLayout="True" InitializeFactory="True">
+          <!-- Native floats, never the managed in-window layer: a managed
+               float is drawn in THIS window's Avalonia layer, which the
+               viewport's native child composites over - the float would be
+               invisible exactly where people drop panels. -->
           <dm:RootDock x:Name="LeftRoot" Id="LeftRoot" IsCollapsable="False"
+                       FloatingWindowHostMode="Native"
                        DefaultDockable="{Binding #LeftLayout}">
             <dm:ProportionalDock x:Name="LeftLayout" Id="LeftLayout" Orientation="Vertical">
               <!-- The tools' CONTENT is assigned in code, deliberately: XAML
@@ -398,8 +394,9 @@
 
         <GridSplitter Grid.Column="3" ResizeDirection="Columns" />
 
-        <dock:DockControl Grid.Column="4" InitializeLayout="True" InitializeFactory="True">
+        <dock:DockControl x:Name="RightDock" Grid.Column="4" InitializeLayout="True" InitializeFactory="True">
           <dm:RootDock x:Name="RightRoot" Id="RightRoot" IsCollapsable="False"
+                       FloatingWindowHostMode="Native"
                        DefaultDockable="{Binding #RightLayout}">
             <dm:ProportionalDock x:Name="RightLayout" Id="RightLayout" Orientation="Vertical">
               <dm:ToolDock Id="PropertiesDock" Alignment="Right" Proportion="1">

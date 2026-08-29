@@ -749,9 +749,27 @@ public sealed class SceneEditorHost : ISceneEditor
             return;
         }
 
-        // Lights float clear of the surface instead of resting on it: a light
-        // AT a surface lights half of nothing.
-        float clearance = kind == InsertKind.PointLight ? 1.5f : InsertHalfExtent;
+        // Any OTHER live gesture — a marquee mid-sweep — is abandoned before
+        // the insert rewrites the selection under it, the same rule
+        // SelectById follows.
+        _viewport.Reset();
+
+        float clearance = kind switch
+        {
+            // A light AT a surface lights half of nothing.
+            InsertKind.PointLight => 1.5f,
+
+            // Centre ON the surface, half-buried: a hole resting flush shares
+            // only the boundary plane with the solid, and the carve treats a
+            // resting negative as a no-op by design — it would sit on an
+            // intact floor cutting nothing, forever.
+            InsertKind.SubtractiveBrush => 0f,
+
+            // A group is a point; it marks the spot rather than resting on it.
+            InsertKind.Group => 0f,
+
+            _ => InsertHalfExtent,
+        };
         Vector3 position = FindInsertPosition(clearance);
 
         SceneNode node = BuildInsert(kind);
@@ -776,23 +794,40 @@ public sealed class SceneEditorHost : ISceneEditor
     {
         // A degenerate viewport (minimised) has no centre ray worth casting;
         // fall back to straight ahead of the camera.
-        Vector3 point;
-        if (_viewportSize.X > 0f && _viewportSize.Y > 0f)
+        if (_viewportSize.X <= 0f || _viewportSize.Y <= 0f)
+            return SnapAllAxes(_scene.Camera.Position + _scene.Camera.Forward * InsertFallbackDistance);
+
+        Ray3 ray = _scene.Camera.ScreenPointToRay(_viewportSize * 0.5f, _viewportSize);
+
+        // The same query PICKING uses — part brushes and meshes included —
+        // so the insert lands on the surface the user is looking at, not on
+        // whatever compiled world geometry happens to be behind it. A ray
+        // through the static world alone passes straight through a platform
+        // built of parts and buries the new thing underneath it.
+        if (!_scene.Raycast(in ray, out SceneRaycastHit hit, SceneQueryFilter.EditorPicking, InsertRayReach))
+            return SnapAllAxes(ray.PointAt(InsertFallbackDistance));
+
+        Vector3 point = hit.Point;
+        SnapSettings snap = _gizmos.Translate.Snap;
+        if (snap.Enabled)
         {
-            // StaticWorld is derived data and null until the first compile
-            // lands — which is exactly the state a brand-new map is in when
-            // its first brush is inserted.
-            Ray3 ray = _scene.Camera.ScreenPointToRay(_viewportSize * 0.5f, _viewportSize);
-            point = _scene.StaticWorld is { } world &&
-                world.Raycast(ray.Origin, ray.Direction, InsertRayReach, out BspRaycastHit hit)
-                ? hit.Point + hit.Normal * clearance
-                : ray.PointAt(InsertFallbackDistance);
-        }
-        else
-        {
-            point = _scene.Camera.Position + _scene.Camera.Forward * InsertFallbackDistance;
+            // Grid-align ALONG the surface only: the snapped point is
+            // re-projected back onto the hit plane, so a coarse grid can
+            // neither bury the insert in the surface nor float it off —
+            // both of which snapping all three axes after the clearance
+            // could do, by up to half an increment.
+            var snapped = new Vector3(
+                snap.SnapScalar(point.X), snap.SnapScalar(point.Y), snap.SnapScalar(point.Z));
+            snapped += hit.Normal * Vector3.Dot(point - snapped, hit.Normal);
+            point = snapped;
         }
 
+        // Clearance after the snap, for the same reason.
+        return point + hit.Normal * clearance;
+    }
+
+    private Vector3 SnapAllAxes(Vector3 point)
+    {
         SnapSettings snap = _gizmos.Translate.Snap;
         if (!snap.Enabled)
             return point;

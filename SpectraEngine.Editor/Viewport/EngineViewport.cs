@@ -92,6 +92,18 @@ public sealed class EngineViewport : NativeControlHost
     /// </remarks>
     public void PumpCursorMode() => _window?.PumpCursorMode();
 
+    /// <summary>
+    /// Hands the keyboard to the engine's native child window.
+    /// </summary>
+    /// <remarks>
+    /// Not Avalonia's <c>Focus()</c>, which is a silent no-op here: a
+    /// <see cref="NativeControlHost"/> is not focusable, and even a focusable
+    /// one would hold AVALONIA focus while the OS keeps delivering keys
+    /// wherever they were going. The engine hears the keyboard only while its
+    /// own HWND has Win32 focus — the same <c>SetFocus</c> a click performs.
+    /// </remarks>
+    public void FocusEngine() => _window?.FocusKeyboard();
+
     /// <inheritdoc/>
     protected override IPlatformHandle CreateNativeControlCore(IPlatformHandle parent)
     {
