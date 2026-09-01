@@ -211,6 +211,29 @@
           </MenuItem>
 
           <MenuItem Header="_View" IsEnabled="{Binding HasSession}">
+            <!-- Panels FIRST, because until this menu existed a user could
+                 neither hide a panel nor discover that panels were a concept:
+                 the dock chrome's close button was the only route, and closing
+                 one was then permanent. -->
+            <MenuItem Header="Panels">
+              <MenuItem Header="Scene" Click="OnShowScenePanel">
+                <MenuItem.Icon><Path Classes="icon menuicon" Data="{StaticResource IconGroup}" /></MenuItem.Icon>
+              </MenuItem>
+              <MenuItem Header="Levels" Click="OnShowMapsPanel">
+                <MenuItem.Icon><Path Classes="icon menuicon" Data="{StaticResource IconMap}" /></MenuItem.Icon>
+              </MenuItem>
+              <MenuItem Header="Properties" Click="OnShowPropertiesPanel" />
+              <Separator />
+              <MenuItem Header="Content" Click="OnShowContentPanel">
+                <MenuItem.Icon><Path Classes="icon menuicon" Data="{StaticResource IconOpenFolder}" /></MenuItem.Icon>
+              </MenuItem>
+              <MenuItem Header="Output" Click="OnShowOutputPanel">
+                <MenuItem.Icon><Path Classes="icon menuicon" Data="{StaticResource IconWarning}" /></MenuItem.Icon>
+              </MenuItem>
+              <MenuItem Header="Console" InputGesture="OemTilde" Click="OnShowConsolePanel" />
+            </MenuItem>
+            <Separator />
+
             <!-- Built in code from the backend's own pipeline list, radio
                  checked, because which pipelines exist depends on the
                  renderer that started. -->
@@ -454,7 +477,33 @@
            DOCKED, all of it. Every panel owns its own grid cell and none of
            them intersect the viewport's, because a NativeControlHost's child
            composites above anything Avalonia draws in this window. -->
-      <Grid x:Name="EditorView" IsVisible="False" ColumnDefinitions="288,1,*,1,308">
+      <!-- THE ROWS ARE NEW, AND THEIR ABSENCE IS WHY NOTHING HORIZONTAL HAD A
+           HOME. This grid was columns-only, so a content browser, an output log
+           and a console had nowhere to be but a fourth vertical column - which
+           is the shape that makes an editor read as a web dashboard. Left and
+           right span the full height, because the tree and the inspector are
+           the two panels that genuinely want it; the bottom region takes the
+           centre column only, under the viewport, which is Godot's shape and
+           the right one here. -->
+      <Grid x:Name="EditorView" IsVisible="False">
+
+        <!-- Spelled out rather than written as a string, because MIN sizes have
+             no shorthand and the panels had none: the viewport was clamped at
+             360 from the day it was embedded, while the columns beside it could
+             be dragged to zero width and left there, with the only way back
+             being a splitter one pixel from the window edge. -->
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="288" MinWidth="180" />
+          <ColumnDefinition Width="1" />
+          <ColumnDefinition Width="*" MinWidth="360" />
+          <ColumnDefinition Width="1" />
+          <ColumnDefinition Width="308" MinWidth="220" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="*" MinHeight="200" />
+          <RowDefinition Height="1" />
+          <RowDefinition Height="236" MinHeight="90" />
+        </Grid.RowDefinitions>
 
         <!-- Two DockControls, one per side, with the viewport PINNED between
              them in a plain grid cell. That pinning is not taste: the viewport
@@ -463,7 +512,8 @@
              enters a dock. The panels do: they can be re-stacked, tabbed and
              floated (a floated panel is a real OS window, which is exactly why
              it may cross the viewport). -->
-        <dock:DockControl x:Name="LeftDock" Grid.Column="0" InitializeLayout="True" InitializeFactory="True">
+        <dock:DockControl x:Name="LeftDock" Grid.Column="0" Grid.RowSpan="3"
+                          InitializeLayout="True" InitializeFactory="True">
           <!-- Native floats, never the managed in-window layer: a managed float
                is drawn in THIS window's Avalonia layer, which the viewport's
                native child composites over - the float would be invisible
@@ -507,11 +557,11 @@
              either of the two controls in this window a user drags most. The
              ink carries the hover instead, driven from code because a child
              cannot read its parent's pseudo-classes from a selector. -->
-        <GridSplitter Grid.Column="1" ResizeDirection="Columns" Cursor="SizeWestEast"
+        <GridSplitter Grid.Column="1" Grid.RowSpan="3" ResizeDirection="Columns" Cursor="SizeWestEast"
                       Width="9" Margin="-4,0" PointerEntered="OnSplitterEntered"
                       PointerExited="OnSplitterExited"
                       Tag="{Binding #LeftSplitInk}" />
-        <Border x:Name="LeftSplitInk" Grid.Column="1" Width="1" Classes="splitink"
+        <Border x:Name="LeftSplitInk" Grid.Column="1" Grid.RowSpan="3" Width="1" Classes="splitink"
                 HorizontalAlignment="Center" />
 
         <!-- MinWidth is not cosmetic: dragging the splitter to zero can leave
@@ -523,17 +573,45 @@
              The bezel is the darkest surface in the window and the only place
              allowed near-black: chrome, then bezel, then render, so the picture
              is framed rather than butted straight against a panel. -->
-        <Border x:Name="ViewportHost" Grid.Column="2" MinWidth="360"
+        <Border x:Name="ViewportHost" Grid.Column="2" Grid.Row="0" MinWidth="360"
                 Background="{StaticResource SpectraViewportBezel}" />
 
-        <GridSplitter Grid.Column="3" ResizeDirection="Columns" Cursor="SizeWestEast"
+        <!-- The bottom region's own splitter. Rows, not columns, and it carries
+             the same ink-plus-hit-area treatment as the vertical pair. -->
+        <GridSplitter Grid.Column="2" Grid.Row="1" ResizeDirection="Rows" Cursor="SizeNorthSouth"
+                      Height="9" Margin="0,-4" PointerEntered="OnSplitterEntered"
+                      PointerExited="OnSplitterExited"
+                      Tag="{Binding #BottomSplitInk}" />
+        <Border x:Name="BottomSplitInk" Grid.Column="2" Grid.Row="1" Height="1" Classes="splitink"
+                VerticalAlignment="Center" />
+
+        <!-- The third dock, on the SAME factory as the other two. A per-control
+             factory would make a drag's target list that factory's own controls,
+             so a panel could never cross between regions - silently. -->
+        <dock:DockControl x:Name="BottomDock" Grid.Column="2" Grid.Row="2"
+                          InitializeLayout="True" InitializeFactory="True">
+          <dm:RootDock x:Name="BottomRoot" Id="BottomRoot" IsCollapsable="False"
+                       FloatingWindowHostMode="Native"
+                       DefaultDockable="{Binding #BottomLayout}">
+            <dm:ProportionalDock x:Name="BottomLayout" Id="BottomLayout" Orientation="Horizontal">
+              <dm:ToolDock Id="BottomToolDock" Alignment="Top" Proportion="1">
+                <dm:Tool x:Name="ContentTool" Id="Content" Title="Content" CanClose="True" CanPin="False" />
+                <dm:Tool x:Name="OutputTool" Id="Output" Title="Output" CanClose="True" CanPin="False" />
+                <dm:Tool x:Name="ConsoleTool" Id="Console" Title="Console" CanClose="True" CanPin="False" />
+              </dm:ToolDock>
+            </dm:ProportionalDock>
+          </dm:RootDock>
+        </dock:DockControl>
+
+        <GridSplitter Grid.Column="3" Grid.RowSpan="3" ResizeDirection="Columns" Cursor="SizeWestEast"
                       Width="9" Margin="-4,0" PointerEntered="OnSplitterEntered"
                       PointerExited="OnSplitterExited"
                       Tag="{Binding #RightSplitInk}" />
-        <Border x:Name="RightSplitInk" Grid.Column="3" Width="1" Classes="splitink"
+        <Border x:Name="RightSplitInk" Grid.Column="3" Grid.RowSpan="3" Width="1" Classes="splitink"
                 HorizontalAlignment="Center" />
 
-        <dock:DockControl x:Name="RightDock" Grid.Column="4" InitializeLayout="True" InitializeFactory="True">
+        <dock:DockControl x:Name="RightDock" Grid.Column="4" Grid.RowSpan="3"
+                          InitializeLayout="True" InitializeFactory="True">
           <dm:RootDock x:Name="RightRoot" Id="RightRoot" IsCollapsable="False"
                        FloatingWindowHostMode="Native"
                        DefaultDockable="{Binding #RightLayout}">

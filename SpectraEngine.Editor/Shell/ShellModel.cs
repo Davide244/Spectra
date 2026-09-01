@@ -793,6 +793,7 @@ public sealed class ShellModel : ObservableObject
     {
         Message = text;
         IsError = false;
+        Output.Append(OutputSeverity.Info, text);
     }
 
     /// <summary>Reports a failure, which stays until something replaces it.</summary>
@@ -800,7 +801,35 @@ public sealed class ShellModel : ObservableObject
     {
         Message = text;
         IsError = true;
+        Output.Append(OutputSeverity.Error, text);
     }
+
+    /// <summary>Reports something that is not right but did not stop anything.</summary>
+    public void SetWarning(string text)
+    {
+        Message = text;
+        IsError = false;
+        Output.Append(OutputSeverity.Warning, text);
+    }
+
+    /// <summary>
+    /// Everything the shell has reported, oldest first.
+    /// </summary>
+    /// <remarks>
+    /// <b>The status line is a VIEW of this, not the storage.</b> It used to be
+    /// the storage, which meant about thirty call sites shared one string and
+    /// each one silently destroyed whatever the last had written - so a failure
+    /// reported while the user was looking somewhere else was gone by the time
+    /// they looked back. The line still shows the newest entry; what changed is
+    /// that the entry before it survives.
+    /// </remarks>
+    public OutputLog Output { get; } = new();
+
+    /// <summary>
+    /// The project's assets, browsed. Assigned by the window, which is the only
+    /// thing that knows where a project's content root is.
+    /// </summary>
+    public ContentBrowserModel? Content { get; set; }
 
     // ─── Filter ──────────────────────────────────────────
 

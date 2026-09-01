@@ -1,4 +1,4 @@
-<ResourceDictionary xmlns="https://github.com/avaloniaui"
+﻿<ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
   <!--
@@ -103,6 +103,13 @@
        The expander is drawn pointing right and rotated 90 degrees when open,
        so one geometry covers both states and they cannot drift in weight. -->
   <StreamGeometry x:Key="IconChevronRight">M6,3.5 L10.5,8 L6,12.5</StreamGeometry>
+
+  <!-- The content browser's pair. Up is a chevron plus a bar, not a bare arrow:
+       a bare arrow in a path row reads as "back", and back and up are different
+       journeys through a folder tree. Refresh is a three-quarter ring with one
+       head, which is the shape every tool uses for it. -->
+  <StreamGeometry x:Key="IconArrowUp">M8,13 L8,4.5 M4.5,8 L8,4.5 L11.5,8 M3.5,2.5 L12.5,2.5</StreamGeometry>
+  <StreamGeometry x:Key="IconRefresh">M13,8 A5,5 0 1 1 11,4.1 M13.5,2 L13.5,5 L10.5,5</StreamGeometry>
 
   <StreamGeometry x:Key="IconClear">M4.5,4.5 L11.5,11.5 M11.5,4.5 L4.5,11.5</StreamGeometry>
 

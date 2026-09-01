@@ -1,0 +1,54 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shell="using:SpectraEngine.Editor.Shell"
+             x:Class="SpectraEngine.Editor.Shell.OutputPanel"
+             x:DataType="shell:ShellModel"
+             Background="{StaticResource SpectraBgPanel}">
+
+  <!--
+    Everything the editor has reported, oldest first.
+
+    A LIST, not a grid, and flat rows rather than cards: this is the idiom the
+    scene tree, the maps pane and the launcher's recents already share, and an
+    output log is the most list-shaped thing in the application.
+  -->
+
+  <Grid RowDefinitions="Auto,*">
+
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="8,6" ColumnSpacing="6">
+      <TextBlock Grid.Column="0" Classes="label" VerticalAlignment="Center"
+                 Text="{Binding Output.ProblemSummary}" />
+      <Button Grid.Column="1" Classes="ghost" Click="OnClearClicked" ToolTip.Tip="Clear the output">
+        <Path Classes="icon" Data="{StaticResource IconClear}" />
+      </Button>
+    </Grid>
+
+    <ScrollViewer Grid.Row="1" Name="Scroller" HorizontalScrollBarVisibility="Disabled">
+      <ItemsControl ItemsSource="{Binding Output.Entries}" Margin="0,0,0,6">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="shell:OutputEntry">
+            <Grid ColumnDefinitions="Auto,*" Margin="8,0" ColumnSpacing="8">
+              <TextBlock Grid.Column="0" Classes="value" VerticalAlignment="Top"
+                         Foreground="{StaticResource SpectraTextDisabled}"
+                         Text="{Binding TimeLabel}" />
+              <TextBlock Grid.Column="1" Classes="line" Text="{Binding Text}"
+                         Foreground="{Binding SeverityBrush}"
+                         TextWrapping="Wrap" />
+            </Grid>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+  </Grid>
+
+  <UserControl.Styles>
+    <!-- The message is set in the UI face, not mono: these are sentences. The
+         TIME beside it is a value and wears mono, which is also what keeps the
+         column from jittering as the seconds change. -->
+    <Style Selector="TextBlock.line">
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+      <Setter Property="Margin" Value="0,1" />
+    </Style>
+  </UserControl.Styles>
+</UserControl>

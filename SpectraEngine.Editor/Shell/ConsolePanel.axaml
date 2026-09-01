@@ -1,0 +1,45 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shell="using:SpectraEngine.Editor.Shell"
+             x:Class="SpectraEngine.Editor.Shell.ConsolePanel"
+             x:DataType="shell:ShellModel"
+             Background="{StaticResource SpectraBgPanel}">
+
+  <!--
+    A command line over the verbs the editor already has.
+
+    It shares the OUTPUT LOG rather than keeping a scrollback of its own, which
+    is the whole reason this is worth having at day one: a command and the error
+    it caused sit in one place, in order, instead of in two panes the user has to
+    correlate by memory. See ConsoleCommands for why there is no cvar system
+    behind it and why that is stated rather than faked.
+  -->
+
+  <Grid RowDefinitions="*,Auto">
+
+    <ScrollViewer Grid.Row="0" Name="Scroller" HorizontalScrollBarVisibility="Disabled">
+      <ItemsControl ItemsSource="{Binding Output.Entries}" Margin="0,6,0,4">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="shell:OutputEntry">
+            <TextBlock Classes="value" Margin="10,0" TextWrapping="Wrap"
+                       Foreground="{Binding SeverityBrush}"
+                       Text="{Binding Text}" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <!-- The prompt is a chevron, not a word: it is the one place in this shell
+         where a mono glyph IS the label, because that is what a command line
+         looks like everywhere and inventing a different one would only make it
+         harder to recognise. -->
+    <Grid Grid.Row="1" ColumnDefinitions="Auto,*" Margin="8,4,8,8" ColumnSpacing="6">
+      <TextBlock Grid.Column="0" Classes="value" VerticalAlignment="Center"
+                 Foreground="{StaticResource SpectraMode}" Text="&gt;" />
+      <TextBox Grid.Column="1" Name="Input" Classes="field num"
+               TextAlignment="Left"
+               Watermark="Type help"
+               KeyDown="OnInputKeyDown" />
+    </Grid>
+  </Grid>
+</UserControl>

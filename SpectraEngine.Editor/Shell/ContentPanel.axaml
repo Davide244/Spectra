@@ -1,0 +1,102 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shell="using:SpectraEngine.Editor.Shell"
+             x:Class="SpectraEngine.Editor.Shell.ContentPanel"
+             x:DataType="shell:ShellModel"
+             Background="{StaticResource SpectraBgPanel}">
+
+  <!--
+    The project's Assets folder, which nothing in this editor could show before.
+
+    A GRID of tiles here and a LIST everywhere else, and that is not an
+    inconsistency. The shell's rule is that a list of NAMES must be a list,
+    because a bordered tile per row costs three times the height and carries no
+    more information. A texture is not a name: the picture IS the information,
+    and a tile is the smallest thing that can carry it. The rule was about
+    decorated rows, not about tiles that show something.
+  -->
+
+  <Grid RowDefinitions="Auto,*">
+
+    <!-- The path row: up, where you are, and a refresh. There is no file
+         watcher behind this pane, so the refresh is the honest answer rather
+         than a listing that silently goes stale. -->
+    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="8,6,8,6" ColumnSpacing="6">
+      <Button Grid.Column="0" Classes="ghost" Name="UpButton" Click="OnUpClicked"
+              IsEnabled="{Binding Content.CanGoUp}" ToolTip.Tip="Up one folder">
+        <Path Classes="icon" Data="{StaticResource IconArrowUp}" />
+      </Button>
+
+      <TextBlock Grid.Column="1" Classes="value" VerticalAlignment="Center"
+                 TextTrimming="CharacterEllipsis"
+                 Text="{Binding Content.Breadcrumb}" />
+
+      <Button Grid.Column="2" Classes="ghost" Click="OnRefreshClicked" ToolTip.Tip="Re-read this folder">
+        <Path Classes="icon" Data="{StaticResource IconRefresh}" />
+      </Button>
+    </Grid>
+
+    <TextBlock Grid.Row="1" Classes="prose" Margin="12,4,12,0"
+               Foreground="{StaticResource SpectraTextMuted}"
+               IsVisible="{Binding !Content.HasContent}"
+               Text="{Binding Content.EmptyMessage}" />
+
+    <ScrollViewer Grid.Row="1" IsVisible="{Binding Content.HasContent}"
+                  HorizontalScrollBarVisibility="Disabled">
+      <ItemsControl ItemsSource="{Binding Content.Entries}" Margin="6,0,6,8">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <WrapPanel Orientation="Horizontal" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="shell:ContentEntry">
+            <Border Classes="tile" DoubleTapped="OnEntryActivated"
+                    ToolTip.Tip="{Binding Name}">
+              <StackPanel Width="88" Margin="0,6">
+
+                <!-- The picture when there is one, the kind glyph when there is
+                     not. Both at the same footprint, so a folder of half-decoded
+                     images does not reflow as they land. -->
+                <Panel Height="58" Margin="0,0,0,4">
+                  <Path Classes="icon" Width="22" Height="22"
+                        IsVisible="{Binding !HasThumbnail}"
+                        Stroke="{Binding KindBrush}"
+                        Data="{Binding Icon}" />
+                  <Image Source="{Binding Thumbnail}" IsVisible="{Binding HasThumbnail}"
+                         Stretch="Uniform" Margin="4" />
+                </Panel>
+
+                <TextBlock Text="{Binding Name}" FontSize="{StaticResource SpectraFontSmall}"
+                           Foreground="{StaticResource SpectraTextBody}"
+                           TextAlignment="Center" TextTrimming="CharacterEllipsis"
+                           MaxWidth="80" />
+                <TextBlock Text="{Binding SizeLabel}" Classes="micro"
+                           TextAlignment="Center" HorizontalAlignment="Center" />
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+  </Grid>
+
+  <UserControl.Styles>
+    <Style Selector="Border.tile">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+      <Setter Property="Margin" Value="2" />
+      <Setter Property="Transitions">
+        <Transitions>
+          <BrushTransition Property="Background"
+                           Duration="{StaticResource SpectraMotionFast}"
+                           Easing="{StaticResource SpectraEaseOut}" />
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="Border.tile:pointerover">
+      <Setter Property="Background" Value="{StaticResource SpectraRowHover}" />
+    </Style>
+  </UserControl.Styles>
+</UserControl>

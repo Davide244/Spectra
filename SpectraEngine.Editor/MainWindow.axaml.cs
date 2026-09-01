@@ -83,6 +83,11 @@ public partial class MainWindow : Window
     // arrive inside it.
     private int _pumpPosted;
 
+    private ContentPanel? _contentView;
+    private OutputPanel? _outputView;
+    private ConsolePanel? _consoleView;
+    private ConsoleCommands? _console;
+
     private EditorSession? _session;
     private SceneTreeModel? _tree;
     private IRenderSurface? _surface;
@@ -152,6 +157,7 @@ public partial class MainWindow : Window
         var dockFactory = new Dock.Model.Avalonia.Factory();
         LeftDock.Factory = dockFactory;
         RightDock.Factory = dockFactory;
+        BottomDock.Factory = dockFactory;
 
         // The panels are built HERE and handed to the dock tools as live
         // controls: the dock's builder returns a Control content instance
@@ -185,12 +191,61 @@ public partial class MainWindow : Window
         };
         MapsTool.Content = _mapsView;
 
+        // ─── The bottom region ────────────────────────────
+        //
+        // The three panels an editor is expected to have and this one did not:
+        // somewhere to see the project's files, somewhere its diagnostics
+        // survive being replaced, and a line to type a verb into.
+
+        _shell.Content = new ContentBrowserModel(_loggerFactory.CreateLogger<ContentBrowserModel>());
+
+        _contentView = new ContentPanel { DataContext = _shell };
+        _contentView.EntryActivated += OnContentActivated;
+        ContentTool.Content = _contentView;
+
+        _outputView = new OutputPanel { DataContext = _shell };
+        OutputTool.Content = _outputView;
+
+        _consoleView = new ConsolePanel { DataContext = _shell };
+        _consoleView.CommandSubmitted += OnConsoleCommand;
+        ConsoleTool.Content = _consoleView;
+
+        // Every entry resolves to a verb a button or a key chord also sends,
+        // which is what keeps the console from being a second path into the
+        // editor. The lambdas return false when there is no session, and the
+        // console says so rather than appearing to have worked.
+        _console = new ConsoleCommands(
+            postHost: command => _session is { } s && Post(() => s.Post(command)),
+            postGizmo: command => _session is { } s && Post(() => s.Post(command)),
+            postCamera: command => _session is { } s && Post(() => s.Post(command)),
+            insert: kind => _session is { } s && Post(() => s.Insert(kind)),
+            setSnap: (tool, value) => _session is { } s && Post(() => s.SetSnapIncrement(tool, value)),
+            setPipeline: name => _session is { } s && Post(() => s.Host.RequestPipeline(name)),
+            setPlaying: playing =>
+            {
+                _shell.RequestPlaying(playing);
+                _session?.Host.RequestPlayMode(playing);
+            });
+
+        static bool Post(Action action)
+        {
+            action();
+            return true;
+        }
+
         // The title is the only place the shell says what is open and whether
         // it is saved, so it follows the document rather than being set once.
         _document.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName is nameof(EditorDocument.Title))
                 RefreshDocumentIdentity();
+
+            // The content browser is fixed to the OPEN PROJECT's assets folder,
+            // exactly as the session's content root is: opening a different
+            // project is a different content root, and a browser still showing
+            // the previous one would offer files this scene cannot resolve.
+            if (args.PropertyName is nameof(EditorDocument.Project))
+                _shell.Content?.SetRoot(_document.Project?.AssetsPath);
         };
         RefreshDocumentIdentity();
         _shell.AboutLabel = $"Version {SpectraEngine.Core.EngineInfo.VersionString}";
@@ -1079,6 +1134,97 @@ public partial class MainWindow : Window
     {
         _shell.SetViewportSize(size.X, size.Y);
         _logger.LogDebug("Viewport resized to {Width}x{Height}", size.X, size.Y);
+    }
+
+    // --- Panels --------------------------------------------------------------
+    //
+    // "Show" rather than "toggle": a menu entry that hides a panel the user is
+    // looking at, because they picked it from a list to find it, is the same
+    // set-versus-toggle mistake the command bar already avoids. Closing is the
+    // dock chrome's own X, which is where a user looks for it.
+    //
+    // The dock's factory is what actually moves a dockable, and asking it to
+    // set the active dockable is enough: a tool that was closed is still in the
+    // layout, so making it active brings it back into view.
+
+    private void OnShowScenePanel(object? sender, RoutedEventArgs e) => ShowTool(SceneTool);
+
+    private void OnShowMapsPanel(object? sender, RoutedEventArgs e) => ShowTool(MapsTool);
+
+    private void OnShowPropertiesPanel(object? sender, RoutedEventArgs e) => ShowTool(PropertiesTool);
+
+    private void OnShowContentPanel(object? sender, RoutedEventArgs e) => ShowTool(ContentTool);
+
+    private void OnShowOutputPanel(object? sender, RoutedEventArgs e) => ShowTool(OutputTool);
+
+    private void OnShowConsolePanel(object? sender, RoutedEventArgs e)
+    {
+        ShowTool(ConsoleTool);
+
+        // The caret goes into the line, because a console you have to click
+        // into after asking for it is a console you stop using.
+        _consoleView?.FocusInput();
+    }
+
+    private static void ShowTool(Dock.Model.Avalonia.Controls.Tool tool)
+    {
+        if (tool.Owner is Dock.Model.Core.IDock owner)
+            owner.ActiveDockable = tool;
+    }
+
+    // --- The bottom region ---------------------------------------------------
+
+    /// <summary>
+    /// Runs one console line and prints both halves.
+    /// </summary>
+    /// <remarks>
+    /// <b>The command is echoed before it runs, and the reply after.</b> A
+    /// console that printed only replies makes a scrollback nobody can read
+    /// back: three "nothing is open" lines in a row say nothing about which
+    /// three commands produced them.
+    /// </remarks>
+    private void OnConsoleCommand(string line)
+    {
+        _shell.Output.Append(OutputSeverity.Command, "> " + line);
+
+        if (_console is not { } console)
+            return;
+
+        ConsoleResult result = console.Execute(line);
+
+        if (result.Reply == ConsoleCommands.ClearMarker)
+        {
+            _shell.Output.Clear();
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(result.Reply))
+            _shell.Output.Append(result.Severity, result.Reply);
+    }
+
+    /// <summary>
+    /// A file was double-clicked in the content browser.
+    /// </summary>
+    /// <remarks>
+    /// <b>A model inserts; everything else is revealed on disk.</b> Dropping a
+    /// texture or a material into the viewport needs a target face and a
+    /// material assignment, neither of which the editor has a verb for yet -
+    /// and a double-click that silently did nothing would be worse than one
+    /// that opens the folder. Dragging into the 3D view waits on the composited
+    /// viewport: Avalonia's drag events cannot reach a native child window.
+    /// </remarks>
+    private void OnContentActivated(ContentEntry entry)
+    {
+        if (entry.Kind == ContentKind.Model)
+        {
+            // SAY SO rather than doing something adjacent. Inserting a block
+            // and calling it a model would be the worst available answer: the
+            // user asked for one thing, got another, and the message explaining
+            // that is a status line they may not be looking at.
+            _shell.SetWarning($"Placing {entry.Name} in the scene is not built yet; opened its folder instead.");
+        }
+
+        RevealInExplorer(entry.FullPath);
     }
 
     // --- Splitters -----------------------------------------------------------
