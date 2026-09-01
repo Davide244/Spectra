@@ -35,12 +35,12 @@
       <Setter Property="HorizontalContentAlignment" Value="Stretch" />
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
-      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
     </Style>
     <Style Selector="Button.maprow /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
-      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
     </Style>
     <Style Selector="Button.maprow:pointerover /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{StaticResource SpectraRowHover}" />
@@ -77,7 +77,7 @@
               <Grid ColumnDefinitions="10,*,Auto" Margin="4,0,8,0">
                 <!-- The startup dot: which map the project boots. -->
                 <Border Grid.Column="0" Width="5" Height="5"
-                        CornerRadius="{StaticResource SpectraRadius2}"
+                        CornerRadius="{StaticResource SpectraRadiusControl}"
                         HorizontalAlignment="Left" VerticalAlignment="Center"
                         Margin="2,0,0,0"
                         Background="{StaticResource SpectraAccent}"

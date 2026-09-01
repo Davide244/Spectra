@@ -213,6 +213,25 @@ public sealed class EditorSession : IDisposable
     public void ApplyProperty(PropertyEdit edit) =>
         Host.EnqueueCommand(_ => Editor?.ApplyProperty(edit));
 
+    /// <summary>
+    /// Opens one history entry to hold a continuous property gesture, such as
+    /// a drag across a numeric field.
+    /// </summary>
+    /// <remarks>
+    /// <b>Posted, like every other edit, so it lands on the render thread in
+    /// order with the edits it wraps.</b> The UI thread never learns whether
+    /// the editor accepted it, and does not need to: a refused gesture makes
+    /// every edit inside it its own history entry, which is the behaviour
+    /// before this existed, and the matching End is a no-op on a gesture that
+    /// never opened.
+    /// </remarks>
+    public void BeginPropertyGesture(string name) =>
+        Host.EnqueueCommand(_ => Editor?.BeginPropertyGesture(name));
+
+    /// <summary>Closes a property gesture, keeping its result or rolling it back.</summary>
+    public void EndPropertyGesture(bool commit) =>
+        Host.EnqueueCommand(_ => Editor?.EndPropertyGesture(commit));
+
     // Render thread only. Null before the scene has loaded, and null for a host
     // that installed no editing layer at all.
     private SceneEditorHost? Editor => SceneManager.Editor as SceneEditorHost;

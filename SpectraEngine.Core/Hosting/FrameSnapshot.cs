@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Inspection;
+﻿using SpectraEngine.Core.Inspection;
 using SpectraEngine.Core.Scene;
 using System;
 using System.Collections.Generic;
@@ -130,6 +130,15 @@ public sealed class FrameSnapshot
 
     /// <summary>How many static-world compiles have landed for the active scene.</summary>
     public int StaticWorldCompileCount { get; init; }
+
+    /// <summary>
+    /// Why the static world stopped recompiling, or null when it is current.
+    /// </summary>
+    /// <remarks>
+    /// A shell that does not show this leaves the user editing a level that has
+    /// silently stopped rebuilding. See <c>Scene.StaticWorldDefect</c>.
+    /// </remarks>
+    public string? StaticWorldDefect { get; init; }
 
     /// <summary>
     /// The selection's editable properties, merged across every selected node.

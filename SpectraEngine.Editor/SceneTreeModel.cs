@@ -632,23 +632,37 @@ public sealed class SceneTreeModel
         {
             foreach (SceneTreeNode node in _index.Values)
                 node.Match = SceneTreeMatch.Match;
+
+            // Cleared here too, or the flag outlives the filter it describes.
+            FilterIsUnknown = false;
             MatchCount = _index.Count;
             return;
         }
 
         SceneNodeKind? kindQuery = null;
-        if (query.StartsWith("t:", StringComparison.OrdinalIgnoreCase))
+        bool kindFilter = query.StartsWith("t:", StringComparison.OrdinalIgnoreCase);
+        if (kindFilter)
         {
             kindQuery = ParseKind(query[2..]);
             query = string.Empty;
         }
 
+        // A "t:" nobody recognises matches NOTHING, and used to match
+        // everything. The old code cleared the query so the kind test could run
+        // on it, and then fell through to Name.Contains("") when the kind did
+        // not parse - which is true of every node in the scene. So a typo in a
+        // filter that is itself a power feature silently reported the whole
+        // scene as a result set, and the only visible difference was a count
+        // that had not changed.
+        FilterIsUnknown = kindFilter && kindQuery is null;
+
         int matches = 0;
         foreach (SceneTreeNode node in _index.Values)
         {
-            bool hit = kindQuery is { } wanted
-                ? node.Kind == wanted
-                : node.Name.Contains(query, StringComparison.OrdinalIgnoreCase);
+            bool hit = !FilterIsUnknown
+                && (kindQuery is { } wanted
+                    ? node.Kind == wanted
+                    : node.Name.Contains(query, StringComparison.OrdinalIgnoreCase));
 
             node.Match = hit ? SceneTreeMatch.Match : SceneTreeMatch.None;
             if (hit)
@@ -686,17 +700,38 @@ public sealed class SceneTreeModel
     // A kind name, matched loosely enough that "light", "Light" and "lights"
     // all work: a filter that silently returns nothing because the user typed a
     // plural is worse than no filter.
-    private static SceneNodeKind? ParseKind(string text)
-    {
-        string wanted = text.Trim().TrimEnd('s');
-        foreach (SceneNodeKind kind in Enum.GetValues<SceneNodeKind>())
-        {
-            if (kind.ToString().Contains(wanted, StringComparison.OrdinalIgnoreCase))
-                return kind;
-        }
+    /// <summary>
+    /// Whether the filter names a kind the tree does not have.
+    /// </summary>
+    /// <remarks>
+    /// Reported rather than swallowed, so the panel can say "no matches" and
+    /// mark the box, instead of quietly showing every node and letting the user
+    /// conclude the filter does nothing.
+    /// </remarks>
+    public bool FilterIsUnknown { get; private set; }
 
-        return null;
-    }
+    /// <summary>
+    /// Resolves a <c>t:</c> filter's word to a node kind.
+    /// </summary>
+    /// <remarks>
+    /// <b>An alias table rather than a substring sweep over the enum.</b> The
+    /// enum's own names are engine words (<c>BrushWorld</c>,
+    /// <c>BrushSubtractive</c>) and matching them by Contains resolved "t:b" to
+    /// whichever of them Enum.GetValues happened to return first. These are the
+    /// words the toolbar and the menus use, plus the engine words for anyone
+    /// who knows them, and anything else is refused.
+    /// </remarks>
+    private static SceneNodeKind? ParseKind(string text) => text.Trim().TrimEnd('s').ToLowerInvariant() switch
+    {
+        "block" or "world" or "brush" or "brushworld" => SceneNodeKind.BrushWorld,
+        "part" or "brushpart" => SceneNodeKind.BrushPart,
+        "cut" or "hole" or "subtractive" or "brushsubtractive" => SceneNodeKind.BrushSubtractive,
+        "light" or "lamp" => SceneNodeKind.Light,
+        "mesh" or "model" or "prop" => SceneNodeKind.Mesh,
+        "group" or "folder" => SceneNodeKind.Group,
+        "empty" or "node" => SceneNodeKind.Empty,
+        _ => null,
+    };
 
 
     private void ApplyChange(in SceneChange change)

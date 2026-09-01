@@ -124,6 +124,11 @@ public sealed class Engine
     /// </summary>
     private void PublishHostFrame(TimeSpan elapsed)
     {
+        // Read once, outside the builder, because the builder runs only when a
+        // snapshot is actually going out and this is what decides whether one
+        // is due at all.
+        bool interacting = _sceneManager.Editor?.IsInteracting ?? false;
+
         Host.PublishFrame(elapsed, builder =>
         {
             ISceneEditor? editor = _sceneManager.Editor;
@@ -148,6 +153,7 @@ public sealed class Engine
                 UndoDepth = editor?.UndoDepth ?? 0,
                 RedoDepth = editor?.RedoDepth ?? 0,
                 StaticWorldCompileCount = _sceneManager.ActiveScene?.StaticWorldCompileCount ?? 0,
+                StaticWorldDefect = _sceneManager.ActiveScene?.StaticWorldDefect,
                 IsPlaying = _character is { Active: true },
                 CanPlay = _character is not null,
                 DebugFlags = _debugFlags,
@@ -155,7 +161,7 @@ public sealed class Engine
                 PipelineNames = _renderer.PipelineNames,
                 SelectionProperties = CaptureProperties(),
             };
-        });
+        }, interacting);
     }
 
     // One last snapshot as the loop ends, so a shell sees the engine stop

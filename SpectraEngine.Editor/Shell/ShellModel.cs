@@ -1,4 +1,4 @@
-using Avalonia.Threading;
+﻿using Avalonia.Threading;
 using SpectraEngine.Core.Hosting;
 using SpectraEngine.Core.Scene;
 using System;
@@ -38,6 +38,42 @@ public sealed record ProjectMapRow(string RelativePath, string Name, bool IsStar
 /// </remarks>
 public sealed class ShellModel : ObservableObject
 {
+    // ─── Optimistic state ────────────────────────────────
+    //
+    // Every one of these is a control the user clicks and the engine answers,
+    // and every one of them used to sit unchanged for a publish plus a pump
+    // after the click. See OptimisticValue for the mechanism and for why a
+    // BOUND on the local opinion is the whole design rather than a detail.
+    //
+    // What is NOT here, deliberately: the pipeline dropdown, because switching
+    // a pipeline legitimately takes time and can legitimately fail, so the
+    // engine's answer is the one worth showing; and the snap increment, which
+    // is a typed field with its own focus guard - a field that stopped taking
+    // refreshes AND held an unconfirmed value would have two reasons to
+    // disagree with the engine and no way to tell them apart.
+
+    private readonly OptimisticValue<string> _modeOpt = new("move", StringComparer.Ordinal);
+    private readonly OptimisticValue<string> _styleOpt = new("Studio", StringComparer.Ordinal);
+    private readonly OptimisticValue<string> _orientationOpt = new("world", StringComparer.Ordinal);
+    private readonly OptimisticValue<bool> _snapOpt = new(false);
+    private readonly OptimisticValue<DebugVisualization> _debugOpt = new(DebugVisualization.None);
+
+    // Play mode holds longer than the rest: entering it is real work (the
+    // editor is suspended, a gesture is rolled back, the cursor changes hands)
+    // and it is legitimately refused on a scene with no character, so twelve
+    // ticks is the difference between "it is starting" and "it said no".
+    private readonly OptimisticValue<bool> _playOpt = new(false) { HoldTicks = 12 };
+
+    // Undo and redo depth move TOGETHER, so they are one value. The pair is
+    // what makes the prediction possible at all: undo means one fewer to undo
+    // and one more to redo, and predicting only half of that would light the
+    // redo button against a depth that had not moved.
+    //
+    // This is the nastiest of the lot without optimism: click Undo, the button
+    // stays lit for up to 65ms because the depth has not come back yet, click
+    // again, and two edits are gone.
+    private readonly OptimisticValue<(int Undo, int Redo)> _historyOpt = new((0, 0));
+
     private SceneTreeModel? _tree;
     private string _gizmoMode = "move";
     private string _gizmoStyle = "Studio";
@@ -107,37 +143,50 @@ public sealed class ShellModel : ObservableObject
     /// </summary>
     public ObservableCollection<ProjectMapRow> ProjectMaps { get; } = [];
 
-    // ─── Command bar ─────────────────────────────────────
+    // ─── Document identity ───────────────────────────────
+    //
+    // Mirrored from EditorDocument rather than bound through it, for the same
+    // reason everything else here is a copy: the window binds to ONE model, and
+    // a second DataContext half way down a StackPanel is a thing every later
+    // reader has to notice.
 
-    private string _activeTab = "home";
+    private string _documentName = "untitled";
+    private string _projectName = string.Empty;
+    private bool _isDocumentDirty;
 
-    /// <summary>Which command strip is showing: <c>home</c>, <c>model</c> or <c>view</c>.</summary>
-    /// <remarks>
-    /// Purely a UI preference — nothing engine-side changes with the tab, so
-    /// it lives here rather than riding a snapshot.
-    /// </remarks>
-    public string ActiveTab
+    /// <summary>The open level's name, which is its bundle folder's name.</summary>
+    public string DocumentName
     {
-        get => _activeTab;
-        set
-        {
-            if (!Set(ref _activeTab, value))
-                return;
-
-            Raise(nameof(IsHomeTab));
-            Raise(nameof(IsModelTab));
-            Raise(nameof(IsViewTab));
-        }
+        get => _documentName;
+        private set => Set(ref _documentName, value);
     }
 
-    /// <summary>Whether the Home strip is showing.</summary>
-    public bool IsHomeTab => _activeTab == "home";
+    /// <summary>The open project's name, or empty when a bundle was opened alone.</summary>
+    public string ProjectName
+    {
+        get => _projectName;
+        private set => Set(ref _projectName, value);
+    }
 
-    /// <summary>Whether the Model strip is showing.</summary>
-    public bool IsModelTab => _activeTab == "model";
+    /// <summary>Whether the level has unsaved edits, for the mark beside its name.</summary>
+    public bool IsDocumentDirty
+    {
+        get => _isDocumentDirty;
+        private set => Set(ref _isDocumentDirty, value);
+    }
 
-    /// <summary>Whether the View strip is showing.</summary>
-    public bool IsViewTab => _activeTab == "view";
+    /// <summary>Takes the document's identity. UI thread.</summary>
+    public void SetDocument(string name, string project, bool dirty)
+    {
+        DocumentName = name;
+        ProjectName = project;
+        IsDocumentDirty = dirty;
+    }
+
+    /// <summary>The Help menu's version line.</summary>
+    public string AboutLabel { get; set; } = "Spectra Editor";
+
+    // ─── Command bar ─────────────────────────────────────
 
     private bool _isPlaying;
     private bool _canPlay;
@@ -148,8 +197,11 @@ public sealed class ShellModel : ObservableObject
         get => _isPlaying;
         private set
         {
-            if (Set(ref _isPlaying, value))
-                Raise(nameof(PlayTip));
+            if (!Set(ref _isPlaying, value))
+                return;
+
+            Raise(nameof(PlayTip));
+            Raise(nameof(PlayLabel));
         }
     }
 
@@ -157,11 +209,22 @@ public sealed class ShellModel : ObservableObject
     public bool CanPlay
     {
         get => _canPlay;
-        private set => Set(ref _canPlay, value);
+        private set
+        {
+            if (Set(ref _canPlay, value))
+                Raise(nameof(PlayTip));
+        }
     }
 
     /// <summary>The play button's tooltip, which names the exit key while playing.</summary>
-    public string PlayTip => _isPlaying ? "Stop playing  (F8 or Esc)" : "Play  (F8)";
+    public string PlayTip => _isPlaying
+        ? "Stop the run and put the camera back.  F8 or Esc"
+        : _canPlay
+            ? "Walk the level in first person.  F8"
+            : "This level has no character to walk with.";
+
+    /// <summary>The play button's word. It is a button with room for one.</summary>
+    public string PlayLabel => _isPlaying ? "Stop" : "Play";
 
     private DebugVisualization _debugFlags;
 
@@ -237,7 +300,9 @@ public sealed class ShellModel : ObservableObject
             Raise(nameof(IsMoveActive));
             Raise(nameof(IsRotateActive));
             Raise(nameof(IsResizeActive));
-            Raise(nameof(SnapLabel));
+            Raise(nameof(SnapUnitLabel));
+            Raise(nameof(SnapSummary));
+            GizmoModeChanged?.Invoke();
         }
     }
 
@@ -256,13 +321,132 @@ public sealed class ShellModel : ObservableObject
         get => _gizmoStyle;
         private set
         {
-            if (Set(ref _gizmoStyle, value))
-                Raise(nameof(IsStudioStyle));
+            if (!Set(ref _gizmoStyle, value))
+                return;
+
+            Raise(nameof(IsStudioStyle));
+            Raise(nameof(GizmoStyleMenuLabel));
         }
     }
 
     /// <summary>Whether the Studio handle roster is live.</summary>
     public bool IsStudioStyle => _gizmoStyle == "Studio";
+
+    // ─── What the user just asked for ────────────────────
+    //
+    // Each of these shows the requested value at once and starts the hold-off.
+    // The caller still posts the verb to the engine; these do not talk to it,
+    // because a model that also drove the engine would be a second path from a
+    // gesture to an edit, and there is exactly one.
+
+    /// <summary>The user picked a tool. Lights it now; the engine confirms.</summary>
+    public void RequestGizmoMode(string mode)
+    {
+        _modeOpt.Request(mode);
+        GizmoMode = _modeOpt.Value;
+    }
+
+    /// <summary>The user picked a handle style.</summary>
+    public void RequestGizmoStyle(string style)
+    {
+        _styleOpt.Request(style);
+        GizmoStyle = _styleOpt.Value;
+    }
+
+    /// <summary>The user picked an axis frame.</summary>
+    public void RequestOrientation(string orientation)
+    {
+        _orientationOpt.Request(orientation);
+        Orientation = _orientationOpt.Value;
+    }
+
+    /// <summary>The user turned snapping on or off.</summary>
+    public void RequestSnapEnabled(bool enabled)
+    {
+        _snapOpt.Request(enabled);
+        SnapEnabled = _snapOpt.Value;
+    }
+
+    /// <summary>The user asked to start or stop play mode.</summary>
+    public void RequestPlaying(bool playing)
+    {
+        _playOpt.Request(playing);
+        IsPlaying = _playOpt.Value;
+    }
+
+    /// <summary>The user turned one debug visualisation on or off.</summary>
+    public void RequestDebugVisualization(DebugVisualization flag, bool enabled)
+    {
+        DebugVisualization wanted = enabled ? _debugFlags | flag : _debugFlags & ~flag;
+        _debugOpt.Request(wanted);
+        SetDebugFlags(_debugOpt.Value);
+    }
+
+    /// <summary>
+    /// The user asked to undo. Predicts the depths so the buttons settle on
+    /// the click rather than a snapshot later.
+    /// </summary>
+    /// <remarks>
+    /// A refused undo - the editor is mid-gesture, or suspended - re-lights the
+    /// button when the engine disagrees for long enough, which is the visible
+    /// refusal the plain version never gave.
+    /// </remarks>
+    public void RequestUndo() =>
+        ApplyHistory(_historyOpt.Request((Math.Max(0, _undoDepth - 1), _redoDepth + 1)));
+
+    /// <summary>The user asked to redo.</summary>
+    public void RequestRedo() =>
+        ApplyHistory(_historyOpt.Request((_undoDepth + 1, Math.Max(0, _redoDepth - 1))));
+
+    private void ApplyHistory(bool _)
+    {
+        (int undo, int redo) = _historyOpt.Value;
+        UndoDepth = undo;
+        RedoDepth = redo;
+    }
+
+    private void SetDebugFlags(DebugVisualization flags)
+    {
+        if (_debugFlags == flags)
+            return;
+
+        _debugFlags = flags;
+        Raise(nameof(DebugWireframe));
+        Raise(nameof(DebugVertices));
+        Raise(nameof(DebugAabbs));
+        Raise(nameof(DebugNormals));
+        Raise(nameof(DebugSceneGraph));
+    }
+
+    /// <summary>
+    /// Drops every unconfirmed request, because the engine they were aimed at
+    /// is gone.
+    /// </summary>
+    /// <remarks>
+    /// Called when a session closes. Without it, a tool picked in the last
+    /// second of one project is still pending when the next one opens, and its
+    /// first six snapshots are ignored - so a fresh session shows the previous
+    /// session's tool for a tenth of a second, on a scene that never had it.
+    /// </remarks>
+    public void ResetOptimisticState()
+    {
+        _modeOpt.Reset(_gizmoMode);
+        _styleOpt.Reset(_gizmoStyle);
+        _orientationOpt.Reset(_orientation);
+        _snapOpt.Reset(_snapEnabled);
+        _debugOpt.Reset(_debugFlags);
+        _playOpt.Reset(_isPlaying);
+        _historyOpt.Reset((_undoDepth, _redoDepth));
+    }
+
+    /// <summary>
+    /// Raised when the engine reports a different live tool.
+    /// </summary>
+    /// <remarks>
+    /// The command bar's single snap field belongs to whichever tool is live,
+    /// so switching tools has to re-read the increment into it. UI thread.
+    /// </remarks>
+    public event Action? GizmoModeChanged;
 
     /// <summary>The axis frame: <c>world</c> or <c>local</c>.</summary>
     public string Orientation
@@ -270,13 +454,27 @@ public sealed class ShellModel : ObservableObject
         get => _orientation;
         private set
         {
-            if (Set(ref _orientation, value))
-                Raise(nameof(IsWorldSpace));
+            if (!Set(ref _orientation, value))
+                return;
+
+            Raise(nameof(IsWorldSpace));
+            Raise(nameof(OrientationMenuLabel));
         }
     }
 
     /// <summary>Whether drags resolve against world axes.</summary>
     public bool IsWorldSpace => _orientation == "world";
+
+    /// <summary>
+    /// The Edit menu's wording for the axis toggle.
+    /// </summary>
+    /// <remarks>
+    /// A menu item that toggles state should say what the state IS, not name
+    /// the mechanism. "Drag axes: world" toggles to local and reads correctly
+    /// either way; "Toggle orientation" tells the reader nothing about what
+    /// they will get.
+    /// </remarks>
+    public string OrientationMenuLabel => $"Drag axes: {_orientation}";
 
     /// <summary>Whether the live manipulator quantises its drags.</summary>
     public bool SnapEnabled
@@ -285,7 +483,8 @@ public sealed class ShellModel : ObservableObject
         private set
         {
             if (Set(ref _snapEnabled, value))
-                Raise(nameof(SnapLabel));
+                Raise(nameof(SnapUnitLabel));
+            Raise(nameof(SnapSummary));
         }
     }
 
@@ -296,32 +495,53 @@ public sealed class ShellModel : ObservableObject
         private set
         {
             if (Set(ref _snapIncrement, value))
-                Raise(nameof(SnapLabel));
+                Raise(nameof(SnapUnitLabel));
+            Raise(nameof(SnapSummary));
         }
     }
 
     /// <summary>
-    /// Snap state as one readable phrase, with the unit the live tool actually
-    /// edits in.
+    /// The unit the LIVE tool's snap increment is measured in.
     /// </summary>
     /// <remarks>
-    /// The unit is not decoration: the three snaps are absolute quantities of
-    /// the thing being edited, so the same number means world units under move
-    /// and degrees under rotate. A bare "0.25" beside a rotate tool would be a
-    /// lie.
+    /// <b>Not decoration.</b> The three snaps are absolute quantities of the
+    /// thing being edited, so the same number means world units under move and
+    /// degrees under rotate; a bare "0.25" beside a rotate tool would be a lie.
+    /// The command bar shows one increment field rather than three, and this is
+    /// what stops that being ambiguous: the unit beside the number changes when
+    /// the tool does.
     /// </remarks>
-    public string SnapLabel => !_snapEnabled
-        ? "snap off"
-        : _gizmoMode == "rotate"
-            ? $"snap {_snapIncrement:0.##}°"
-            : $"snap {_snapIncrement:0.##} su";
+    public string SnapUnitLabel => _gizmoMode == "rotate" ? "deg" : "su";
+
+    /// <summary>
+    /// Snap state as one phrase, for the inspector's empty state.
+    /// </summary>
+    /// <remarks>
+    /// The command bar shows the increment as a field beside a lit toggle, which
+    /// is the right shape for something you change. This is the right shape for
+    /// something you are merely being told, in a panel that would otherwise be
+    /// blank.
+    /// </remarks>
+    public string SnapSummary => _snapEnabled
+        ? $"{_snapIncrement:0.##} {SnapUnitLabel}"
+        : "off";
+
+    /// <summary>The Edit menu's wording for the handle-style toggle.</summary>
+    public string GizmoStyleMenuLabel => $"Handles: {_gizmoStyle}";
 
     /// <summary>Which camera is driving.</summary>
     public string Navigation
     {
         get => _navigation;
-        private set => Set(ref _navigation, value);
+        private set
+        {
+            if (Set(ref _navigation, value))
+                Raise(nameof(NavigationMenuLabel));
+        }
     }
+
+    /// <summary>The View menu's wording for the camera toggle.</summary>
+    public string NavigationMenuLabel => $"Camera: {_navigation}";
 
     // ─── Selection and history ───────────────────────────
 
@@ -356,8 +576,11 @@ public sealed class ShellModel : ObservableObject
         get => _undoDepth;
         private set
         {
-            if (Set(ref _undoDepth, value))
-                Raise(nameof(CanUndo));
+            if (!Set(ref _undoDepth, value))
+                return;
+
+            Raise(nameof(CanUndo));
+            Raise(nameof(UndoTip));
         }
     }
 
@@ -367,8 +590,11 @@ public sealed class ShellModel : ObservableObject
         get => _redoDepth;
         private set
         {
-            if (Set(ref _redoDepth, value))
-                Raise(nameof(CanRedo));
+            if (!Set(ref _redoDepth, value))
+                return;
+
+            Raise(nameof(CanRedo));
+            Raise(nameof(RedoTip));
         }
     }
 
@@ -377,6 +603,23 @@ public sealed class ShellModel : ObservableObject
 
     /// <summary>Whether the redo button should be live.</summary>
     public bool CanRedo => _redoDepth > 0;
+
+    /// <summary>
+    /// The undo button's tooltip, which says how deep the history is.
+    /// </summary>
+    /// <remarks>
+    /// A disabled icon button with a bare "Undo" tooltip leaves the user
+    /// guessing whether the tool refused them or had nothing to do. The depth
+    /// answers that, and it is already published on every snapshot.
+    /// </remarks>
+    public string UndoTip => _undoDepth == 0
+        ? "Nothing to undo"
+        : $"Undo, {_undoDepth} step(s) back.  Ctrl+Z";
+
+    /// <summary>The redo button's tooltip. See <see cref="UndoTip"/>.</summary>
+    public string RedoTip => _redoDepth == 0
+        ? "Nothing to redo"
+        : $"Redo, {_redoDepth} step(s) forward.  Ctrl+Y";
 
     // ─── Readouts ────────────────────────────────────────
 
@@ -444,8 +687,12 @@ public sealed class ShellModel : ObservableObject
         get => _matchCount;
         private set
         {
-            if (Set(ref _matchCount, value))
-                Raise(nameof(TreeCountLabel));
+            if (!Set(ref _matchCount, value))
+                return;
+
+            Raise(nameof(TreeCountLabel));
+            Raise(nameof(HasNoMatches));
+            Raise(nameof(NoMatchLabel));
         }
     }
 
@@ -455,6 +702,25 @@ public sealed class ShellModel : ObservableObject
     /// </summary>
     public string TreeCountLabel =>
         _matchCount == _nodeCount ? $"{_nodeCount}" : $"{_matchCount} / {_nodeCount}";
+
+    /// <summary>
+    /// Whether a filter is on and nothing passes it.
+    /// </summary>
+    /// <remarks>
+    /// <b>The tree DIMS rather than hides</b>, which is right - removing rows
+    /// collapses the hierarchy around every match and destroys the only thing a
+    /// user has after two hundred nodes, which is knowing where things live. It
+    /// does mean a zero-match filter looks exactly like a panel that stopped
+    /// working: every row is still there, greyed, and the only signal is a
+    /// counter reading "0 /". Hence this, and the line the panel shows.
+    /// </remarks>
+    public bool HasNoMatches => _filterText.Length > 0 && _matchCount == 0;
+
+    /// <summary>What to say when the filter matched nothing.</summary>
+    public string NoMatchLabel =>
+        _tree is { FilterIsUnknown: true }
+            ? $"“{_filterText}” is not a kind. Try t:block, t:part, t:cut, t:light, t:mesh or t:group."
+            : $"Nothing here is called “{_filterText}”.";
 
     /// <summary>The viewport's pixel size, which is not the window's.</summary>
     public string ViewportLabel => $"{_viewportWidth}x{_viewportHeight}";
@@ -489,6 +755,38 @@ public sealed class ShellModel : ObservableObject
 
     /// <summary>Whether there is anything to show in the message zone.</summary>
     public bool HasMessage => _message.Length > 0;
+
+    private string? _worldDefect;
+
+    /// <summary>
+    /// Why the level has stopped rebuilding, or null when it is current.
+    /// </summary>
+    /// <remarks>
+    /// <b>Its own channel, not the message line.</b> The message line is
+    /// last-writer-wins and every save, open and refusal writes to it, so a
+    /// standing failure put there is gone by the next thing that happens. This
+    /// one is a state rather than an event: it is true until it is fixed, and it
+    /// means edits are landing in a level the viewport is no longer showing.
+    /// </remarks>
+    public string? WorldDefect
+    {
+        get => _worldDefect;
+        private set
+        {
+            if (!Set(ref _worldDefect, value))
+                return;
+
+            Raise(nameof(HasWorldDefect));
+            Raise(nameof(WorldDefectTip));
+        }
+    }
+
+    /// <summary>Whether to show the standing world warning.</summary>
+    public bool HasWorldDefect => !string.IsNullOrEmpty(_worldDefect);
+
+    /// <summary>The warning's full text, for its tooltip.</summary>
+    public string WorldDefectTip =>
+        $"The level has stopped rebuilding, so the viewport is showing the last version that compiled. {_worldDefect}";
 
     /// <summary>Reports something that went normally.</summary>
     public void SetMessage(string text)
@@ -525,6 +823,8 @@ public sealed class ShellModel : ObservableObject
                 return;
 
             Raise(nameof(HasFilter));
+            Raise(nameof(HasNoMatches));
+            Raise(nameof(NoMatchLabel));
             _filterDebounce?.Stop();
             _filterDebounce ??= new DispatcherTimer(
                 TimeSpan.FromMilliseconds(120), DispatcherPriority.Background, (_, _) => ApplyFilterNow());
@@ -568,6 +868,12 @@ public sealed class ShellModel : ObservableObject
 
         tree.ApplyFilter(_filterText);
         MatchCount = tree.MatchCount;
+
+        // Raised unconditionally, because FilterIsUnknown can flip while the
+        // count does not: going from "t:zz" to "zzz" leaves MatchCount at 0, so
+        // its setter stays silent and the panel would go on offering a list of
+        // kind names for a filter that is now an ordinary name search.
+        Raise(nameof(NoMatchLabel));
     }
 
     // ─── The one crossing ────────────────────────────────
@@ -592,31 +898,45 @@ public sealed class ShellModel : ObservableObject
             Fps = snapshot.Fps;
             FrameTimeMs = snapshot.FrameTimeMs;
             SelectionCount = snapshot.SelectedIds.Count;
-            UndoDepth = snapshot.UndoDepth;
-            RedoDepth = snapshot.RedoDepth;
             CompileCount = snapshot.StaticWorldCompileCount;
+            WorldDefect = snapshot.StaticWorldDefect;
 
-            GizmoMode = snapshot.GizmoModeName ?? "move";
-            GizmoStyle = snapshot.GizmoStyleName ?? "Studio";
-            Orientation = snapshot.GizmoOrientationName ?? "world";
-            SnapEnabled = snapshot.SnapEnabled;
-            SnapIncrement = snapshot.SnapIncrement;
+            // Everything below that goes through an OptimisticValue is reported
+            // BY the engine and possibly still pending FROM the user; Apply is
+            // what decides which of the two the UI shows this tick.
+            _historyOpt.Apply((snapshot.UndoDepth, snapshot.RedoDepth));
+            ApplyHistory(true);
+
+            _modeOpt.Apply(snapshot.GizmoModeName ?? "move");
+            GizmoMode = _modeOpt.Value;
+
+            _styleOpt.Apply(snapshot.GizmoStyleName ?? "Studio");
+            GizmoStyle = _styleOpt.Value;
+
+            _orientationOpt.Apply(snapshot.GizmoOrientationName ?? "world");
+            Orientation = _orientationOpt.Value;
+
+            _snapOpt.Apply(snapshot.SnapEnabled);
+            SnapEnabled = _snapOpt.Value;
+
+            // The increment belongs to whichever tool is LIVE, so while a tool
+            // switch is unconfirmed the reported increment still describes the
+            // previous tool. Writing it would put the move grid in a field
+            // labelled degrees for one tick.
+            if (!_modeOpt.HasPending)
+                SnapIncrement = snapshot.SnapIncrement;
+
             Navigation = snapshot.NavigationModeName ?? "-";
 
-            IsPlaying = snapshot.IsPlaying;
+            _playOpt.Apply(snapshot.IsPlaying);
+            IsPlaying = _playOpt.Value;
+
             CanPlay = snapshot.CanPlay;
             PipelineNames = snapshot.PipelineNames;
             PipelineName = snapshot.PipelineName;
 
-            if (_debugFlags != snapshot.DebugFlags)
-            {
-                _debugFlags = snapshot.DebugFlags;
-                Raise(nameof(DebugWireframe));
-                Raise(nameof(DebugVertices));
-                Raise(nameof(DebugAabbs));
-                Raise(nameof(DebugNormals));
-                Raise(nameof(DebugSceneGraph));
-            }
+            _debugOpt.Apply(snapshot.DebugFlags);
+            SetDebugFlags(_debugOpt.Value);
 
             _properties?.Apply(snapshot.SelectionProperties, snapshot.SelectedIds.Count);
 

@@ -1,118 +1,386 @@
-<UserControl xmlns="https://github.com/avaloniaui"
+﻿<UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:shell="clr-namespace:SpectraEngine.Editor.Shell"
              x:Class="SpectraEngine.Editor.Shell.PropertiesPanel"
              x:DataType="shell:ShellModel"
              Background="{StaticResource SpectraBgPanel}">
 
-  <!-- The inspector, self-contained for the same reason the scene panel is:
-       a docking layout hosts it wherever, and everything its fields need
-       travels with it. -->
+  <!--
+    The inspector, self-contained for the same reason the scene panel is: a
+    docking layout hosts it wherever, and everything its fields need travels
+    with it.
+
+    THREE THINGS DECIDE THE LAYOUT.
+
+    1. A VECTOR ROW IS TWO LINES. The panel is 308px wide by default. A fixed
+       label column plus three cells side by side left about 31px of interior
+       per cell - five characters of monospace - in a panel whose main job is
+       showing positions, so "-125.5" could not be displayed at all. The label
+       and its unit take one line, the three cells take the next, and each cell
+       is then wide enough for a real number.
+
+    2. AN AXIS LETTER IS A HANDLE, NOT A DECORATION. Press it and drag sideways
+       and the value follows the pointer; the whole drag is one undo entry.
+       Every tool this editor's users arrive from does this, and its absence is
+       what made the panel read as a settings dialog rather than as part of an
+       editor. The letter wears its axis's colour, which is the same colour
+       that axis's arrow wears in the viewport.
+
+    3. NOTHING IS SHOWN THAT NOBODY CAN USE. The name is the panel's header
+       rather than a field in a "Node" section, and the node's GUID is not
+       shown at all: it used to be the second row in the panel, permanently
+       truncated, above the properties people came here to edit.
+  -->
+
+  <UserControl.Styles>
+    <!-- The row's label. Also its drag handle, when the value is a number. -->
+    <Style Selector="TextBlock.rowlabel">
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+    <Style Selector="TextBlock.rowlabel.scrub">
+      <Setter Property="Cursor" Value="SizeWestEast" />
+    </Style>
+    <Style Selector="TextBlock.rowlabel.scrub:pointerover">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+    </Style>
+
+    <!-- The unit, at the far right of the label line: it belongs to the whole
+         row rather than to one of three cells, and putting it inside each cell
+         would spend a third of the space that made the cells too narrow in the
+         first place. -->
+    <Style Selector="TextBlock.rowunit">
+      <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontMicro}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!-- The axis letter. Sunken into the cell's left edge so the cell still
+         reads as one control, coloured so a glance finds y without counting. -->
+    <Style Selector="TextBlock.axis">
+      <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+      <Setter Property="Width" Value="14" />
+      <Setter Property="TextAlignment" Value="Center" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Cursor" Value="SizeWestEast" />
+    </Style>
+    <Style Selector="TextBlock.axis.x"><Setter Property="Foreground" Value="{StaticResource SpectraAxisX}" /></Style>
+    <Style Selector="TextBlock.axis.y"><Setter Property="Foreground" Value="{StaticResource SpectraAxisY}" /></Style>
+    <Style Selector="TextBlock.axis.z"><Setter Property="Foreground" Value="{StaticResource SpectraAxisZ}" /></Style>
+
+    <!-- One cell: the axis letter and its field, in one sunken capsule. -->
+    <Style Selector="Border.cell">
+      <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderSoft}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+      <Setter Property="Height" Value="{StaticResource SpectraFieldHeight}" />
+    </Style>
+    <Style Selector="Border.cell:pointerover">
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
+    </Style>
+
+    <!-- The field inside a cell draws no chrome of its own: the cell is the
+         control, and a second border one pixel inside the first reads as a
+         rendering fault. -->
+    <Style Selector="TextBox.cellfield">
+      <Setter Property="Height" Value="20" />
+      <Setter Property="MinHeight" Value="20" />
+      <Setter Property="MinWidth" Value="0" />
+      <Setter Property="Padding" Value="2,0,4,0" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+      <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+      <Setter Property="TextAlignment" Value="Right" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="SelectionBrush" Value="{StaticResource SpectraAccentRest}" />
+      <Setter Property="CaretBrush" Value="{StaticResource SpectraAccent}" />
+    </Style>
+    <Style Selector="TextBox.cellfield /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="TextBox.cellfield /template/ TextBlock#PART_Watermark">
+      <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+      <Setter Property="TextAlignment" Value="Right" />
+    </Style>
+
+    <!-- The name, in the header. A title that happens to be editable, which is
+         what it is: a field with a box around it would make the panel's own
+         heading look like the first of its properties. -->
+    <Style Selector="TextBox.nametitle">
+      <Setter Property="Height" Value="24" />
+      <Setter Property="MinHeight" Value="24" />
+      <Setter Property="Padding" Value="4,0" />
+      <Setter Property="Margin" Value="-5,0,0,0" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontBase}" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="SelectionBrush" Value="{StaticResource SpectraAccentRest}" />
+      <Setter Property="CaretBrush" Value="{StaticResource SpectraAccent}" />
+    </Style>
+    <Style Selector="TextBox.nametitle /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="TextBox.nametitle:pointerover /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderSoft}" />
+    </Style>
+    <Style Selector="TextBox.nametitle:focus /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+    </Style>
+
+    <!-- The kind, as a quiet mono chip: Block, Part, Cut, Light, Mesh. -->
+    <Style Selector="Border.kindchip">
+      <Setter Property="Background" Value="{StaticResource SpectraBgControl}" />
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+      <Setter Property="Padding" Value="6,1" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style Selector="Border.swatch">
+      <Setter Property="Width" Value="24" />
+      <Setter Property="Height" Value="{StaticResource SpectraFieldHeight}" />
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    </Style>
+  </UserControl.Styles>
 
   <DockPanel>
 
-    <!-- No panel header: the dock's tool chrome already names this
-         "Properties". The selection count is the one fact worth a line here,
-         because it is what a bulk edit's reach depends on. -->
-    <TextBlock DockPanel.Dock="Top" Margin="10,8,10,0"
-               Classes="value" Text="{Binding SelectionLabel}"
-               Foreground="{StaticResource SpectraTextMuted}"
-               IsVisible="{Binding Properties.HasSelection}" />
+    <!-- ___ Header _______________________________________
+         The name and the kind, which together answer "what am I editing" -
+         the question "1 selected" could not. -->
+    <Border DockPanel.Dock="Top"
+            BorderBrush="{StaticResource SpectraBorderSoft}"
+            BorderThickness="0,0,0,1"
+            Padding="12,8,10,8"
+            IsVisible="{Binding Properties.HasSelection}">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBox Grid.Column="0" x:Name="NameBox" Classes="nametitle"
+                 IsVisible="{Binding !Properties.IsMultiple}"
+                 Text="{Binding Properties.NameField.Text, Mode=TwoWay}"
+                 GotFocus="OnPropertyFieldFocused"
+                 LostFocus="OnPropertyFieldBlurred"
+                 KeyDown="OnPropertyFieldKeyDown"
+                 ToolTip.Tip="Rename. Enter or click away to keep it, Escape to abandon it." />
+        <TextBlock Grid.Column="0" Text="{Binding Properties.MultipleLabel}"
+                   IsVisible="{Binding Properties.IsMultiple}"
+                   FontSize="{StaticResource SpectraFontBase}"
+                   Foreground="{StaticResource SpectraTextEmphasis}"
+                   VerticalAlignment="Center" />
+        <Border Grid.Column="1" Classes="kindchip"
+                IsVisible="{Binding Properties.HasKind}">
+          <TextBlock Text="{Binding Properties.HeaderKind}"
+                     FontFamily="{StaticResource SpectraFontMono}"
+                     FontSize="{StaticResource SpectraFontMicro}"
+                     Foreground="{StaticResource SpectraTextBody}" />
+        </Border>
+      </Grid>
+    </Border>
 
-    <TextBlock DockPanel.Dock="Top" Margin="12,16"
-               Text="{Binding Properties.EmptyLabel}"
-               Foreground="{StaticResource SpectraTextMuted}"
-               FontSize="{StaticResource SpectraFontSmall}"
-               IsVisible="{Binding !Properties.HasSelection}" />
+    <!-- ___ Empty state __________________________________
+         A panel with nothing selected is the state it is in most often, so it
+         carries the level's own numbers rather than the words "Nothing
+         selected" over 800px of black. -->
+    <StackPanel DockPanel.Dock="Top" Margin="14,14,14,0" Spacing="10"
+                IsVisible="{Binding !Properties.HasSelection}">
+      <TextBlock Classes="prose" TextWrapping="Wrap"
+                 Foreground="{StaticResource SpectraTextMuted}"
+                 Text="Select something in the viewport or the scene tree to edit it." />
+
+      <Border Height="1" Background="{StaticResource SpectraBorderSoft}" />
+
+      <TextBlock Classes="sectionhead" Text="This level" />
+      <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto">
+        <TextBlock Grid.Row="0" Grid.Column="0" Classes="rowlabel" Text="Objects" Width="86" />
+        <TextBlock Grid.Row="0" Grid.Column="1" Classes="value" Text="{Binding NodeCountLabel}" />
+        <TextBlock Grid.Row="1" Grid.Column="0" Classes="rowlabel" Text="Grid" Width="86" />
+        <TextBlock Grid.Row="1" Grid.Column="1" Classes="value" Text="{Binding SnapSummary}" />
+        <TextBlock Grid.Row="2" Grid.Column="0" Classes="rowlabel" Text="Renderer" Width="86" />
+        <TextBlock Grid.Row="2" Grid.Column="1" Classes="value" Text="{Binding PipelineName}" />
+      </Grid>
+
+      <Border Height="1" Background="{StaticResource SpectraBorderSoft}" />
+
+      <TextBlock Classes="prose" TextWrapping="Wrap"
+                 Foreground="{StaticResource SpectraTextMuted}"
+                 Text="Drag any axis letter beside a number to change it without typing. Help &gt; Keyboard reference lists everything else." />
+    </StackPanel>
 
     <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                   IsVisible="{Binding Properties.HasSelection}">
-      <ItemsControl ItemsSource="{Binding Properties.Groups}" Margin="0,4,0,12">
+      <ItemsControl ItemsSource="{Binding Properties.Groups}" Margin="0,2,0,14">
         <ItemsControl.ItemTemplate>
-          <DataTemplate>
-            <StackPanel Margin="0,8,0,0">
+          <DataTemplate x:DataType="shell:PropertyGroupModel">
+            <StackPanel Margin="0,10,0,0">
 
-              <!-- The section header is the GROUP, which the inspector
-                   derives from the payload each value came from rather
-                   than being told. A node with no light simply has no
-                   Light section. -->
-              <TextBlock Text="{Binding Name}" Margin="10,0,10,4"
-                         FontSize="{StaticResource SpectraFontMicro}"
-                         Foreground="{StaticResource SpectraTextMuted}" />
+              <!-- The section heading is the GROUP, which the inspector derives
+                   from the payload each value came from rather than being told.
+                   A node with no light simply has no Light section. -->
+              <TextBlock Classes="sectionhead" Text="{Binding Name}"
+                         Margin="12,0,12,5" IsVisible="{Binding HasName}" />
 
               <ItemsControl ItemsSource="{Binding Rows}">
                 <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <Grid ColumnDefinitions="104,*" Margin="10,1">
+                  <DataTemplate x:DataType="shell:PropertyRowModel">
+                    <StackPanel Margin="12,0,12,0">
 
-                      <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding Name}"
-                                   FontSize="{StaticResource SpectraFontSmall}"
-                                   Foreground="{StaticResource SpectraTextBody}"
-                                   VerticalAlignment="Center" />
-                        <!-- "3 of 5": editing a row only part of the
-                             selection carries is still a bulk edit, and the
-                             user is entitled to know how far it reaches. -->
-                        <TextBlock Text="{Binding PartialLabel}" Margin="6,0,0,0"
-                                   FontSize="{StaticResource SpectraFontMicro}"
-                                   Foreground="{StaticResource SpectraTextMuted}"
-                                   VerticalAlignment="Center"
-                                   IsVisible="{Binding IsPartial}" />
+                      <!-- ___ Vector: label line, then three cells ___ -->
+                      <StackPanel IsVisible="{Binding IsVector}" Margin="0,2,0,4">
+                        <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,3">
+                          <TextBlock Grid.Column="0" Classes="rowlabel scrub" Text="{Binding Name}"
+                                     PointerPressed="OnLabelPressed"
+                                     PointerMoved="OnScrubMoved"
+                                     PointerReleased="OnScrubReleased"
+                                     PointerCaptureLost="OnScrubLost"
+                                     ToolTip.Tip="Drag sideways to change all three. Shift for ten times, Ctrl for a tenth." />
+                          <TextBlock Grid.Column="1" Text="{Binding PartialLabel}" Margin="6,0"
+                                     FontSize="{StaticResource SpectraFontMicro}"
+                                     Foreground="{StaticResource SpectraTextMuted}"
+                                     VerticalAlignment="Center"
+                                     IsVisible="{Binding IsPartial}" />
+                          <TextBlock Grid.Column="2" Classes="rowunit" Text="{Binding Unit}"
+                                     IsVisible="{Binding HasUnit}" />
+                        </Grid>
+
+                        <ItemsControl ItemsSource="{Binding Fields}">
+                          <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                              <UniformGrid Rows="1" />
+                            </ItemsPanelTemplate>
+                          </ItemsControl.ItemsPanel>
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="shell:PropertyFieldModel">
+                              <Border Classes="cell" Margin="0,0,4,0">
+                                <Grid ColumnDefinitions="Auto,*">
+                                  <TextBlock Grid.Column="0" Classes="axis"
+                                             Classes.x="{Binding IsX}"
+                                             Classes.y="{Binding IsY}"
+                                             Classes.z="{Binding IsZ}"
+                                             Text="{Binding Label}"
+                                             PointerPressed="OnAxisPressed"
+                                             PointerMoved="OnScrubMoved"
+                                             PointerReleased="OnScrubReleased"
+                                             PointerCaptureLost="OnScrubLost"
+                                             ToolTip.Tip="Drag sideways to change this one." />
+                                  <TextBox Grid.Column="1" Classes="cellfield"
+                                           Text="{Binding Text, Mode=TwoWay}"
+                                           PlaceholderText="{Binding Placeholder}"
+                                           GotFocus="OnPropertyFieldFocused"
+                                           LostFocus="OnPropertyFieldBlurred"
+                                           KeyDown="OnPropertyFieldKeyDown" />
+                                </Grid>
+                              </Border>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                       </StackPanel>
 
-                      <ItemsControl Grid.Column="1" ItemsSource="{Binding Fields}"
-                                    IsVisible="{Binding HasFields}">
-                        <ItemsControl.ItemsPanel>
-                          <ItemsPanelTemplate>
-                            <UniformGrid Rows="1" />
-                          </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                          <DataTemplate>
-                            <Grid ColumnDefinitions="Auto,*" Margin="0,0,4,0">
-                              <TextBlock Grid.Column="0" Text="{Binding Label}"
-                                         IsVisible="{Binding HasLabel}"
-                                         Margin="0,0,4,0" VerticalAlignment="Center"
-                                         FontFamily="{StaticResource SpectraFontMono}"
-                                         FontSize="{StaticResource SpectraFontMicro}"
-                                         Foreground="{StaticResource SpectraTextMuted}" />
-                              <TextBox Grid.Column="1"
-                                       Text="{Binding Text, Mode=TwoWay}"
-                                       PlaceholderText="{Binding Placeholder}"
-                                       GotFocus="OnPropertyFieldFocused"
-                                       LostFocus="OnPropertyFieldBlurred"
-                                       KeyDown="OnPropertyFieldKeyDown"
-                                       Padding="5,3"
-                                       FontFamily="{StaticResource SpectraFontMono}"
-                                       FontSize="{StaticResource SpectraFontSmall}"
-                                       Background="{StaticResource SpectraBgInput}"
-                                       Foreground="{StaticResource SpectraTextEmphasis}"
-                                       BorderBrush="{StaticResource SpectraBorderSoft}"
-                                       BorderThickness="1" />
-                            </Grid>
-                          </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                      </ItemsControl>
+                      <!-- ___ Everything else: label left, editor right ___ -->
+                      <Grid ColumnDefinitions="86,*" Margin="0,1" IsVisible="{Binding !IsVector}">
 
-                      <CheckBox Grid.Column="1" IsChecked="{Binding Flag, Mode=TwoWay}"
-                                IsVisible="{Binding IsBoolean}"
-                                VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                          <TextBlock Classes="rowlabel" Classes.scrub="{Binding IsScrubbable}"
+                                     Text="{Binding Name}"
+                                     PointerPressed="OnLabelPressed"
+                                     PointerMoved="OnScrubMoved"
+                                     PointerReleased="OnScrubReleased"
+                                     PointerCaptureLost="OnScrubLost" />
+                          <TextBlock Text="{Binding PartialLabel}" Margin="5,0,0,0"
+                                     FontSize="{StaticResource SpectraFontMicro}"
+                                     Foreground="{StaticResource SpectraTextMuted}"
+                                     VerticalAlignment="Center"
+                                     IsVisible="{Binding IsPartial}" />
+                        </StackPanel>
 
-                      <ComboBox Grid.Column="1" ItemsSource="{Binding Choices}"
-                                SelectedItem="{Binding Choice, Mode=TwoWay}"
-                                IsVisible="{Binding IsChoice}"
-                                HorizontalAlignment="Stretch"
-                                FontSize="{StaticResource SpectraFontSmall}"
-                                Background="{StaticResource SpectraBgInput}" />
+                        <!-- Scalar -->
+                        <ItemsControl Grid.Column="1" ItemsSource="{Binding Fields}"
+                                      IsVisible="{Binding IsScalar}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="shell:PropertyFieldModel">
+                              <Border Classes="cell">
+                                <Grid ColumnDefinitions="*,Auto">
+                                  <TextBox Grid.Column="0" Classes="cellfield"
+                                           Text="{Binding Text, Mode=TwoWay}"
+                                           PlaceholderText="{Binding Placeholder}"
+                                           GotFocus="OnPropertyFieldFocused"
+                                           LostFocus="OnPropertyFieldBlurred"
+                                           KeyDown="OnPropertyFieldKeyDown" />
+                                  <TextBlock Grid.Column="1" Classes="rowunit" Margin="0,0,6,0"
+                                             Text="{Binding Unit}" IsVisible="{Binding HasUnit}" />
+                                </Grid>
+                              </Border>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
 
-                      <TextBlock Grid.Column="1" Text="{Binding ReadOnlyText}"
-                                 IsVisible="{Binding IsReadOnly}"
-                                 VerticalAlignment="Center"
-                                 TextTrimming="CharacterEllipsis"
-                                 FontFamily="{StaticResource SpectraFontMono}"
-                                 FontSize="{StaticResource SpectraFontMicro}"
-                                 Foreground="{StaticResource SpectraTextMuted}" />
-                    </Grid>
+                        <!-- Colour: a swatch and a hex value, never three
+                             linear floats. The box is a real cell over the row's
+                             single field, so Enter and blur commit it and
+                             Escape abandons it - a hex string parsed per
+                             keystroke can never be assembled, because "#8" and
+                             "#80" are both unreadable and each one puts the
+                             last good colour back. -->
+                        <Grid Grid.Column="1" ColumnDefinitions="Auto,*"
+                              IsVisible="{Binding IsColor}">
+                          <Border Grid.Column="0" Classes="swatch"
+                                  Background="{Binding Swatch}" Margin="0,0,5,0"
+                                  ToolTip.Tip="{Binding Hex}" />
+                          <ItemsControl Grid.Column="1" ItemsSource="{Binding Fields}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="shell:PropertyFieldModel">
+                                <Border Classes="cell">
+                                  <TextBox Classes="cellfield" TextAlignment="Left" Padding="6,0"
+                                           Text="{Binding Text, Mode=TwoWay}"
+                                           PlaceholderText="mixed"
+                                           GotFocus="OnPropertyFieldFocused"
+                                           LostFocus="OnPropertyFieldBlurred"
+                                           KeyDown="OnPropertyFieldKeyDown"
+                                           ToolTip.Tip="Written in sRGB, stored as linear light." />
+                                </Border>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </Grid>
+
+                        <CheckBox Grid.Column="1" IsChecked="{Binding Flag, Mode=TwoWay}"
+                                  IsVisible="{Binding IsBoolean}"
+                                  VerticalAlignment="Center" />
+
+                        <ComboBox Grid.Column="1" ItemsSource="{Binding Choices}"
+                                  SelectedItem="{Binding Choice, Mode=TwoWay}"
+                                  IsVisible="{Binding IsChoice}"
+                                  HorizontalAlignment="Stretch" />
+
+                        <TextBlock Grid.Column="1" Text="{Binding ReadOnlyText}"
+                                   IsVisible="{Binding IsReadOnly}"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   FontFamily="{StaticResource SpectraFontMono}"
+                                   FontSize="{StaticResource SpectraFontSmall}"
+                                   Foreground="{StaticResource SpectraTextMuted}"
+                                   ToolTip.Tip="{Binding ReadOnlyText}" />
+                      </Grid>
+                    </StackPanel>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>

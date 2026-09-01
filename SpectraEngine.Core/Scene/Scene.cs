@@ -1047,6 +1047,27 @@ public sealed partial class Scene
     // repeats of the same defect while another brush keeps re-arming the pump.
     private string? _lastLoggedSnapshotDefect;
 
+    /// <summary>
+    /// Why the last static-world compile was refused, or null when the world is
+    /// current.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Published because this failure is otherwise invisible, and it is
+    /// permanent.</b> A brush whose world transform is not rigid makes every
+    /// subsequent snapshot defective, so the compile stops landing and the
+    /// viewport goes on showing the last good world for as long as the session
+    /// lasts: the user edits geometry and nothing changes, with the reason in a
+    /// log file they have no reason to open. Nothing about that is recoverable
+    /// by guessing.
+    /// </para>
+    /// <para>
+    /// Render thread, like everything else here; the host copies it onto the
+    /// frame snapshot.
+    /// </para>
+    /// </remarks>
+    public string? StaticWorldDefect { get; private set; }
+
     // Cadence for the harvested-compile stats line. A continuously animating
     // brush lands a compile nearly every frame, and a per-harvest line through
     // synchronous sinks would throttle the render thread and grow the log file
@@ -1568,9 +1589,12 @@ public sealed partial class Scene
                     "Static world compile v{Version} skipped: {Defect} Keeping the last good world.",
                     version, defectMessage);
             }
+
+            StaticWorldDefect = defectMessage;
             return;
         }
         _lastLoggedSnapshotDefect = null;
+        StaticWorldDefect = null;
 
         // Diff this snapshot against the previous one BEFORE branching on the
         // placement count: an emptied scene must still dirty the cells the

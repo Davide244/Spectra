@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Numerics;
 
@@ -189,25 +189,39 @@ public readonly record struct PropertyRow
     /// <summary>Whether this row can be edited at all.</summary>
     public bool IsEditable => Kind != PropertyKind.ReadOnlyText;
 
+    /// <summary>
+    /// The unit the value is measured in, or empty when it has none.
+    /// </summary>
+    /// <remarks>
+    /// <b>A fact about the value, so it lives with the value.</b> Without it
+    /// the panel showed a light's range as "10" and a brush's size as "6 0.2
+    /// 6", and the reader had to already know that one is world units and the
+    /// other is not a length at all. Deriving it in the shell from the
+    /// <see cref="PropertyId"/> would have worked exactly as well until the
+    /// second consumer - a console readout, a tooltip, a generated document -
+    /// derived it slightly differently.
+    /// </remarks>
+    public string Unit { get; init; }
+
     internal static PropertyRow ReadOnly(string group, string name, PropertyId id, string text) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.ReadOnlyText, Text = text, Choices = [], PresentCount = 1, SelectionCount = 1 };
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.ReadOnlyText, Text = text, Unit = "", Choices = [], PresentCount = 1, SelectionCount = 1 };
 
     internal static PropertyRow OfText(string group, string name, PropertyId id, string text) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Text, Text = text, Choices = [], PresentCount = 1, SelectionCount = 1 };
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Text, Text = text, Unit = "", Choices = [], PresentCount = 1, SelectionCount = 1 };
 
-    internal static PropertyRow OfNumber(string group, string name, PropertyId id, float value) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Number, Number = value, Choices = [], PresentCount = 1, SelectionCount = 1 };
+    internal static PropertyRow OfNumber(string group, string name, PropertyId id, float value, string unit = "") =>
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Number, Number = value, Unit = unit, Choices = [], PresentCount = 1, SelectionCount = 1 };
 
-    internal static PropertyRow OfVector(string group, string name, PropertyId id, Vector3 value) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Vector3, Vector = value, Choices = [], PresentCount = 1, SelectionCount = 1 };
+    internal static PropertyRow OfVector(string group, string name, PropertyId id, Vector3 value, string unit = "") =>
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Vector3, Vector = value, Unit = unit, Choices = [], PresentCount = 1, SelectionCount = 1 };
 
     internal static PropertyRow OfColor(string group, string name, PropertyId id, Vector3 value) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Color, Vector = value, Choices = [], PresentCount = 1, SelectionCount = 1 };
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Color, Vector = value, Unit = "", Choices = [], PresentCount = 1, SelectionCount = 1 };
 
     internal static PropertyRow OfFlag(string group, string name, PropertyId id, bool value) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Boolean, Flag = value, Choices = [], PresentCount = 1, SelectionCount = 1 };
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Boolean, Flag = value, Unit = "", Choices = [], PresentCount = 1, SelectionCount = 1 };
 
     internal static PropertyRow OfChoice(
         string group, string name, PropertyId id, string value, IReadOnlyList<string> choices) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Choice, Text = value, Choices = choices, PresentCount = 1, SelectionCount = 1 };
+        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Choice, Text = value, Unit = "", Choices = choices, PresentCount = 1, SelectionCount = 1 };
 }

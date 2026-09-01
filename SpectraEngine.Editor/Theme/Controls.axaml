@@ -1,4 +1,4 @@
-<Styles xmlns="https://github.com/avaloniaui"
+﻿<Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
   <!--
@@ -12,9 +12,34 @@
     the tree's expander chevron, whose theme Fluent binds with StaticResource
     from inside its own template; that is a deliberate, visible thing to live
     with rather than a reason to retemplate everything around it.
+
+    THE SHAPE OF THE COMMAND BAR IS A ROW OF RAISED CLUSTERS. A cluster is one
+    bordered capsule holding the controls that belong to one decision - the
+    three tools, the four insert verbs, the undo pair. Grouping is then a thing
+    you can see rather than a hairline you have to notice, the segments inside a
+    cluster can be flat without losing their affordance (the capsule is the
+    raised object), and the row reads as instrumentation instead of as eleven
+    loose glyphs with dividers between some of them.
+
+    EVERY STATE CHANGE RAMPS, AND EVERY DURATION COMES FROM A TOKEN. See the
+    motion block at the foot of Tokens.axaml for the budget and the exclusions.
+    Two implementation notes that belong here rather than there:
+
+    - ENTER AND EXIT SHARE ONE DURATION. Leaving faster than arriving is the
+      usual advice and it is right, but expressing it means re-declaring the
+      Transitions setter inside the :pointerover style and relying on the order
+      Avalonia applies and REVERTS setters when a style frame deactivates,
+      which is not a guarantee it makes. A 55ms exit that is sometimes 90 is a
+      coin flip, not a choice, so the exit token exists and is spent only where
+      the two ends are separate properties.
+
+    - A TRANSITION GOES ON THE PART THAT ACTUALLY CHANGES. Putting a
+      BrushTransition on Button.Background when the fill is set on the template
+      ContentPresenter animates a property nothing renders, which produces no
+      error and no motion.
   -->
 
-  <!-- ─── Fluent key overrides ─────────────────────────────
+  <!-- ___ Fluent key overrides _____________________________
        These win before any selector runs, because the templates resolve them
        dynamically. Neutralising the tree's own selection visuals matters most:
        the row draws its own from model state, and Fluent's would sit
@@ -29,23 +54,116 @@
     <SolidColorBrush x:Key="TreeViewItemBorderBrushSelected" Color="Transparent" />
     <SolidColorBrush x:Key="TreeViewItemBorderBrushPointerOver" Color="Transparent" />
     <Thickness x:Key="TreeViewItemBorderThemeThickness">0</Thickness>
-    <x:Double x:Key="TreeViewItemMinHeight">22</x:Double>
+    <x:Double x:Key="TreeViewItemMinHeight">24</x:Double>
+
+    <!-- The dropdown list. Fluent paints a selected ComboBoxItem with the
+         machine's own accent, which on this machine is purple: opening the
+         pipeline list put a band of Windows personalisation colour in the
+         middle of the palette. Named explicitly here as well as through
+         SystemAccentColor, because these three keys are what the template
+         actually reads. -->
+    <StaticResource x:Key="ComboBoxItemBackgroundSelected" ResourceKey="SpectraControlChecked" />
+    <StaticResource x:Key="ComboBoxItemBackgroundSelectedPointerOver" ResourceKey="SpectraControlChecked" />
+    <StaticResource x:Key="ComboBoxItemBackgroundSelectedDisabled" ResourceKey="SpectraControlChecked" />
+    <StaticResource x:Key="ComboBoxItemBackgroundPointerOver" ResourceKey="SpectraControlHover" />
+    <StaticResource x:Key="ComboBoxItemForeground" ResourceKey="SpectraTextBody" />
+    <StaticResource x:Key="ComboBoxItemForegroundSelected" ResourceKey="SpectraTextEmphasis" />
+    <StaticResource x:Key="ComboBoxItemForegroundPointerOver" ResourceKey="SpectraTextEmphasis" />
+    <StaticResource x:Key="ComboBoxDropDownBackground" ResourceKey="SpectraBgRaised" />
+    <StaticResource x:Key="ComboBoxDropDownBorderBrush" ResourceKey="SpectraBorderStrong" />
+    <StaticResource x:Key="ComboBoxBackground" ResourceKey="SpectraBgControl" />
+    <StaticResource x:Key="ComboBoxBackgroundPointerOver" ResourceKey="SpectraBgControlHover" />
+    <StaticResource x:Key="ComboBoxBackgroundPressed" ResourceKey="SpectraBgControl" />
+    <StaticResource x:Key="ComboBoxBorderBrush" ResourceKey="SpectraBorderControl" />
+    <StaticResource x:Key="ComboBoxBorderBrushPointerOver" ResourceKey="SpectraBorderControl" />
+    <StaticResource x:Key="ComboBoxForeground" ResourceKey="SpectraTextEmphasis" />
   </Styles.Resources>
 
-  <!-- ─── Window and roots ─────────────────────────────────-->
   <Style Selector="Window">
-    <Setter Property="Background" Value="{StaticResource SpectraBgApp}" />
     <Setter Property="FontFamily" Value="{StaticResource SpectraFontUi}" />
     <Setter Property="FontSize" Value="{StaticResource SpectraFontBase}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
   </Style>
 
   <Style Selector="TextBlock">
     <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
   </Style>
 
-  <!-- ─── Readout text ─────────────────────────────────────
+  <!-- ___ The icon contract ________________________________
+       ONE place decides how a glyph is drawn, and it draws at the authored
+       coordinates. See the header of Icons.axaml for why Uniform was a defect
+       rather than a convenience. -->
+  <Style Selector="Path.icon">
+    <Setter Property="Width" Value="16" />
+    <Setter Property="Height" Value="16" />
+    <Setter Property="Stretch" Value="None" />
+    <Setter Property="Stroke" Value="{StaticResource SpectraTextBody}" />
+    <Setter Property="StrokeThickness" Value="1.3" />
+    <Setter Property="StrokeLineCap" Value="Round" />
+    <Setter Property="StrokeJoin" Value="Round" />
+    <Setter Property="Fill" Value="Transparent" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <!-- The glyphs are authored with 11 units of ink in a 16 box; the icon
+         sets everyone recognises (Lucide, Feather, Phosphor) sit nearer 80% of
+         their box, and at 69% these read as undersized beside 12px text. One
+         render transform scales ALL of them by the same factor, which is the
+         whole point of putting them on a shared grid: a per-glyph fix would be
+         Stretch="Uniform" again under another name. Stroke is authored at 1.3
+         so it lands at 1.56 after the scale. -->
+    <Setter Property="RenderTransformOrigin" Value="50%,50%" />
+    <Setter Property="RenderTransform" Value="scale(1.2)" />
+    <!-- The single cheapest line in the motion system: a glyph that warms up
+         under the cursor is the thing that makes a dense row of them feel
+         alive, and it costs one transition on a property already being set. -->
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Stroke"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <!-- A glyph that names a KIND wears that kind's tint, everywhere it appears.
+       The node-kind palette existed from the first pass and was spent in
+       exactly one place - a 15px tree glyph - which is why four insert buttons
+       in a row read as four grey outlines. -->
+  <Style Selector="Path.icon.kind-world">
+    <Setter Property="Stroke" Value="{StaticResource SpectraKindBrushWorld}" />
+  </Style>
+  <Style Selector="Path.icon.kind-part">
+    <Setter Property="Stroke" Value="{StaticResource SpectraKindBrushPart}" />
+  </Style>
+  <Style Selector="Path.icon.kind-cut">
+    <Setter Property="Stroke" Value="{StaticResource SpectraKindBrushSubtractive}" />
+  </Style>
+  <Style Selector="Path.icon.kind-light">
+    <Setter Property="Stroke" Value="{StaticResource SpectraKindLight}" />
+  </Style>
+  <Style Selector="Path.icon.kind-mesh">
+    <Setter Property="Stroke" Value="{StaticResource SpectraKindMesh}" />
+  </Style>
+  <Style Selector="Path.icon.kind-group">
+    <Setter Property="Stroke" Value="{StaticResource SpectraKindGroup}" />
+  </Style>
+  <!-- Disabled outranks kind: a verb you cannot use must not look like the
+       liveliest thing in the cluster. -->
+  <Style Selector="Button:disabled Path.icon.kind-world,
+                   Button:disabled Path.icon.kind-part,
+                   Button:disabled Path.icon.kind-cut,
+                   Button:disabled Path.icon.kind-light">
+    <Setter Property="Stroke" Value="{StaticResource SpectraTextDisabled}" />
+  </Style>
+
+  <!-- ___ Text roles ______________________________________
        App-scoped rather than window-scoped, because the dockable panels use
-       these and a floated panel leaves the main window's style scope. -->
+       these and a floated panel leaves the main window's style scope.
+
+       .value is a MEASUREMENT - a number, a path, a key name. .label names one.
+       .prose is a sentence, and it is set in the UI face: the status bar used
+       to render whole sentences in 11px Cascadia Mono, which is the single most
+       machine-made typographic choice a tool can make. -->
   <Style Selector="TextBlock.value">
     <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
     <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
@@ -54,94 +172,89 @@
   </Style>
   <Style Selector="TextBlock.label">
     <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector="TextBlock.prose">
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!-- A section heading: BODY SIZE, weight carrying the emphasis, sentence
+       case, separated from what it names by space rather than by a rule.
+
+       It used to be 10px letter-spaced uppercase muted, which is the marketing
+       eyebrow - the single most web-flavoured typographic move in the shell.
+       Every tool in this category sets its section headings at or near body
+       size and lets weight do the work: "Transform" beats "T R A N S F O R M",
+       and the uppercase form is also measurably slower to read because it
+       destroys word shape. -->
+  <Style Selector="TextBlock.sectionhead">
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
     <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!-- The tertiary label SpectraFontMicro still exists for: a unit, a count, a
+       caption under a value. Never a heading and never a control label. -->
+  <Style Selector="TextBlock.micro">
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontMicro}" />
     <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
 
-  <!-- ─── Menu ─────────────────────────────────────────────-->
+  <!-- ___ Menus ___________________________________________
+       Five real menus, and every verb in the shell appears in one of them with
+       its shortcut printed beside it. That is affordable now because an
+       Avalonia popup on Windows is a real OS window: it composites ABOVE the
+       viewport's native child, exactly as a context menu does, so a menu is no
+       longer confined to the width of the panel it opens over. -->
   <Style Selector="Menu">
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="Padding" Value="4,0" />
   </Style>
 
   <Style Selector="Menu > MenuItem">
-    <Setter Property="Padding" Value="10,4" />
+    <Setter Property="Padding" Value="9,0" />
+    <Setter Property="Height" Value="{StaticResource SpectraControlHeight}" />
+    <Setter Property="MinHeight" Value="{StaticResource SpectraControlHeight}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
     <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
   </Style>
 
   <Style Selector="Menu > MenuItem:pointerover">
     <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
     <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
   </Style>
-
-  <Style Selector="MenuItem">
-    <Setter Property="MinHeight" Value="26" />
-  </Style>
-
-  <!-- ─── Labeled tool button ───────────────────────────────
-       Icon plus word, for the verbs a newcomer hunts for: Studio labels its
-       insert buttons and it is right to - an icon-only strip is fast for the
-       hand and mute for the eye. Same height and states as Button.tool, no
-       fixed width. -->
-  <Style Selector="Button.toollabel">
-    <Setter Property="Height" Value="{StaticResource SpectraToolbarButtonSize}" />
-    <Setter Property="Padding" Value="7,0" />
-    <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderThickness" Value="0" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
-    <Setter Property="VerticalContentAlignment" Value="Center" />
-  </Style>
-  <Style Selector="Button.toollabel /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderThickness" Value="0" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
-  </Style>
-  <Style Selector="Button.toollabel:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
-  </Style>
-  <Style Selector="Button.toollabel:pressed /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraControlPressed}" />
-  </Style>
-  <Style Selector="Button.toollabel Path">
-    <Setter Property="Stroke" Value="{StaticResource SpectraTextBody}" />
-    <Setter Property="StrokeThickness" Value="1.4" />
-    <Setter Property="StrokeLineCap" Value="Round" />
-    <Setter Property="StrokeJoin" Value="Round" />
-    <Setter Property="Fill" Value="Transparent" />
-    <Setter Property="Width" Value="16" />
-    <Setter Property="Height" Value="16" />
-    <Setter Property="Stretch" Value="Uniform" />
-  </Style>
-  <Style Selector="Button.toollabel TextBlock">
-    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
-    <Setter Property="VerticalAlignment" Value="Center" />
-  </Style>
-  <Style Selector="Button.toollabel:pointerover Path">
-    <Setter Property="Stroke" Value="{StaticResource SpectraTextEmphasis}" />
-  </Style>
-  <Style Selector="Button.toollabel:pointerover TextBlock">
+  <Style Selector="Menu > MenuItem:open">
+    <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
     <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
   </Style>
-  <Style Selector="Button.toollabel:disabled Path">
-    <Setter Property="Stroke" Value="{StaticResource SpectraTextDisabled}" />
-  </Style>
-  <Style Selector="Button.toollabel:disabled TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextDisabled}" />
+
+  <Style Selector="MenuItem">
+    <Setter Property="MinHeight" Value="28" />
   </Style>
 
-  <!-- ─── Popup menus (dropdowns and context menus) ─────────
+  <!-- ___ Popup surfaces __________________________________
        The raised-overlay treatment every floating surface gets: raised
-       surface, strong 1px border, the 4px radius reserved for things that
-       float. Context menus are real OS popups, which is why they may legally
-       cross the viewport when nothing drawn inside the shell can. -->
+       surface, strong 1px border, the 5px radius reserved for things that
+       float above the window. -->
   <Style Selector="ContextMenu">
     <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
     <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
     <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius4}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusFloat}" />
     <Setter Property="Padding" Value="3" />
   </Style>
 
@@ -149,14 +262,21 @@
     <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
     <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
     <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius4}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusFloat}" />
   </Style>
 
   <Style Selector="ContextMenu MenuItem, Menu MenuItem MenuItem">
     <Setter Property="Padding" Value="10,4" />
     <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
     <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
   </Style>
 
   <Style Selector="ContextMenu MenuItem:pointerover, Menu MenuItem MenuItem:pointerover">
@@ -170,7 +290,22 @@
     <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
     <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
     <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
-    <Setter Property="Margin" Value="18,0,2,0" />
+    <Setter Property="Margin" Value="24,0,2,0" />
+  </Style>
+
+  <!-- A menu item's glyph. Muted, and one step smaller than a toolbar glyph:
+       here it is a reminder of which button in the command row does the same
+       thing, not the thing being pointed at, so it must not out-weigh the word
+       beside it. -->
+  <Style Selector="Path.menuicon">
+    <Setter Property="Stroke" Value="{StaticResource SpectraTextMuted}" />
+    <Setter Property="RenderTransform" Value="scale(1.0)" />
+  </Style>
+  <Style Selector="MenuItem:pointerover Path.menuicon">
+    <Setter Property="Stroke" Value="{StaticResource SpectraTextBody}" />
+  </Style>
+  <Style Selector="MenuItem:disabled Path.menuicon">
+    <Setter Property="Stroke" Value="{StaticResource SpectraTextDisabled}" />
   </Style>
 
   <Style Selector="ContextMenu Separator, Menu MenuItem Separator">
@@ -179,177 +314,358 @@
     <Setter Property="Margin" Value="6,3" />
   </Style>
 
-  <!-- ─── Toolbar buttons ──────────────────────────────────
-       One square footprint for every control in the row, so the eye reads a
-       rhythm rather than a queue of differently sized things. The glyph, not
-       the frame, carries the state. -->
+  <!-- ___ Clusters ________________________________________
+       The raised capsule that holds one group of command-bar controls. -->
+  <Style Selector="Border.cluster">
+    <Setter Property="Background" Value="{StaticResource SpectraBgControl}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Height" Value="{StaticResource SpectraControlHeight}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!-- The 1px rule BETWEEN segments of one cluster. Inside a capsule, so it is
+       the soft border rather than the control border. -->
+  <Style Selector="Border.segsep">
+    <Setter Property="Width" Value="1" />
+    <Setter Property="Background" Value="{StaticResource SpectraBorderControl}" />
+    <Setter Property="Margin" Value="0" />
+  </Style>
+
+  <!-- A rule BETWEEN clusters, in the status bar and anywhere else two runs of
+       values meet. One implementation: the box-drawing character this used to
+       be sits at 1.35:1 against the panel and spends 20px saying nothing. -->
+  <Style Selector="Border.groupsep">
+    <Setter Property="Width" Value="1" />
+    <Setter Property="Height" Value="14" />
+    <Setter Property="Background" Value="{StaticResource SpectraBorderStrong}" />
+    <Setter Property="Margin" Value="10,0" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!-- ___ Segment buttons _________________________________
+       Flat inside their capsule: the capsule is the raised object, so a second
+       fill per segment would be a box inside a box. State is carried by the
+       glyph and by one checked fill. -->
+  <Style Selector="Button.seg">
+    <Setter Property="Height" Value="26" />
+    <Setter Property="MinWidth" Value="0" />
+    <Setter Property="Padding" Value="6,0" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+  </Style>
+  <Style Selector="Button.seg /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
+  </Style>
+  <Style Selector="Button.seg:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
+  </Style>
+  <Style Selector="Button.seg:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraControlPressed}" />
+  </Style>
+  <Style Selector="Button.seg:pointerover">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
+  <Style Selector="Button.seg:pointerover Path.icon">
+    <Setter Property="Stroke" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
+
+  <!-- The live tool, in the MODE colour rather than the accent. Red means "you
+       selected this"; amber means "the machine is in this state". They were one
+       colour, so a lit Move button and a selected tree row were the same signal
+       and the window read as monochrome plus one.
+
+       Still a CLASS rather than a ToggleButton's own checked state, and the
+       reason has been extended rather than replaced: a toggle flips itself on
+       click and is then corrected a frame later by the engine's snapshot, which
+       reads as a flicker. What was missing was the other half - a class bound
+       one way has no local opinion at all, which is why the button used to sit
+       dark for up to 65ms after the click. ShellModel now holds a BOUNDED local
+       opinion (OptimisticValue) and defers to the engine when it disagrees, so
+       the class lights on the click and the engine still wins. -->
+  <Style Selector="Button.seg.active /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraControlChecked}" />
+  </Style>
+  <Style Selector="Button.seg.active:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraControlChecked}" />
+  </Style>
+  <Style Selector="Button.seg.active">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
+  <Style Selector="Button.seg.active Path.icon">
+    <Setter Property="Stroke" Value="{StaticResource SpectraMode}" />
+  </Style>
+
+  <Style Selector="Button.seg:disabled Path.icon">
+    <Setter Property="Stroke" Value="{StaticResource SpectraTextDisabled}" />
+  </Style>
+  <Style Selector="Button.seg:disabled">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextDisabled}" />
+  </Style>
+
+  <!-- ___ Standalone icon button __________________________
+       For the few controls that are not part of a group: raised on its own,
+       because it has no capsule to belong to. -->
   <Style Selector="Button.tool">
     <Setter Property="Width" Value="{StaticResource SpectraToolbarButtonSize}" />
     <Setter Property="Height" Value="{StaticResource SpectraToolbarButtonSize}" />
     <Setter Property="Padding" Value="0" />
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderThickness" Value="0" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
     <Setter Property="HorizontalContentAlignment" Value="Center" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
   </Style>
-
-  <!-- Fluent hangs its own background on the template's named part, so a
-       setter on the control itself is beaten by the TemplateBinding. -->
   <Style Selector="Button.tool /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderThickness" Value="0" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="Background" Value="{StaticResource SpectraBgControl}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+        <BrushTransition Property="BorderBrush"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
   </Style>
   <Style Selector="Button.tool:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
+    <Setter Property="Background" Value="{StaticResource SpectraBgControlHover}" />
   </Style>
   <Style Selector="Button.tool:pressed /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraControlPressed}" />
+    <Setter Property="Background" Value="{StaticResource SpectraBgControl}" />
   </Style>
-
-  <!-- The active tool is a CLASS, not a ToggleButton's own checked state. A
-       toggle would flip itself on click and then be corrected a frame later by
-       the engine's snapshot, which reads as a flicker; a class bound one way to
-       the reported state has no local opinion to fight. -->
-  <Style Selector="Button.tool.active /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraControlChecked}" />
-  </Style>
-  <Style Selector="Button.tool.active:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraControlChecked}" />
-  </Style>
-
-  <!-- The glyph carries the state: muted at rest, white when the tool is the
-       live one. Disabled goes further down rather than translucent, because
-       opacity on dark reads as a rendering fault. -->
-  <Style Selector="Button.tool Path">
-    <Setter Property="Stroke" Value="{StaticResource SpectraTextBody}" />
-    <Setter Property="StrokeThickness" Value="1.4" />
-    <Setter Property="StrokeLineCap" Value="Round" />
-    <Setter Property="StrokeJoin" Value="Round" />
-    <Setter Property="Fill" Value="Transparent" />
-    <Setter Property="Width" Value="16" />
-    <Setter Property="Height" Value="16" />
-    <Setter Property="Stretch" Value="Uniform" />
-  </Style>
-  <Style Selector="Button.tool:pointerover Path">
+  <Style Selector="Button.tool:pointerover Path.icon">
     <Setter Property="Stroke" Value="{StaticResource SpectraTextEmphasis}" />
   </Style>
-  <Style Selector="Button.tool.active Path">
-    <Setter Property="Stroke" Value="{StaticResource SpectraAccent}" />
+  <Style Selector="Button.tool.active /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraControlChecked}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraMode}" />
   </Style>
-  <Style Selector="Button.tool:disabled Path">
+  <Style Selector="Button.tool.active Path.icon">
+    <Setter Property="Stroke" Value="{StaticResource SpectraMode}" />
+  </Style>
+  <Style Selector="Button.tool:disabled Path.icon">
     <Setter Property="Stroke" Value="{StaticResource SpectraTextDisabled}" />
   </Style>
 
-  <!-- ─── Mode chips ───────────────────────────────────────
+  <!-- A borderless icon button, for places that already sit inside a bordered
+       container (the filter row's clear, a panel header's action). -->
+  <Style Selector="Button.ghost">
+    <Setter Property="Width" Value="{StaticResource SpectraFieldHeight}" />
+    <Setter Property="Height" Value="{StaticResource SpectraFieldHeight}" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button.ghost /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
+  </Style>
+  <Style Selector="Button.ghost:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
+  </Style>
+  <Style Selector="Button.ghost Path.icon">
+    <Setter Property="Stroke" Value="{StaticResource SpectraTextMuted}" />
+  </Style>
+  <Style Selector="Button.ghost:pointerover Path.icon">
+    <Setter Property="Stroke" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
+
+  <!-- ___ Mode chips ______________________________________
        A two-way CHOICE is not an on/off toggle, and lighting an icon for one
-       says the wrong thing: "world" is not the enabled state of "local". These
-       show the value they currently hold, in the same monospace the rest of
-       the technical vocabulary uses, and clicking swaps it. -->
+       says the wrong thing: "world" is not the enabled state of "local". A chip
+       shows its SUBJECT and its VALUE together - a bare "Studio" in a box is a
+       word with nothing to attach it to - and clicking swaps the value. -->
   <Style Selector="Button.chip">
-    <Setter Property="Height" Value="{StaticResource SpectraToolbarButtonSize}" />
-    <Setter Property="MinWidth" Value="58" />
+    <Setter Property="Height" Value="{StaticResource SpectraControlHeight}" />
     <Setter Property="Padding" Value="8,0" />
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderThickness" Value="0" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
-    <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
-    <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
     <Setter Property="HorizontalContentAlignment" Value="Center" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
   </Style>
   <Style Selector="Button.chip /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
+    <Setter Property="Background" Value="{StaticResource SpectraBgControl}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
     <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
   </Style>
   <Style Selector="Button.chip:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+    <Setter Property="Background" Value="{StaticResource SpectraBgControlHover}" />
   </Style>
-  <Style Selector="Button.chip:pointerover">
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  <Style Selector="Button.chip:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraBgControl}" />
   </Style>
-
-  <!-- ─── Command-bar tabs ─────────────────────────────────
-       A tab is text with a 2px bottom bar, never a lit icon: the bar says
-       "this strip is showing" without spending the accent on a fill. The
-       border rides the template presenter, which supports per-side
-       thickness, so the inactive state reserves the same 2px and nothing
-       jumps when the selection moves. -->
-  <Style Selector="Button.tab">
-    <Setter Property="Height" Value="30" />
-    <Setter Property="Padding" Value="12,0" />
-    <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderThickness" Value="0" />
-    <Setter Property="CornerRadius" Value="0" />
-    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
-    <Setter Property="VerticalAlignment" Value="Stretch" />
-    <Setter Property="HorizontalContentAlignment" Value="Center" />
-    <Setter Property="VerticalContentAlignment" Value="Center" />
+  <Style Selector="Button.chip TextBlock.chipsubject">
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
-  <Style Selector="Button.tab /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderBrush" Value="Transparent" />
-    <Setter Property="BorderThickness" Value="0,0,0,2" />
-    <Setter Property="CornerRadius" Value="0" />
-  </Style>
-  <Style Selector="Button.tab:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
-  </Style>
-  <Style Selector="Button.tab:pointerover">
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
-  </Style>
-  <Style Selector="Button.tab.active /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
-  </Style>
-  <Style Selector="Button.tab.active">
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
-  </Style>
-
-  <!-- The active state a chip can carry when it is a TOGGLE rather than a
-       two-way choice: the View strip's debug visualisations are genuinely
-       on/off, so they light the way tool buttons do. -->
-  <Style Selector="Button.chip.active /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraControlChecked}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
-  </Style>
-  <Style Selector="Button.chip.active">
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
-  </Style>
-
-  <!-- ─── Snap increment fields ────────────────────────────
-       Typed entry beside the snap toggle: one number, one unit, committed on
-       Enter or blur exactly as a property field is. -->
-  <Style Selector="TextBox.snapfield">
-    <Setter Property="Width" Value="46" />
-    <Setter Property="Height" Value="{StaticResource SpectraControlHeight}" />
-    <Setter Property="MinHeight" Value="{StaticResource SpectraControlHeight}" />
-    <Setter Property="MinWidth" Value="0" />
-    <Setter Property="Padding" Value="4,2" />
-    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  <Style Selector="Button.chip TextBlock.chipvalue">
     <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
     <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
-    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
-  <Style Selector="TextBox.snapfield:pointerover /template/ Border#PART_BorderElement">
-    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
+  <Style Selector="Button.chip:disabled TextBlock.chipvalue">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextDisabled}" />
   </Style>
-  <Style Selector="TextBox.snapfield:focus /template/ Border#PART_BorderElement">
-    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+  <Style Selector="Button.chip:disabled TextBlock.chipsubject">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextDisabled}" />
   </Style>
 
-  <!-- ─── Start-page buttons ───────────────────────────────
+  <!-- A chip whose value is NOT the default is state the user set, and it says
+       so in the mode colour. Without this the only way to notice that handles
+       are on Classic is to read the word. -->
+  <Style Selector="Button.chip.nondefault TextBlock.chipvalue">
+    <Setter Property="Foreground" Value="{StaticResource SpectraMode}" />
+  </Style>
+
+  <!-- ___ Text input ______________________________________
+       Sunken, per rule 3 in Tokens.axaml. One recipe, three sizes.
+
+       A field being typed into gets an accent border AND drops its fill: on a
+       near-black panel the caret alone is not a state anyone notices, and the
+       panel refreshes about thirty times a second behind it. -->
+  <Style Selector="TextBox.field">
+    <Setter Property="Height" Value="{StaticResource SpectraFieldHeight}" />
+    <Setter Property="MinHeight" Value="{StaticResource SpectraFieldHeight}" />
+    <Setter Property="MinWidth" Value="0" />
+    <Setter Property="Padding" Value="6,2" />
+    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderSoft}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="SelectionBrush" Value="{StaticResource SpectraAccentRest}" />
+    <Setter Property="CaretBrush" Value="{StaticResource SpectraAccent}" />
+  </Style>
+  <Style Selector="TextBox.field /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderSoft}" />
+    <!-- The BORDER ramps, the fill does not: a field's focus edge appearing
+         over 90ms reads as the field waking up, while a fill that fades under a
+         caret you are already typing into reads as a repaint. -->
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="BorderBrush"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
+  </Style>
+  <Style Selector="TextBox.field:pointerover /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
+  </Style>
+  <Style Selector="TextBox.field:focus /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{StaticResource SpectraBgWindow}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+  </Style>
+  <Style Selector="TextBox.field /template/ TextBlock#PART_Watermark">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+  </Style>
+
+  <!-- A numeric cell: mono, and the digits sit at the RIGHT so a column of them
+       lines up on the decimal instead of on the minus sign. -->
+  <Style Selector="TextBox.field.num">
+    <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+    <Setter Property="TextAlignment" Value="Right" />
+    <Setter Property="Padding" Value="4,2" />
+  </Style>
+  <Style Selector="TextBox.field.num /template/ TextBlock#PART_Watermark">
+    <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+    <Setter Property="TextAlignment" Value="Right" />
+  </Style>
+
+  <!-- ___ Checkbox ________________________________________
+       Fluent's stock box is 20px with a system-accent fill; at 20 it is the
+       tallest thing in a 24px inspector row and it arrives in whatever colour
+       the machine's personalisation settings chose. -->
+  <Style Selector="CheckBox">
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+  <Style Selector="CheckBox /template/ Border#NormalRectangle">
+    <Setter Property="Width" Value="15" />
+    <Setter Property="Height" Value="15" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="CheckBox:checked /template/ Border#NormalRectangle">
+    <Setter Property="Background" Value="{StaticResource SpectraAccentRest}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+  </Style>
+  <Style Selector="CheckBox /template/ Path#CheckGlyph">
+    <Setter Property="Stroke" Value="#FFFFFF" />
+    <Setter Property="Fill" Value="#FFFFFF" />
+  </Style>
+
+  <!-- ___ Combo ___________________________________________ -->
+  <Style Selector="ComboBox">
+    <Setter Property="Height" Value="{StaticResource SpectraFieldHeight}" />
+    <Setter Property="MinHeight" Value="{StaticResource SpectraFieldHeight}" />
+    <Setter Property="Padding" Value="8,0" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="ComboBox /template/ Border#Background">
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+  </Style>
+  <Style Selector="ComboBoxItem">
+    <Setter Property="MinHeight" Value="28" />
+    <Setter Property="Padding" Value="9,0" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+  </Style>
+
+  <!-- ___ Page buttons ____________________________________
        The one filled-accent button in the shell, and the fill is
        SpectraAccentRest rather than the brand red: white on #E33A3A is 4.3:1
        and fails AA at 13px. The brighter red is the hover, not the rest. -->
@@ -357,7 +673,7 @@
     <Setter Property="Height" Value="32" />
     <Setter Property="MinWidth" Value="150" />
     <Setter Property="Padding" Value="14,0" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
     <Setter Property="FontSize" Value="{StaticResource SpectraFontBase}" />
     <Setter Property="HorizontalContentAlignment" Value="Center" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
@@ -366,7 +682,14 @@
   <Style Selector="Button.primary /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{StaticResource SpectraAccentRest}" />
     <Setter Property="BorderThickness" Value="0" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
   </Style>
   <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{StaticResource SpectraAccent}" />
@@ -382,74 +705,37 @@
     <Setter Property="Height" Value="32" />
     <Setter Property="MinWidth" Value="150" />
     <Setter Property="Padding" Value="14,0" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
     <Setter Property="FontSize" Value="{StaticResource SpectraFontBase}" />
     <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
     <Setter Property="HorizontalContentAlignment" Value="Center" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
   </Style>
   <Style Selector="Button.secondary /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
+    <Setter Property="Background" Value="{StaticResource SpectraBgControl}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
     <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+        <BrushTransition Property="BorderBrush"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
   </Style>
   <Style Selector="Button.secondary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
+    <Setter Property="Background" Value="{StaticResource SpectraBgControlHover}" />
     <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
   </Style>
   <Style Selector="Button.secondary:pointerover">
     <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
   </Style>
 
-  <!-- ─── Recent-project cards ─────────────────────────────
-       Buttons in a card's clothing, so keyboard focus and activation come
-       from the control instead of being re-invented on a Border. -->
-  <Style Selector="Button.card">
-    <Setter Property="Padding" Value="0" />
-    <Setter Property="HorizontalAlignment" Value="Stretch" />
-    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-    <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderThickness" Value="0" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
-  </Style>
-  <Style Selector="Button.card /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraBgPanel}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
-  </Style>
-  <Style Selector="Button.card:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
-  </Style>
-  <Style Selector="Button.card:pressed /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{StaticResource SpectraBgPanel}" />
-  </Style>
-
-  <!-- ─── Text input ───────────────────────────────────────-->
-  <Style Selector="TextBox.filter">
-    <Setter Property="Height" Value="{StaticResource SpectraControlHeight}" />
-    <Setter Property="MinHeight" Value="{StaticResource SpectraControlHeight}" />
-    <Setter Property="Padding" Value="6,2" />
-    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
-    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
-    <Setter Property="VerticalContentAlignment" Value="Center" />
-  </Style>
-  <Style Selector="TextBox.filter:pointerover /template/ Border#PART_BorderElement">
-    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
-  </Style>
-  <Style Selector="TextBox.filter:focus /template/ Border#PART_BorderElement">
-    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
-  </Style>
-
-  <!-- ─── Scrollbars ───────────────────────────────────────
+  <!-- ___ Scrollbars ______________________________________
        Fluent's default light thumb on a near-black panel is the single
        loudest "stock theme" tell in the window. -->
   <Style Selector="ScrollBar:vertical">
@@ -458,23 +744,56 @@
   </Style>
   <Style Selector="ScrollBar /template/ Thumb">
     <Setter Property="Background" Value="#24FFFFFF" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
   </Style>
   <Style Selector="ScrollBar /template/ Thumb:pointerover">
     <Setter Property="Background" Value="#3AFFFFFF" />
   </Style>
 
-  <!-- ─── Splitter ─────────────────────────────────────────
-       A hairline that thickens into the accent under the cursor, so the drag
-       target is discoverable without a permanent 6px gutter. -->
+  <!-- ___ Splitter ________________________________________
+       A hairline whose HIT AREA is wider than its ink. The old one was a 1px
+       target: the style changed colour on hover, which nobody ever saw, because
+       landing on a one-pixel column is not something a hand does.
+
+       AND THEN NOBODY SAW THE WIDE ONE EITHER. The splitters in MainWindow set
+       Background="Transparent" inline to make the wide band hit-testable, and a
+       local value outranks a style trigger, so this :pointerover rule has never
+       fired since the day the wide target was introduced - on the two controls
+       in the window a user drags most. The transparent fill now comes from the
+       base style below, where the trigger can beat it, and the visible ink is a
+       separate 1px child so the hit area and the line can differ. -->
   <Style Selector="GridSplitter">
-    <Setter Property="Background" Value="{StaticResource SpectraBorderStrong}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="MinWidth" Value="0" />
   </Style>
-  <Style Selector="GridSplitter:pointerover">
+
+  <!-- The ink. IsHitTestVisible is False so the wide splitter behind it still
+       gets the pointer; the .hot class is written by the splitter's own
+       enter/exit and drag events, because a child cannot see its parent's
+       pseudo-classes from a selector. -->
+  <Style Selector="Border.splitink">
+    <Setter Property="Background" Value="{StaticResource SpectraBorderStrong}" />
+    <Setter Property="IsHitTestVisible" Value="False" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
+  </Style>
+  <Style Selector="Border.splitink.hot">
     <Setter Property="Background" Value="{StaticResource SpectraAccent}" />
   </Style>
 
-  <!-- ─── Tree ─────────────────────────────────────────────-->
+  <!-- ___ Tree ____________________________________________ -->
   <Style Selector="TreeView">
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderThickness" Value="0" />
@@ -488,7 +807,7 @@
     <Setter Property="BorderThickness" Value="0" />
   </Style>
 
-  <!-- ─── Focus ────────────────────────────────────────────
+  <!-- ___ Focus ___________________________________________
        Fluent's stock adorner is a hard white rectangle, which on a near-black
        row reads as a rendering fault and is the single loudest "default theme"
        tell left in the window. It is replaced rather than removed: keyboard
@@ -498,7 +817,7 @@
       <FocusAdornerTemplate>
         <Border BorderBrush="{StaticResource SpectraAccent}"
                 BorderThickness="1"
-                CornerRadius="{StaticResource SpectraRadius2}" />
+                CornerRadius="{StaticResource SpectraRadiusControl}" />
       </FocusAdornerTemplate>
     </Setter>
   </Style>
@@ -508,41 +827,36 @@
       <FocusAdornerTemplate>
         <Border BorderBrush="{StaticResource SpectraAccent}"
                 BorderThickness="1"
-                CornerRadius="{StaticResource SpectraRadius2}"
+                CornerRadius="{StaticResource SpectraRadiusControl}"
                 Margin="-1" />
       </FocusAdornerTemplate>
     </Setter>
   </Style>
 
-  <!-- Fluent's watermark inherits neither the size nor the muted tone, so it
-       arrives as full-size body text and reads as a value somebody typed. -->
-  <Style Selector="TextBox.filter /template/ TextBlock#PART_Watermark">
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
-    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+  <!-- A pressed toolbar button keeps its own focus ring off: a ring drawn
+       around a segment inside a capsule is a rectangle inside a rectangle one
+       pixel apart, which reads as a rendering fault rather than as focus. -->
+  <Style Selector="Button.seg">
+    <Setter Property="FocusAdorner" Value="{x:Null}" />
   </Style>
 
-  <Style Selector="TreeViewItem /template/ ToggleButton#PART_ExpandCollapseChevron">
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
-    <Setter Property="Width" Value="14" />
-    <Setter Property="Margin" Value="0" />
-  </Style>
-  <Style Selector="TreeViewItem /template/ ToggleButton#PART_ExpandCollapseChevron:pointerover">
-    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
-  </Style>
-
-  <!-- ─── Tooltips ─────────────────────────────────────────
+  <!-- ___ Tooltips ________________________________________
        An overlay, so it is the one thing here allowed to look raised: a
        lighter surface and a real border, since a drop shadow on near-black
        is invisible and the usual compensation (a 40px blur) reads as a
-       smudge. -->
+       smudge.
+
+       A tooltip is PROSE plus a key name, so it is set in the UI face and the
+       shortcut inside it wears mono. -->
   <Style Selector="ToolTip">
     <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
     <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
     <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius4}" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusFloat}" />
     <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
     <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
-    <Setter Property="Padding" Value="8,5" />
+    <Setter Property="MaxWidth" Value="280" />
+    <Setter Property="Padding" Value="9,6" />
   </Style>
 
 </Styles>

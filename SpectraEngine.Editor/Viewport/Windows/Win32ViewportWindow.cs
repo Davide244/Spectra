@@ -177,6 +177,16 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
         0x53 => Win32Interop.IsKeyDown(Win32Interop.VK_SHIFT)
             ? Viewport.ShellChord.SaveMapAs
             : Viewport.ShellChord.SaveMap,    // S
+
+        // The number row only. The numpad's own codes are deliberately absent:
+        // an insert is not a thing anyone reaches for with their right hand
+        // while the left is on the movement keys, and claiming them would take
+        // four more codes away from the engine for nothing.
+        0x31 => Viewport.ShellChord.InsertBlock, // 1
+        0x32 => Viewport.ShellChord.InsertPart,  // 2
+        0x33 => Viewport.ShellChord.InsertCut,   // 3
+        0x34 => Viewport.ShellChord.InsertLight, // 4
+
         _ => null,
     };
 

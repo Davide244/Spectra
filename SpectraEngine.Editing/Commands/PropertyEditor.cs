@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Bsp;
+﻿using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Inspection;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Editing.Undo;
@@ -68,9 +68,27 @@ public static class PropertyEditor
     /// Writes <paramref name="edit"/> to every node in
     /// <paramref name="targets"/> that carries the property.
     /// </summary>
+    /// <param name="inGesture">
+    /// True while the caller is holding a transaction open around a continuous
+    /// gesture, so this edit joins it instead of becoming its own history
+    /// entry.
+    /// </param>
     /// <returns>How many nodes actually changed.</returns>
+    /// <remarks>
+    /// <b><paramref name="inGesture"/> is what makes a scrubbable field
+    /// possible.</b> A drag across a number emits one edit per pointer move,
+    /// and each opening its own transaction would put sixty entries in the
+    /// history for one gesture - which is not merely untidy: undo would then
+    /// walk back through the drag one frame at a time, and the user's "put it
+    /// back" would take sixty presses. Inside an open transaction the stack
+    /// offers each new command to the ones already recorded and
+    /// <see cref="ICoalescingCommand"/> absorbs them, so the whole drag ends as
+    /// one command per node whose before/after span the gesture. Commands that
+    /// do not coalesce simply accumulate inside the transaction and still
+    /// commit as the single entry a transaction always commits as.
+    /// </remarks>
     public static int Apply(
-        UndoStack undo, IReadOnlyList<SceneNode> targets, PropertyEdit edit)
+        UndoStack undo, IReadOnlyList<SceneNode> targets, PropertyEdit edit, bool inGesture = false)
     {
         ArgumentNullException.ThrowIfNull(undo);
         ArgumentNullException.ThrowIfNull(targets);
@@ -91,11 +109,17 @@ public static class PropertyEditor
 
         // The transaction is opened only once there is something to put in it,
         // so a no-op commit leaves the history untouched rather than pushing an
-        // empty entry.
-        undo.BeginTransaction(NameOf(edit.Id));
+        // empty entry. Inside a gesture the caller owns the transaction, and
+        // opening a second one here would throw rather than nest.
+        bool ownTransaction = !inGesture;
+        if (ownTransaction)
+            undo.BeginTransaction(NameOf(edit.Id));
+
         foreach (IEditorCommand command in commands)
             undo.Execute(command);
-        undo.CommitTransaction();
+
+        if (ownTransaction)
+            undo.CommitTransaction();
 
         return commands.Count;
     }
@@ -144,6 +168,19 @@ public static class PropertyEditor
                 break;
 
             case PropertyId.Scale:
+                // A BRUSH placement must stay rigid. A non-rigid world matrix
+                // on a brush node makes every later placement snapshot
+                // defective, so the static world stops recompiling for the rest
+                // of the session while the viewport goes on showing the last
+                // good one - a level that silently stops responding to edits,
+                // with the reason in a log file. The panel does not offer the
+                // row (see NodeInspector), and this refuses it anyway, because
+                // the two guards protect against different mistakes: one is a
+                // UI that could grow the row back, the other is any caller at
+                // all.
+                if (node.Brush is not null)
+                    return null;
+
                 next.Scale = Merge(current.Scale, edit.Vector, edit.Axes);
                 break;
 

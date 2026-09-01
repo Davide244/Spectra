@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Inspection;
+﻿using SpectraEngine.Core.Inspection;
 using SpectraEngine.Editing.Commands;
 using SpectraEngine.Editor.Shell;
 using System.Collections.Generic;
@@ -24,9 +24,12 @@ public sealed class PropertyPanelTests
     private sealed class Rig
     {
         public List<PropertyEdit> Edits { get; } = [];
+        public List<string> GesturesOpened { get; } = [];
+        public List<bool> GesturesClosed { get; } = [];
         public PropertyPanelModel Panel { get; }
 
-        public Rig() => Panel = new PropertyPanelModel(Edits.Add);
+        public Rig() => Panel = new PropertyPanelModel(
+            Edits.Add, GesturesOpened.Add, GesturesClosed.Add);
 
         public void Publish(params PropertyRow[] rows) => Panel.Apply(rows, 1);
         public void Publish(int selection, params PropertyRow[] rows) => Panel.Apply(rows, selection);
@@ -197,7 +200,8 @@ public sealed class PropertyPanelTests
         var rig = new Rig();
         rig.Publish(Text(PropertyId.NodeName, "Wall"));
 
-        PropertyFieldModel field = rig.Row(PropertyId.NodeName).Fields[0];
+        // Through the header's own field, which is where the name lives now.
+        PropertyFieldModel field = rig.Panel.NameField;
         field.BeginEdit();
         field.Text = "Doorway";
         field.Commit();
@@ -337,8 +341,214 @@ public sealed class PropertyPanelTests
             Vector(PropertyId.Scale, Vector3.One),
             Choice(PropertyId.BrushKind, "World", "World", "Part"));
 
-        rig.Panel.Groups.Select(g => g.Name).ShouldBe(["Node", "Transform", "Brush"]);
-        rig.Panel.Groups[1].Rows.Count.ShouldBe(2);
+        // The name is the panel's HEADER now, not the first row of a "Node"
+        // section, so the sections start at the first real payload.
+        rig.Panel.Groups.Select(g => g.Name).ShouldBe(["Transform", "Brush"]);
+        rig.Panel.Groups[0].Rows.Count.ShouldBe(2);
+        rig.Panel.NameField.Text.ShouldBe("Wall");
+    }
+
+    [Fact]
+    public void The_name_becomes_the_header_and_the_id_is_not_shown()
+    {
+        var rig = new Rig();
+        rig.Publish(
+            Text(PropertyId.NodeName, "WallNorth"),
+            new PropertyRow
+            {
+                Group = "Node", Name = "Id", Id = PropertyId.NodeId,
+                Kind = PropertyKind.ReadOnlyText, Text = "1ef302b1-1aa4-42ed-8aa1-7490bbbb0000",
+                Choices = [], PresentCount = 1, SelectionCount = 1,
+            },
+            Vector(PropertyId.Position, Vector3.Zero));
+
+        rig.Panel.NameField.Text.ShouldBe("WallNorth");
+        rig.Panel.Groups.SelectMany(g => g.Rows).Select(r => r.Id).ShouldBe([PropertyId.Position]);
+    }
+
+    [Fact]
+    public void Rows_still_refresh_when_a_published_row_is_not_rendered()
+    {
+        // The panel skips two of the published rows, so its rows and the
+        // snapshot's are no longer index-for-index. Getting that wrong reads
+        // one row's value into another's box, which is silent and wrong rather
+        // than a crash.
+        var rig = new Rig();
+        rig.Publish(
+            Text(PropertyId.NodeName, "Wall"),
+            new PropertyRow
+            {
+                Group = "Node", Name = "Id", Id = PropertyId.NodeId,
+                Kind = PropertyKind.ReadOnlyText, Text = "id", Choices = [],
+                PresentCount = 1, SelectionCount = 1,
+            },
+            Vector(PropertyId.Position, new Vector3(1f, 2f, 3f)),
+            Vector(PropertyId.Scale, new Vector3(4f, 5f, 6f)));
+
+        rig.Row(PropertyId.Position).Fields[1].Text.ShouldBe("2");
+        rig.Row(PropertyId.Scale).Fields[2].Text.ShouldBe("6");
+    }
+
+    [Fact]
+    public void A_kind_is_derived_from_the_sections_the_selection_grew()
+    {
+        var rig = new Rig();
+        rig.Publish(
+            Text(PropertyId.NodeName, "DoorwayCut"),
+            Choice(PropertyId.BrushKind, "World", "World", "Part"),
+            Choice(PropertyId.BrushOperation, "Subtractive", "Additive", "Subtractive"));
+
+        // Subtractive outranks the kind, exactly as it does in the tree: a cut
+        // renders nothing at all, so it is the fact worth leading with.
+        rig.Panel.HeaderKind.ShouldBe("Cut");
+    }
+
+    [Fact]
+    public void A_colour_is_shown_in_sRGB_and_read_back_as_linear()
+    {
+        var rig = new Rig();
+        rig.Publish(new PropertyRow
+        {
+            Group = "Light", Name = "Color", Id = PropertyId.LightColor, Kind = PropertyKind.Color,
+            Vector = Vector3.One, Choices = [], PresentCount = 1, SelectionCount = 1,
+        });
+
+        PropertyRowModel row = rig.Row(PropertyId.LightColor);
+        row.Hex.ShouldBe("#FFFFFF");
+        row.Fields[0].Text.ShouldBe("#FFFFFF");
+
+        // Through the cell, on the same commit contract as every other field.
+        PropertyFieldModel cell = row.Fields[0];
+        cell.BeginEdit();
+        cell.Text = "#808080";
+        cell.Commit();
+
+        // Mid grey in sRGB is about 0.216 in linear light, which is the whole
+        // reason the panel converts rather than showing the stored numbers.
+        rig.Edits.Count.ShouldBe(1);
+        rig.Edits[0].Id.ShouldBe(PropertyId.LightColor);
+        rig.Edits[0].Vector.X.ShouldBeInRange(0.20f, 0.23f);
+    }
+
+    [Fact]
+    public void An_unreadable_colour_puts_the_last_good_one_back()
+    {
+        var rig = new Rig();
+        rig.Publish(new PropertyRow
+        {
+            Group = "Light", Name = "Color", Id = PropertyId.LightColor, Kind = PropertyKind.Color,
+            Vector = Vector3.One, Choices = [], PresentCount = 1, SelectionCount = 1,
+        });
+
+        PropertyRowModel row = rig.Row(PropertyId.LightColor);
+        PropertyFieldModel cell = row.Fields[0];
+
+        // A partial value is exactly what typing produces, and it must NOT be
+        // parsed: "#8" and "#80" are both unreadable, and a box that reverted
+        // on each one could never be typed into at all.
+        cell.BeginEdit();
+        cell.Text = "#80";
+        rig.Publish(new PropertyRow
+        {
+            Group = "Light", Name = "Color", Id = PropertyId.LightColor, Kind = PropertyKind.Color,
+            Vector = Vector3.One, Choices = [], PresentCount = 1, SelectionCount = 1,
+        });
+
+        rig.Edits.ShouldBeEmpty();
+        cell.Text.ShouldBe("#80");
+
+        // It is only on the commit that an unreadable value puts the last good
+        // one back.
+        cell.Commit();
+        rig.Edits.ShouldBeEmpty();
+        cell.Text.ShouldBe("#FFFFFF");
+    }
+
+    [Fact]
+    public void A_committed_field_takes_the_next_refresh()
+    {
+        // The regression this exists for: Enter used to commit and then re-open
+        // the edit, so the field stopped taking refreshes for as long as it kept
+        // focus. Type a position, press Enter, drag the object in the viewport,
+        // and the box went on showing the number you typed while the object was
+        // somewhere else.
+        var rig = new Rig();
+        rig.Publish(Vector(PropertyId.Position, Vector3.Zero));
+
+        PropertyFieldModel field = rig.Row(PropertyId.Position).Fields[0];
+        field.BeginEdit();
+        field.Text = "5";
+        field.Commit();
+
+        field.IsEditing.ShouldBeFalse();
+
+        rig.Publish(Vector(PropertyId.Position, new Vector3(9f, 0f, 0f)));
+        field.Text.ShouldBe("9");
+    }
+
+    [Fact]
+    public void A_drag_on_one_axis_leaves_a_sibling_being_typed_into_alone()
+    {
+        // The scrub guard and the typing guard were once the same bool, and a
+        // drag clears its guard on EVERY cell of the row (a vector drag writes
+        // all three). So typing into x without committing, then dragging y,
+        // handed x back to the refresh, and the next publish silently replaced
+        // what had been typed. A pointer capture does not move keyboard focus,
+        // so the two states are genuinely independent.
+        var rig = new Rig();
+        rig.Publish(Vector(PropertyId.Position, Vector3.Zero));
+
+        PropertyRowModel row = rig.Row(PropertyId.Position);
+        PropertyFieldModel x = row.Fields[0];
+        PropertyFieldModel y = row.Fields[1];
+
+        x.BeginEdit();
+        x.Text = "12.5";
+
+        foreach (PropertyFieldModel cell in row.Fields)
+            cell.BeginScrub();
+        row.ScrubTo(y, 3f);
+        foreach (PropertyFieldModel cell in row.Fields)
+            cell.EndScrub();
+
+        rig.Publish(Vector(PropertyId.Position, new Vector3(0f, 3f, 0f)));
+
+        x.Text.ShouldBe("12.5");
+        x.IsEditing.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_scrub_is_one_gesture_and_the_field_ignores_refreshes_inside_it()
+    {
+        var rig = new Rig();
+        rig.Publish(Vector(PropertyId.Position, Vector3.Zero));
+
+        PropertyRowModel row = rig.Row(PropertyId.Position);
+        PropertyFieldModel field = row.Fields[1];
+
+        rig.Panel.BeginGesture(row.Name);
+        foreach (PropertyFieldModel cell in row.Fields)
+            cell.BeginScrub();
+
+        row.ScrubTo(field, 1.5f);
+        row.ScrubTo(field, 2.5f);
+
+        // A stale publish arriving mid-drag must not pull the number back.
+        rig.Publish(Vector(PropertyId.Position, Vector3.Zero));
+        field.Text.ShouldBe("2.5");
+
+        foreach (PropertyFieldModel cell in row.Fields)
+            cell.EndScrub();
+        rig.Panel.EndGesture(commit: true);
+
+        rig.GesturesOpened.ShouldBe(["Position"]);
+        rig.GesturesClosed.ShouldBe([true]);
+        rig.Edits.Count.ShouldBe(2);
+        rig.Edits.ShouldAllBe(e => e.Axes == PropertyAxes.Y);
+
+        // And it takes refreshes again the moment the drag is over.
+        rig.Publish(Vector(PropertyId.Position, new Vector3(0f, 7f, 0f)));
+        field.Text.ShouldBe("7");
     }
 
     [Fact]

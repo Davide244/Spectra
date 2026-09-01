@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Assets;
+﻿using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Scene;
 using System;
@@ -63,11 +63,17 @@ public static class NodeInspector
         into.Add(PropertyRow.ReadOnly(NodeGroup, "Id", PropertyId.NodeId, node.Id.ToString("D")));
 
         Transform local = node.LocalTransform;
-        into.Add(PropertyRow.OfVector(TransformGroup, "Position", PropertyId.Position, local.Position));
+        into.Add(PropertyRow.OfVector(TransformGroup, "Position", PropertyId.Position, local.Position, "su"));
         into.Add(PropertyRow.OfVector(
             TransformGroup, "Rotation", PropertyId.Rotation,
-            EulerAngles.FromQuaternion(local.Rotation).AsDegrees));
-        into.Add(PropertyRow.OfVector(TransformGroup, "Scale", PropertyId.Scale, local.Scale));
+            EulerAngles.FromQuaternion(local.Rotation).AsDegrees, "deg"));
+        // A brush node has no editable scale, and offering one was a way to
+        // stop the level compiling. Brush placements must stay rigid: the resize
+        // tool rebuilds the brush's own extents rather than scaling its node,
+        // and the Brush section's Size row is the same measurement in the same
+        // units. So the row is simply absent, rather than present and refused.
+        if (node.Brush is null)
+            into.Add(PropertyRow.OfVector(TransformGroup, "Scale", PropertyId.Scale, local.Scale));
 
         if (node.Brush is { } brush)
             DescribeBrush(node, brush, into);
@@ -209,7 +215,7 @@ public static class NodeInspector
         // something anybody types. The bounds are what a resize gesture already
         // works in, so the number here and the number the gizmo reports agree.
         Aabb bounds = brush.LocalBounds;
-        into.Add(PropertyRow.OfVector(BrushGroup, "Size", PropertyId.BrushSize, bounds.Max - bounds.Min));
+        into.Add(PropertyRow.OfVector(BrushGroup, "Size", PropertyId.BrushSize, bounds.Max - bounds.Min, "su"));
     }
 
     private static void DescribeLight(Light light, List<PropertyRow> into)
@@ -222,13 +228,13 @@ public static class NodeInspector
         // in a colour picker: a .spectramat colour directive is authored in sRGB
         // and stored linear, and showing one as though it were the other is how
         // a light ends up mysteriously twice as bright as the material beside it.
-        into.Add(PropertyRow.OfColor(LightGroup, "Color (linear)", PropertyId.LightColor, light.Color));
+        into.Add(PropertyRow.OfColor(LightGroup, "Color", PropertyId.LightColor, light.Color));
         into.Add(PropertyRow.OfNumber(LightGroup, "Intensity", PropertyId.LightIntensity, light.Intensity));
 
         // Shown for a directional light too, even though it means nothing there:
         // Light.Range is still stored and still validated on set, so hiding it
         // would hide a value that can still refuse an edit.
-        into.Add(PropertyRow.OfNumber(LightGroup, "Range", PropertyId.LightRange, light.Range));
+        into.Add(PropertyRow.OfNumber(LightGroup, "Range", PropertyId.LightRange, light.Range, "su"));
         into.Add(PropertyRow.OfFlag(LightGroup, "Enabled", PropertyId.LightEnabled, light.Enabled));
     }
 }

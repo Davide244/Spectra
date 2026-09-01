@@ -1,4 +1,6 @@
+﻿using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Media;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Runtime.InteropServices;
@@ -34,10 +36,26 @@ internal static partial class DarkCaption
     // COLORREF is 0x00BBGGRR, which is byte-reversed from every hex colour in
     // the theme. Getting this backwards produces a blue title bar on a red
     // accent and looks like a theming bug rather than a byte-order one.
-    private static uint ColorRef(byte r, byte g, byte b) => (uint)(r | (g << 8) | (b << 16));
+    private static uint ColorRef(Color c) => (uint)(c.R | (c.G << 8) | (c.B << 16));
 
-    /// <summary>Applies the dark caption to <paramref name="window"/>, if the OS supports it.</summary>
-    internal static void Apply(Window window, ILogger logger)
+    /// <summary>
+    /// Paints the dark caption onto <paramref name="window"/>, if the OS
+    /// supports it.
+    /// </summary>
+    /// <remarks>
+    /// <b>Every top-level window, not just the main one.</b> A caption left
+    /// alone is painted in the machine's personalisation colour, so a shell
+    /// that dresses one window and not its dialogs puts a band of somebody's
+    /// wallpaper across the top of every prompt it shows - the same leak
+    /// SystemAccentColor closes inside the window, one layer out. The overload
+    /// exists because a dialog has no logger to hand and the failure it would
+    /// log is "this build of Windows is too old", which one window reporting is
+    /// enough of.
+    /// </remarks>
+    internal static void Apply(Window window) => Apply(window, logger: null);
+
+    /// <inheritdoc cref="Apply(Window)"/>
+    internal static void Apply(Window window, ILogger? logger)
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -50,11 +68,15 @@ internal static partial class DarkCaption
             int dark = 1;
             Set(handle.Handle, DwmwaUseImmersiveDarkMode, ref dark);
 
-            // SpectraBgPanel and SpectraTextBody: the caption reads as another
-            // docked strip rather than as a separate window frame.
-            uint caption = ColorRef(0x12, 0x10, 0x11);
-            uint text = ColorRef(0xA9, 0xA2, 0xA3);
-            uint border = ColorRef(0x2E, 0x28, 0x29);
+            // READ FROM THE TOKEN DICTIONARY, never transcribed. These three
+            // are the only colours in the shell the theme cannot reach through
+            // a brush - DWM takes a COLORREF - so the one thing that could go
+            // wrong is the palette moving and the title bar staying where it
+            // was, which is invisible until somebody notices the caption is a
+            // slightly different grey from the strip beneath it.
+            uint caption = ColorRef(Token("SpectraBgPanelColor", 0x24, 0x20, 0x21));
+            uint text = ColorRef(Token("SpectraTextBodyColor", 0xC2, 0xBB, 0xBD));
+            uint border = ColorRef(Token("SpectraBorderStrongColor", 0x3F, 0x39, 0x3B));
 
             Set(handle.Handle, DwmwaCaptionColor, ref caption);
             Set(handle.Handle, DwmwaTextColor, ref text);
@@ -62,13 +84,22 @@ internal static partial class DarkCaption
         }
         catch (DllNotFoundException ex)
         {
-            logger.LogDebug(ex, "dwmapi is unavailable; the title bar keeps the system colour");
+            logger?.LogDebug(ex, "dwmapi is unavailable; the title bar keeps the system colour");
         }
         catch (EntryPointNotFoundException ex)
         {
-            logger.LogDebug(ex, "DwmSetWindowAttribute is unavailable; the title bar keeps the system colour");
+            logger?.LogDebug(ex, "DwmSetWindowAttribute is unavailable; the title bar keeps the system colour");
         }
     }
+
+    // The fallback is the value the token holds today, so a missing key paints
+    // the intended colour rather than black. It is a belt-and-braces default,
+    // not a second source of truth: the dictionary is loaded before any window
+    // opens, so in practice the lookup always succeeds.
+    private static Color Token(string key, byte r, byte g, byte b)
+        => Application.Current?.TryFindResource(key, out object? value) == true && value is Color c
+            ? c
+            : Color.FromRgb(r, g, b);
 
     [SupportedOSPlatform("windows")]
     private static void Set<T>(nint hwnd, int attribute, ref T value) where T : unmanaged

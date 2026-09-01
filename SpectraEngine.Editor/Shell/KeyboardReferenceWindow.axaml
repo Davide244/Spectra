@@ -1,0 +1,80 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:SpectraEngine.Editor.Shell"
+        x:Class="SpectraEngine.Editor.Shell.KeyboardReferenceWindow"
+        x:DataType="shell:KeyboardReferenceWindow"
+        Title="Keyboard reference"
+        Width="560" Height="640"
+        MinWidth="420" MinHeight="360"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource SpectraBgApp}">
+
+  <!--
+    Every binding the shell and the engine keymap answer to, in one place.
+
+    It is a real modal WINDOW rather than a panel, which is what lets it sit
+    over the viewport: the airspace rule is about content Avalonia draws inside
+    the main window, and a top-level window is composited by the OS above the
+    viewport's native child like any other.
+
+    The table is authored in code beside the bindings it describes rather than
+    generated from them, because there is no single table to generate FROM: the
+    chords live in three places (the window's KeyBindings, the viewport's
+    ShellChord interception, and the engine's own keymap) and a reference built
+    from one of them would quietly claim the other two do not exist.
+  -->
+
+  <Window.Styles>
+    <Style Selector="TextBlock.key">
+      <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.what">
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+  </Window.Styles>
+
+  <DockPanel>
+    <Border DockPanel.Dock="Bottom"
+            Background="{StaticResource SpectraBgPanel}"
+            BorderBrush="{StaticResource SpectraBorderStrong}"
+            BorderThickness="0,1,0,0"
+            Padding="14,10">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0" Classes="prose"
+                   Foreground="{StaticResource SpectraTextMuted}"
+                   Text="Letter keys stand down while a camera is driving." />
+        <Button Grid.Column="1" Classes="secondary" MinWidth="90" Height="28"
+                Content="Close" Click="OnCloseClicked" IsCancel="True" IsDefault="True" />
+      </Grid>
+    </Border>
+
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" Padding="14,12,10,14">
+      <ItemsControl ItemsSource="{Binding Sections}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="shell:KeyboardSection">
+            <StackPanel Margin="0,0,0,18">
+              <TextBlock Classes="sectionhead" Text="{Binding Name}" Margin="0,0,0,6" />
+              <Border Height="1" Background="{StaticResource SpectraBorderSoft}" Margin="0,0,0,4" />
+              <ItemsControl ItemsSource="{Binding Rows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="shell:KeyboardRow">
+                    <Grid ColumnDefinitions="150,*" Margin="0,3">
+                      <TextBlock Grid.Column="0" Classes="key" Text="{Binding Keys}" />
+                      <TextBlock Grid.Column="1" Classes="what" Text="{Binding What}" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

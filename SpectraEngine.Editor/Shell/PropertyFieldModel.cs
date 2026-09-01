@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Inspection;
+﻿using SpectraEngine.Core.Inspection;
 using System;
 using System.Globalization;
 
@@ -36,6 +36,7 @@ public sealed class PropertyFieldModel : ObservableObject
     private string _live = string.Empty;
     private bool _isMixed;
     private bool _isEditing;
+    private bool _isScrubbing;
 
     internal PropertyFieldModel(
         PropertyId id, PropertyAxes axis, string label, Action<PropertyFieldModel, string> commit)
@@ -57,6 +58,33 @@ public sealed class PropertyFieldModel : ObservableObject
 
     /// <summary>Whether this cell has an axis letter to show.</summary>
     public bool HasLabel => Label.Length > 0;
+
+    // The three axis flags exist because a XAML class binding cannot compare
+    // strings, and the axis letter has to wear the same colour its arrow wears
+    // in the viewport.
+
+    /// <summary>Whether this cell edits x.</summary>
+    public bool IsX => Axis == PropertyAxes.X;
+
+    /// <summary>Whether this cell edits y.</summary>
+    public bool IsY => Axis == PropertyAxes.Y;
+
+    /// <summary>Whether this cell edits z.</summary>
+    public bool IsZ => Axis == PropertyAxes.Z;
+
+    /// <summary>
+    /// The unit to print inside a scalar cell, or empty.
+    /// </summary>
+    /// <remarks>
+    /// Copied down from the row rather than read up from it: the cell's
+    /// template binds against this model, and reaching back to a parent
+    /// DataContext from inside a nested ItemsControl is the kind of binding
+    /// that resolves to nothing and reports nothing when a template moves.
+    /// </remarks>
+    public string Unit { get; internal set; } = string.Empty;
+
+    /// <summary>Whether there is a unit to print.</summary>
+    public bool HasUnit => Unit.Length > 0;
 
     /// <summary>What the box shows.</summary>
     public string Text
@@ -97,7 +125,15 @@ public sealed class PropertyFieldModel : ObservableObject
         IsMixed = mixed;
 
         // The guard, and the whole reason this class exists.
-        if (_isEditing)
+        //
+        // TWO flags, not one. A drag ends by clearing the guard on every cell
+        // of its row, because a vector drag writes all three - and if that were
+        // the same flag typing uses, a cell the user had typed into and not yet
+        // committed would be handed back to the refresh by a drag on its
+        // NEIGHBOUR, and the next publish would silently replace what they
+        // typed. The two states are genuinely independent: a pointer capture
+        // does not move keyboard focus.
+        if (_isEditing || _isScrubbing)
             return;
 
         Text = mixed ? string.Empty : live;
@@ -105,6 +141,29 @@ public sealed class PropertyFieldModel : ObservableObject
 
     /// <summary>The box gained focus: refreshes stop landing here.</summary>
     public void BeginEdit() => _isEditing = true;
+
+    /// <summary>
+    /// A drag across this cell's handle has started: refreshes stop landing
+    /// here until <see cref="EndScrub"/>.
+    /// </summary>
+    /// <remarks>
+    /// <b>The same guard typing uses, for the same reason.</b> A drag writes
+    /// absolute values several times faster than the engine publishes, so
+    /// without it every refresh would put a value one or two publishes stale
+    /// back into the box and the number under the cursor would jitter
+    /// backwards while the object moved forwards.
+    /// </remarks>
+    public void BeginScrub() => _isScrubbing = true;
+
+    /// <summary>Shows a value written by a drag, without committing anything.</summary>
+    public void SetScrubText(string text)
+    {
+        _live = text;
+        Text = text;
+    }
+
+    /// <summary>The drag ended: refreshes resume, unless somebody is typing.</summary>
+    public void EndScrub() => _isScrubbing = false;
 
     /// <summary>
     /// Enter, or focus lost. Applies the value and hands the cell back to the

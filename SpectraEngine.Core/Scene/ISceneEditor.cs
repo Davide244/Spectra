@@ -163,6 +163,25 @@ public interface ISceneEditor
     /// </remarks>
     string NavigationModeName { get; }
 
+    /// <summary>
+    /// True while a gesture is in flight: a manipulator drag, a marquee, or a
+    /// value being scrubbed in a property panel.
+    /// </summary>
+    /// <remarks>
+    /// <b>The host publishes snapshots faster while this is true</b>
+    /// (<see cref="Hosting.EngineHost.InteractiveSnapshotInterval"/>), because a
+    /// drag is the one case where the resting publish rate is visibly wrong: the
+    /// object moves at the frame rate and every number describing it steps at
+    /// thirty a second, which reads as the panel being broken.
+    /// <para>
+    /// Deliberately NOT "the user is doing something" - a camera is excluded,
+    /// because navigating changes nothing any panel displays, and paying four
+    /// times the snapshot rate to say so would be the cost with none of the
+    /// benefit.
+    /// </para>
+    /// </remarks>
+    bool IsInteracting { get; }
+
     /// <summary>How many edits can currently be undone.</summary>
     int UndoDepth { get; }
 

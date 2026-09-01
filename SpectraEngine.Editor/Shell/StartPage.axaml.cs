@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using System;
@@ -119,10 +119,26 @@ public partial class StartPage : UserControl
         RecentList.ItemsSource = _shown;
 
         RecentList.IsVisible = _shown.Count > 0;
-        EmptyLabel.IsVisible = _shown.Count == 0;
-        EmptyLabel.Text = _all.Count == 0
-            ? "Nothing yet. A project you create or open appears here."
-            : $"No recent project matches '{query}'.";
+
+        // Every piece of chrome here is sized to what it has to show. Headings
+        // appear once there is a column's worth of rows to head; the filter
+        // appears once the list is longer than a glance; the empty state
+        // replaces the whole thing rather than sitting above a void.
+        ColumnHeadings.IsVisible = _shown.Count > 1;
+        FilterBox.IsVisible = _all.Count > 4;
+        EmptyState.IsVisible = _shown.Count == 0;
+        EmptyActions.IsVisible = _all.Count == 0;
+        FirstRunHelp.IsVisible = _all.Count == 0;
+
+        // The empty state stands in for two different situations and has to
+        // say which: a first launch, and a filter that matched nothing. The
+        // body knew; the heading was a literal reading "Nothing open yet.",
+        // which over a filter miss tells the user their projects are gone.
+        bool firstRun = _all.Count == 0;
+        EmptyTitle.Text = firstRun ? "Nothing open yet." : "No match.";
+        EmptyLabel.Text = firstRun
+            ? "Make a project to start building, or open one you already have. Projects you open appear in this list."
+            : $"None of your recent projects match “{query}”.";
     }
 
     private void OnFilterChanged(object? sender, TextChangedEventArgs e) => ApplyFilter();

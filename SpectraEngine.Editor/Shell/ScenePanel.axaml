@@ -1,4 +1,4 @@
-<UserControl xmlns="https://github.com/avaloniaui"
+﻿<UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:SpectraEngine.Editor"
              xmlns:shell="clr-namespace:SpectraEngine.Editor.Shell"
@@ -32,7 +32,7 @@
       <Separator />
       <MenuItem Header="Group" InputGesture="Ctrl+G" Click="OnMenuGroup" />
       <MenuItem Header="Ungroup" InputGesture="Ctrl+Shift+G" Click="OnMenuUngroup" />
-      <MenuItem Header="Convert part / world" InputGesture="Ctrl+T" Click="OnMenuConvertKind" />
+      <MenuItem Header="Convert block / part" InputGesture="Ctrl+T" Click="OnMenuConvertKind" />
       <Separator IsVisible="{Binding HasChildren}" />
       <MenuItem Header="Expand all" Click="OnMenuExpandAll" IsVisible="{Binding HasChildren}" />
       <MenuItem Header="Collapse all" Click="OnMenuCollapseAll" IsVisible="{Binding HasChildren}" />
@@ -105,14 +105,40 @@
     <Style Selector="Button.chevron:pointerover Path">
       <Setter Property="Stroke" Value="{StaticResource SpectraTextEmphasis}" />
     </Style>
+    <!-- TransformOperationsTransition, not TransformTransition: "rotate(90deg)"
+         parses to a TransformOperations, and the wrong transition type animates
+         nothing while producing no error. This is the single most-noticed
+         micro-animation in any tree, and it costs three lines. -->
+    <Style Selector="Button.chevron Path">
+      <Setter Property="Transitions">
+        <Transitions>
+          <TransformOperationsTransition Property="RenderTransform"
+                                         Duration="{StaticResource SpectraMotionBase}"
+                                         Easing="{StaticResource SpectraEaseInOut}" />
+        </Transitions>
+      </Setter>
+    </Style>
     <Style Selector="Button.chevron.open Path">
       <Setter Property="RenderTransform" Value="rotate(90deg)" />
     </Style>
 
     <Style Selector="Border.row">
       <Setter Property="Background" Value="Transparent" />
-      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
       <Setter Property="Height" Value="{StaticResource SpectraTreeRowHeight}" />
+      <!-- The FILL ramps; the BORDER does not, and that split is the whole
+           reason this is one transition instead of two. The border is the drop
+           indicator, which changes at pointer-move rate while a drag crosses
+           rows - a 90ms ramp on it would smear the insertion line behind the
+           cursor and make the drop position unreadable, which is the one thing
+           it exists to say. -->
+      <Setter Property="Transitions">
+        <Transitions>
+          <BrushTransition Property="Background"
+                           Duration="{StaticResource SpectraMotionFast}"
+                           Easing="{StaticResource SpectraEaseOut}" />
+        </Transitions>
+      </Setter>
     </Style>
 
     <!-- Drop indicators. INTO outlines the whole row (it becomes the parent);
@@ -139,13 +165,31 @@
     </Style>
 
     <!-- The 2px accent bar is what makes a selected row unmistakable at a
-         glance down a long list; the fill alone is too quiet at 16% and too
-         loud above it. -->
+         glance down a long list; the fill alone is too quiet at 22% and too
+         loud above it.
+
+         It GROWS from the row's centre rather than appearing. Scale and opacity
+         only - never Width, which is layout and would re-measure every row in
+         a virtualised list thirty times a second. A transform is composited. -->
     <Style Selector="Border.selbar">
-      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Background" Value="{StaticResource SpectraAccent}" />
+      <Setter Property="Opacity" Value="0" />
+      <Setter Property="RenderTransformOrigin" Value="50%,50%" />
+      <Setter Property="RenderTransform" Value="scaleY(0.3)" />
+      <Setter Property="Transitions">
+        <Transitions>
+          <DoubleTransition Property="Opacity"
+                            Duration="{StaticResource SpectraMotionBase}"
+                            Easing="{StaticResource SpectraEaseOut}" />
+          <TransformOperationsTransition Property="RenderTransform"
+                                         Duration="{StaticResource SpectraMotionBase}"
+                                         Easing="{StaticResource SpectraEaseOut}" />
+        </Transitions>
+      </Setter>
     </Style>
     <Style Selector="Border.row.selected Border.selbar">
-      <Setter Property="Background" Value="{StaticResource SpectraAccent}" />
+      <Setter Property="Opacity" Value="1" />
+      <Setter Property="RenderTransform" Value="scaleY(1)" />
     </Style>
 
     <Style Selector="TextBlock.rowname">
@@ -172,6 +216,16 @@
 
     <!-- The in-place rename editor: the same footprint as the name it
          replaces, so nothing in the row moves when editing starts. -->
+    <!-- A filter matching nothing marks itself and its count. Accent, not
+         warning yellow: an empty result is not a fault, it is a state, and this
+         is the same colour the shell uses for "here is where you are". -->
+    <Style Selector="TextBox.field.nomatch /template/ Border#PART_BorderElement">
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+    </Style>
+    <Style Selector="TextBlock.value.nomatch">
+      <Setter Property="Foreground" Value="{StaticResource SpectraAccent}" />
+    </Style>
+
     <Style Selector="TextBox.renamebox">
       <Setter Property="Height" Value="20" />
       <Setter Property="MinHeight" Value="0" />
@@ -184,7 +238,7 @@
       <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
       <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
     </Style>
   </UserControl.Styles>
 
@@ -195,20 +249,43 @@
          information. The count rides the filter row instead, where it is
          also the filter's own feedback. -->
     <Grid DockPanel.Dock="Top" Margin="8,8,8,6" ColumnDefinitions="*,Auto,Auto">
-      <TextBox Grid.Column="0" x:Name="FilterBox" Classes="filter"
+      <TextBox Grid.Column="0" x:Name="FilterBox" Classes="field"
+               Classes.nomatch="{Binding HasNoMatches}"
                Text="{Binding FilterText, Mode=TwoWay}"
-               PlaceholderText="Filter, or t:light"
+               PlaceholderText="Filter by name, or t:light"
                KeyDown="OnFilterKeyDown" />
-      <Button Grid.Column="1" Classes="tool" Width="24" Height="24" Margin="4,0,0,0"
+      <Button Grid.Column="1" Classes="ghost" Margin="3,0,0,0"
               Click="OnClearFilterClicked" IsVisible="{Binding HasFilter}"
-              ToolTip.Tip="Clear filter  (Esc)">
-        <Path Data="{StaticResource IconClear}" Width="11" Height="11" />
+              ToolTip.Tip="Clear the filter  (Esc)">
+        <Path Classes="icon" Data="{StaticResource IconClear}" />
       </Button>
       <TextBlock Grid.Column="2" Classes="value" Text="{Binding TreeCountLabel}"
+                 Classes.nomatch="{Binding HasNoMatches}"
                  Foreground="{StaticResource SpectraTextMuted}"
-                 Margin="6,0,0,0" VerticalAlignment="Center"
+                 Margin="6,0,2,0" VerticalAlignment="Center"
                  ToolTip.Tip="Nodes shown / nodes in the scene" />
     </Grid>
+
+    <!-- A filter that matches nothing is otherwise indistinguishable from a
+         panel that broke: the rows stay (dimming rather than hiding is what
+         preserves the user's spatial memory of their own scene) so a zero-match
+         filter dims all 253 of them and changes a five-character counter. This
+         says so in words, and offers the way out. -->
+    <Border DockPanel.Dock="Top" Margin="8,0,8,6" Padding="8,6"
+            Background="{StaticResource SpectraBgInput}"
+            BorderBrush="{StaticResource SpectraBorderSoft}"
+            BorderThickness="1"
+            CornerRadius="{StaticResource SpectraRadiusControl}"
+            IsVisible="{Binding HasNoMatches}">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0" Classes="prose" TextWrapping="Wrap"
+                   Text="{Binding NoMatchLabel}" />
+        <Button Grid.Column="1" Classes="ghost" Click="OnClearFilterClicked"
+                ToolTip.Tip="Clear the filter  (Esc)">
+          <Path Classes="icon" Data="{StaticResource IconClear}" />
+        </Button>
+      </Grid>
+    </Border>
 
     <!--
       A flat list, not a tree control. A TreeView realises a container per
@@ -256,14 +333,19 @@
                       Click="OnChevronClicked" PointerPressed="OnChevronPressed">
                 <Path Data="{StaticResource IconChevronRight}" />
               </Button>
-              <Path Grid.Column="2"
+              <Path Grid.Column="2" Classes="icon"
                     Data="{Binding Kind, Converter={StaticResource KindIcon}}"
                     Stroke="{Binding Kind, Converter={StaticResource KindTint}}"
-                    StrokeThickness="1.2" StrokeLineCap="Round" StrokeJoin="Round"
-                    Fill="Transparent" Width="14" Height="14" Stretch="Uniform"
-                    Margin="2,0,0,0" VerticalAlignment="Center" />
+                    Width="15" Height="15"
+                    RenderTransform="scale(1.05)"
+                    Margin="2,0,0,0" />
+              <!-- The tooltip is the whole name. Rows trim with an ellipsis and
+                   the panel does not scroll sideways, so at 288px a name three
+                   levels deep is unreadable and there was no way to see it at
+                   all short of dragging the splitter. -->
               <TextBlock Grid.Column="3" Classes="rowname" Text="{Binding Name}" Margin="6,0,4,0"
-                         IsVisible="{Binding !IsRenaming}" />
+                         IsVisible="{Binding !IsRenaming}"
+                         ToolTip.Tip="{Binding Name}" />
               <!-- Text is set imperatively when editing begins, never bound:
                    a binding would let a ~30 Hz snapshot republish rewrite the
                    box mid-keystroke, which reads as a broken keyboard. -->

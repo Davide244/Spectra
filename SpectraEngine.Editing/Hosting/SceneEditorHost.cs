@@ -235,6 +235,17 @@ public sealed class SceneEditorHost : ISceneEditor
     public bool SnapEnabled => _gizmos.SnapEnabled;
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The viewport's own drag mode covers all three viewport gestures at once
+    /// (manipulate, select-and-move, marquee), which is exactly the arbitration
+    /// that type exists to own - asking the gizmo controller separately would
+    /// be a second answer to one question. The property gesture is the other
+    /// half: an inspector scrub moves the object without the viewport knowing.
+    /// </remarks>
+    public bool IsInteracting =>
+        _viewport.DragMode != ViewportDragMode.None || _propertyGestureOpen;
+
+    /// <inheritdoc/>
     public float SnapIncrement => _gizmos.Mode switch
     {
         GizmoMode.Rotate => _gizmos.Rotate.Snap.Increment,
@@ -336,7 +347,7 @@ public sealed class SceneEditorHost : ISceneEditor
     // scene) or mid-drag (a gizmo transaction is open, and transactions do not
     // nest). Never silent — a verb that does nothing reads as a broken
     // binding, which is why every caller of this logs through it.
-    private bool RefuseEdit(string label)
+    private bool RefuseEdit(string label, bool allowPropertyGesture = false)
     {
         if (IsSuspended)
         {
@@ -347,6 +358,19 @@ public sealed class SceneEditorHost : ISceneEditor
         if (_gizmos.Active.State == GizmoInteractionState.Dragging)
         {
             _logger.LogDebug("{Label}: refused, a manipulation is in progress", label);
+            return true;
+        }
+
+        // A property gesture owns an open transaction for as long as a pointer
+        // is held, and a pointer capture does not block the keyboard: Ctrl+1
+        // during a drag would insert a block INTO the drag's transaction, and
+        // releasing without having moved cancels that transaction and rolls the
+        // insert back - the object appears, is selected, and vanishes, with no
+        // history entry and no message. Same rule as a gizmo drag, for the same
+        // reason.
+        if (_propertyGestureOpen && !allowPropertyGesture)
+        {
+            _logger.LogDebug("{Label}: refused, a property gesture is in progress", label);
             return true;
         }
 
@@ -628,10 +652,70 @@ public sealed class SceneEditorHost : ISceneEditor
         // blur that entering play mode causes must not write into a running
         // session, and a bulk edit opens a transaction that cannot nest inside
         // a live drag.
-        if (RefuseEdit("Property edit"))
+        // The one caller exempt from the gesture gate: these ARE the gesture's
+        // own edits.
+        if (RefuseEdit("Property edit", allowPropertyGesture: true))
             return 0;
 
-        return PropertyEditor.Apply(_undo, _scene.Selection.Items, edit);
+        return PropertyEditor.Apply(_undo, _scene.Selection.Items, edit, _propertyGestureOpen);
+    }
+
+    // Whether a continuous property gesture owns the transaction right now.
+    private bool _propertyGestureOpen;
+
+    /// <summary>
+    /// Opens one history entry to hold a continuous property gesture, such as
+    /// a drag across a numeric field.
+    /// </summary>
+    /// <returns>
+    /// True when the gesture was opened. False means the editor refused it, and
+    /// the caller must not go on to emit edits or call
+    /// <see cref="EndPropertyGesture"/>.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>The same shape a gizmo drag already uses</b>, and for the same
+    /// reason: one user gesture is one undo entry, whatever the pointer did in
+    /// between. Every <see cref="PropertyEdit"/> that arrives while this is
+    /// open joins the entry rather than starting its own.
+    /// </para>
+    /// <para>
+    /// <b>Refusal is reported rather than thrown</b>, because the caller is a
+    /// pointer handler in a UI: a press that lands in the publish interval
+    /// between play mode starting and the panel hearing about it is ordinary,
+    /// not exceptional, and it must simply do nothing.
+    /// </para>
+    /// </remarks>
+    public bool BeginPropertyGesture(string name)
+    {
+        if (_propertyGestureOpen || RefuseEdit("Property gesture"))
+            return false;
+
+        _undo.BeginTransaction(string.IsNullOrEmpty(name) ? "Edit" : name);
+        _propertyGestureOpen = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Closes a gesture opened by <see cref="BeginPropertyGesture"/>, keeping
+    /// what it did or rolling it back.
+    /// </summary>
+    /// <remarks>
+    /// <b>Cancelling has to roll back rather than simply stop recording</b>, or
+    /// an abandoned drag would leave the scene holding the last value the
+    /// pointer happened to pass over with no history entry to take it back.
+    /// </remarks>
+    public void EndPropertyGesture(bool commit)
+    {
+        if (!_propertyGestureOpen)
+            return;
+
+        _propertyGestureOpen = false;
+
+        if (commit)
+            _undo.CommitTransaction();
+        else
+            _undo.CancelTransaction();
     }
 
     /// <summary>
@@ -660,7 +744,25 @@ public sealed class SceneEditorHost : ISceneEditor
     /// </remarks>
     public void OnSceneReplaced()
     {
-        Suspend();
+        // The gesture rollback WITHOUT the suspension latch, and the difference
+        // is the whole editor.
+        //
+        // This used to call Suspend(), which does these two things and then
+        // sets IsSuspended - a flag only ExitPlayMode ever clears. So opening a
+        // map left the editor permanently refusing every mutating verb: insert,
+        // delete, duplicate, group, rename and every property edit answered
+        // "refused, play mode owns the scene" at Debug level and did nothing,
+        // in an editor nobody was playing. Whether it bit depended on a race
+        // between this queued command and the editor factory (an editor that
+        // did not exist yet took the null-conditional and survived), which is
+        // why the shell worked on some launches and was inert on others - the
+        // hardest kind of fault to report, and the reason it stood.
+        //
+        // Not latching also preserves a suspension that IS real: a scene
+        // replaced while play mode owns it stays suspended, because nothing
+        // here writes the flag in either direction.
+        _viewport.Reset();
+        _camera.SuspendNavigation();
         _scene.Selection.Clear();
         _undo.Clear();
     }

@@ -1,11 +1,13 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="using:System"
+                    xmlns:ease="using:Avalonia.Animation.Easings">
 
   <!--
     The shell's whole vocabulary. Nothing outside this file may write a literal
-    colour, size or radius.
+    colour, size, radius or duration.
 
-    Two rules the values encode, both learned the hard way in dark tool UIs:
+    Four rules the values encode, all learned the hard way in dark tool UIs:
 
     1. STRUCTURAL LINES ARE SOLID HEX, NEVER ALPHA. A white-at-8% hairline
        resolves to a different rendered colour over each surface it crosses, so
@@ -15,124 +17,314 @@
     2. TEXT COLOUR IS A COLOUR, NEVER AN OPACITY. Opacity on a white brush
        breaks Windows subpixel rendering and gamma, which shows up as fringed,
        slightly bolder text that nobody can point at.
+
+    3. SURFACES HAVE A DIRECTION, AND THE DIRECTION IS THE AFFORDANCE. Anything
+       you PRESS is lighter than the panel it sits on; anything you TYPE INTO is
+       darker. Before this rule existed, a mode chip and a text field shared a
+       fill, a border, a radius and a font, and differed only by being four
+       pixels apart in height - so two buttons sat in the toolbar dressed as
+       inputs, beside three real inputs, and nothing on screen said which was
+       which. Raised means press, sunken means type, and there is no third
+       reading to learn.
+
+    4. EVERY BRUSH IS A SolidColorBrush OVER A DynamicResource COLOUR. The
+       consumers keep referencing brushes with StaticResource, so a theme swap
+       re-tints every brush IN PLACE and no reference anywhere else in the shell
+       has to change or be re-resolved. The expensive route - converting all 380
+       consumer references to DynamicResource - buys the same thing and costs a
+       live subscription per reference; this costs about thirty lines here and
+       nothing anywhere else.
   -->
 
-  <!-- ─── Surfaces ─────────────────────────────────────────
-       Four steps, deliberately close together. #0A0708 to #121011 is 1.06:1,
-       so these separate almost nothing on their own: the 1px borders below are
-       what make the layout readable, and dropping them "for cleanliness" makes
-       the whole window read as one flat plane. Never #000000 as a surface. -->
-  <Color x:Key="SpectraBgAppColor">#0A0708</Color>
-  <Color x:Key="SpectraBgPanelColor">#121011</Color>
-  <Color x:Key="SpectraBgRaisedColor">#191617</Color>
-  <Color x:Key="SpectraBgInputColor">#201C1D</Color>
+  <!-- ___ Ground surfaces _________________________________
+       Seven steps, each about four L* apart, and the ladder itself is the
+       change: the shell used to sit at #0A0708 to #1B1819, which is four
+       near-black surfaces separated by 1.06:1 with the hairlines carrying the
+       whole layout.
 
-  <SolidColorBrush x:Key="SpectraBgApp" Color="{StaticResource SpectraBgAppColor}" />
-  <SolidColorBrush x:Key="SpectraBgPanel" Color="{StaticResource SpectraBgPanelColor}" />
-  <SolidColorBrush x:Key="SpectraBgRaised" Color="{StaticResource SpectraBgRaisedColor}" />
-  <SolidColorBrush x:Key="SpectraBgInput" Color="{StaticResource SpectraBgInputColor}" />
+       THE VALUE, NOT THE HUE, IS WHAT MADE IT READ AS A DARK WEB PAGE. Near
+       black beside a tone-mapped viewport whose baseplate sits around L* 65 is
+       a ~25:1 slam, and the eye adapts to the largest bright field in the
+       window, which is the render. Adapted there, every state change in the
+       chrome landed in the crushed bottom of the response curve - which is why
+       the design looked right in a screenshot (no adapting field) and dead on a
+       monitor. Unreal, Unity, Godot and Blender all sit at L* 15 to 33 for
+       exactly this reason: the chrome must be quieter than the picture, not a
+       different medium from it.
 
-  <!-- ─── Borders ──────────────────────────────────────────
-       Load-bearing, not decoration. See the surface note above. -->
-  <Color x:Key="SpectraBorderStrongColor">#2E2829</Color>
-  <Color x:Key="SpectraBorderSoftColor">#241F20</Color>
-  <SolidColorBrush x:Key="SpectraBorderStrong" Color="{StaticResource SpectraBorderStrongColor}" />
-  <SolidColorBrush x:Key="SpectraBorderSoft" Color="{StaticResource SpectraBorderSoftColor}" />
+       Warm-neutral rather than the blue-grey most DCC tools use, because the
+       brand accent is warm and a warm red on a cool ground is the gamer-RGB
+       look. At L* 4 the old palette's documented warmth was below threshold and
+       rendered as neutral black anyway: hue needs value to show. -->
+  <Color x:Key="SpectraBgWindowColor">#131011</Color>
+  <Color x:Key="SpectraBgAppColor">#1A1718</Color>
+  <Color x:Key="SpectraBgPanelColor">#242021</Color>
+  <Color x:Key="SpectraBgRaisedColor">#2E2A2B</Color>
 
-  <!-- ─── Text ─────────────────────────────────────────────
-       Contrast against #0A0708: emphasis 16.8:1, body 8.0:1, muted 3.6:1.
-       Muted is for 11px chrome labels only and never for a value the user has
-       to read. -->
-  <Color x:Key="SpectraTextEmphasisColor">#EDEAEA</Color>
-  <Color x:Key="SpectraTextBodyColor">#A9A2A3</Color>
-  <Color x:Key="SpectraTextMutedColor">#6E6668</Color>
-  <Color x:Key="SpectraTextDisabledColor">#4A4243</Color>
+  <SolidColorBrush x:Key="SpectraBgWindow" Color="{DynamicResource SpectraBgWindowColor}" />
+  <SolidColorBrush x:Key="SpectraBgApp" Color="{DynamicResource SpectraBgAppColor}" />
+  <SolidColorBrush x:Key="SpectraBgPanel" Color="{DynamicResource SpectraBgPanelColor}" />
+  <SolidColorBrush x:Key="SpectraBgRaised" Color="{DynamicResource SpectraBgRaisedColor}" />
 
-  <SolidColorBrush x:Key="SpectraTextEmphasis" Color="{StaticResource SpectraTextEmphasisColor}" />
-  <SolidColorBrush x:Key="SpectraTextBody" Color="{StaticResource SpectraTextBodyColor}" />
-  <SolidColorBrush x:Key="SpectraTextMuted" Color="{StaticResource SpectraTextMutedColor}" />
-  <SolidColorBrush x:Key="SpectraTextDisabled" Color="{StaticResource SpectraTextDisabledColor}" />
+  <!-- ___ Directional surfaces ____________________________
+       Rule 3 above, as four brushes. Control sits ABOVE the panel, input BELOW
+       it, and the gap between them is now 2.1:1 of honest value rather than a
+       ratio a caption had to explain. -->
+  <Color x:Key="SpectraBgControlColor">#383335</Color>
+  <Color x:Key="SpectraBgControlHoverColor">#433D3F</Color>
+  <Color x:Key="SpectraBgControlActiveColor">#4E4749</Color>
+  <Color x:Key="SpectraBgInputColor">#161314</Color>
 
-  <!-- ─── Accent ───────────────────────────────────────────
-       Budget: under 5% of on-screen pixels. Selection fill, focus ring, the
-       active-tool bar, one primary button, threshold states. Never a panel or
-       a toolbar fill.
+  <SolidColorBrush x:Key="SpectraBgControl" Color="{DynamicResource SpectraBgControlColor}" />
+  <SolidColorBrush x:Key="SpectraBgControlHover" Color="{DynamicResource SpectraBgControlHoverColor}" />
+  <SolidColorBrush x:Key="SpectraBgControlActive" Color="{DynamicResource SpectraBgControlActiveColor}" />
+  <SolidColorBrush x:Key="SpectraBgInput" Color="{DynamicResource SpectraBgInputColor}" />
+
+  <!-- ___ Borders _________________________________________
+       Trim now, not scaffolding. They used to be DARKER than the surfaces they
+       separated, because at L* 4 there was nowhere below to go, so every edge
+       in the window was a gap. Lighter than their surface reads as a highlight
+       edge, which is what a raised control's rim actually is. -->
+  <Color x:Key="SpectraBorderSoftColor">#322D2F</Color>
+  <Color x:Key="SpectraBorderStrongColor">#3F393B</Color>
+  <Color x:Key="SpectraBorderControlColor">#4C4547</Color>
+
+  <SolidColorBrush x:Key="SpectraBorderSoft" Color="{DynamicResource SpectraBorderSoftColor}" />
+  <SolidColorBrush x:Key="SpectraBorderStrong" Color="{DynamicResource SpectraBorderStrongColor}" />
+  <SolidColorBrush x:Key="SpectraBorderControl" Color="{DynamicResource SpectraBorderControlColor}" />
+
+  <!-- ___ Viewport bezel __________________________________
+       The one place allowed near-black, and it is a deliberate two-step frame
+       rather than a cliff: chrome, then bezel, then render. Every DCC tool
+       frames its viewport, and this is why - an unframed render butted straight
+       against a panel makes the panel look like a bug. -->
+  <SolidColorBrush x:Key="SpectraViewportBezel" Color="{DynamicResource SpectraBgWindowColor}" />
+
+  <!-- ___ Text ____________________________________________
+       Contrast against the PANEL (#242021), which is where nearly all of it is
+       read: emphasis 13.4:1, body 8.3:1, muted 4.8:1, faint 2.7:1.
+
+       Muted passing AA is new. It sat at 4.3:1 and was carrying the inspector's
+       section headings; a heading that fails the small-text threshold is a
+       disabled row that happens to be a heading.
+
+       Disabled does two jobs: genuinely disabled controls, and the
+       filter-dimmed tree rows. The old value was 1.5:1 against the old panel -
+       literally invisible - in a feature whose entire premise is "dimmed, not
+       hidden". -->
+  <Color x:Key="SpectraTextEmphasisColor">#EFECED</Color>
+  <Color x:Key="SpectraTextBodyColor">#C2BBBD</Color>
+  <Color x:Key="SpectraTextMutedColor">#958D8F</Color>
+  <Color x:Key="SpectraTextDisabledColor">#6A6365</Color>
+
+  <SolidColorBrush x:Key="SpectraTextEmphasis" Color="{DynamicResource SpectraTextEmphasisColor}" />
+  <SolidColorBrush x:Key="SpectraTextBody" Color="{DynamicResource SpectraTextBodyColor}" />
+  <SolidColorBrush x:Key="SpectraTextMuted" Color="{DynamicResource SpectraTextMutedColor}" />
+  <SolidColorBrush x:Key="SpectraTextDisabled" Color="{DynamicResource SpectraTextDisabledColor}" />
+
+  <!-- ___ Accent, and the one thing it is allowed to mean __
+       SELECTION. Selected rows, the 2px row bar, the drop indicator, the focus
+       ring, one primary button. Budget: under 5% of on-screen pixels, never a
+       panel or a toolbar fill.
+
+       It used to mean seven things at once - selected, live tool, focus,
+       primary, error, drop target, no-match - which made the window monochrome
+       plus one, and made "you picked this thing" and "the machine is in this
+       mode" indistinguishable at a glance. The other meanings moved out below.
 
        SpectraAccentRest is the fill for anything carrying white text: white on
-       #E33A3A is 4.3:1 and fails AA at 13px, on #C82F30 it is 5.4:1. The
-       brighter red is that button's hover, not its resting state. -->
-  <Color x:Key="SpectraAccentColor">#E33A3A</Color>
-  <Color x:Key="SpectraAccentRestColor">#C82F30</Color>
-  <SolidColorBrush x:Key="SpectraAccent" Color="{StaticResource SpectraAccentColor}" />
-  <SolidColorBrush x:Key="SpectraAccentRest" Color="{StaticResource SpectraAccentRestColor}" />
+       #E8474A is 4.0:1 and fails AA at 13px, on #C8353A it is 5.2:1. The
+       brighter red is that button's hover, not its resting state. And
+       SpectraTextDanger exists because the accent AS TEXT is 4.0:1 on the
+       panel, which is not an error message. -->
+  <Color x:Key="SpectraAccentColor">#E8474A</Color>
+  <Color x:Key="SpectraAccentRestColor">#C8353A</Color>
+  <Color x:Key="SpectraTextDangerColor">#FF6E6B</Color>
 
-  <!-- ─── Transient state fills ────────────────────────────
-       Alpha is correct here: these are localised and sit on a known surface. -->
-  <SolidColorBrush x:Key="SpectraRowHover" Color="#FFFFFF" Opacity="0.045" />
-  <SolidColorBrush x:Key="SpectraRowSelected" Color="{StaticResource SpectraAccentColor}" Opacity="0.16" />
-  <SolidColorBrush x:Key="SpectraControlHover" Color="#FFFFFF" Opacity="0.06" />
-  <SolidColorBrush x:Key="SpectraControlPressed" Color="#FFFFFF" Opacity="0.10" />
-  <SolidColorBrush x:Key="SpectraControlChecked" Color="{StaticResource SpectraAccentColor}" Opacity="0.18" />
+  <SolidColorBrush x:Key="SpectraAccent" Color="{DynamicResource SpectraAccentColor}" />
+  <SolidColorBrush x:Key="SpectraAccentRest" Color="{DynamicResource SpectraAccentRestColor}" />
+  <SolidColorBrush x:Key="SpectraTextDanger" Color="{DynamicResource SpectraTextDangerColor}" />
 
-  <!-- ─── Node-kind tints ──────────────────────────────────
-       A tree of two hundred identical rows is a list of names; the tint plus
-       the glyph is what makes it a scene. Deliberately desaturated except the
-       two that matter most at a glance: a light, and a subtractive brush that
-       renders nothing at all and can only be found here. -->
-  <SolidColorBrush x:Key="SpectraKindGroup" Color="#6E6668" />
-  <SolidColorBrush x:Key="SpectraKindMesh" Color="#A9A2A3" />
-  <SolidColorBrush x:Key="SpectraKindBrushWorld" Color="#7FA7D9" />
-  <SolidColorBrush x:Key="SpectraKindBrushPart" Color="#4FC2C2" />
-  <SolidColorBrush x:Key="SpectraKindBrushSubtractive" Color="#C77FD9" />
-  <SolidColorBrush x:Key="SpectraKindLight" Color="#E3C13A" />
+  <!-- ___ Mode ____________________________________________
+       STATE, not selection: the live gizmo tool, snap on, the dirty dot, a
+       non-default chip, and every warning. 7.0:1 on panel, so it reads as a lit
+       glyph rather than a shout.
 
-  <!-- ─── Semantic ─────────────────────────────────────────
+       Warning is the SAME colour deliberately, not a second amber. A warning
+       and a lit mode are one semantic family - attention, not error - and two
+       ambers four degrees apart would be a distinction nobody could make. A
+       warning is told apart by its icon and its place, not by its hue. -->
+  <Color x:Key="SpectraModeColor">#E5A93F</Color>
+  <SolidColorBrush x:Key="SpectraMode" Color="{DynamicResource SpectraModeColor}" />
+  <SolidColorBrush x:Key="SpectraWarning" Color="{DynamicResource SpectraModeColor}" />
+
+  <!-- ___ Semantic ________________________________________
        The brand accent IS red, so destructive actions must not be filled red
        or "delete" and "selected" look identical. Filled red always means
        primary-and-safe; destructive is a ghost with a red border. -->
-  <SolidColorBrush x:Key="SpectraWarning" Color="#E3B23A" />
-  <SolidColorBrush x:Key="SpectraSuccess" Color="#4FA96A" />
+  <Color x:Key="SpectraSuccessColor">#5DBE7A</Color>
+  <Color x:Key="SpectraInfoColor">#6E9FDE</Color>
+  <SolidColorBrush x:Key="SpectraSuccess" Color="{DynamicResource SpectraSuccessColor}" />
+  <SolidColorBrush x:Key="SpectraInfo" Color="{DynamicResource SpectraInfoColor}" />
 
-  <!-- ─── Fonts ────────────────────────────────────────────
+  <!-- ___ The machine's accent, overruled _________________
+       Fluent resolves SystemAccentColor from Windows personalisation, so any
+       stock control the shell has not explicitly restyled paints itself in
+       whatever colour the user picked for their taskbar. The pipeline
+       dropdown's selected row was arriving lavender. Naming the family here
+       means the leak, wherever the next one turns up, leaks brand red instead
+       of somebody's wallpaper.
+
+       Only the first key is named anywhere in this repo. The six shades below
+       are read by Fluent's own control templates and by nothing else, so a
+       search for references finds none: they are load-bearing and invisible,
+       which is exactly the shape of thing a tidy-up deletes as dead. -->
+  <Color x:Key="SystemAccentColor">#C8353A</Color>
+  <Color x:Key="SystemAccentColorDark1">#B22F33</Color>
+  <Color x:Key="SystemAccentColorDark2">#8E2529</Color>
+  <Color x:Key="SystemAccentColorDark3">#6B1C1F</Color>
+  <Color x:Key="SystemAccentColorLight1">#E8474A</Color>
+  <Color x:Key="SystemAccentColorLight2">#EE6C6E</Color>
+  <Color x:Key="SystemAccentColorLight3">#F49092</Color>
+
+  <!-- ___ Transient state fills ___________________________
+       Alpha is correct here: these are localised, transient, and sit on a
+       known surface.
+
+       THE OPACITIES WENT UP WITH THE GROUND, AND HAD TO. A 4.5% white lift is a
+       fixed ABSOLUTE delta, and by Weber's law a fixed delta reads as LESS
+       change on a lighter ground, not more - so carrying the old numbers onto
+       the new surfaces would have made every hover in the window quieter than
+       it was before. -->
+  <SolidColorBrush x:Key="SpectraRowHover" Color="#FFFFFF" Opacity="0.07" />
+  <SolidColorBrush x:Key="SpectraRowSelected" Color="{DynamicResource SpectraAccentColor}" Opacity="0.22" />
+  <SolidColorBrush x:Key="SpectraControlHover" Color="#FFFFFF" Opacity="0.08" />
+  <SolidColorBrush x:Key="SpectraControlPressed" Color="#FFFFFF" Opacity="0.13" />
+  <SolidColorBrush x:Key="SpectraControlChecked" Color="{DynamicResource SpectraModeColor}" Opacity="0.22" />
+
+  <!-- ___ Axis identity ___________________________________
+       X, Y and Z wear the same hues here as the gizmo handles do in the
+       viewport (GizmoColors: 1,0.25,0.25 / 0.25,1,0.25 / 0.35,0.55,1), so the
+       letter beside a field and the arrow under the cursor are recognisably
+       the same axis.
+
+       Desaturated on purpose. The viewport values are full-strength display
+       colours drawn over tone-mapped 3D; at panel scale they would read as
+       three more accents, and #FF4040 in particular is close enough to the
+       brand red to be mistaken for a selection. These keep the hue and give
+       up the shout - lifted one step with the ground, since a tint tuned
+       against near-black goes muddy on a mid-dark panel. -->
+  <SolidColorBrush x:Key="SpectraAxisX" Color="#D9635F" />
+  <SolidColorBrush x:Key="SpectraAxisY" Color="#74B863" />
+  <SolidColorBrush x:Key="SpectraAxisZ" Color="#6F9BDB" />
+
+  <!-- ___ Node-kind tints _________________________________
+       A tree of two hundred identical rows is a list of names; the tint plus
+       the glyph is what makes it a scene. Deliberately desaturated except the
+       two that matter most at a glance: a light, and a subtractive brush that
+       renders nothing at all and can only be found here.
+
+       These are also the shell's only spent information colour, and until now
+       they appeared in exactly one place - a 15px tree glyph. They belong on
+       every surface that names a kind. -->
+  <SolidColorBrush x:Key="SpectraKindGroup" Color="#958D8F" />
+  <SolidColorBrush x:Key="SpectraKindMesh" Color="#BDB6B8" />
+  <SolidColorBrush x:Key="SpectraKindBrushWorld" Color="#8FB4E2" />
+  <SolidColorBrush x:Key="SpectraKindBrushPart" Color="#5FCECE" />
+  <SolidColorBrush x:Key="SpectraKindBrushSubtractive" Color="#CE8DE0" />
+  <SolidColorBrush x:Key="SpectraKindLight" Color="#E9CA4C" />
+
+  <!-- ___ Fonts ___________________________________________
        $Default is Avalonia's terminal fallback. There is no CSS-style
        "monospace" or "sans-serif" generic: naming one resolves to nothing and
        fails silently, which is what the old Consolas,Menlo,monospace stack was
        doing on this machine.
 
        Mono renders one px smaller than adjacent sans, because mono faces carry
-       a larger x-height for the same nominal size and otherwise read bigger. -->
+       a larger x-height for the same nominal size and otherwise read bigger.
+       Mono is for VALUES - numbers, paths, key names - and never for prose. A
+       sentence set in 11px Cascadia Mono is the single most machine-made
+       typographic choice a tool can make, and the status bar was doing it. -->
   <FontFamily x:Key="SpectraFontUi">avares://Avalonia.Fonts.Inter/Assets#Inter, Segoe UI Variable Text, Segoe UI, $Default</FontFamily>
   <FontFamily x:Key="SpectraFontMono">Cascadia Mono, Consolas, $Default</FontFamily>
 
-  <!-- ─── Type scale ───────────────────────────────────────
+  <!-- ___ Type scale ______________________________________
        13px is the base, which is where every professional tool lives (VS Code
-       13, Unity 12, Blender 11). Never 700 weight at 13px on dark: it blooms. -->
+       13, Unity 12, Blender 11). Never 700 weight at 13px on dark: it blooms.
+
+       SpectraFontMicro survives for the two places a genuinely tertiary label
+       is wanted. It is NO LONGER the inspector's section headings: 10px
+       letter-spaced uppercase muted is the marketing eyebrow, and tools set
+       their section headings at body size and let weight carry the emphasis.
+       "Transform" beats "T R A N S F O R M". -->
   <x:Double x:Key="SpectraFontMicro">10</x:Double>
   <x:Double x:Key="SpectraFontSmall">11</x:Double>
   <x:Double x:Key="SpectraFontSecondary">12</x:Double>
   <x:Double x:Key="SpectraFontBase">13</x:Double>
-  <x:Double x:Key="SpectraFontTitle">15</x:Double>
+  <x:Double x:Key="SpectraFontTitle">14</x:Double>
+  <x:Double x:Key="SpectraFontDisplay">16</x:Double>
 
-  <!-- ─── Fixed heights ────────────────────────────────────
-       Values, not padding-derived, so rows stack cleanly at 125% and 150% DPI. -->
-  <x:Double x:Key="SpectraTreeRowHeight">22</x:Double>
-  <x:Double x:Key="SpectraControlHeight">24</x:Double>
+  <!-- ___ Fixed heights ___________________________________
+       Values, not padding-derived, so rows stack cleanly at 125% and 150% DPI.
+
+       ONE control height for the whole command bar. The old set had toolbar
+       buttons at 28 and the fields between them at 24, which ran four pixels
+       of misalignment through the densest row in the window.
+
+       The tree row went 22 to 24: at 13px text with a 15px glyph, 22 is the
+       dense-web row height, and a scene tree is scanned rather than read. -->
+  <x:Double x:Key="SpectraTreeRowHeight">24</x:Double>
+  <x:Double x:Key="SpectraFieldHeight">26</x:Double>
+  <x:Double x:Key="SpectraControlHeight">28</x:Double>
   <x:Double x:Key="SpectraToolbarButtonSize">28</x:Double>
-  <x:Double x:Key="SpectraPanelHeaderHeight">32</x:Double>
+  <x:Double x:Key="SpectraMenuBarHeight">32</x:Double>
   <x:Double x:Key="SpectraToolbarHeight">40</x:Double>
-  <x:Double x:Key="SpectraStatusBarHeight">24</x:Double>
+  <x:Double x:Key="SpectraStatusBarHeight">26</x:Double>
 
-  <!-- ─── Radii ────────────────────────────────────────────
-       Three values, no more. 0 for the frame and docked edges, 2 for controls
-       and chips, 4 for anything that floats. -->
-  <CornerRadius x:Key="SpectraRadius0">0</CornerRadius>
-  <CornerRadius x:Key="SpectraRadius2">2</CornerRadius>
-  <CornerRadius x:Key="SpectraRadius4">4</CornerRadius>
+  <!-- ___ Radii ___________________________________________
+       Two values, and they mean different things rather than being two sizes
+       of one thing: controls and chips are nearly square, anything FLOATING
+       above the window is properly rounded. Rounded flat pills in a row is the
+       web idiom; Hammer, Unreal and Blender all set their headers and buttons
+       square. The frame and the docked edges carry no radius at all, which is
+       said by not setting one rather than by a token nothing could reference.
 
-  <!-- ─── Spacing ──────────────────────────────────────────
-       4-based with a 2px half-step. -->
-  <Thickness x:Key="SpectraPadTight">6,2</Thickness>
-  <Thickness x:Key="SpectraPadControl">8,4</Thickness>
-  <Thickness x:Key="SpectraPadPanel">8</Thickness>
+       Named for their job, not their pixel count: the values moved once and the
+       old SpectraRadiusControl/4 keys immediately described neither. -->
+  <CornerRadius x:Key="SpectraRadiusControl">2</CornerRadius>
+  <CornerRadius x:Key="SpectraRadiusFloat">6</CornerRadius>
+
+  <!-- ___ Motion __________________________________________
+       The shell had none. Not "sparse" - zero Transitions, Animations,
+       KeyFrames or Easings anywhere in it, so every state in the application
+       was a single-frame swap.
+
+       That matters twice over, and the second reason is the one that gets
+       missed: a small value step delivered INSTANTLY is a step function with no
+       transient, and peripheral vision is motion-driven. The same step
+       delivered over 90ms is an event you notice without looking at it. Raising
+       the hover fills without adding the ramp would have fixed half of it.
+
+       THE BUDGET, stated so this cannot drift into bouncy: interaction motion
+       is at most 130ms; exactly two non-interaction transitions may exceed it
+       (a view swap and a reveal scroll) because neither answers a pointer;
+       nothing overshoots, so BackEase, BounceEase and ElasticEase are banned by
+       name; and nothing loops or idles.
+
+       EXITS ARE FASTER THAN ENTRANCES. Leaving at 55ms while arriving at 90 is
+       what stops a list feeling sticky when the pointer sweeps down it.
+
+       AND NOTHING ON THE DRAG PATH ANIMATES. A transition on a value a pointer
+       writes every frame is a lag machine: the target moves before the
+       interpolation lands, so the element trails the cursor by exactly the
+       duration. The drop indicators, every property value cell, the status
+       readouts and the rename box are named exclusions. -->
+  <ease:CubicEaseOut x:Key="SpectraEaseOut" />
+  <ease:CubicEaseInOut x:Key="SpectraEaseInOut" />
+
+  <sys:TimeSpan x:Key="SpectraMotionExit">00:00:00.0550000</sys:TimeSpan>
+  <sys:TimeSpan x:Key="SpectraMotionFast">00:00:00.0900000</sys:TimeSpan>
+  <sys:TimeSpan x:Key="SpectraMotionBase">00:00:00.1300000</sys:TimeSpan>
+  <sys:TimeSpan x:Key="SpectraMotionSwap">00:00:00.1900000</sys:TimeSpan>
 
 </ResourceDictionary>

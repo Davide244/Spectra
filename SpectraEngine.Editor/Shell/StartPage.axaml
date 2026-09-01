@@ -67,12 +67,12 @@
       <Setter Property="HorizontalContentAlignment" Value="Left" />
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
-      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
     </Style>
     <Style Selector="Button.action /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
-      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadius2}" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
     </Style>
     <Style Selector="Button.action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
@@ -139,18 +139,29 @@
           <Button Classes="action" Click="OnOpenMapClicked">
             <StackPanel Orientation="Horizontal" Spacing="8">
               <Path Data="{StaticResource IconMap}" />
-              <TextBlock Text="Open map bundle" />
+              <TextBlock Text="Open a level on its own" />
             </StackPanel>
           </Button>
 
-          <!-- Directly under the verbs it explains, not pinned to the far
-               bottom of a tall rail where it reads as unrelated small print. -->
-          <Border Height="1" Background="{StaticResource SpectraBorderSoft}" Margin="8,10,4,9" />
-
-          <TextBlock TextWrapping="Wrap" Margin="8,0,4,0"
-                     FontSize="{StaticResource SpectraFontSecondary}"
-                     Foreground="{StaticResource SpectraTextMuted}"
-                     Text="A project is a folder: its manifest, Assets, Maps and Scripts. Everything authored is text." />
+          <!-- Scaffolding, and therefore CONDITIONAL. This paragraph used to be
+               permanent: the one thing a new user read on first launch was a
+               note about the on-disk layout, and it was also the thing a
+               returning user read forever. It is shown while there is nothing
+               to reopen, which is exactly when an explanation is worth reading,
+               and it disappears the moment the page has real content - which is
+               how instructional support should fade, by demonstrated skill
+               rather than by a timer. -->
+          <StackPanel x:Name="FirstRunHelp" Spacing="9">
+            <Border Height="1" Background="{StaticResource SpectraBorderSoft}" Margin="8,12,4,3" />
+            <TextBlock TextWrapping="Wrap" Margin="8,0,4,0"
+                       FontSize="{StaticResource SpectraFontSecondary}"
+                       Foreground="{StaticResource SpectraTextMuted}"
+                       Text="A project is an ordinary folder holding your Assets, Levels and Scripts. Nothing in it is a database, and everything you author is text you can read." />
+            <TextBlock TextWrapping="Wrap" Margin="8,0,4,0"
+                       FontSize="{StaticResource SpectraFontSecondary}"
+                       Foreground="{StaticResource SpectraTextMuted}"
+                       Text="You can also drop a project or a level folder anywhere on this window." />
+          </StackPanel>
       </StackPanel>
     </Border>
 
@@ -164,25 +175,44 @@
                    FontSize="{StaticResource SpectraFontBase}"
                    Foreground="{StaticResource SpectraTextBody}"
                    VerticalAlignment="Center" />
-        <TextBox Grid.Column="2" x:Name="FilterBox" Classes="filter" Width="180"
+        <!-- Hidden below a handful of rows: a filter box over three items is a
+             control that can only ever remove things from a list you can
+             already see all of. -->
+        <TextBox Grid.Column="2" x:Name="FilterBox" Classes="field" Width="180"
                  PlaceholderText="Filter"
                  TextChanged="OnFilterChanged" KeyDown="OnFilterKeyDown" />
       </Grid>
 
-      <!-- Column headings sit outside the scroll, so they stay put. -->
-      <Grid DockPanel.Dock="Top" ColumnDefinitions="*,1.6*,Auto" Margin="8,0,10,4">
-        <TextBlock Grid.Column="0" Classes="colhead" Text="Name" />
-        <TextBlock Grid.Column="1" Classes="colhead" Text="Location" />
-        <TextBlock Grid.Column="2" Classes="colhead" Text="Opened" />
-      </Grid>
+      <!-- Column headings sit outside the scroll, so they stay put - and are
+           hidden until there is a column's worth of rows to head. Three
+           spreadsheet headings over ONE row is the shape of a table with the
+           table missing. -->
+      <StackPanel x:Name="ColumnHeadings" DockPanel.Dock="Top">
+        <Grid ColumnDefinitions="*,1.6*,Auto" Margin="8,0,10,4">
+          <TextBlock Grid.Column="0" Classes="colhead" Text="Name" />
+          <TextBlock Grid.Column="1" Classes="colhead" Text="Location" />
+          <TextBlock Grid.Column="2" Classes="colhead" Text="Opened" />
+        </Grid>
+        <Border Height="1" Background="{StaticResource SpectraBorderSoft}" Margin="0,0,0,2" />
+      </StackPanel>
 
-      <Border DockPanel.Dock="Top" Height="1" Background="{StaticResource SpectraBorderSoft}" Margin="0,0,0,2" />
-
-      <TextBlock x:Name="EmptyLabel" DockPanel.Dock="Top" Margin="8,14,0,0"
-                 Text="Nothing yet. A project you create or open appears here."
-                 FontSize="{StaticResource SpectraFontSecondary}"
-                 Foreground="{StaticResource SpectraTextMuted}"
-                 TextWrapping="Wrap" />
+      <!-- The page with nothing on it. It gets the three doors again, in the
+           middle of the column where the eye already is, rather than one grey
+           sentence at the top of 750px of nothing. -->
+      <StackPanel x:Name="EmptyState" DockPanel.Dock="Top" Margin="8,26,8,0"
+                  MaxWidth="480" HorizontalAlignment="Left" Spacing="14">
+        <TextBlock x:Name="EmptyTitle" Text="Nothing open yet."
+                   FontSize="{StaticResource SpectraFontTitle}"
+                   Foreground="{StaticResource SpectraTextEmphasis}" />
+        <TextBlock x:Name="EmptyLabel" TextWrapping="Wrap"
+                   FontSize="{StaticResource SpectraFontSecondary}"
+                   Foreground="{StaticResource SpectraTextMuted}"
+                   Text="Make a project to start building, or open one you already have. Projects you open appear in this list." />
+        <StackPanel x:Name="EmptyActions" Orientation="Horizontal" Spacing="8">
+          <Button Classes="primary" MinWidth="130" Content="New project" Click="OnNewProjectClicked" />
+          <Button Classes="secondary" MinWidth="130" Content="Open project" Click="OnOpenProjectClicked" />
+        </StackPanel>
+      </StackPanel>
 
       <ListBox x:Name="RecentList"
                Background="Transparent"

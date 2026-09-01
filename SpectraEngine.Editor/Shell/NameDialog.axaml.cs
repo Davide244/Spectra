@@ -1,7 +1,6 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
-using Avalonia.Markup.Xaml;
 using System.IO;
 using System.Linq;
 
@@ -31,9 +30,8 @@ public partial class NameDialog : Window
     {
         InitializeComponent();
         Opened += (_, _) => Input.Focus();
+        Opened += (_, _) => DarkCaption.Apply(this);
     }
-
-    private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
     /// <summary>
     /// Shows the dialog and returns the trimmed name, or null when cancelled.

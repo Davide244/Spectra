@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
 using System;
@@ -135,6 +135,30 @@ public sealed class EngineHost
     /// </remarks>
     public TimeSpan SnapshotInterval { get; set; } = TimeSpan.FromMilliseconds(33);
 
+    /// <summary>
+    /// The interval used instead while the editor is mid-gesture. Defaults to
+    /// about a hundred and twenty a second.
+    /// </summary>
+    /// <remarks>
+    /// <b>A gizmo drag is the one case where the resting interval is visibly
+    /// wrong.</b> The engine renders the drag at several hundred frames a second
+    /// and the inspector beside it steps at thirty, so the numbers a user is
+    /// watching move in visible jerks while the object under them is smooth -
+    /// which reads as the panel being broken rather than as it being throttled.
+    /// <para>
+    /// The cost is bounded by the gesture: a drag lasts about a second, so this
+    /// is on the order of ninety extra snapshots for the whole gesture, and the
+    /// argument against per-frame publishing (hundreds a second, forever, for a
+    /// UI that discards most of them) does not apply to it.
+    /// </para>
+    /// <para>
+    /// A shell that drains snapshots rather than sampling the newest MUST size
+    /// its queue in time rather than in count, or a bound that meant eight
+    /// seconds at the resting rate means two here.
+    /// </para>
+    /// </remarks>
+    public TimeSpan InteractiveSnapshotInterval { get; set; } = TimeSpan.FromMilliseconds(8);
+
     /// <summary>The most recently published snapshot, or <see cref="FrameSnapshot.Empty"/>.</summary>
     /// <remarks>
     /// For a shell that wants to poll rather than subscribe, and for one that
@@ -174,6 +198,14 @@ public sealed class EngineHost
     {
         ArgumentNullException.ThrowIfNull(command);
         _commands.Enqueue(command);
+
+        // A command the user just issued is news, exactly as a structural change
+        // is. Without this the echo waits for the clock, so a toolbar toggle
+        // sits dark for up to a whole interval after the click and the wait is
+        // VARIABLE, which the eye reads as unreliability rather than as
+        // latency. The same argument the change log already makes; this is the
+        // other half of it.
+        _stateDirty = true;
     }
 
     /// <summary>
@@ -196,6 +228,15 @@ public sealed class EngineHost
     // last-write-wins state ("be playing", "wireframe on", "use Deferred"),
     // and a queue would replay a stale intermediate click for no benefit.
 
+    // Every request latch marks the state dirty for the same reason
+    // EnqueueCommand does: a play button, a debug toggle and a pipeline change
+    // are all things a user just clicked, and all of them are read back from
+    // the next snapshot. MarkDirty is the one place that says so, so a latch
+    // added later cannot quietly opt out of it.
+    private volatile bool _stateDirty;
+
+    private void MarkDirty() => _stateDirty = true;
+
     private int _playModeRequest = -1;
     private int _debugFlagsToSet;
     private int _debugFlagsToClear;
@@ -214,8 +255,11 @@ public sealed class EngineHost
     /// character (<see cref="FrameSnapshot.CanPlay"/> false) ignores the
     /// request entirely.
     /// </remarks>
-    public void RequestPlayMode(bool active) =>
+    public void RequestPlayMode(bool active)
+    {
         Interlocked.Exchange(ref _playModeRequest, active ? 1 : 0);
+        MarkDirty();
+    }
 
     /// <summary>
     /// Asks the engine to turn the given debug visualisations on or off.
@@ -241,6 +285,8 @@ public sealed class EngineHost
             Interlocked.Or(ref _debugFlagsToClear, bits);
             Interlocked.And(ref _debugFlagsToSet, ~bits);
         }
+
+        MarkDirty();
     }
 
     /// <summary>
@@ -252,6 +298,7 @@ public sealed class EngineHost
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         Interlocked.Exchange(ref _pipelineRequest, name);
+        MarkDirty();
     }
 
     /// <summary>
@@ -329,8 +376,16 @@ public sealed class EngineHost
     /// Produces the frame's values. Invoked only when a snapshot is actually
     /// going out, so a host that nobody is listening to pays almost nothing.
     /// </param>
+    /// <param name="interactive">
+    /// True while a gesture is in flight, which selects
+    /// <see cref="InteractiveSnapshotInterval"/> instead of
+    /// <see cref="SnapshotInterval"/>.
+    /// </param>
     /// <returns>The snapshot that was published, or null when none was due.</returns>
-    public FrameSnapshot? PublishFrame(TimeSpan elapsed, Func<FrameSnapshotBuilder, FrameSnapshot> build)
+    public FrameSnapshot? PublishFrame(
+        TimeSpan elapsed,
+        Func<FrameSnapshotBuilder, FrameSnapshot> build,
+        bool interactive = false)
     {
         ArgumentNullException.ThrowIfNull(build);
 
@@ -343,15 +398,18 @@ public sealed class EngineHost
         // Nullable rather than a sentinel: a TimeSpan.MinValue sentinel makes
         // the very first subtraction overflow, which is a throw on frame one
         // rather than the "publish immediately" it looks like.
-        bool due = _lastPublished is not { } last || elapsed - last >= SnapshotInterval;
+        TimeSpan interval = interactive ? InteractiveSnapshotInterval : SnapshotInterval;
+        bool due = _lastPublished is not { } last || elapsed - last >= interval;
 
         // Structural news goes out on the next frame regardless of the clock: a
         // tree view lagging a third of a second behind a delete is exactly the
-        // kind of thing that reads as a broken editor.
-        if (!due && _changeLog.Count == 0 && !_changeLog.Overflowed)
+        // kind of thing that reads as a broken editor. So does state the user
+        // just asked for - see EnqueueCommand.
+        if (!due && !_stateDirty && _changeLog.Count == 0 && !_changeLog.Overflowed)
             return null;
 
         _lastPublished = elapsed;
+        _stateDirty = false;
 
         (IReadOnlyList<SceneChange> changes, bool overflowed) = _changeLog.Drain();
         FrameSnapshot snapshot = build(new FrameSnapshotBuilder(_frameNumber, changes, overflowed));

@@ -1,0 +1,49 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="SpectraEngine.Editor.Shell.ConfirmDialog"
+        Title="Unsaved changes"
+        Width="440" SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{StaticResource SpectraBgApp}">
+
+  <!--
+    The unsaved-work prompt: Save, Discard, Cancel.
+
+    It replaces a box that asked the user to TYPE the word "discard", which was
+    wrong in three ways at once. It offered no way to keep the work, so the
+    correct answer - "I do want this" - meant cancelling, finding Ctrl+S, and
+    starting the gesture again. It gated ordinary, recoverable flows like
+    opening a project. And it failed SILENTLY: the name box validated only that
+    the text was a legal filename, so "yes", "discard changes" and an empty
+    field all passed validation, failed the equality check, and closed the
+    dialog having done nothing at all, with no message.
+
+    A typed confirmation is a reasonable guard for something genuinely
+    irreversible. Unsaved work is not that: it has an obvious third answer, and
+    the dialog's job is to offer it.
+  -->
+
+  <StackPanel Margin="20,18,20,16" Spacing="16">
+    <TextBlock x:Name="MessageText" TextWrapping="Wrap"
+               FontSize="{StaticResource SpectraFontBase}"
+               Foreground="{StaticResource SpectraTextEmphasis}" />
+
+    <TextBlock x:Name="DetailText" TextWrapping="Wrap"
+               FontSize="{StaticResource SpectraFontSecondary}"
+               Foreground="{StaticResource SpectraTextMuted}" />
+
+    <!-- Save first and leftmost of the three: it is the answer that loses
+         nothing, so it is the one the eye reaches and the one Enter takes.
+         Cancel is last and is what Escape and the close button do. -->
+    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+      <Button Classes="primary" MinWidth="104" Content="Save"
+              Click="OnSaveClicked" IsDefault="True" />
+      <Button Classes="secondary" MinWidth="104" Content="Discard"
+              Click="OnDiscardClicked" />
+      <Button Classes="secondary" MinWidth="104" Content="Cancel"
+              Click="OnCancelClicked" IsCancel="True" />
+    </StackPanel>
+  </StackPanel>
+</Window>

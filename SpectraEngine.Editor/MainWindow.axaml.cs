@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -66,10 +66,22 @@ public partial class MainWindow : Window
 
     // Bounded like the engine's own change log, and for the same reason: a
     // stalled UI thread must not turn into unbounded growth on the render
-    // thread's publish path. Eight seconds at the publish rate.
-    private const int MaxQueuedSnapshots = 240;
+    // thread's publish path.
+    //
+    // SIZED FOR THE FASTER OF THE TWO PUBLISH RATES. The host raises its rate
+    // to about 120Hz while a gesture is in flight, so a bound stated in COUNT
+    // means something different depending on what the user is doing: 240 was
+    // eight seconds at rest and under two while dragging - and dragging is
+    // exactly when a shell is most likely to fall behind. Five seconds at the
+    // interactive rate, half a minute at rest.
+    private const int MaxQueuedSnapshots = 600;
     private int _queuedSnapshots;
     private volatile bool _droppedSnapshots;
+
+    // Set on the render thread when a snapshot is published, cleared on the UI
+    // thread as the pump begins. One post per UI frame however many snapshots
+    // arrive inside it.
+    private int _pumpPosted;
 
     private EditorSession? _session;
     private SceneTreeModel? _tree;
@@ -178,16 +190,26 @@ public partial class MainWindow : Window
         _document.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName is nameof(EditorDocument.Title))
-                Title = _document.Title;
+                RefreshDocumentIdentity();
         };
-        Title = _document.Title;
+        RefreshDocumentIdentity();
+        _shell.AboutLabel = $"Version {SpectraEngine.Core.EngineInfo.VersionString}";
 
-        _shell.Properties = new PropertyPanelModel(OnPropertyEdit);
+        _shell.Properties = new PropertyPanelModel(
+            OnPropertyEdit,
+            name => _session?.BeginPropertyGesture(name),
+            commit => _session?.EndPropertyGesture(commit));
 
         // The pipeline dropdown's user choice, forwarded as a request. Wired
         // once: the session is resolved when the event fires, so it follows
         // whichever session is live.
         _shell.PipelineRequested += name => _session?.Host.RequestPipeline(name);
+
+        // The command bar carries ONE snap field, and it belongs to whichever
+        // tool is live, so a tool switch has to re-read the increment into it.
+        // Without this the box keeps showing the previous tool's number beside
+        // the new tool's unit, which is a worse lie than showing nothing.
+        _shell.GizmoModeChanged += () => RefreshSnapField(_latest);
 
         // Document chords as real key bindings, so they also work while an
         // Avalonia control has focus - the tree, the filter, a property field.
@@ -241,8 +263,50 @@ public partial class MainWindow : Window
             Command = new RelayCommand(() => { CommitFocusedEdit(); _session?.Post(EditorHostCommand.Redo); }),
         });
 
+        // Insert, window-wide - and intercepted in the viewport as well
+        // (ShellChord), because those are the two halves of one shortcut. The
+        // engine keymap has no chord for an insert, so a window binding alone
+        // would fire only while an Avalonia control had focus: that is, only
+        // while the user was NOT looking at the place they wanted to insert
+        // into. Two routes, one handler each, exactly as the document chords
+        // do it.
+        AddChord(Key.D1, KeyModifiers.Control, () => _session?.Insert(InsertKind.WorldBrush));
+        AddChord(Key.D2, KeyModifiers.Control, () => _session?.Insert(InsertKind.PartBrush));
+        AddChord(Key.D3, KeyModifiers.Control, () => _session?.Insert(InsertKind.SubtractiveBrush));
+        AddChord(Key.D4, KeyModifiers.Control, () => _session?.Insert(InsertKind.PointLight));
+
+        // Mode verbs, window-wide, for the same reason the document chords are:
+        // the engine only sees the keyboard while its native child window holds
+        // focus, so F8 did nothing whenever a tree row or a property field had
+        // been clicked - while the button's own tooltip went on promising it.
+        // Neither of these is a scene edit, so both are safe from anywhere.
+        AddChord(Key.F8, KeyModifiers.None, () => _session?.Host.RequestPlayMode(!_latest.IsPlaying));
+        AddChord(Key.F, KeyModifiers.None, () => _session?.Post(EditorCameraCommand.FrameSelection));
+
+        // Drop a project or a level folder anywhere on the window. The engine's
+        // viewport is a native child and never sees Avalonia's drag events, so
+        // the drop target is the window itself and the chrome around the
+        // viewport is where it lands.
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        AddHandler(DragDrop.DropEvent, OnDrop);
+
+        // A WATCHDOG, not the clock the shell runs on. The pump is driven by
+        // the engine publishing (OnFrameCompleted posts one), so it does work
+        // when and only when there is work; this catches the one thing that is
+        // not snapshot-driven - the cursor-mode latch, where landing 33ms late
+        // is a visible jump at the start of every freelook - and keeps the
+        // shell alive if publishing ever stops.
+        //
+        // 8ms is a real 8ms only because TimerResolution asks for it. Left
+        // alone, Windows rounds an 8ms timer up to 15.6 and reports success.
+        //
+        // Normal outranks Render in Avalonia's priority order, so a value the
+        // pump writes reaches the screen in the SAME frame rather than the
+        // next. (This is the opposite of the WPF ordering people expect, and
+        // getting it wrong costs a whole frame.)
         _pump = new DispatcherTimer(
-            TimeSpan.FromMilliseconds(16), DispatcherPriority.Normal, OnPump);
+            TimeSpan.FromMilliseconds(8), DispatcherPriority.Normal, OnPump);
 
         // The one frame customisation this shell makes: paint the OS caption to
         // match the window instead of the user's accent colour. It is a DWM
@@ -260,6 +324,111 @@ public partial class MainWindow : Window
             _shell.SetError(
                 "This platform cannot host the viewport yet: the embedded surface is Windows-only in v1.");
         }
+        else
+        {
+            // The status bar exists before a session does, and an empty strip
+            // along the bottom of a launcher is 26 pixels of nothing. One line
+            // saying what to do next costs the same space.
+            _shell.SetMessage("Open a project to start building, or drop one on this window.");
+        }
+    }
+
+    /// <summary>
+    /// Adds one window-level chord that commits any focused field first.
+    /// </summary>
+    /// <remarks>
+    /// The commit is not optional. A key binding fires with focus still in
+    /// whatever box the user was typing in, so without it Ctrl+S writes the
+    /// bundle WITHOUT the number just typed and then reports "Saved", and F8
+    /// enters play mode leaving a half-typed value in a field that is about to
+    /// stop taking refreshes.
+    /// </remarks>
+    private void AddChord(Key key, KeyModifiers modifiers, Action run)
+    {
+        // A window-level binding on a PRINTABLE key with no modifier fires even
+        // while a text box has focus: Avalonia's TextBox marks KeyDown handled
+        // only for caret and editing keys, so an ordinary letter bubbles to the
+        // window and the binding runs. Typing "Floor" into a rename box would
+        // therefore commit the half-typed name on the "F" (CommitFocusedEdit
+        // blurs, which commits) and frame the selection, and the same letter
+        // would break every filter search containing it. Function keys carry no
+        // such risk, which is why the guard is on the key rather than on the
+        // binding.
+        bool printable = modifiers == KeyModifiers.None
+            && (key is >= Key.A and <= Key.Z || key is >= Key.D0 and <= Key.D9);
+
+        KeyBindings.Add(new KeyBinding
+        {
+            Gesture = new KeyGesture(key, modifiers),
+            Command = new RelayCommand(() =>
+            {
+                if (printable && FocusManager?.GetFocusedElement() is TextBox)
+                    return;
+
+                CommitFocusedEdit();
+                run();
+            }),
+        });
+    }
+
+    /// <summary>
+    /// Mirrors the document's identity onto the shell model and the OS title.
+    /// </summary>
+    /// <remarks>
+    /// <b>The title names the app once and the level once.</b> It used to be
+    /// "<c>{map} - {project} - Spectra Editor</c>" unconditionally, which on
+    /// the common case of a project whose startup level shares its name renders
+    /// "Demo - Demo - Spectra Editor", and with nothing open at all renders
+    /// "untitled - no project - Spectra Editor": two placeholders and a product
+    /// name, describing a window that is showing a launcher.
+    /// </remarks>
+    private void RefreshDocumentIdentity()
+    {
+        string project = _document.Project?.Project.Name ?? string.Empty;
+        _shell.SetDocument(_document.MapLabel, project, _document.IsDirty);
+
+        if (!_shell.HasSession)
+        {
+            Title = "Spectra Editor";
+            return;
+        }
+
+        string mark = _document.IsDirty ? "*" : string.Empty;
+        Title = project.Length == 0 || string.Equals(project, _document.MapLabel, StringComparison.Ordinal)
+            ? $"{_document.MapLabel}{mark} - Spectra Editor"
+            : $"{_document.MapLabel}{mark} - {project} - Spectra Editor";
+    }
+
+    /// <summary>
+    /// Fills the View menu's Renderer submenu from the pipelines the running
+    /// backend actually offers.
+    /// </summary>
+    /// <remarks>
+    /// Built in code rather than templated, because a generated
+    /// <c>MenuItem</c> container gives no place to hang a click handler, and
+    /// because which pipelines exist is a property of the renderer that
+    /// started rather than of the shell. Radio-checked: this is a choice of
+    /// one, and a list of checkboxes would suggest otherwise.
+    /// </remarks>
+    private void RefreshRendererMenu()
+    {
+        RendererMenu.Items.Clear();
+
+        foreach (string name in _shell.PipelineNames)
+        {
+            string pipeline = name;
+            var item = new MenuItem
+            {
+                Header = pipeline,
+                ToggleType = MenuItemToggleType.Radio,
+                GroupName = "renderer",
+                IsChecked = string.Equals(pipeline, _shell.PipelineName, StringComparison.Ordinal),
+            };
+            item.Click += (_, _) => _session?.Host.RequestPipeline(pipeline);
+            RendererMenu.Items.Add(item);
+        }
+
+        RendererMenu.IsEnabled = RendererMenu.Items.Count > 0;
     }
 
     /// <summary>
@@ -283,29 +452,102 @@ public partial class MainWindow : Window
                     continue;
             }
 
-            if (File.Exists(arg) &&
-                arg.EndsWith(ProjectFormat.Extension, StringComparison.OrdinalIgnoreCase))
-            {
-                OpenProjectAt(arg);
+            if (TryOpenPath(arg))
                 return;
-            }
-
-            if (Directory.Exists(arg))
-            {
-                if (MapBundle.IsBundle(arg))
-                {
-                    _document.SetProject(null);
-                    LaunchSession(new SessionLaunch(null, null, Path.GetFullPath(arg)));
-                    return;
-                }
-
-                if (Directory.GetFiles(arg, "*" + ProjectFormat.Extension).Length >= 1)
-                {
-                    OpenProjectAt(arg);
-                    return;
-                }
-            }
         }
+    }
+
+    /// <summary>
+    /// Opens whatever a path names, if it names anything this shell can open.
+    /// </summary>
+    /// <returns>True when the path was recognised and a launch has started.</returns>
+    /// <remarks>
+    /// <b>One classifier, two callers.</b> The rules are the same whether a
+    /// path arrives on the command line or under a dropped file, and writing
+    /// them twice is how a manifest becomes double-clickable but not
+    /// droppable.
+    /// </remarks>
+    private bool TryOpenPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        if (File.Exists(path) &&
+            path.EndsWith(ProjectFormat.Extension, StringComparison.OrdinalIgnoreCase))
+        {
+            OpenProjectAt(path);
+            return true;
+        }
+
+        if (!Directory.Exists(path))
+            return false;
+
+        if (MapBundle.IsBundle(path))
+        {
+            _document.SetProject(null);
+            LaunchSession(new SessionLaunch(null, null, Path.GetFullPath(path)));
+            return true;
+        }
+
+        if (Directory.GetFiles(path, "*" + ProjectFormat.Extension).Length >= 1)
+        {
+            OpenProjectAt(path);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Takes a project or a level dropped onto the window.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The gesture people try first.</b> Everything this shell opens is a
+    /// FOLDER, and the only routes in were a modal folder picker and a command
+    /// line - while the classification a drop needs was already written for
+    /// startup arguments.
+    /// </para>
+    /// <para>
+    /// <b>Guarded by the same unsaved check every other open goes through</b>,
+    /// and refused outright while a run is in progress: a drop is easy to make
+    /// by accident and replacing the scene under a character somebody is
+    /// walking around in is not a thing to do on one gesture.
+    /// </para>
+    /// </remarks>
+    private async Task DropAsync(IEnumerable<Avalonia.Platform.Storage.IStorageItem> items)
+    {
+        if (_latest.IsPlaying)
+        {
+            _shell.SetMessage("Stop the run before opening something else.");
+            return;
+        }
+
+        foreach (Avalonia.Platform.Storage.IStorageItem item in items)
+        {
+            string? path = item.TryGetLocalPath();
+            if (string.IsNullOrEmpty(path))
+                continue;
+
+            // Classified BEFORE the unsaved-work prompt, so dropping something
+            // unopenable does not first ask about discarding work.
+            bool openable = (File.Exists(path)
+                    && path.EndsWith(ProjectFormat.Extension, StringComparison.OrdinalIgnoreCase))
+                || (Directory.Exists(path)
+                    && (MapBundle.IsBundle(path)
+                        || Directory.GetFiles(path, "*" + ProjectFormat.Extension).Length >= 1));
+
+            if (!openable)
+                continue;
+
+            if (!await ConfirmDiscardAsync("opening what you dropped"))
+                return;
+
+            if (TryOpenPath(path))
+                return;
+        }
+
+        _shell.SetError("That is not a Spectra project or level folder.");
     }
 
     // --- Engine lifetime -----------------------------------------------------
@@ -350,9 +592,16 @@ public partial class MainWindow : Window
         viewport.ContextMenuRequested += OnViewportContextMenu;
         _viewport = viewport;
 
+        // A one-millisecond timer for as long as a session is open. Without it
+        // the 8ms pump silently becomes 15.6ms, which is most of the shell's
+        // worst-case lag; with it the start page and a closed editor still cost
+        // nothing.
+        TimerResolution.Acquire(_logger);
+
         StartView.IsVisible = false;
         EditorView.IsVisible = true;
         _shell.HasSession = true;
+        RefreshDocumentIdentity();
 
         // Attach last: creating the native child is what eventually raises
         // SurfaceCreated, and everything above must be in place by then. The
@@ -377,6 +626,13 @@ public partial class MainWindow : Window
         ViewportHost.Child = null;
         StopSession();
 
+        // The engine those requests were aimed at is gone: an unconfirmed tool
+        // pick would otherwise still be pending when the next project opens,
+        // and its first snapshots would be ignored - a fresh session showing
+        // the previous session's tool, on a scene that never had it.
+        _shell.ResetOptimisticState();
+        TimerResolution.Release();
+
         viewport.SurfaceCreated -= OnSurfaceCreated;
         viewport.SurfaceDestroying -= OnSurfaceDestroying;
         viewport.ShellChord -= OnShellChord;
@@ -393,6 +649,7 @@ public partial class MainWindow : Window
         _tree = null;
         _shell.Tree = null;
         _shell.HasSession = false;
+        RefreshDocumentIdentity();
         _shell.HasProject = false;
         _shell.ProjectMaps.Clear();
 
@@ -577,10 +834,37 @@ public partial class MainWindow : Window
         }
 
         _published.Enqueue(snapshot);
+
+        // PHASE-LOCK. Without this the shell's timer beats against the
+        // engine's publish clock, so a snapshot landing just after a tick waits
+        // a whole tick for no reason and the wait is different every time -
+        // which the eye reads as unreliability rather than as latency. Posting
+        // makes the two ends meet: the UI does its work as soon as there is
+        // work, and never wakes up when there is none.
+        //
+        // Coalesced, because several snapshots can be published inside one UI
+        // frame while a gesture is in flight and the pump drains all of them in
+        // one pass anyway.
+        if (Interlocked.Exchange(ref _pumpPosted, 1) != 0)
+            return;
+
+        try
+        {
+            Dispatcher.UIThread.Post(() => OnPump(null, EventArgs.Empty), DispatcherPriority.Normal);
+        }
+        catch (InvalidOperationException)
+        {
+            // The dispatcher has shut down under us: the window is closing and
+            // this snapshot has nowhere to go. Not an error, and not something
+            // the render thread should hear about.
+            Interlocked.Exchange(ref _pumpPosted, 0);
+        }
     }
 
     private void OnPump(object? sender, EventArgs e)
     {
+        Interlocked.Exchange(ref _pumpPosted, 0);
+
         // The cursor first: a freelook that started this frame should capture
         // before anything else looks at the pointer.
         _viewport?.PumpCursorMode();
@@ -618,37 +902,54 @@ public partial class MainWindow : Window
         if (snapshot.IsPlaying && _viewportMenu is { IsOpen: true } menu)
             menu.Close();
 
+        string? pipelineBefore = _shell.PipelineName;
+        int pipelineCountBefore = _shell.PipelineNames.Count;
+
         _shell.ApplySnapshot(snapshot);
-        RefreshSnapFields(snapshot);
+        RefreshSnapField(snapshot);
+
+        // Rebuilt only when the answer changed. A MenuItem collection rebuilt
+        // at the publish rate is UI-thread garbage for a surface nobody is
+        // looking at, and the menu is re-read every time it opens anyway.
+        if (pipelineCountBefore != _shell.PipelineNames.Count
+            || !string.Equals(pipelineBefore, _shell.PipelineName, StringComparison.Ordinal))
+        {
+            RefreshRendererMenu();
+        }
     }
 
-    // --- Snap increment fields -----------------------------------------------
+    // --- Snap increment field ------------------------------------------------
     //
-    // Three small boxes with the property panel's commit contract: a focused
-    // field stops taking refreshes, Enter and blur commit, Escape reverts, and
-    // unparseable or non-positive text reverts rather than sticking. Plain
-    // code-behind over the controls, like the scroll offsets: the state is two
-    // floats and a focus flag, and a model would be ceremony.
+    // ONE box with the property panel's commit contract: a focused field stops
+    // taking refreshes, Enter and blur commit, Escape reverts, and unparseable
+    // or non-positive text reverts rather than sticking. Plain code-behind over
+    // the control, like the scroll offsets: the state is one float and a focus
+    // flag, and a model would be ceremony.
+    //
+    // ONE rather than three, because the three were labelled "mv", "rot" and
+    // "sz" and asked the reader to hold a mapping from abbreviation to tool in
+    // their head, for a tool they had already chosen. The box holds the live
+    // tool's increment, and the unit beside it says which unit that is.
 
-    private void RefreshSnapFields(FrameSnapshot snapshot)
-    {
-        RefreshSnapField(SnapMoveBox, snapshot.MoveSnapIncrement);
-        RefreshSnapField(SnapRotateBox, snapshot.RotateSnapIncrement);
-        RefreshSnapField(SnapResizeBox, snapshot.ResizeSnapIncrement);
-    }
-
-    private static void RefreshSnapField(TextBox box, float value)
+    private void RefreshSnapField(FrameSnapshot snapshot)
     {
         // A focused field is being typed into; writing the published value
         // back would delete characters as they arrive, which reads as a broken
         // keyboard. The blur or Enter that ends the edit commits it.
-        if (box.IsFocused)
+        if (SnapBox.IsFocused)
             return;
 
-        string text = PropertyFieldModel.Format(value);
-        if (box.Text != text)
-            box.Text = text;
+        string text = PropertyFieldModel.Format(IncrementFor(snapshot, LiveSnapTool));
+        if (SnapBox.Text != text)
+            SnapBox.Text = text;
     }
+
+    private static float IncrementFor(FrameSnapshot snapshot, GizmoMode tool) => tool switch
+    {
+        GizmoMode.Rotate => snapshot.RotateSnapIncrement,
+        GizmoMode.Scale => snapshot.ResizeSnapIncrement,
+        _ => snapshot.MoveSnapIncrement,
+    };
 
     private void OnSnapFieldFocused(object? sender, FocusChangedEventArgs e)
     {
@@ -688,7 +989,7 @@ public partial class MainWindow : Window
         // negative would throw inside the setting on the render thread, and
         // clamping would write a number nobody asked for.
         if (PropertyFieldModel.TryParseNumber(box.Text ?? string.Empty, out float value) && value > 0f)
-            _session?.SetSnapIncrement(SnapToolFor(box), value);
+            _session?.SetSnapIncrement(LiveSnapTool, value);
         else
             RevertSnapField(box);
     }
@@ -721,19 +1022,28 @@ public partial class MainWindow : Window
         // an increment the engine never had; the editor's defaults are the
         // honest resting value.
         FrameSnapshot latest = _latest;
-        bool empty = ReferenceEquals(latest, FrameSnapshot.Empty);
-        float value = ReferenceEquals(box, SnapRotateBox)
-            ? (empty ? 15f : latest.RotateSnapIncrement)
-            : ReferenceEquals(box, SnapResizeBox)
-                ? (empty ? 1f : latest.ResizeSnapIncrement)
-                : (empty ? 1f : latest.MoveSnapIncrement);
+        GizmoMode tool = LiveSnapTool;
+        float value = ReferenceEquals(latest, FrameSnapshot.Empty)
+            ? (tool == GizmoMode.Rotate ? 15f : 1f)
+            : IncrementFor(latest, tool);
         box.Text = PropertyFieldModel.Format(value);
     }
 
-    private GizmoMode SnapToolFor(TextBox box) =>
-        ReferenceEquals(box, SnapRotateBox) ? GizmoMode.Rotate
-            : ReferenceEquals(box, SnapResizeBox) ? GizmoMode.Scale
-            : GizmoMode.Translate;
+    /// <summary>
+    /// Which tool the command bar's snap field is currently editing.
+    /// </summary>
+    /// <remarks>
+    /// Read from the shell model rather than from the snapshot, because the
+    /// model is what the unit label beside the box is bound to: taking the two
+    /// from different sources is how a field ends up showing degrees under a
+    /// move tool for one publish interval.
+    /// </remarks>
+    private GizmoMode LiveSnapTool => _shell.GizmoMode switch
+    {
+        "rotate" => GizmoMode.Rotate,
+        "resize" => GizmoMode.Scale,
+        _ => GizmoMode.Translate,
+    };
 
     /// <summary>
     /// Marks the document edited when the undo history has moved at all.
@@ -771,11 +1081,56 @@ public partial class MainWindow : Window
         _logger.LogDebug("Viewport resized to {Width}x{Height}", size.X, size.Y);
     }
 
+    // --- Splitters -----------------------------------------------------------
+    //
+    // The hover lives on the INK, not on the splitter, and it is driven from
+    // code rather than from a selector, for two reasons that compound. The
+    // splitter is nine pixels wide so it can be grabbed by a hand; the line a
+    // user sees is one pixel, and a nine-pixel accent band appearing under the
+    // cursor is a different control from the one that is there. And a child
+    // cannot read its parent's pseudo-classes from a selector at all, so
+    // ".splitink" has no way to know the splitter above it is hovered.
+    //
+    // The ink is reached through Tag rather than by name because there are two
+    // of these and there will be a third the moment the bottom region lands.
+
+    private static void OnSplitterEntered(object? sender, PointerEventArgs e) =>
+        SetSplitterHot(sender, hot: true);
+
+    private static void OnSplitterExited(object? sender, PointerEventArgs e) =>
+        SetSplitterHot(sender, hot: false);
+
+    private static void SetSplitterHot(object? sender, bool hot)
+    {
+        if (sender is Control { Tag: Control ink })
+            ink.Classes.Set("hot", hot);
+    }
+
     // --- Driving the editor --------------------------------------------------
 
-    private void OnHomeTabClicked(object? sender, RoutedEventArgs e) => _shell.ActiveTab = "home";
-    private void OnModelTabClicked(object? sender, RoutedEventArgs e) => _shell.ActiveTab = "model";
-    private void OnViewTabClicked(object? sender, RoutedEventArgs e) => _shell.ActiveTab = "view";
+    private void OnSnapFinerClicked(object? sender, RoutedEventArgs e) =>
+        _session?.Post(GizmoCommand.FinerSnap);
+
+    private void OnSnapCoarserClicked(object? sender, RoutedEventArgs e) =>
+        _session?.Post(GizmoCommand.CoarserSnap);
+
+    private void OnKeyboardReferenceClicked(object? sender, RoutedEventArgs e) =>
+        _ = new KeyboardReferenceWindow().ShowDialog(this);
+
+    private static void OnDragOver(object? sender, DragEventArgs e)
+    {
+        // Copy rather than Move: nothing on disk is touched by opening, and a
+        // Move cursor over a file manager's own window promises otherwise.
+        e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+    }
+
+    private void OnDrop(object? sender, DragEventArgs e)
+    {
+        if (e.DataTransfer.TryGetFiles() is { } files)
+            _ = DropAsync(files);
+    }
 
     private void OnInsertWorldBrushClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.WorldBrush);
     private void OnInsertPartBrushClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.PartBrush);
@@ -783,33 +1138,116 @@ public partial class MainWindow : Window
     private void OnInsertLightClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.PointLight);
     private void OnInsertGroupClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.Group);
 
-    // Set semantics against the displayed state, never a toggle verb: a
-    // toggle sent against a snapshot one publish stale flips the wrong way
-    // exactly when the user clicks fastest, while re-requesting the state
-    // already shown is a no-op.
-    private void OnPlayClicked(object? sender, RoutedEventArgs e) =>
-        _session?.Host.RequestPlayMode(!_shell.IsPlaying);
+    // ─── Set semantics, and a local opinion with a bound ──
+    //
+    // SET, never a toggle verb: a toggle sent against a snapshot one publish
+    // stale flips the wrong way exactly when the user clicks fastest, while
+    // re-requesting the state already shown is a no-op.
+    //
+    // And the shell shows the request IMMEDIATELY rather than waiting for the
+    // engine to echo it. Set semantics is exactly what makes that safe - a
+    // stale echo can only be an older value, never the opposite of what was
+    // asked for - and ShellModel bounds the wait, so an engine that refuses
+    // (play mode on a scene with no character, an edit while a gesture is
+    // open) still wins within about a tenth of a second, visibly.
+
+    private void OnPlayClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_session is not { } session)
+            return;
+
+        bool wanted = !_shell.IsPlaying;
+        _shell.RequestPlaying(wanted);
+        session.Host.RequestPlayMode(wanted);
+    }
 
     private void OnDebugWireClicked(object? sender, RoutedEventArgs e) =>
-        _session?.Host.RequestDebugVisualization(DebugVisualization.Wireframe, !_shell.DebugWireframe);
+        RequestDebug(DebugVisualization.Wireframe, !_shell.DebugWireframe);
     private void OnDebugVerticesClicked(object? sender, RoutedEventArgs e) =>
-        _session?.Host.RequestDebugVisualization(DebugVisualization.Vertices, !_shell.DebugVertices);
+        RequestDebug(DebugVisualization.Vertices, !_shell.DebugVertices);
     private void OnDebugAabbsClicked(object? sender, RoutedEventArgs e) =>
-        _session?.Host.RequestDebugVisualization(DebugVisualization.Aabbs, !_shell.DebugAabbs);
+        RequestDebug(DebugVisualization.Aabbs, !_shell.DebugAabbs);
     private void OnDebugNormalsClicked(object? sender, RoutedEventArgs e) =>
-        _session?.Host.RequestDebugVisualization(DebugVisualization.Normals, !_shell.DebugNormals);
+        RequestDebug(DebugVisualization.Normals, !_shell.DebugNormals);
     private void OnDebugSceneGraphClicked(object? sender, RoutedEventArgs e) =>
-        _session?.Host.RequestDebugVisualization(DebugVisualization.SceneGraph, !_shell.DebugSceneGraph);
+        RequestDebug(DebugVisualization.SceneGraph, !_shell.DebugSceneGraph);
 
-    private void OnMoveClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.UseTranslate);
-    private void OnRotateClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.UseRotate);
-    private void OnResizeClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.UseScale);
-    private void OnOrientationClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.ToggleOrientation);
-    private void OnStyleClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.ToggleStyle);
-    private void OnSnapClicked(object? sender, RoutedEventArgs e) => _session?.Post(GizmoCommand.ToggleSnap);
+    private void RequestDebug(DebugVisualization flag, bool enabled)
+    {
+        if (_session is not { } session)
+            return;
 
-    private void OnUndoClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.Undo);
-    private void OnRedoClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.Redo);
+        // The model first, so the tick shows the new state, then the engine.
+        // A debug toggle is the one of these the user watches while the menu is
+        // still OPEN, so its lag was the most visible of the lot.
+        _shell.RequestDebugVisualization(flag, enabled);
+        session.Host.RequestDebugVisualization(flag, enabled);
+    }
+
+    private void OnMoveClicked(object? sender, RoutedEventArgs e) => UseTool("move", GizmoCommand.UseTranslate);
+    private void OnRotateClicked(object? sender, RoutedEventArgs e) => UseTool("rotate", GizmoCommand.UseRotate);
+    private void OnResizeClicked(object? sender, RoutedEventArgs e) => UseTool("resize", GizmoCommand.UseScale);
+
+    private void UseTool(string mode, GizmoCommand command)
+    {
+        if (_session is not { } session)
+            return;
+
+        _shell.RequestGizmoMode(mode);
+        session.Post(command);
+    }
+
+    // The two chips carry a VALUE, so the click resolves to the value it wants
+    // rather than to "the other one". The toggle verbs still exist and are
+    // still what the keyboard sends; a shell posting one would be computing
+    // the answer from a snapshot it may already have superseded locally.
+    private void OnOrientationClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_session is not { } session)
+            return;
+
+        bool toWorld = !_shell.IsWorldSpace;
+        _shell.RequestOrientation(toWorld ? "world" : "local");
+        session.Post(toWorld ? GizmoCommand.UseWorldOrientation : GizmoCommand.UseLocalOrientation);
+    }
+
+    private void OnStyleClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_session is not { } session)
+            return;
+
+        bool toStudio = !_shell.IsStudioStyle;
+        _shell.RequestGizmoStyle(toStudio ? "Studio" : "Classic");
+        session.Post(toStudio ? GizmoCommand.UseStudioStyle : GizmoCommand.UseClassicStyle);
+    }
+
+    private void OnSnapClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_session is not { } session)
+            return;
+
+        bool on = !_shell.SnapEnabled;
+        _shell.RequestSnapEnabled(on);
+        session.Post(on ? GizmoCommand.EnableSnap : GizmoCommand.DisableSnap);
+    }
+
+    private void OnUndoClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_session is not { } session)
+            return;
+
+        _shell.RequestUndo();
+        session.Post(EditorHostCommand.Undo);
+    }
+
+    private void OnRedoClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_session is not { } session)
+            return;
+
+        _shell.RequestRedo();
+        session.Post(EditorHostCommand.Redo);
+    }
     private void OnDuplicateClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.Duplicate);
     private void OnDeleteClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.Delete);
     private void OnGroupClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.Group);
@@ -832,6 +1270,10 @@ public partial class MainWindow : Window
             case ShellChord.OpenMap: OnOpenMapClicked(this, new RoutedEventArgs()); break;
             case ShellChord.SaveMap: OnSaveClicked(this, new RoutedEventArgs()); break;
             case ShellChord.SaveMapAs: OnSaveAsClicked(this, new RoutedEventArgs()); break;
+            case ShellChord.InsertBlock: _session?.Insert(InsertKind.WorldBrush); break;
+            case ShellChord.InsertPart: _session?.Insert(InsertKind.PartBrush); break;
+            case ShellChord.InsertCut: _session?.Insert(InsertKind.SubtractiveBrush); break;
+            case ShellChord.InsertLight: _session?.Insert(InsertKind.PointLight); break;
         }
     }
 
@@ -882,13 +1324,17 @@ public partial class MainWindow : Window
             return item;
         }
 
-        // The same vocabulary as the Model strip: one set of names for one set
-        // of things.
+        // ONE vocabulary, everywhere. Block, part and cut are what the command
+        // row says, what the Object menu says and what the keyboard reference
+        // says, so they are what this says: the same five things went by two
+        // sets of names depending on which surface the user reached them
+        // through, which is how "world brush", "hole" and "part" become three
+        // concepts instead of three words for two.
         var insert = new MenuItem { Header = "Insert here" };
-        insert.Items.Add(Item("World brush", null, () => _session?.Insert(InsertKind.WorldBrush, _viewportMenuPoint)));
-        insert.Items.Add(Item("Part", null, () => _session?.Insert(InsertKind.PartBrush, _viewportMenuPoint)));
-        insert.Items.Add(Item("Hole", null, () => _session?.Insert(InsertKind.SubtractiveBrush, _viewportMenuPoint)));
-        insert.Items.Add(Item("Point light", null, () => _session?.Insert(InsertKind.PointLight, _viewportMenuPoint)));
+        insert.Items.Add(Item("Block", "Ctrl+D1", () => _session?.Insert(InsertKind.WorldBrush, _viewportMenuPoint)));
+        insert.Items.Add(Item("Part", "Ctrl+D2", () => _session?.Insert(InsertKind.PartBrush, _viewportMenuPoint)));
+        insert.Items.Add(Item("Cut", "Ctrl+D3", () => _session?.Insert(InsertKind.SubtractiveBrush, _viewportMenuPoint)));
+        insert.Items.Add(Item("Light", "Ctrl+D4", () => _session?.Insert(InsertKind.PointLight, _viewportMenuPoint)));
         insert.Items.Add(Item("Empty group", null, () => _session?.Insert(InsertKind.Group, _viewportMenuPoint)));
 
         var menu = new ContextMenu();
@@ -899,7 +1345,7 @@ public partial class MainWindow : Window
         menu.Items.Add(new Separator());
         menu.Items.Add(Item("Group", "Ctrl+G", () => _session?.Post(EditorHostCommand.Group)));
         menu.Items.Add(Item("Ungroup", "Ctrl+Shift+G", () => _session?.Post(EditorHostCommand.Ungroup)));
-        menu.Items.Add(Item("Convert part / world", "Ctrl+T", () => _session?.Post(EditorHostCommand.ToggleBrushKind)));
+        menu.Items.Add(Item("Convert block / part", "Ctrl+T", () => _session?.Post(EditorHostCommand.ToggleBrushKind)));
         menu.Items.Add(new Separator());
         menu.Items.Add(Item("Frame selection", "F", () => _session?.Post(EditorCameraCommand.FrameSelection)));
 
@@ -1400,28 +1846,60 @@ public partial class MainWindow : Window
 
     private async void OnSaveAsClicked(object? sender, RoutedEventArgs e)
     {
-        if (_session is null) return;
+        if (await PickSaveTargetAsync() is { } target)
+            SaveMapTo(target);
+    }
+
+    /// <summary>
+    /// Asks where a level should be written, or null when the user backed out.
+    /// </summary>
+    /// <remarks>
+    /// A folder picker plus a name, because a level IS a folder: the platform
+    /// save dialogs name files, and pointing one at a directory bundle means
+    /// either lying about what is being created or depending on whether a
+    /// backend happens to touch the path it returns.
+    /// </remarks>
+    private async Task<string?> PickSaveTargetAsync()
+    {
+        if (_session is null)
+            return null;
 
         IReadOnlyList<IStorageFolder> picked = await StorageProvider.OpenFolderPickerAsync(
             new FolderPickerOpenOptions
             {
-                Title = "Folder to save the map bundle into",
+                Title = "Folder to save the level into",
                 AllowMultiple = false,
                 SuggestedStartLocation = await SuggestedStartAsync(_document.SuggestedMapFolder),
             });
 
-        if (picked.Count == 0) return;
+        if (picked.Count == 0)
+            return null;
 
         string? name = await NameDialog.AskAsync(
-            this, "Save map as", "Name for the map bundle:", _document.MapLabel);
-        if (name is null) return;
+            this, "Save level as", "Name for the level folder:", _document.MapLabel);
 
-        SaveMapTo(Path.Combine(picked[0].Path.LocalPath, name + MapFormat.BundleExtension));
+        return name is null
+            ? null
+            : Path.Combine(picked[0].Path.LocalPath, name + MapFormat.BundleExtension);
     }
 
-    private void SaveMapTo(string bundlePath)
+    private void SaveMapTo(string bundlePath) => _ = SaveMapToAsync(bundlePath);
+
+    /// <summary>
+    /// Writes the level and reports whether it landed.
+    /// </summary>
+    /// <remarks>
+    /// <b>Awaitable because one caller has to know.</b> The unsaved-work prompt
+    /// offers Save, and "the user chose Save" is not the same as "the level was
+    /// saved": the write can fail, and proceeding anyway would discard the work
+    /// the user had just asked to keep, having told them it was safe.
+    /// </remarks>
+    private Task<bool> SaveMapToAsync(string bundlePath)
     {
-        if (_session is not { } session) return;
+        if (_session is not { } session)
+            return Task.FromResult(false);
+
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         session.SaveMap(bundlePath, (report, error) => Dispatcher.UIThread.Post(() =>
         {
@@ -1431,7 +1909,8 @@ public partial class MainWindow : Window
 
             if (error is not null)
             {
-                _shell.SetError($"Could not save the map: {error.Message}");
+                _shell.SetError($"Could not save the level: {error.Message}");
+                done.TrySetResult(false);
                 return;
             }
 
@@ -1447,7 +1926,13 @@ public partial class MainWindow : Window
             _shell.SetMessage(report?.Describe() is { } lost
                 ? $"Saved {_document.MapLabel}.{manifestNote} {lost}"
                 : $"Saved {_document.MapLabel}.{manifestNote}");
+
+            done.TrySetResult(true);
         }));
+
+        // A session torn down before the callback runs would leave this pending
+        // forever, and the prompt awaiting it with a modal already closed.
+        return done.Task;
     }
 
     /// <summary>
@@ -1544,12 +2029,35 @@ public partial class MainWindow : Window
     {
         if (!_document.IsDirty) return true;
 
-        string? answer = await NameDialog.AskAsync(
-            this, "Unsaved changes",
-            $"{_document.MapLabel} has unsaved changes, and {what} will discard them. "
-            + "Type discard to continue.", string.Empty);
+        UnsavedChoice choice = await ConfirmDialog.AskAsync(this, _document.MapLabel, what);
 
-        return string.Equals(answer, "discard", StringComparison.OrdinalIgnoreCase);
+        return choice switch
+        {
+            UnsavedChoice.Discard => true,
+
+            // Handled HERE rather than at each of the eight call sites, so
+            // every route that can discard work offers the same way to keep it
+            // and none of them can forget to.
+            UnsavedChoice.Save => await SaveFromPromptAsync(),
+
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// Writes the level on the user's behalf from the unsaved-work prompt.
+    /// </summary>
+    /// <returns>
+    /// True when the level is on disk and the gesture that asked may continue.
+    /// </returns>
+    /// <remarks>
+    /// A level that has never been saved needs a target, and choosing one can
+    /// itself be cancelled - which means "no, go back", not "yes, discard".
+    /// </remarks>
+    private async Task<bool> SaveFromPromptAsync()
+    {
+        string? target = _document.MapPath ?? await PickSaveTargetAsync();
+        return target is not null && await SaveMapToAsync(target);
     }
 
     private async Task<IStorageFolder?> SuggestedStartAsync(string? path)
