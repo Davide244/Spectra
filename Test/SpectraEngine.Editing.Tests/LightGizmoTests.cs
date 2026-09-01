@@ -258,6 +258,173 @@ public sealed class LightGizmoTests
         harness.Undo.UndoCount.ShouldBe(1);
     }
 
+    // --- The shape handles ---------------------------------------------------
+
+    [Theory]
+    [InlineData(LightKind.Spot, LightHandle.ConeOuter)]
+    [InlineData(LightKind.Spot, LightHandle.ConeInner)]
+    [InlineData(LightKind.Rect, LightHandle.Width)]
+    [InlineData(LightKind.Rect, LightHandle.Height)]
+    [InlineData(LightKind.Disc, LightHandle.Radius)]
+    public void Each_shape_offers_only_its_own_handles(LightKind kind, LightHandle offered)
+    {
+        (ViewportHarness harness, SceneNode lamp) = BuildLamp(kind);
+        var tool = new LightGizmo(harness.Scene, harness.Undo);
+
+        // Turned so the light's own basis is not edge-on to the camera; a knob
+        // placed along the forward axis of a lamp pointing at the eye projects
+        // onto the lamp itself, which is inherent and not what this checks.
+        lamp.LocalTransform = lamp.LocalTransform with
+        {
+            Rotation = Light.RotationForDirection(Vector3.Normalize(new Vector3(-0.4f, -0.3f, -1f))),
+        };
+
+        // Every kind is walked at every pixel of a coarse grid, and the handle
+        // this kind offers must be findable somewhere while the ones it does not
+        // must be findable nowhere. A test that only probed the expected spot
+        // would pass just as happily if EVERY kind offered EVERY handle.
+        var found = new HashSet<LightHandle>();
+
+        for (float x = 8f; x < harness.ViewportSize.X; x += 6f)
+        {
+            for (float y = 8f; y < harness.ViewportSize.Y; y += 6f)
+                found.Add(tool.Pick(At(harness, new Vector2(x, y)), out _));
+        }
+
+        found.ShouldContain(offered, $"{kind} should offer {offered} somewhere on screen");
+
+        foreach (LightHandle other in Enum.GetValues<LightHandle>())
+        {
+            if (other is LightHandle.None or LightHandle.Range || other == offered)
+                continue;
+
+            if (kind == LightKind.Spot && other is LightHandle.ConeInner or LightHandle.ConeOuter)
+                continue;
+
+            if (kind == LightKind.Rect && other is LightHandle.Width or LightHandle.Height)
+                continue;
+
+            found.ShouldNotContain(other, $"{kind} must not offer {other}");
+        }
+    }
+
+    [Fact]
+    public void Dragging_the_outer_cone_handle_widens_the_cone()
+    {
+        (ViewportHarness harness, SceneNode lamp) = BuildLamp(LightKind.Spot);
+        lamp.Light!.InnerAngle = 10f;
+        lamp.Light.OuterAngle = 20f;
+
+        var tool = new LightGizmo(harness.Scene, harness.Undo) { Snap = null, AngleSnap = null };
+
+        Vector2 knob = FindHandle(harness, tool, LightHandle.ConeOuter);
+        Vector2 axis = FindAxis(harness, tool, knob, LightHandle.ConeOuter);
+
+        tool.Update(At(harness, knob, down: true, pressed: true), cancelRequested: false).ShouldBeTrue();
+        tool.Update(At(harness, knob + (axis * 80f), down: true), cancelRequested: false);
+        tool.Update(At(harness, knob + (axis * 80f)), cancelRequested: false);
+
+        lamp.Light.OuterAngle.ShouldBeGreaterThan(20f);
+        harness.Undo.UndoCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public void A_cone_dragged_past_the_ceiling_stops_there_rather_than_inverting()
+    {
+        (ViewportHarness harness, SceneNode lamp) = BuildLamp(LightKind.Spot);
+        var tool = new LightGizmo(harness.Scene, harness.Undo) { Snap = null, AngleSnap = null };
+
+        Vector2 knob = FindHandle(harness, tool, LightHandle.ConeOuter);
+        Vector2 axis = FindAxis(harness, tool, knob, LightHandle.ConeOuter);
+
+        tool.Update(At(harness, knob, down: true, pressed: true), cancelRequested: false);
+
+        // Far past 89 degrees. A half-angle beyond that is a cone pointing
+        // backwards, which is not a shape anybody means - and unlike range it
+        // is clamped rather than refused, because a drag should stop at the end
+        // rather than throw from inside an open transaction.
+        tool.Update(At(harness, knob + (axis * 5000f), down: true), cancelRequested: false);
+
+        lamp.Light!.OuterAngle.ShouldBe(Light.MaxConeAngle);
+    }
+
+    [Fact]
+    public void A_rect_lights_width_and_height_are_dragged_independently()
+    {
+        (ViewportHarness harness, SceneNode lamp) = BuildLamp(LightKind.Rect);
+        lamp.Light!.Width = 1f;
+        lamp.Light.Height = 1f;
+
+        var tool = new LightGizmo(harness.Scene, harness.Undo) { Snap = null, AngleSnap = null };
+
+        Vector2 knob = FindHandle(harness, tool, LightHandle.Width);
+        Vector2 axis = FindAxis(harness, tool, knob, LightHandle.Width);
+
+        tool.Update(At(harness, knob, down: true, pressed: true), cancelRequested: false);
+        tool.Update(At(harness, knob + (axis * 60f), down: true), cancelRequested: false);
+        tool.Update(At(harness, knob + (axis * 60f)), cancelRequested: false);
+
+        lamp.Light.Width.ShouldBeGreaterThan(1f);
+
+        // The other axis is untouched: "make this panel wider" must not also
+        // make it taller, which is the whole reason there are two handles.
+        lamp.Light.Height.ShouldBe(1f);
+    }
+
+    // The first pixel at which the tool reports this handle. A search rather
+    // than a computed position, because the knob's placement is the thing under
+    // test and recomputing it here would be the same expression twice.
+    private static Vector2 FindHandle(ViewportHarness harness, LightGizmo tool, LightHandle wanted)
+    {
+        for (float x = 4f; x < harness.ViewportSize.X; x += 3f)
+        {
+            for (float y = 4f; y < harness.ViewportSize.Y; y += 3f)
+            {
+                var at = new Vector2(x, y);
+                if (tool.Pick(At(harness, at), out _) == wanted)
+                    return at;
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException($"no pixel picks {wanted}");
+    }
+
+    // Which way to drag so the scalar GROWS: probe the four cardinals and keep
+    // whichever still reports the same handle furthest out. Derived rather than
+    // assumed, for the same reason the tool derives it.
+    private static Vector2 FindAxis(
+        ViewportHarness harness, LightGizmo tool, Vector2 knob, LightHandle handle)
+    {
+        Vector2 best = new(1f, 0f);
+        float bestDistance = -1f;
+
+        foreach (Vector2 direction in new[]
+        {
+            new Vector2(1f, 0f), new Vector2(-1f, 0f),
+            new Vector2(0f, 1f), new Vector2(0f, -1f),
+        })
+        {
+            // Walk outward until the handle stops answering; the direction that
+            // stays on the knob longest is the one the knob travels along.
+            float distance = 0f;
+            for (float step = 2f; step <= 14f; step += 2f)
+            {
+                if (tool.Pick(At(harness, knob + (direction * step)), out _) != handle)
+                    break;
+
+                distance = step;
+            }
+
+            if (distance > bestDistance)
+            {
+                bestDistance = distance;
+                best = direction;
+            }
+        }
+
+        return best;
+    }
+
     [Fact]
     public void The_light_command_coalesces_so_a_drag_keeps_one_before_state()
     {

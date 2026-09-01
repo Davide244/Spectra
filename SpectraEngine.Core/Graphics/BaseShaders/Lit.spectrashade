@@ -44,6 +44,8 @@ shader Lit {
         vec4[8] uLightTangent;
         int uLightCount;
         float uAmbient;
+        vec3 uAmbientSky;
+        vec3 uAmbientGround;
     }
 
     [Binding(0)] sampler2D uDiffuse;
@@ -67,7 +69,11 @@ shader Lit {
         // one light a constant floor that every light stacks on top of is
         // visibly wrong: the scene gets brighter with each light added even
         // where none of them reach.
-        vec3 total = albedo * uAmbient;
+        // The same hemisphere the deferred path uses, because the two share one
+        // light rig: a forward-drawn transparent surface beside a deferred
+        // opaque one must not sit in a differently coloured room.
+        vec3 ambient = Math.Mix(uAmbientGround, uAmbientSky, n.y * 0.5 + 0.5);
+        vec3 total = albedo * ambient * uAmbient;
 
         for (int i = 0; i < uLightCount; i = i + 1) {
             vec4 posRange = uLightPositions[i];

@@ -27,6 +27,29 @@ namespace SpectraEngine.Core.Graphics;
 /// </remarks>
 public static class LightUpload
 {
+    /// <summary>
+    /// The ambient hemisphere's upper half: what a surface facing straight up
+    /// sees.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Ambient was a flat scalar</b>, which lights a floor and a ceiling
+    /// identically and leaves everything in an unlit corner without shape. A
+    /// hemisphere is the cheapest thing that fixes it - two uniforms and one
+    /// mix, against an irradiance probe's cubemap and a convolution pass - and
+    /// it is what makes a scene read as lit by a PLACE.
+    /// </para>
+    /// <para>
+    /// <b>The pair's average luminance is one</b>, deliberately, so the existing
+    /// ambient STRENGTH keeps meaning what it meant: turning this on must not
+    /// silently rescale every scene already tuned against it.
+    /// </para>
+    /// </remarks>
+    public static Vector3 AmbientSky { get; set; } = new(0.92f, 1.06f, 1.40f);
+
+    /// <summary>The lower half: bounce off the ground, warmer and dimmer.</summary>
+    public static Vector3 AmbientGround { get; set; } = new(1.01f, 0.93f, 0.84f);
+
     // Scratch buffers, reused. Sized to the hard cap so they never grow, and
     // static because the render thread is the only caller: the draw path is
     // asserted allocation-free in steady state and a per-draw array would be
@@ -49,8 +72,15 @@ public static class LightUpload
     /// stops at the count anyway.
     /// </remarks>
     public static void Apply(ShaderProgram shader, RenderView view, float ambient)
+        => Apply(shader, view, ambient, AmbientSky, AmbientGround);
+
+    /// <inheritdoc cref="Apply(ShaderProgram, RenderView, float)"/>
+    public static void Apply(
+        ShaderProgram shader, RenderView view, float ambient, Vector3 sky, Vector3 ground)
     {
         Packed packed = Fill(view);
+        shader.SetUniform("uAmbientSky", sky);
+        shader.SetUniform("uAmbientGround", ground);
 
         shader.SetUniform("uLightPositions", packed.Positions);
         shader.SetUniform("uLightColors", packed.Colors);
@@ -70,8 +100,15 @@ public static class LightUpload
     /// arrays below are shared scratch that the next call overwrites.
     /// </remarks>
     public static void Apply(PostPass pass, RenderView view, float ambient)
+        => Apply(pass, view, ambient, AmbientSky, AmbientGround);
+
+    /// <inheritdoc cref="Apply(PostPass, RenderView, float)"/>
+    public static void Apply(
+        PostPass pass, RenderView view, float ambient, Vector3 sky, Vector3 ground)
     {
         Packed packed = Fill(view);
+        pass.SetUniform("uAmbientSky", sky);
+        pass.SetUniform("uAmbientGround", ground);
 
         pass.SetUniform("uLightPositions", packed.Positions.AsSpan());
         pass.SetUniform("uLightColors", packed.Colors.AsSpan());

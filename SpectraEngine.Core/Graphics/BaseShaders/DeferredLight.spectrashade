@@ -50,6 +50,19 @@ shader DeferredLight {
         vec3 uCameraPosition;
         float uAmbient;
 
+        // HEMISPHERE ambient: what the surface sees looking up, and looking
+        // down. A flat scalar - which is what this was - lights a floor and a
+        // ceiling identically, so nothing in an unlit corner has any shape at
+        // all; it is the cheapest single thing that makes a scene read as being
+        // lit by a PLACE rather than by a number. Two uniforms and one mix,
+        // against an irradiance probe's cubemap and a convolution pass.
+        //
+        // The two are chosen so their average luminance is one, which is what
+        // lets uAmbient keep meaning exactly what it meant before: the strength,
+        // tuned once for the whole demo.
+        vec3 uAmbientSky;
+        vec3 uAmbientGround;
+
         // What the sky is, for the pixels no geometry wrote. A full-screen
         // triangle covers every pixel, so the light pass cannot leave the
         // background alone the way a forward pass does: it has to put the
@@ -208,7 +221,11 @@ shader DeferredLight {
         vec3 f0 = Math.Mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
         vec3 diffuseColor = albedo * (1.0 - metallic);
 
-        vec3 total = diffuseColor * uAmbient * ao;
+        // n.y remapped to 0..1: straight up takes the sky, straight down the
+        // ground, and a wall gets the average - which is the whole of the
+        // approximation and the reason it costs one mix.
+        vec3 ambient = Math.Mix(uAmbientGround, uAmbientSky, n.y * 0.5 + 0.5);
+        vec3 total = diffuseColor * ambient * uAmbient * ao;
 
         for (int i = 0; i < uLightCount; i = i + 1) {
             vec4 posRange = uLightPositions[i];

@@ -203,7 +203,11 @@ public sealed class SceneEditorHost : ISceneEditor
         // fourth: a range is a length, so it belongs on the same grid as a
         // position, and a second ladder could drift out of step with the one
         // drawn on the floor.
-        LightGizmo = new LightGizmo(scene, _undo) { Snap = _gizmos.Translate.Snap };
+        LightGizmo = new LightGizmo(scene, _undo)
+        {
+            Snap = _gizmos.Translate.Snap,
+            AngleSnap = _gizmos.Rotate.Snap,
+        };
 
         _viewport = new ViewportInteractionController(scene, _gizmos)
         {
