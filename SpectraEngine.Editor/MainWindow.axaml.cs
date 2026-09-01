@@ -371,6 +371,19 @@ public partial class MainWindow : Window
         Opened += (_, _) =>
         {
             DarkCaption.Apply(this, _logger);
+
+            // The interop probe runs INSTEAD of opening anything, because it is
+            // a measurement of this machine rather than a feature: it needs a
+            // real compositor (there is no headless form of the question) and
+            // it must not compete with an engine session for the GPU while it
+            // asks. The window closes itself when it is done, so the switch can
+            // be run from a script on five machines.
+            if (InteropProbe.Requested(Program.StartupArgs))
+            {
+                _ = RunInteropProbeAsync();
+                return;
+            }
+
             OpenFromStartupArgs();
         };
 
@@ -1170,6 +1183,16 @@ public partial class MainWindow : Window
     {
         if (tool.Owner is Dock.Model.Core.IDock owner)
             owner.ActiveDockable = tool;
+    }
+
+    private async Task RunInteropProbeAsync()
+    {
+        await InteropProbe.RunAsync(this, _logger);
+
+        // Long enough for the log to flush and for a human running it by hand
+        // to read the console; short enough to be scriptable.
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        Close();
     }
 
     // --- The bottom region ---------------------------------------------------
