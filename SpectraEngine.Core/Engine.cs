@@ -441,6 +441,11 @@ public sealed class Engine
             // and end a freelook.
             _inputManager.ApplyPendingCursorMode();
 
+            // Beside the mode, in the same slot and for the same reason: cursor
+            // calls belong to the thread that owns the window, and the tools
+            // that know what shape is wanted run on the render thread.
+            _inputManager.ApplyPendingCursorShape();
+
             // The fourth main-thread latch, same slot, same reason: F11 is read
             // on the render thread but undecorating and moving the window is
             // window-thread work. A no-op on every frame but the one that

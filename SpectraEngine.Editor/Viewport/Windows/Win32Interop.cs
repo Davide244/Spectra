@@ -59,7 +59,18 @@ internal static partial class Win32Interop
     internal const int VK_LSHIFT = 0xA0;
     internal const int VK_RSHIFT = 0xA1;
 
+    // The stock cursors the editor asks for. IDC_HAND is the closest Windows
+    // has to a "grab", and there is no rotate cursor at all - that degrades to
+    // IDC_SIZEALL, in the backend, which is the only layer allowed to know it.
     internal const int IDC_ARROW = 32512;
+    internal const int IDC_CROSS = 32515;
+    internal const int IDC_SIZENWSE = 32642;
+    internal const int IDC_SIZENESW = 32643;
+    internal const int IDC_SIZEWE = 32644;
+    internal const int IDC_SIZENS = 32645;
+    internal const int IDC_SIZEALL = 32646;
+    internal const int IDC_NO = 32648;
+    internal const int IDC_HAND = 32649;
 
     internal delegate nint WndProc(nint hwnd, uint message, nint wParam, nint lParam);
 

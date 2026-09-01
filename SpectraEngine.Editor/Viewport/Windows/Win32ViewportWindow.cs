@@ -287,6 +287,54 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
 
     // --- Messages ------------------------------------------------------------
 
+    /// <summary>
+    /// What the engine currently wants the pointer to look like, as an OS
+    /// cursor handle.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Loaded on demand and kept, because <c>LoadCursor</c> on a stock
+    /// cursor is a cache lookup rather than an allocation</b>, but it is still a
+    /// call inside a message that arrives with every mouse move. Stock cursors
+    /// are never destroyed, so there is nothing here to release.
+    /// </para>
+    /// <para>
+    /// <b>The degradations live here.</b> Windows has no rotate cursor, and its
+    /// closest thing to a grab is the hand. A tool asking for either gets the
+    /// nearest available shape and never learns that it did - which is the
+    /// whole reason the vocabulary is the engine's rather than the platform's.
+    /// </para>
+    /// </remarks>
+    private nint ResolveCursor()
+    {
+        CursorShape shape = Host?.RequestedCursorShape ?? CursorShape.Arrow;
+
+        int id = shape switch
+        {
+            CursorShape.Crosshair => Win32Interop.IDC_CROSS,
+            CursorShape.Grab or CursorShape.Grabbing => Win32Interop.IDC_HAND,
+            CursorShape.SizeWestEast => Win32Interop.IDC_SIZEWE,
+            CursorShape.SizeNorthSouth => Win32Interop.IDC_SIZENS,
+            CursorShape.SizeNorthWestSouthEast => Win32Interop.IDC_SIZENWSE,
+            CursorShape.SizeNorthEastSouthWest => Win32Interop.IDC_SIZENESW,
+            CursorShape.SizeAll or CursorShape.Rotate => Win32Interop.IDC_SIZEALL,
+            CursorShape.No => Win32Interop.IDC_NO,
+            _ => Win32Interop.IDC_ARROW,
+        };
+
+        if (_cursors.TryGetValue(id, out nint handle))
+            return handle;
+
+        handle = Win32Interop.LoadCursor(0, id);
+        if (handle == 0)
+            handle = _arrowCursor;
+
+        _cursors[id] = handle;
+        return handle;
+    }
+
+    private readonly Dictionary<int, nint> _cursors = [];
+
     private bool HandleMessage(uint message, nint wParam, nint lParam, out nint result)
     {
         result = 0;
@@ -305,7 +353,12 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
                 if ((lParam & 0xFFFF) != Win32Interop.HTCLIENT)
                     return false;
 
-                Win32Interop.SetCursor(_cursorLocked ? 0 : _arrowCursor);
+                // HERE, and nowhere else. Windows re-asserts the window class's
+                // own cursor on every mouse move, so a SetCursor issued from
+                // anywhere but this message is reverted within a frame - which
+                // is exactly what produces the "the cursor flickers" report
+                // that has no other explanation.
+                Win32Interop.SetCursor(_cursorLocked ? 0 : ResolveCursor());
                 result = 1;
                 return true;
 

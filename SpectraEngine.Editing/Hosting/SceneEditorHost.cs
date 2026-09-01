@@ -143,6 +143,12 @@ public sealed class SceneEditorHost : ISceneEditor
     // Last frame's framebuffer latch, kept so Draw can size the marquee without
     // asking the renderer a second time.
     private Vector2 _viewportSize;
+
+    // The SHAPE seam, beside the lock. Held as the interface rather than the
+    // manager for the same reason the camera holds ICursorLock: the editing
+    // layer must never see a window, and a test can hand it a fake.
+    private readonly ICursorShape _cursorShape;
+    private CursorShape _lastCursorShape = CursorShape.Arrow;
     private bool _editorNavigation = true;
 
     /// <summary>
@@ -186,6 +192,7 @@ public sealed class SceneEditorHost : ISceneEditor
         // than the manager is what keeps the editing layer from ever seeing a
         // window.
         _camera = new EditorCameraController(scene) { CursorLock = input };
+        _cursorShape = input;
         _viewport = new ViewportInteractionController(scene, _gizmos) { CameraController = _camera };
         _inputSource = new EngineEditorInputSource(input, renderer);
         _gizmoBindings = BuildGizmoBindings();
@@ -324,6 +331,7 @@ public sealed class SceneEditorHost : ISceneEditor
         // has to reach the marquee as well as the manipulator, and Update is the
         // one call that routes it to whichever owns the pointer.
         _viewport.Update(in frame, _input.WasKeyPressed(InputKey.Escape));
+        UpdateCursorShape();
 
         return _editorNavigation;
     }
@@ -796,6 +804,63 @@ public sealed class SceneEditorHost : ISceneEditor
         // and because it is the one thing here that is not about the scene at
         // all: it says which way you are facing.
         Compass.Draw(output, _scene.Camera, _viewportSize);
+    }
+
+    /// <summary>
+    /// Tells the host what the pointer should look like, from what the viewport
+    /// is currently doing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Derived from the arbitration rather than set at each gesture's
+    /// start.</b> Every gesture would otherwise have to remember to put the
+    /// cursor back, and the one that forgets leaves a grab cursor over an empty
+    /// viewport with nothing to attribute it to. Reading the live drag mode and
+    /// the hover means the shape cannot get out of step with what a press would
+    /// actually do, because both come from the same answer.
+    /// </para>
+    /// <para>
+    /// <b>A selectable object gets an ARROW, not a hand.</b> The outline is the
+    /// affordance; a hand cursor over 3D geometry reads as a hyperlink, which
+    /// is the single most web-flavoured thing a viewport can do.
+    /// </para>
+    /// </remarks>
+    private void UpdateCursorShape()
+    {
+        // The camera FIRST, because it owns the pointer whenever it is
+        // gesturing and the viewport's drag mode is None throughout. A freelook
+        // is excluded on purpose: it locks the cursor, so there is no shape to
+        // show and asking for one would fight the lock.
+        if (_camera.IsNavigating && !_camera.IsFreeLooking)
+        {
+            Request(CursorShape.SizeAll);
+            return;
+        }
+
+        CursorShape shape = _viewport.DragMode switch
+        {
+            ViewportDragMode.Manipulate => CursorShape.Grabbing,
+            ViewportDragMode.SelectAndMove => CursorShape.Grabbing,
+            ViewportDragMode.BoxSelect => CursorShape.Crosshair,
+
+            // Not dragging. A handle under the cursor is the only thing that
+            // says "you can pick this up"; everything else is an arrow.
+            _ => _viewport.HoverMode == ViewportDragMode.Manipulate
+                ? CursorShape.Grab
+                : IsSuspended ? CursorShape.No : CursorShape.Arrow,
+        };
+
+        Request(shape);
+
+        // Only on a change: the request takes a lock, and this runs every frame.
+        void Request(CursorShape wanted)
+        {
+            if (wanted == _lastCursorShape)
+                return;
+
+            _lastCursorShape = wanted;
+            _cursorShape.RequestCursorShape(wanted);
+        }
     }
 
     /// <inheritdoc/>

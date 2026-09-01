@@ -107,6 +107,20 @@ public sealed class EngineHost
     public void ApplyPendingCursorMode() => _input?.ApplyPendingCursorMode();
 
     /// <summary>
+    /// What shape the pointer should currently be, as most recently requested by
+    /// whatever is under it.
+    /// </summary>
+    /// <remarks>
+    /// <b>Read by the host at the moment the OS asks what the cursor is</b> -
+    /// on Windows, inside <c>WM_SETCURSOR</c>, because the OS re-asserts the
+    /// window class's own cursor on every mouse move and a <c>SetCursor</c>
+    /// issued anywhere else is reverted within a frame. That single fact is why
+    /// this is a poll rather than an event: there is exactly one moment per
+    /// message when the answer can be given, and it belongs to the host.
+    /// </remarks>
+    public CursorShape RequestedCursorShape => _input?.CursorShape ?? CursorShape.Arrow;
+
+    /// <summary>
     /// Raised on the RENDER thread once per published frame, carrying an
     /// immutable description of it.
     /// </summary>

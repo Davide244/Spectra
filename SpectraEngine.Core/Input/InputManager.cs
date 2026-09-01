@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Numerics;
 using Microsoft.Extensions.Logging;
 using Silk.NET.Input;
@@ -24,7 +24,7 @@ namespace SpectraEngine.Core.Input;
 /// <c>SilkCursorMode</c>.
 /// </para>
 /// </remarks>
-public sealed class InputManager : ICursorLock, IInputSink
+public sealed class InputManager : ICursorLock, ICursorShape, IInputSink
 {
     private readonly ILogger<InputManager> _logger;
     private readonly object _stateLock = new();
@@ -176,6 +176,32 @@ public sealed class InputManager : ICursorLock, IInputSink
         }
     }
 
+    // ─── Cursor shape (ICursorShape) ─────────────────────────
+    //
+    // Beside the mode latch and not folded into it: mode is whether the pointer
+    // is visible, hidden or captured; shape is what it MEANS. A freelook wants
+    // Locked and has no shape at all, and a gizmo handle wants a visible
+    // pointer with a Grab shape - one setting could not say both.
+    //
+    // No "applied" half, unlike the mode: Windows re-asserts the class cursor
+    // on every mouse move, so a shape is not a transition anybody can wait on
+    // and the only useful answer is the newest request.
+
+    private CursorShape _requestedCursorShape = CursorShape.Arrow;
+
+    /// <inheritdoc/>
+    public void RequestCursorShape(CursorShape shape)
+    {
+        lock (_stateLock)
+            _requestedCursorShape = shape;
+    }
+
+    /// <inheritdoc/>
+    public CursorShape CursorShape
+    {
+        get { lock (_stateLock) return _requestedCursorShape; }
+    }
+
     // ─── Cursor lock (ICursorLock) ───────────────────────────
 
     /// <inheritdoc/>
@@ -289,6 +315,57 @@ public sealed class InputManager : ICursorLock, IInputSink
                 _lastMousePosition = restore;
         }
     }
+
+    /// <summary>
+    /// Applies whatever cursor SHAPE was last requested. <b>Main thread only</b>,
+    /// in the same pump slot as the mode.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The standalone path only.</b> An embedded host has no Silk mouse to
+    /// drive and answers the OS itself, from wherever that platform asks - on
+    /// Windows, inside <c>WM_SETCURSOR</c>. It reads
+    /// <see cref="CursorShape"/> rather than calling this.
+    /// </para>
+    /// <para>
+    /// <b>Silk's standard set has no Grab, no Grabbing and no Rotate</b>, so
+    /// those degrade here: a hand for the two grabs, a move cursor for the
+    /// rotate. The degradation lives in the backend on every platform, which is
+    /// the rule the shape vocabulary exists to make possible.
+    /// </para>
+    /// </remarks>
+    public void ApplyPendingCursorShape()
+    {
+        CursorShape requested;
+        lock (_stateLock)
+        {
+            if (_requestedCursorShape == _appliedCursorShape)
+                return;
+
+            requested = _requestedCursorShape;
+        }
+
+        if (PrimaryMouse() is { } mouse)
+        {
+            mouse.Cursor.StandardCursor = requested switch
+            {
+                CursorShape.Crosshair => StandardCursor.Crosshair,
+                CursorShape.Grab or CursorShape.Grabbing => StandardCursor.Hand,
+                CursorShape.SizeWestEast => StandardCursor.HResize,
+                CursorShape.SizeNorthSouth => StandardCursor.VResize,
+                CursorShape.SizeNorthWestSouthEast => StandardCursor.NwseResize,
+                CursorShape.SizeNorthEastSouthWest => StandardCursor.NeswResize,
+                CursorShape.SizeAll or CursorShape.Rotate => StandardCursor.ResizeAll,
+                CursorShape.No => StandardCursor.NotAllowed,
+                _ => StandardCursor.Default,
+            };
+        }
+
+        lock (_stateLock)
+            _appliedCursorShape = requested;
+    }
+
+    private CursorShape _appliedCursorShape = CursorShape.Arrow;
 
     /// <summary>
     /// Reacts to the window gaining or losing focus. <b>Main thread only</b> —
