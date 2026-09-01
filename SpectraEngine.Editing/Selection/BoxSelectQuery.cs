@@ -1,8 +1,9 @@
-using SpectraEngine.Core.Bsp;
+﻿using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Scene;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using SpectraEngine.Editing.Viewport;
 
 namespace SpectraEngine.Editing.Selection;
 
@@ -92,6 +93,102 @@ public static class BoxSelectQuery
         }
 
         results.RemoveRange(write, results.Count - write);
+
+        AppendCoveredLights(scene, camera, in rect, viewportSize, mode, results);
+    }
+
+    /// <summary>
+    /// Adds every light whose icon the rectangle covers.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A second pass, because lights are not in the spatial index</b> - and
+    /// they are deliberately not, since admitting them would make every lamp
+    /// collidable and query-visible through <c>PhysicsFlags.Default</c>. Before
+    /// this, dragging a marquee across a room full of lamps selected none of
+    /// them and CLEARED whatever was selected, which reads as the marquee being
+    /// broken rather than as lights being special.
+    /// </para>
+    /// <para>
+    /// <b>It tests the ICON, at the same screen-constant radius the overlay
+    /// draws and the click picks.</b> One definition of where a light is on
+    /// screen, so a marquee and a click cannot disagree about what a lamp is -
+    /// which is the whole reason this lives here rather than in the controller.
+    /// </para>
+    /// <para>
+    /// Linear in the number of lights. That is the right complexity: it is
+    /// proportional to what can be selected this way rather than to the world,
+    /// and it wants an index of its own only once lights themselves number in
+    /// the thousands.
+    /// </para>
+    /// </remarks>
+    private static void AppendCoveredLights(
+        Scene scene,
+        Camera camera,
+        in ScreenRect rect,
+        Vector2 viewportSize,
+        BoxSelectMode mode,
+        List<SceneNode> results)
+    {
+        IReadOnlyList<SceneNode> lights = scene.LightNodes;
+
+        for (int i = 0; i < lights.Count; i++)
+        {
+            SceneNode node = lights[i];
+
+            // A light node that ALSO carries geometry is already in the index
+            // and has already been judged; adding it again would duplicate it
+            // in the selection.
+            if (node.Brush is not null || node.MeshRenderer is not null)
+                continue;
+
+            if (CoversLightIcon(camera, node, in rect, viewportSize, mode))
+                results.Add(node);
+        }
+    }
+
+    /// <summary>
+    /// Whether the rectangle covers this light's icon. Public so the brute-force
+    /// oracle in the tests can use exactly the same rule.
+    /// </summary>
+    public static bool CoversLightIcon(
+        Camera camera,
+        SceneNode node,
+        in ScreenRect rect,
+        Vector2 viewportSize,
+        BoxSelectMode mode)
+    {
+        ArgumentNullException.ThrowIfNull(camera);
+        ArgumentNullException.ThrowIfNull(node);
+
+        Vector3 at = node.WorldPosition;
+
+        // Behind the eye plane: the divide has no meaning, and the same ruling
+        // the boxes get applies - Intersect accepts, Contain does not.
+        float depth = Vector3.Dot(at - camera.Position, camera.Forward);
+        if (depth <= MinClipW)
+            return false;
+
+        Vector2 screen = Project(camera, at, viewportSize);
+        float radius = LightOverlay.IconPixels;
+
+        var icon = new ScreenRect(
+            new Vector2(screen.X - radius, screen.Y - radius),
+            new Vector2(screen.X + radius, screen.Y + radius));
+
+        return mode == BoxSelectMode.Contain
+            ? rect.Contains(in icon)
+            : rect.Intersects(in icon);
+    }
+
+    private static Vector2 Project(Camera camera, Vector3 world, Vector2 viewportSize)
+    {
+        Vector4 clip = Vector4.Transform(new Vector4(world, 1f), camera.GetViewProjection());
+        float inverseW = 1f / MathF.Max(clip.W, MinClipW);
+
+        return new Vector2(
+            (clip.X * inverseW * 0.5f + 0.5f) * viewportSize.X,
+            (0.5f - clip.Y * inverseW * 0.5f) * viewportSize.Y);
     }
 
     /// <summary>

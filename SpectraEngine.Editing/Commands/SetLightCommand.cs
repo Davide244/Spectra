@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Scene;
+﻿using SpectraEngine.Core.Scene;
 using System;
 using System.Numerics;
 
@@ -33,7 +33,7 @@ namespace SpectraEngine.Editing.Commands;
 /// ask for and report nothing.
 /// </para>
 /// </remarks>
-public sealed class SetLightCommand : IEditorCommand
+public sealed class SetLightCommand : ICoalescingCommand
 {
     /// <summary>The five settings a light carries, as a value.</summary>
     public readonly record struct Settings(
@@ -93,7 +93,29 @@ public sealed class SetLightCommand : IEditorCommand
     public Settings Before { get; }
 
     /// <summary>The settings the light carries after the edit.</summary>
-    public Settings After { get; }
+    /// <remarks>
+    /// Private setter, retargeted through <see cref="SetAfter"/> and
+    /// <see cref="TryAbsorb"/> while the command is still inside an open
+    /// transaction - the zero-allocation drag path every other gesture command
+    /// here already has, and the piece the light gizmo could not exist without:
+    /// a per-frame drag would otherwise push one history entry per frame.
+    /// </remarks>
+    public Settings After { get; private set; }
+
+    /// <summary>
+    /// Retargets the after-state, keeping the captured before-state.
+    /// </summary>
+    public void SetAfter(Settings after) => After = after;
+
+    /// <inheritdoc/>
+    public bool TryAbsorb(IEditorCommand newer)
+    {
+        if (newer is not SetLightCommand next || next.NodeId != NodeId)
+            return false;
+
+        SetAfter(next.After);
+        return true;
+    }
 
     /// <inheritdoc/>
     public string Name { get; init; } = "Light";

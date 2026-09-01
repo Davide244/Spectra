@@ -140,6 +140,12 @@ public sealed class SceneEditorHost : ISceneEditor
     /// <summary>What is selected, and what the cursor is over.</summary>
     public SelectionOutline Selection { get; } = new();
 
+    /// <summary>Every light's icon, and the selected lights' shapes.</summary>
+    public LightOverlay Lights { get; } = new();
+
+    /// <summary>The light's own handles: reach and aim.</summary>
+    public LightGizmo LightGizmo { get; }
+
     // Last frame's framebuffer latch, kept so Draw can size the marquee without
     // asking the renderer a second time.
     private Vector2 _viewportSize;
@@ -193,7 +199,17 @@ public sealed class SceneEditorHost : ISceneEditor
         // window.
         _camera = new EditorCameraController(scene) { CursorLock = input };
         _cursorShape = input;
-        _viewport = new ViewportInteractionController(scene, _gizmos) { CameraController = _camera };
+        // The light tool shares the MOVE tool's snap ladder rather than owning a
+        // fourth: a range is a length, so it belongs on the same grid as a
+        // position, and a second ladder could drift out of step with the one
+        // drawn on the floor.
+        LightGizmo = new LightGizmo(scene, _undo) { Snap = _gizmos.Translate.Snap };
+
+        _viewport = new ViewportInteractionController(scene, _gizmos)
+        {
+            CameraController = _camera,
+            LightTool = LightGizmo,
+        };
         _inputSource = new EngineEditorInputSource(input, renderer);
         _gizmoBindings = BuildGizmoBindings();
 
@@ -792,6 +808,8 @@ public sealed class SceneEditorHost : ISceneEditor
         // line pass so neither hides behind the geometry it describes.
         _partOutlines.Draw(output, _scene);
         _negativeOutlines.Draw(output, _scene);
+        Lights.Draw(output, _scene, _scene.Camera, _viewportSize);
+        LightGizmo.Draw(output, _viewportSize);
 
         // Between the context overlays and the manipulator, in that order: an
         // outline says what a press would act on, a handle says what a press

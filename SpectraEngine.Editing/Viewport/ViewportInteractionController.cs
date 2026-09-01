@@ -159,6 +159,19 @@ public sealed class ViewportInteractionController
     /// </summary>
     public float PickDistance { get; set; } = float.PositiveInfinity;
 
+    /// <summary>
+    /// The light manipulator, when the host has one. Null in a viewport that
+    /// does not edit lights.
+    /// </summary>
+    /// <remarks>
+    /// <b>It reports <see cref="ViewportDragMode.Manipulate"/> like the
+    /// transform gizmo does, rather than getting a mode of its own.</b> Adding a
+    /// value to that enum would touch every consumer for a distinction none of
+    /// them make: a light drag IS a manipulation, and the cursor, the hover and
+    /// the camera stand-down all want exactly the same answer for both.
+    /// </remarks>
+    public Gizmos.LightGizmo? LightTool { get; set; }
+
     /// <summary>What currently owns the pointer.</summary>
     public ViewportDragMode DragMode { get; private set; }
 
@@ -308,6 +321,20 @@ public sealed class ViewportInteractionController
             return WithheldFromCamera();
         }
 
+        // A light drag in progress routes to the light tool and nowhere else.
+        // FIRST, before the transform gizmo is even asked: both report
+        // Manipulate, so without this the transform gizmo's own finish logic
+        // would run against a gesture it never started.
+        if (LightTool is { IsDragging: true } dragging)
+        {
+            ClearHover();
+
+            if (!dragging.Update(in frame, cancelRequested))
+                SetMode(ViewportDragMode.None);
+
+            return WithheldFromCamera();
+        }
+
         // Rules 1 and 2, evaluated once for the whole frame: a press that
         // belongs to navigation — because the combination is the camera's, or
         // because the camera is already mid-gesture — is invisible to every tool
@@ -332,6 +359,27 @@ public sealed class ViewportInteractionController
             ClearHover();
             SetMode(ViewportDragMode.Manipulate);
             return WithheldFromCamera();
+        }
+
+        // The light tool gets the press the TRANSFORM gizmo did not take, which
+        // is the whole arbitration between them: a lamp is still moved and
+        // rotated by the tool the user already knows, and these handles sit
+        // where those do not.
+        if (LightTool is { } lights)
+        {
+            if (cameraOwnsPointer)
+            {
+                // Navigation asked for this press, so the light tool must not
+                // see it - and must not keep a hover from before it either, or
+                // a handle stays lit under a cursor that is driving a camera.
+                lights.Reset();
+            }
+            else if (lights.Update(in frame, cancelRequested))
+            {
+                ClearHover();
+                SetMode(ViewportDragMode.Manipulate);
+                return WithheldFromCamera();
+            }
         }
 
         if (frame.WasPressed(DragButton) && frame.IsPointerUsable && !cameraOwnsPointer)
@@ -377,6 +425,7 @@ public sealed class ViewportInteractionController
         // scene is replaced. Keeping it would outline a node that no longer
         // belongs to any graph.
         ClearHover();
+        LightTool?.Reset();
         // Same reason as the withheld frames below: a host that resets while
         // the orbit button is down (a minimized window, an undo mid-gesture)
         // must not have the travel since the last camera frame land as one
@@ -536,15 +585,44 @@ public sealed class ViewportInteractionController
             return false;
 
         Ray3 ray = Scene.Camera.ScreenPointToRay(frame.CursorPosition, frame.ViewportSize);
+
         // Editor picking disregards CanQuery on purpose: a designer must be
         // able to select the thing they can see, whatever its gameplay flags
         // say. Honouring the flag here would make clearing CanQuery turn a
         // brush unselectable in the viewport, with the Explorer as the only way
         // back — a setting that hides its own undo.
-        if (!Scene.Raycast(in ray, out SceneRaycastHit hit, SceneQueryFilter.EditorPicking, PickDistance))
-            return false;
+        bool geometry = Scene.Raycast(
+            in ray, out SceneRaycastHit hit, SceneQueryFilter.EditorPicking, PickDistance);
 
-        node = hit.Node;
+        // Lights are picked SEPARATELY, because they are deliberately not in the
+        // spatial index: admitting them would make every lamp collidable, since
+        // PhysicsFlags.Default carries CanCollide | CanQuery.
+        bool lamp = LightPicking.TryPick(
+            Scene, Scene.Camera, in ray, frame.ViewportSize, out SceneNode? light, out float lightDistance);
+
+        if (!lamp)
+        {
+            node = geometry ? hit.Node : null;
+            return geometry;
+        }
+
+        // An icon WINS a tie plus its own radius, rather than strictly. It is
+        // drawn on top and at a constant screen size, so the visible thing at
+        // the cursor is the icon whenever the two are within an icon of each
+        // other - and a lamp mounted flush against the ceiling it lights would
+        // otherwise be unclickable at exactly the placement people use most.
+        // Same reasoning the gizmo handles already get, one layer out.
+        if (geometry)
+        {
+            float slack = LightPicking.WorldRadius(Scene.Camera, frame.ViewportSize, light!.WorldPosition);
+            if (lightDistance > hit.Distance + slack)
+            {
+                node = hit.Node;
+                return true;
+            }
+        }
+
+        node = light;
         return true;
     }
 
