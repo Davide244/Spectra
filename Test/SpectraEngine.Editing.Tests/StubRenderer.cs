@@ -65,6 +65,14 @@ internal sealed class StubRenderer : Renderer
     }
 
     protected override void FlushDebugDrawCore(SpectraEngine.Core.Scene.Camera camera)
+
+    {
+    }
+
+    protected override ShaderProgram? DebugLineShader => null;
+
+    protected override void FlushWorldLinesCore(
+        SpectraEngine.Core.Scene.Camera camera, ShaderProgram program)
     {
     }
 

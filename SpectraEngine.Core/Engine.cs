@@ -950,12 +950,21 @@ public sealed class Engine
                     _windowModeLatch.ToggleFullscreen();
 
                 _renderer.DebugDraw.Clear();
+                _renderer.WorldLines.Clear();
                 if (_sceneManager.ActiveScene is { } scene)
                 {
-                    // The selection highlight is editor UI, not a debug
-                    // visualisation — it draws whenever something is selected,
-                    // with no F-key opt-in (and costs nothing when nothing is).
-                    DebugVisualizations.DrawSelectionHighlight(_renderer.DebugDraw, scene);
+                    // The world lane FIRST, and it is not the same buffer: it is
+                    // flushed inside whichever pass owns the scene's depth, so a
+                    // ground grid is occluded by the floor rather than drawn
+                    // through it. See ISceneEditor.DrawWorld.
+                    editor?.DrawWorld(_renderer.WorldLines);
+
+                    // The selection outline used to be drawn HERE, from Core,
+                    // for every host including a shipped game that can never
+                    // have a selection. It moved to the editing assembly with
+                    // the rest of the editor's viewport chrome (see
+                    // SelectionOutline), which also let it become the shape of
+                    // the thing rather than an axis-aligned box around it.
 
                     // The manipulator and the marquee ride the same depth-off
                     // line path as the highlight, which is what makes a gizmo

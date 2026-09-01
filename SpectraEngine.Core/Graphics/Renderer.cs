@@ -153,6 +153,36 @@ public abstract class Renderer
     public DebugDraw DebugDraw { get; } = new();
 
     /// <summary>
+    /// The frame's world-space lines, drawn WITH depth testing, inside the pass
+    /// that owns the scene's depth.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A second lane, because the overlay's depth-off rule is right for what
+    /// the overlay carries and wrong for this.</b> Gizmo handles and the
+    /// selection outline are editor chrome and must never be hidden by the
+    /// geometry they describe - a handle you can see and cannot pick is worse
+    /// than no handle. A ground grid is the opposite: it is part of the world,
+    /// it lies at y = 0, and one drawn through the walls of a room is not a
+    /// grid, it is a fault.
+    /// </para>
+    /// <para>
+    /// <b>These lines go THROUGH the tone curve and the overlay's do not</b>,
+    /// which is correct for the same reason: a grid is lit scene content and
+    /// should dim as the exposure rises, while a handle is a display colour
+    /// that must not change brightness because the camera turned. Colours
+    /// pushed here are therefore authored in LINEAR light and tuned against the
+    /// ACES curve, not copied from the overlay's display values.
+    /// </para>
+    /// <para>
+    /// Cleared once per frame by the engine, exactly as <see cref="DebugDraw"/>
+    /// is, and flushed by whichever pipeline is running from inside its own
+    /// depth-owning pass.
+    /// </para>
+    /// </remarks>
+    public DebugDraw WorldLines { get; } = new();
+
+    /// <summary>
     /// Where each frame's time goes, phase by phase. Off unless asked for: the
     /// scopes cost a branch each, but a profile nobody reads is still work.
     /// </summary>
@@ -1455,6 +1485,82 @@ public abstract class Renderer
     /// testing off. Called inside an already-open pass.
     /// </summary>
     protected abstract void FlushDebugDrawCore(Scene.Camera camera);
+
+    /// <summary>
+    /// Draws <see cref="WorldLines"/> with depth testing ON and depth writing
+    /// OFF, using <paramref name="program"/>. Called inside an already-open pass
+    /// that owns the scene's depth.
+    /// </summary>
+    /// <remarks>
+    /// Depth WRITE is off because a line is one pixel wide and a grid is
+    /// effectively a plane of them: writing depth would let the grid reject
+    /// geometry drawn after it, so anything a pipeline happens to submit later
+    /// would be sliced by an invisible lattice.
+    /// </remarks>
+    protected abstract void FlushWorldLinesCore(Scene.Camera camera, ShaderProgram program);
+
+    /// <summary>
+    /// Draws this frame's <see cref="WorldLines"/> into the open pass.
+    /// </summary>
+    /// <param name="camera">The camera the pass is rendering with.</param>
+    /// <param name="gbuffer">
+    /// True when the open pass is a deferred G-buffer pass, which needs the
+    /// five-attachment shader; false for a single-target scene pass.
+    /// </param>
+    /// <remarks>
+    /// <b>Which pass this is called from is the whole design.</b> The only pass
+    /// in a deferred frame that owns the scene's depth is the G-buffer pass -
+    /// the light pass afterwards is a full-screen triangle into a target whose
+    /// own depth was never written, so a depth-tested draw there would test
+    /// against a cleared buffer and show through everything, which is precisely
+    /// the failure this lane exists to avoid. Forward and wireframe own their
+    /// depth in their scene pass and use the ordinary line shader there.
+    /// </remarks>
+    public void FlushWorldLines(Scene.Camera camera, bool gbuffer)
+    {
+        ArgumentNullException.ThrowIfNull(camera);
+        if (WorldLines.VertexCount == 0)
+            return;
+
+        ShaderProgram? program = gbuffer ? EnsureWorldLineGBufferShader() : DebugLineShader;
+        if (program is null)
+            return;
+
+        FlushWorldLinesCore(camera, program);
+    }
+
+    /// <summary>
+    /// The backend's compiled <c>DebugLine</c> program, or null before the
+    /// renderer has initialised.
+    /// </summary>
+    protected abstract ShaderProgram? DebugLineShader { get; }
+
+    private ShaderProgram? _worldLineGBufferShader;
+
+    /// <summary>
+    /// Compiles the five-attachment world-line shader on first use.
+    /// </summary>
+    /// <remarks>
+    /// Lazily, because a frame that draws no world lines - every shipped game -
+    /// must not pay for a program it never binds, and because compiling one
+    /// inside an open pass would be a state change in the middle of a recorded
+    /// command list. The first grid frame therefore compiles it outside a pass:
+    /// see the pipelines, which call PrepareWorldLines before opening theirs.
+    /// </remarks>
+    private ShaderProgram EnsureWorldLineGBufferShader() =>
+        _worldLineGBufferShader ??= BaseShaders.WorldLineGBufferPath is { } path
+            ? CreateShaderFromFile(path)
+            : CreateShaderFromSource(BaseShaders.WorldLineGBuffer);
+
+    /// <summary>
+    /// Compiles whatever <see cref="FlushWorldLines"/> will need, before a pass
+    /// opens.
+    /// </summary>
+    public void PrepareWorldLines(bool gbuffer)
+    {
+        if (gbuffer && WorldLines.VertexCount > 0)
+            _ = EnsureWorldLineGBufferShader();
+    }
 
     /// <summary>
     /// Draws the debug overlay into the window, in its own pass on top of

@@ -43,6 +43,12 @@ public sealed unsafe class D3D12ForwardPipeline : ID3D12RenderPipeline
                 camera.AspectRatio = aspect;
 
             DrawView(context.View, camera);
+
+            // The world-line lane, INSIDE this pass, because this pass owns the
+            // scene's depth. A ground grid is world content and must be
+            // occluded by the geometry it lies under; the depth-off overlay
+            // that carries gizmo handles would draw it straight through walls.
+            renderer.FlushWorldLines(camera, gbuffer: false);
         }
         finally
         {

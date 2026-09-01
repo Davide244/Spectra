@@ -71,6 +71,12 @@ public sealed unsafe class D3D11WireframePipeline : ID3D11RenderPipeline
             ctx->RSSetState((ID3D11RasterizerState*)_wireframeState.Handle);
             DrawView(context.View, camera);
             ctx->RSSetState((ID3D11RasterizerState*)_solidState.Handle);
+
+            // The world-line lane, INSIDE this pass, because this pass owns the
+            // scene's depth. A ground grid is world content and must be
+            // occluded by the geometry it lies under; the depth-off overlay
+            // that carries gizmo handles would draw it straight through walls.
+            context.Renderer.FlushWorldLines(camera, gbuffer: false);
         }
         finally
         {

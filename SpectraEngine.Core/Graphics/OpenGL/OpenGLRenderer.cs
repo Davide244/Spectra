@@ -424,6 +424,35 @@ public class OpenGLRenderer : Renderer
         _gl.Enable(EnableCap.DepthTest);
     }
 
+    /// <inheritdoc/>
+    protected override ShaderProgram? DebugLineShader => _debugShader;
+
+    /// <inheritdoc/>
+    protected override void FlushWorldLinesCore(Scene.Camera camera, ShaderProgram program)
+    {
+        if (_lineBatch is null || _gl is null)
+            return;
+
+        // Test and write, accepting an exact tie. See DepthMode.TestWriteEqual
+        // for both halves. LEqual specifically: GL defaults to Less, which
+        // rejects a grid lying exactly on the floor it describes - the case the
+        // grid exists for - so leaving the default here would have made the
+        // OpenGL backend disagree with the other two about whether the grid is
+        // visible at all.
+        _gl.Enable(EnableCap.DepthTest);
+        _gl.DepthFunc(DepthFunction.Lequal);
+        _gl.DepthMask(true);
+
+        program.Use();
+        program.SetUniform("uView", camera.View);
+        program.SetUniform("uProjection", camera.Projection);
+        _lineBatch.Draw(WorldLines.Vertices, (uint)WorldLines.VertexCount);
+
+        // Restored, not left: the comparison is context state and the next pass
+        // in this frame is ordinary geometry, which wants strict Less.
+        _gl.DepthFunc(DepthFunction.Less);
+    }
+
     // The two halves of the frame wrapper in Render, reachable from the test
     // assembly so a test can draw one known colour through the real path and
     // read the window back. Internal rather than public: nothing in a game

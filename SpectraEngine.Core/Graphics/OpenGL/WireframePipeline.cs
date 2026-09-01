@@ -58,6 +58,12 @@ public sealed class WireframePipeline : IOpenGLRenderPipeline
 
             gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Fill);
             gl.Enable(EnableCap.CullFace);
+
+            // The world-line lane, INSIDE this pass, because this pass owns the
+            // scene's depth. A ground grid is world content and must be
+            // occluded by the geometry it lies under; the depth-off overlay
+            // that carries gizmo handles would draw it straight through walls.
+            context.Renderer.FlushWorldLines(camera, gbuffer: false);
         }
         finally
         {

@@ -57,6 +57,12 @@ public sealed unsafe class D3D12DeferredPipeline : ID3D12RenderPipeline
         // change in the middle of a recorded list.
         renderer.PrepareGeometryInstancing();
 
+        // Outside the pass, beside the instanced-variant compile and for the
+        // same reason: a program created inside an open pass is a state change
+        // in the middle of a recorded list.
+        renderer.PrepareWorldLines(gbuffer: true);
+
+
         // DEPTH ONLY, and the colour attachments are deliberately not cleared.
         // The depth buffer is the coverage mask: the light pass returns the sky
         // wherever depth is still 1, so no attachment is ever read at a pixel
@@ -76,6 +82,15 @@ public sealed unsafe class D3D12DeferredPipeline : ID3D12RenderPipeline
                 camera.AspectRatio = aspect;
 
             renderer.DrawGeometry(context.View, camera, surfaceShader);
+
+            // The world-line lane, INSIDE the G-buffer pass, because this is the
+            // only pass in a deferred frame that owns the scene's depth: the
+            // light pass afterwards is a full-screen triangle into a target
+            // whose own depth was never written, so a depth-tested draw there
+            // would test against a cleared buffer and show through everything.
+            // The five-attachment variant writes black albedo and the line's
+            // colour as emissive, so the light pass adds it unchanged.
+            renderer.FlushWorldLines(camera, gbuffer: true);
         }
         finally
         {

@@ -1204,7 +1204,28 @@ public sealed unsafe class D3D12Renderer : Renderer
         debug.SetUniform("uView", camera.View);
         debug.SetUniform("uProjection", camera.Projection * GlToD3dClipZ);
         debug.Use();
-        _lineBatch.Draw(DebugDraw.Vertices, (uint)DebugDraw.VertexCount);
+        _lineBatch.Draw(DebugDraw.Vertices, (uint)DebugDraw.VertexCount, DepthMode.None);
+    }
+
+    /// <inheritdoc/>
+    protected override ShaderProgram? DebugLineShader => _debugShader;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The depth mode rides the DRAW rather than the batch, because it goes
+    /// into the PSO key: a pipeline compiled for the always-on-top overlay
+    /// handed to a depth-tested draw is a wrong picture, not an error.
+    /// </remarks>
+    protected override void FlushWorldLinesCore(Scene.Camera camera, ShaderProgram program)
+    {
+        if (_lineBatch is null)
+            return;
+
+        var typed = (D3D12ShaderProgram)program;
+        typed.SetUniform("uView", camera.View);
+        typed.SetUniform("uProjection", camera.Projection * GlToD3dClipZ);
+        typed.Use();
+        _lineBatch.Draw(WorldLines.Vertices, (uint)WorldLines.VertexCount, DepthMode.TestWriteEqual, typed);
     }
 
     // ─── Per-frame arenas ────────────────────────────────────

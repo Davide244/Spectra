@@ -88,6 +88,29 @@ public interface ISceneEditor
     /// </summary>
     void Draw(DebugDraw output);
 
+    /// <summary>
+    /// Pushes the editor's WORLD overlay - the ground grid, the origin - into
+    /// this frame's depth-tested line buffer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A second lane, because the two kinds of editor line want opposite
+    /// depth rules.</b> <see cref="Draw"/>'s output is chrome: handles and a
+    /// selection outline that must never be hidden by the geometry they
+    /// describe, or a handle you can see is a handle you cannot pick. What goes
+    /// here is world content - a grid at y = 0 that must be occluded by the
+    /// floor it lies under, because a grid drawn through the walls of a room is
+    /// not a grid, it is a fault.
+    /// </para>
+    /// <para>
+    /// These lines go through the tone curve and <see cref="Draw"/>'s do not,
+    /// which follows from the same distinction: a grid is lit scene content and
+    /// should dim as exposure rises, while a handle is a display colour. Colours
+    /// pushed here are therefore authored in LINEAR light.
+    /// </para>
+    /// </remarks>
+    void DrawWorld(DebugDraw output);
+
     /// <summary>How many nodes are selected.</summary>
     int SelectionCount { get; }
 

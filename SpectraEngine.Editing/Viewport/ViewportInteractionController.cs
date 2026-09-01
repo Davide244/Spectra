@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Graphics;
+﻿using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Editing.Cameras;
@@ -172,6 +172,99 @@ public sealed class ViewportInteractionController
     public event Action<ViewportDragMode>? DragModeChanged;
 
     /// <summary>
+    /// How far a HOVER ray may travel. Deliberately finite, unlike
+    /// <see cref="PickDistance"/>.
+    /// </summary>
+    /// <remarks>
+    /// A press is a deliberate act and may reach anything in an unbounded
+    /// world; a hover happens on every frame the cursor moves, and nobody
+    /// hovers something half a kilometre away on purpose. Bounding it bounds
+    /// the descent, which is what keeps a mesh-heavy scene from paying a
+    /// per-triangle test at the frame rate.
+    /// </remarks>
+    public float HoverPickDistance { get; set; } = 500f;
+
+    /// <summary>
+    /// The node under the cursor when nothing owns the pointer, or null.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Null while a gesture is live, and that is not laziness.</b> During a
+    /// drag the pointer means the drag; an outline following the cursor across
+    /// whatever it passes over would say the press does something it will not.
+    /// </para>
+    /// <para>
+    /// <b>Null while the cursor is over a HANDLE too.</b> The manipulator draws
+    /// its own highlight there, and the press will manipulate rather than
+    /// select, so an object outline would promise a selection that is not going
+    /// to happen. This is the same precedence <see cref="ClassifyPress"/>
+    /// already encodes, reused rather than restated.
+    /// </para>
+    /// </remarks>
+    public SceneNode? HoveredNode { get; private set; }
+
+    /// <summary>What a press would mean at the cursor's current position.</summary>
+    public ViewportDragMode HoverMode { get; private set; }
+
+    // The cursor position the last hover was computed at. Exact equality
+    // deliberately: a still cursor is by far the common case, and a tolerance
+    // would only ever answer "no" one frame later.
+    private Vector2 _hoverCursor = new(float.NaN, float.NaN);
+
+    /// <summary>
+    /// Recomputes <see cref="HoveredNode"/>, if the cursor has moved and
+    /// nothing owns the pointer.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is <see cref="ClassifyPress"/> with the node kept.</b> That
+    /// function is a pure, tested "what would a press here mean" - exactly the
+    /// oracle a hover highlight is built on - and it existed, was tested, and
+    /// was called by nothing in the product. Answering the hover any other way
+    /// would be a second implementation free to disagree with what the click
+    /// then does.
+    /// </remarks>
+    private void UpdateHover(in EditorInputFrame frame, bool cameraOwnsPointer)
+    {
+        if (!frame.IsPointerUsable || cameraOwnsPointer || DragMode != ViewportDragMode.None)
+        {
+            ClearHover();
+            return;
+        }
+
+        if (frame.CursorPosition == _hoverCursor)
+            return;
+
+        _hoverCursor = frame.CursorPosition;
+
+        if (Gizmos.Active.PickAt(in frame).IsHit)
+        {
+            HoveredNode = null;
+            HoverMode = ViewportDragMode.Manipulate;
+            return;
+        }
+
+        float previous = PickDistance;
+        PickDistance = HoverPickDistance;
+        try
+        {
+            HoveredNode = TryPickNode(in frame, out SceneNode? node) ? node : null;
+        }
+        finally
+        {
+            PickDistance = previous;
+        }
+
+        HoverMode = HoveredNode is null ? ViewportDragMode.BoxSelect : ViewportDragMode.SelectAndMove;
+    }
+
+    private void ClearHover()
+    {
+        HoveredNode = null;
+        HoverMode = ViewportDragMode.None;
+        _hoverCursor = new Vector2(float.NaN, float.NaN);
+    }
+
+    /// <summary>
     /// Decides what a press at this frame's cursor would mean, without changing
     /// anything. Returns <see cref="ViewportDragMode.None"/> for a cursor
     /// outside the viewport, which belongs to whatever panel it is over.
@@ -210,6 +303,7 @@ public sealed class ViewportInteractionController
     {
         if (DragMode == ViewportDragMode.BoxSelect)
         {
+            ClearHover();
             UpdateBoxSelect(in frame, cancelRequested);
             return WithheldFromCamera();
         }
@@ -226,6 +320,7 @@ public sealed class ViewportInteractionController
 
         if (DragMode != ViewportDragMode.None)
         {
+            ClearHover();
             FinishGizmoGesture(gizmoResult, cancelRequested);
             return WithheldFromCamera();
         }
@@ -234,18 +329,25 @@ public sealed class ViewportInteractionController
         {
             // The cursor was over a handle and the manipulator took the press
             // itself — nothing to arbitrate.
+            ClearHover();
             SetMode(ViewportDragMode.Manipulate);
             return WithheldFromCamera();
         }
 
         if (frame.WasPressed(DragButton) && frame.IsPointerUsable && !cameraOwnsPointer)
         {
+            ClearHover();
             BeginGesture(in frame);
             return WithheldFromCamera();
         }
 
         // Nothing owns the pointer: the camera may have it.
         CameraController?.Update(in frame);
+
+        // Last, and only here: every earlier return owns the pointer, and a
+        // hover computed while something else is dragging is an answer to a
+        // question nobody asked.
+        UpdateHover(in frame, cameraOwnsPointer);
         return DragMode;
     }
 
@@ -271,6 +373,10 @@ public sealed class ViewportInteractionController
         Gizmos.Reset();
         _deferredSelect = null;
         PressedNode = null;
+        // A hover names a live SceneNode, and a reset is what happens when a
+        // scene is replaced. Keeping it would outline a node that no longer
+        // belongs to any graph.
+        ClearHover();
         // Same reason as the withheld frames below: a host that resets while
         // the orbit button is down (a minimized window, an undo mid-gesture)
         // must not have the travel since the last camera frame land as one

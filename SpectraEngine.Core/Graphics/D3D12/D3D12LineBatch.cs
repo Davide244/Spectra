@@ -1,4 +1,4 @@
-using Silk.NET.Core.Native;
+﻿using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 using System;
@@ -32,7 +32,25 @@ internal sealed unsafe class D3D12LineBatch : IDisposable
         _shader = shader;
     }
 
-    public void Draw(ReadOnlySpan<float> interleaved, uint vertexCount)
+    /// <summary>
+    /// Draws one interleaved line list.
+    /// </summary>
+    /// <param name="depth">
+    /// The depth state the draw wants. It goes into the PSO key rather than
+    /// being set beside it, because on this backend depth state IS part of the
+    /// pipeline: a PSO compiled for the always-on-top overlay handed to a
+    /// depth-tested draw renders the wrong picture and reports nothing.
+    /// </param>
+    /// <param name="program">
+    /// The program to draw with, or null for the batch's own. A separate
+    /// program is what the depth-tested world-line lane needs on a deferred
+    /// frame, where the line has to write all five G-buffer attachments.
+    /// </param>
+    public void Draw(
+        ReadOnlySpan<float> interleaved,
+        uint vertexCount,
+        DepthMode depth,
+        D3D12ShaderProgram? program = null)
     {
         if (vertexCount == 0) return;
         var list = _renderer.CurrentList;
@@ -54,9 +72,9 @@ internal sealed unsafe class D3D12LineBatch : IDisposable
         // compiled for the back buffer is invalid for an offscreen target with
         // a different format, and D3D12 validates the pair at draw time.
         var target = _renderer.CurrentTargetState;
-        var pso = _shader.GetPso(
+        var pso = (program ?? _shader).GetPso(
             LineLayout, FillMode.Solid, PrimitiveTopologyType.Line,
-            DepthMode.None, BlendMode.Opaque, DepthBias.None, in target);
+            depth, BlendMode.Opaque, DepthBias.None, in target);
         _renderer.BindPipelineState(list, pso);
         _renderer.BindTopology(list, D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
 

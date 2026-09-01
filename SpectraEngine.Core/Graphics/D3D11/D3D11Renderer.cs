@@ -46,6 +46,7 @@ public sealed unsafe class D3D11Renderer : Renderer
     private DepthBias _biasedRasterizerFor;
     private ComPtr<ID3D11DepthStencilState> _defaultDepth;
     private ComPtr<ID3D11DepthStencilState> _overlayDepth;
+    private ComPtr<ID3D11DepthStencilState> _worldLineDepth;
 
     // Every resource built by the Create* factories is tracked here so
     // Shutdown can free stragglers. Meshes/textures leave early through
@@ -509,6 +510,40 @@ public sealed unsafe class D3D11Renderer : Renderer
         ctx->OMSetDepthStencilState((ID3D11DepthStencilState*)_defaultDepth.Handle, 0);
     }
 
+    /// <inheritdoc/>
+    protected override ShaderProgram? DebugLineShader => _debugShader;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <b>A second line batch, because a D3D11 input layout is bound to the
+    /// shader signature it was validated against.</b> The batch is created from
+    /// a program's vertex bytecode, so reusing the debug batch with the
+    /// G-buffer world-line program creates successfully and then fails every
+    /// draw. The layouts are identical in content and that changes nothing:
+    /// this is the same trap the instance buffer already documents.
+    /// </remarks>
+    protected override void FlushWorldLinesCore(Scene.Camera camera, ShaderProgram program)
+    {
+        var typed = (D3D11ShaderProgram)program;
+        D3D11LineBatch? batch = ReferenceEquals(program, _debugShader)
+            ? _lineBatch
+            : _worldLineBatch ??= new D3D11LineBatch(_device, _context, typed);
+
+        if (batch is null)
+            return;
+
+        typed.SetUniform("uView", camera.View);
+        typed.SetUniform("uProjection", camera.Projection * GlToD3dClipZ);
+        typed.Use();
+
+        var ctx = (ID3D11DeviceContext*)_context.Handle;
+        ctx->OMSetDepthStencilState((ID3D11DepthStencilState*)_worldLineDepth.Handle, 0);
+        batch.Draw(WorldLines.Vertices, (uint)WorldLines.VertexCount);
+        ctx->OMSetDepthStencilState((ID3D11DepthStencilState*)_defaultDepth.Handle, 0);
+    }
+
+    private D3D11LineBatch? _worldLineBatch;
+
     public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices,
         ReadOnlySpan<VertexAttribute> attributes, MeshCpuAccess cpuAccess = MeshCpuAccess.Retained)
     {
@@ -578,6 +613,8 @@ public sealed unsafe class D3D11Renderer : Renderer
         _pipelines.Clear();
 
         _lineBatch?.Dispose();
+        _worldLineBatch?.Dispose();
+        _worldLineBatch = null;
         _lineBatch = null;
         _debugShader = null;
 
@@ -604,6 +641,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         ComOwnership.Release(ref _biasedRasterizer);
         ComOwnership.Release(ref _defaultDepth);
         ComOwnership.Release(ref _overlayDepth);
+        ComOwnership.Release(ref _worldLineDepth);
         EnsureSwapChainWindowed();
         ComOwnership.Release(ref _swapChain);
         ComOwnership.Release(ref _infoQueue);
@@ -870,6 +908,22 @@ public sealed unsafe class D3D11Renderer : Renderer
         ID3D11DepthStencilState* overlay = null;
         SilkMarshal.ThrowHResult(((ID3D11Device*)_device.Handle)->CreateDepthStencilState(&overlayDesc, &overlay));
         _overlayDepth = ComOwnership.Own(overlay);
+
+        // World-line state: test AND write, accepting an exact tie. See
+        // DepthMode.TestWriteEqual for both halves - LessEqual because a grid on
+        // a floor is coplanar by construction, and the write because in a
+        // deferred frame the depth buffer is the coverage mask and a line that
+        // wrote none would be discarded by the light pass as sky.
+        var worldLineDesc = new DepthStencilDesc
+        {
+            DepthEnable = 1,
+            DepthWriteMask = DepthWriteMask.All,
+            DepthFunc = ComparisonFunc.LessEqual,
+            StencilEnable = 0,
+        };
+        ID3D11DepthStencilState* worldLine = null;
+        SilkMarshal.ThrowHResult(((ID3D11Device*)_device.Handle)->CreateDepthStencilState(&worldLineDesc, &worldLine));
+        _worldLineDepth = ComOwnership.Own(worldLine);
     }
 
     /// <summary>

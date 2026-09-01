@@ -131,6 +131,15 @@ public sealed class SceneEditorHost : ISceneEditor
     // affordance — it is the only way one can be seen.
     private readonly SubtractiveBrushOverlay _negativeOutlines = new();
 
+    /// <summary>The ground grid and the world axes, drawn depth-TESTED.</summary>
+    public GroundGrid Grid { get; } = new();
+
+    /// <summary>The corner axis widget, drawn depth-OFF like the manipulators.</summary>
+    public AxisCompass Compass { get; } = new();
+
+    /// <summary>What is selected, and what the cursor is over.</summary>
+    public SelectionOutline Selection { get; } = new();
+
     // Last frame's framebuffer latch, kept so Draw can size the marquee without
     // asking the renderer a second time.
     private Vector2 _viewportSize;
@@ -775,7 +784,29 @@ public sealed class SceneEditorHost : ISceneEditor
         // line pass so neither hides behind the geometry it describes.
         _partOutlines.Draw(output, _scene);
         _negativeOutlines.Draw(output, _scene);
+
+        // Between the context overlays and the manipulator, in that order: an
+        // outline says what a press would act on, a handle says what a press
+        // WILL do, and the handle has to be the one on top.
+        Selection.Draw(output, _scene, _scene.Camera, _viewportSize, _viewport.HoveredNode);
+
         _viewport.Draw(output, _viewportSize);
+
+        // Last, so nothing in the scene overlay can be mistaken for part of it,
+        // and because it is the one thing here that is not about the scene at
+        // all: it says which way you are facing.
+        Compass.Draw(output, _scene.Camera, _viewportSize);
+    }
+
+    /// <inheritdoc/>
+    public void DrawWorld(DebugDraw output)
+    {
+        // The grid's spacing is the LIVE move increment, not a fixed size, so
+        // the squares on the floor are the squares an object will land on. It
+        // follows the translate tool specifically rather than the live tool: a
+        // rotate snap is in degrees and would silently reinterpret the grid as
+        // a 15-unit lattice.
+        Grid.Draw(output, _scene.Camera, _gizmos.Translate.Snap.Increment, _viewportSize.Y);
     }
 
     // --- Navigation keyboard -------------------------------------------------

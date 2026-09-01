@@ -42,6 +42,12 @@ public sealed unsafe class D3D12WireframePipeline : ID3D12RenderPipeline
             renderer.CurrentFillMode = FillMode.Wireframe;
             DrawView(context.View, camera);
             renderer.CurrentFillMode = FillMode.Solid;
+
+            // The world-line lane, INSIDE this pass, because this pass owns the
+            // scene's depth. A ground grid is world content and must be
+            // occluded by the geometry it lies under; the depth-off overlay
+            // that carries gizmo handles would draw it straight through walls.
+            renderer.FlushWorldLines(camera, gbuffer: false);
         }
         finally
         {

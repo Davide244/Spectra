@@ -18,6 +18,7 @@ public static class BaseShaders
     private const string GBufferFillFileName = "GBufferFill.spectrashade";
     private const string DeferredLightFileName = "DeferredLight.spectrashade";
     private const string ShadowDepthFileName = "ShadowDepth.spectrashade";
+    private const string WorldLineGBufferFileName = "WorldLineGBuffer.spectrashade";
 
     /// <summary>The built-in lit shader — diffuse + ambient from one directional light, modulated by a diffuse texture.</summary>
     public static string Lit => ReadEmbedded(LitFileName);
@@ -36,6 +37,9 @@ public static class BaseShaders
 
     /// <summary>The shadow map's depth pass: writes depth from the light, and nothing else.</summary>
     public static string ShadowDepth => ReadEmbedded(ShadowDepthFileName);
+
+    /// <summary>The depth-tested world line, written into a deferred G-buffer.</summary>
+    public static string WorldLineGBuffer => ReadEmbedded(WorldLineGBufferFileName);
 
 
     /// <summary>
@@ -68,6 +72,9 @@ public static class BaseShaders
 
     /// <summary>Source-file path for <see cref="ShadowDepth"/>, if locatable on disk.</summary>
     public static string? ShadowDepthPath => TryResolveSourcePath(ShadowDepthFileName);
+
+    /// <summary>Source-file path for <see cref="WorldLineGBuffer"/>, if locatable on disk.</summary>
+    public static string? WorldLineGBufferPath => TryResolveSourcePath(WorldLineGBufferFileName);
 
     private static string ReadEmbedded(string fileName)
     {
