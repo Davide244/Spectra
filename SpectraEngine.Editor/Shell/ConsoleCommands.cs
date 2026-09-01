@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Hosting;
+﻿using SpectraEngine.Core.Hosting;
 using SpectraEngine.Editing.Cameras;
 using SpectraEngine.Editing.Gizmos;
 using SpectraEngine.Editing.Hosting;
@@ -96,6 +96,7 @@ public sealed class ConsoleCommands
         ("part", "insert a part brush"),
         ("cut", "insert a subtractive brush"),
         ("light", "insert a point light"),
+        ("panel", "insert a surface light on what you are looking at"),
         ("group", "group the selection"),
         ("ungroup", "ungroup the selection"),
         ("duplicate", "duplicate the selection"),
@@ -139,6 +140,7 @@ public sealed class ConsoleCommands
             "part" => Insert(InsertKind.PartBrush, "part"),
             "cut" or "subtract" => Insert(InsertKind.SubtractiveBrush, "cut"),
             "light" => Insert(InsertKind.PointLight, "light"),
+            "panel" or "surfacelight" => Insert(InsertKind.SurfaceLight, "surface light"),
 
             "group" => Host(EditorHostCommand.Group, "grouped"),
             "ungroup" => Host(EditorHostCommand.Ungroup, "ungrouped"),

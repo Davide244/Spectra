@@ -30,7 +30,11 @@ namespace SpectraEngine.Core
         // Asset format versions
         public const int ModelFormatVersion = 1;
         public const int TextureFormatVersion = 1;
-        public const int MapFormatVersion = 1;
+        // 2: light kinds beyond directional and point, with the angles and
+        // extents they need. A document only DECLARES it needs version 2 when it
+        // actually carries one of those (see MapSceneBinder), so every map
+        // written before this still says 1 and still opens in an older editor.
+        public const int MapFormatVersion = 2;
 
         // The oldest reader that can still make sense of a map this engine writes.
         // Source formats version asymmetrically from cooked ones: a cooked artifact
@@ -39,7 +43,17 @@ namespace SpectraEngine.Core
         // survive an engine older or newer than itself. A reader refuses a document
         // whose minimumReadableVersion exceeds MapFormatVersion, and otherwise carries
         // members it does not recognise through untouched.
+        // Still 1, and deliberately: this constant is the floor a NEW document
+        // gets, and raising it would tell every older editor to refuse every map
+        // this engine writes, including the overwhelming majority that carry
+        // nothing an older editor could not read. The documents that genuinely
+        // need a newer reader raise their OWN minimum, per document, where the
+        // fact is actually known.
         public const int MinimumReadableMapVersion = 1;
+
+        // What a document declares when it carries a light shape older readers
+        // would silently delete. See MapSceneBinder.RequiredReaderVersion.
+        public const int LightShapeMapVersion = 2;
 
         // A game project is data too: a text manifest naming the maps, the display
         // defaults and the backends, read once at boot. Same asymmetric versioning

@@ -425,10 +425,8 @@ public class OpenGLRenderer : Renderer
     }
 
     /// <inheritdoc/>
-    protected override ShaderProgram? DebugLineShader => _debugShader;
-
-    /// <inheritdoc/>
-    protected override void FlushWorldLinesCore(Scene.Camera camera, ShaderProgram program)
+    protected override void FlushWorldLinesCore(
+        Scene.Camera camera, ShaderProgram program, float nudge)
     {
         if (_lineBatch is null || _gl is null)
             return;
@@ -443,9 +441,13 @@ public class OpenGLRenderer : Renderer
         _gl.DepthFunc(DepthFunction.Lequal);
         _gl.DepthMask(true);
 
+        // Use FIRST on this backend: glUniform writes into the active program,
+        // so staging before it would write into whatever was bound last.
         program.Use();
         program.SetUniform("uView", camera.View);
         program.SetUniform("uProjection", camera.Projection);
+        program.SetUniform("uCameraPosition", camera.Position);
+        program.SetUniform("uDepthNudge", nudge);
         _lineBatch.Draw(WorldLines.Vertices, (uint)WorldLines.VertexCount);
 
         // Restored, not left: the comparison is context state and the next pass

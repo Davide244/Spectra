@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Bsp;
+﻿using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Scene;
 using System;
 using SpectraEngine.Core.Serialization;
@@ -106,6 +106,15 @@ public static class MapFormat
     public const string RangeMember = "range";
     public const string EnabledMember = "enabled";
 
+    // APPENDED, in this order, and never reordered. The canonical member order
+    // is what byte identity is defined against, so inserting one of these
+    // earlier would rewrite every existing file that carries a light.
+    public const string InnerAngleMember = "innerAngle";
+    public const string OuterAngleMember = "outerAngle";
+    public const string WidthMember = "width";
+    public const string HeightMember = "height";
+    public const string RadiusMember = "radius";
+
     // --- closed vocabularies ------------------------------------------------
 
     public const string WorldKind = "world";
@@ -116,6 +125,9 @@ public static class MapFormat
 
     public const string DirectionalLight = "directional";
     public const string PointLight = "point";
+    public const string SpotLight = "spot";
+    public const string RectLight = "rect";
+    public const string DiscLight = "disc";
 
     /// <summary>
     /// Realms, in the vocabulary the format fixes. No enum exists in Core yet;
@@ -132,7 +144,27 @@ public static class MapFormat
     internal static string ToWire(BrushOperation operation) =>
         operation == BrushOperation.Subtractive ? SubtractiveOperation : AdditiveOperation;
 
-    internal static string ToWire(LightKind kind) => kind == LightKind.Point ? PointLight : DirectionalLight;
+    /// <summary>
+    /// The wire name for a light kind.
+    /// </summary>
+    /// <remarks>
+    /// <b>A switch that THROWS, not a ternary.</b> This was
+    /// <c>kind == Point ? "point" : "directional"</c>, which is correct for two
+    /// kinds and silently serialises every future one as directional - a saved
+    /// map that loads as the wrong shape with nothing anywhere reporting it, and
+    /// the exact failure the format's own rules exist to prevent. A missing case
+    /// is now a load-time error at the moment the map is written rather than a
+    /// wrong picture the next time it is opened.
+    /// </remarks>
+    internal static string ToWire(LightKind kind) => kind switch
+    {
+        LightKind.Directional => DirectionalLight,
+        LightKind.Point => PointLight,
+        LightKind.Spot => SpotLight,
+        LightKind.Rect => RectLight,
+        LightKind.Disc => DiscLight,
+        _ => throw new NotSupportedException($"No wire name for light kind '{kind}'."),
+    };
 
     internal static int IndexOf(string[] order, string member) => Array.IndexOf(order, member);
 }

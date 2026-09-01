@@ -1282,6 +1282,7 @@ public partial class MainWindow : Window
     private void OnInsertPartBrushClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.PartBrush);
     private void OnInsertSubtractiveBrushClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.SubtractiveBrush);
     private void OnInsertLightClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.PointLight);
+    private void OnInsertSurfaceLightClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.SurfaceLight);
     private void OnInsertGroupClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.Group);
 
     // ─── Set semantics, and a local opinion with a bound ──
@@ -1481,6 +1482,11 @@ public partial class MainWindow : Window
         insert.Items.Add(Item("Part", "Ctrl+D2", () => _session?.Insert(InsertKind.PartBrush, _viewportMenuPoint)));
         insert.Items.Add(Item("Cut", "Ctrl+D3", () => _session?.Insert(InsertKind.SubtractiveBrush, _viewportMenuPoint)));
         insert.Items.Add(Item("Light", "Ctrl+D4", () => _session?.Insert(InsertKind.PointLight, _viewportMenuPoint)));
+
+        // The one insert that genuinely wants the RIGHT-CLICK point rather than
+        // the view centre: it mounts on the surface under the cursor, so "here"
+        // is the whole gesture.
+        insert.Items.Add(Item("Surface light", null, () => _session?.Insert(InsertKind.SurfaceLight, _viewportMenuPoint)));
         insert.Items.Add(Item("Empty group", null, () => _session?.Insert(InsertKind.Group, _viewportMenuPoint)));
 
         var menu = new ContextMenu();

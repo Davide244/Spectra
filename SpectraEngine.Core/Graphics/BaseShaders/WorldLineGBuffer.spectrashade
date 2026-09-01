@@ -1,4 +1,4 @@
-// WorldLineGBuffer.spectrashade — the depth-tested world line, written into a
+﻿// WorldLineGBuffer.spectrashade — the depth-tested world line, written into a
 // deferred G-buffer.
 //
 // WHY THIS EXISTS AT ALL. The engine's debug overlay draws with depth testing
@@ -57,12 +57,19 @@ shader WorldLineGBuffer {
     [Binding(0)] cbuffer Camera {
         mat4 uView;
         mat4 uProjection;
+        vec3 uCameraPosition;
+        float uDepthNudge;
     }
 
+    // Identical to WorldLine's, deliberately: the two lanes must place a line at
+    // the same depth or a grid would sit at one height under the forward
+    // pipeline and another under the deferred one, which reads as a rendering
+    // bug that appears only when somebody presses the pipeline key.
     [Vertex]
     VertexOutput VertexMain(VertexInput input) {
         var output = new VertexOutput();
-        output.position = uProjection * uView * vec4(input.position, 1.0);
+        vec3 nudged = input.position + (uCameraPosition - input.position) * uDepthNudge;
+        output.position = uProjection * uView * vec4(nudged, 1.0);
         output.color = input.color;
         return output;
     }

@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Bsp;
+﻿using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Core.Serialization;
 using System;
@@ -309,6 +309,25 @@ public static class MapWriter
 
         if (!light.Enabled) w.WriteBoolean(MapFormat.EnabledMember, false);
         CanonicalJson.Flush(w, light.Unknown, 4);
+
+        // Written only when they differ from the default, like everything above
+        // - which is also what makes byte identity hold for every file written
+        // before these members existed: a directional light or a point light
+        // carries the defaults, so nothing new appears in its object.
+        if (light.InnerAngle != 25f) WriteFinite(w, MapFormat.InnerAngleMember, light.InnerAngle);
+        CanonicalJson.Flush(w, light.Unknown, 5);
+
+        if (light.OuterAngle != 35f) WriteFinite(w, MapFormat.OuterAngleMember, light.OuterAngle);
+        CanonicalJson.Flush(w, light.Unknown, 6);
+
+        if (light.Width != 1f) WriteFinite(w, MapFormat.WidthMember, light.Width);
+        CanonicalJson.Flush(w, light.Unknown, 7);
+
+        if (light.Height != 1f) WriteFinite(w, MapFormat.HeightMember, light.Height);
+        CanonicalJson.Flush(w, light.Unknown, 8);
+
+        if (light.Radius != 0.5f) WriteFinite(w, MapFormat.RadiusMember, light.Radius);
+        CanonicalJson.Flush(w, light.Unknown, 9);
 
         w.WriteEndObject();
     });

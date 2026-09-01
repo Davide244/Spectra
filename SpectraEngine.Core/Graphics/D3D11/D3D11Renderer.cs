@@ -511,9 +511,6 @@ public sealed unsafe class D3D11Renderer : Renderer
     }
 
     /// <inheritdoc/>
-    protected override ShaderProgram? DebugLineShader => _debugShader;
-
-    /// <inheritdoc/>
     /// <remarks>
     /// <b>A second line batch, because a D3D11 input layout is bound to the
     /// shader signature it was validated against.</b> The batch is created from
@@ -522,18 +519,29 @@ public sealed unsafe class D3D11Renderer : Renderer
     /// draw. The layouts are identical in content and that changes nothing:
     /// this is the same trap the instance buffer already documents.
     /// </remarks>
-    protected override void FlushWorldLinesCore(Scene.Camera camera, ShaderProgram program)
+    protected override void FlushWorldLinesCore(
+        Scene.Camera camera, ShaderProgram program, float nudge)
     {
         var typed = (D3D11ShaderProgram)program;
-        D3D11LineBatch? batch = ReferenceEquals(program, _debugShader)
-            ? _lineBatch
-            : _worldLineBatch ??= new D3D11LineBatch(_device, _context, typed);
 
-        if (batch is null)
-            return;
+        // One batch PER PROGRAM. A D3D11 input layout is bound to the shader
+        // signature it was validated against, so a batch built for one program
+        // creates successfully against another and then fails every draw with a
+        // missing-semantic error - the same trap the instance buffer already
+        // documents, and the reason this is a dictionary rather than a field.
+        if (!_worldLineBatches.TryGetValue(program, out D3D11LineBatch? batch))
+        {
+            batch = new D3D11LineBatch(_device, _context, typed);
+            _worldLineBatches[program] = batch;
+        }
 
+        // Use() LAST on this backend: the writes are staged into a constant
+        // shadow that Use() flushes, so writing after it would leave this
+        // draw with the previous frame's values.
         typed.SetUniform("uView", camera.View);
         typed.SetUniform("uProjection", camera.Projection * GlToD3dClipZ);
+        typed.SetUniform("uCameraPosition", camera.Position);
+        typed.SetUniform("uDepthNudge", nudge);
         typed.Use();
 
         var ctx = (ID3D11DeviceContext*)_context.Handle;
@@ -542,7 +550,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         ctx->OMSetDepthStencilState((ID3D11DepthStencilState*)_defaultDepth.Handle, 0);
     }
 
-    private D3D11LineBatch? _worldLineBatch;
+    private readonly Dictionary<ShaderProgram, D3D11LineBatch> _worldLineBatches = [];
 
     public override Mesh CreateMesh(ReadOnlySpan<float> vertices, ReadOnlySpan<uint> indices,
         ReadOnlySpan<VertexAttribute> attributes, MeshCpuAccess cpuAccess = MeshCpuAccess.Retained)
@@ -613,8 +621,11 @@ public sealed unsafe class D3D11Renderer : Renderer
         _pipelines.Clear();
 
         _lineBatch?.Dispose();
-        _worldLineBatch?.Dispose();
-        _worldLineBatch = null;
+
+        foreach (D3D11LineBatch batch in _worldLineBatches.Values)
+            batch.Dispose();
+
+        _worldLineBatches.Clear();
         _lineBatch = null;
         _debugShader = null;
 

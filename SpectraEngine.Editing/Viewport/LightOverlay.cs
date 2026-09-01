@@ -188,7 +188,99 @@ public sealed class LightOverlay
                 DrawRing(output, at, Vector3.UnitY, Vector3.UnitZ, light.Range, colour);
                 DrawRing(output, at, Vector3.UnitZ, Vector3.UnitX, light.Range, colour);
                 break;
+
+            case LightKind.Spot:
+                DrawCone(output, node, light, colour);
+                break;
+
+            case LightKind.Rect:
+            case LightKind.Disc:
+                DrawArea(output, node, light, colour);
+                break;
         }
+    }
+
+    // TWO cones, inner and outer, because the falloff between them is what a
+    // spot actually is: one outline says where the light stops and says nothing
+    // about where it is at full strength, which is the half a user is aiming.
+    private static void DrawCone(DebugDraw output, SceneNode node, Light light, Vector3 colour)
+    {
+        Basis(node, out Vector3 forward, out Vector3 right, out Vector3 up);
+
+        Vector3 at = node.WorldPosition;
+        float reach = light.Range;
+
+        DrawConeRing(output, at, forward, right, up, reach, light.OuterAngle, colour);
+        DrawConeRing(output, at, forward, right, up, reach, light.InnerAngle, colour * 0.45f);
+
+        // A short stub along the axis, so a cone seen end-on from directly
+        // behind is still a cone rather than two concentric circles.
+        output.Line(at, at + (forward * reach * 0.15f), colour);
+    }
+
+    private static void DrawConeRing(
+        DebugDraw output, Vector3 apex, Vector3 forward, Vector3 right, Vector3 up,
+        float reach, float halfAngleDegrees, Vector3 colour)
+    {
+        float radians = halfAngleDegrees * (MathF.PI / 180f);
+        Vector3 centre = apex + (forward * reach * MathF.Cos(radians));
+        float radius = reach * MathF.Sin(radians);
+
+        DrawRing(output, centre, right, up, radius, colour);
+
+        // Four rays from the apex to the rim, at the diagonals. Not the whole
+        // rim: a cone drawn as a full fan is a solid disc of lines that hides
+        // whatever the light is pointing at.
+        for (int i = 0; i < 4; i++)
+        {
+            float angle = i * (MathF.Tau / 4);
+            Vector3 rim = centre + (right * radius * MathF.Cos(angle)) + (up * radius * MathF.Sin(angle));
+            output.Line(apex, rim, colour * 0.7f);
+        }
+    }
+
+    // The emitting surface, plus one arrow saying which way it faces. The arrow
+    // is not decoration: an area light is ONE-SIDED, so a panel turned round
+    // lights nothing and looks identical from the front.
+    private static void DrawArea(DebugDraw output, SceneNode node, Light light, Vector3 colour)
+    {
+        Basis(node, out Vector3 forward, out Vector3 right, out Vector3 up);
+        Vector3 at = node.WorldPosition;
+
+        if (light.Kind == LightKind.Disc)
+        {
+            DrawRing(output, at, right, up, light.Radius, colour);
+        }
+        else
+        {
+            Vector3 halfWidth = right * light.Width * 0.5f;
+            Vector3 halfHeight = up * light.Height * 0.5f;
+
+            Vector3 a = at - halfWidth - halfHeight;
+            Vector3 b = at + halfWidth - halfHeight;
+            Vector3 c = at + halfWidth + halfHeight;
+            Vector3 d = at - halfWidth + halfHeight;
+
+            output.Line(a, b, colour);
+            output.Line(b, c, colour);
+            output.Line(c, d, colour);
+            output.Line(d, a, colour);
+        }
+
+        float reach = MathF.Min(light.Range, MathF.Max(light.Width, light.Height) + 1f);
+        output.Arrow(at, at + (forward * reach * 0.5f), colour);
+    }
+
+    // The node's own basis, straight out of the world matrix - the same three
+    // rows Scene.CollectLights uploads. Not a rotation applied to unit vectors:
+    // two expressions for one basis is how the shape drawn here ends up facing
+    // the opposite way from the light being cast, silently.
+    private static void Basis(SceneNode node, out Vector3 forward, out Vector3 right, out Vector3 up)
+    {
+        Matrix4x4 world = node.WorldMatrix;
+        forward = Vector3.Normalize(new Vector3(world.M31, world.M32, world.M33));
+        right = Vector3.Normalize(new Vector3(world.M11, world.M12, world.M13));
+        up = Vector3.Normalize(new Vector3(world.M21, world.M22, world.M23));
     }
 
     /// <summary>

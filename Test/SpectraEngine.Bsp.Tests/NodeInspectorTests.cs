@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Assets;
+﻿using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Inspection;
 using SpectraEngine.Core.Scene;
@@ -200,6 +200,50 @@ public sealed class NodeInspectorTests
 
         kind.Kind.ShouldBe(PropertyKind.Choice);
         kind.Text.ShouldBe("Point");
-        kind.Choices.ShouldBe(["Directional", "Point"]);
+
+        // EVERY kind, and matched against the enum rather than a literal list:
+        // a kind offered by the dropdown but missing from the label switch shows
+        // as "Directional" and rewrites itself to that the moment anybody
+        // touches the row, and a kind in the enum but missing from the dropdown
+        // cannot be reached at all.
+        kind.Choices!.Count.ShouldBe(Enum.GetValues<LightKind>().Length);
+
+        foreach (LightKind value in Enum.GetValues<LightKind>())
+            kind.Choices.ShouldContain(value.ToString());
+    }
+
+    [Fact]
+    public void A_lights_shape_rows_are_the_ones_that_shape_reads()
+    {
+        // A cone angle on a rect light is stored and read by NOTHING, so a row
+        // for it would accept a number and change no pixel - which teaches, in
+        // one session, that this panel's fields are decorative.
+        List<PropertyRow> spot = Describe(
+            new SceneNode("Spot") { Light = new Light { Kind = LightKind.Spot } });
+
+        spot.ShouldContain(r => r.Id == PropertyId.LightOuterAngle);
+        spot.ShouldNotContain(r => r.Id == PropertyId.LightWidth);
+
+        List<PropertyRow> panel = Describe(
+            new SceneNode("Panel") { Light = new Light { Kind = LightKind.Rect } });
+
+        panel.ShouldContain(r => r.Id == PropertyId.LightWidth);
+        panel.ShouldContain(r => r.Id == PropertyId.LightHeight);
+        panel.ShouldNotContain(r => r.Id == PropertyId.LightRadius);
+
+        List<PropertyRow> disc = Describe(
+            new SceneNode("Disc") { Light = new Light { Kind = LightKind.Disc } });
+
+        disc.ShouldContain(r => r.Id == PropertyId.LightRadius);
+        disc.ShouldNotContain(r => r.Id == PropertyId.LightOuterAngle);
+
+        // Range is the deliberate exception: it is stored and validated for
+        // every kind, so hiding it would hide a value that can still refuse an
+        // edit.
+        List<PropertyRow> sun = Describe(
+            new SceneNode("Sun") { Light = new Light { Kind = LightKind.Directional } });
+
+        sun.ShouldContain(r => r.Id == PropertyId.LightRange);
+        sun.ShouldNotContain(r => r.Id == PropertyId.LightWidth);
     }
 }

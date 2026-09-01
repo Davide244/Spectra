@@ -132,7 +132,7 @@ public sealed class GroundGrid
         // metres up, so the extent grows with the camera's height. Capped, or a
         // camera parked at altitude asks for a grid the cap would truncate
         // anyway.
-        float radius = MathF.Min(Radius * MathF.Max(1f, height / 10f), Radius * 4f);
+        float radius = MathF.Min(Radius * MathF.Max(1f, height / 10f), Radius * 2f);
 
         float cell = CoarsenedCell(increment, height, camera, viewportHeight);
         CellSizeLastDraw = cell;
@@ -218,6 +218,17 @@ public sealed class GroundGrid
     // axis letters wear, so the letter beside a field, the arrow under the
     // cursor and the line across the floor are recognisably the same axis. This
     // is what turns "a grid" into "the world has an origin".
+    //
+    // DRAWN SHORTER THAN THE GRID, and that is the one thing about them that is
+    // not obvious. The grid plane is at y = 0 and a level's geometry straddles
+    // it - a wall standing on a floor whose top is at zero has half its height
+    // below the plane - so a grid line legitimately passes IN FRONT of the wall
+    // it appears to cross. That is correct, it is what every editor in this
+    // category does, and it is not a depth failure (WorldLineGlTests pins the
+    // depth lane in both directions). What it IS is loud: an axis at full
+    // strength running a hundred units across a room reads as a rendering
+    // fault, so the axes reach a third of the grid and the grid itself fades
+    // hard well before its own edge.
     private static void DrawAxes(DebugDraw output, float centerX, float centerZ, float reach, Vector3 eye)
     {
         var xColor = new Vector3(0.30f, 0.020f, 0.020f);
@@ -226,15 +237,17 @@ public sealed class GroundGrid
         // Only where the axis actually crosses the drawn patch. An axis line
         // pinned to the patch's own edge would be a bright line that is not the
         // axis, which is worse than no axis at all.
-        if (MathF.Abs(centerZ) <= reach)
+        float axisReach = reach * 0.34f;
+
+        if (MathF.Abs(centerZ) <= axisReach)
         {
-            DrawFading(output, new Vector3(centerX - reach, 0f, 0f), new Vector3(centerX + reach, 0f, 0f),
+            DrawFading(output, new Vector3(centerX - axisReach, 0f, 0f), new Vector3(centerX + axisReach, 0f, 0f),
                 xColor, eye, reach);
         }
 
-        if (MathF.Abs(centerX) <= reach)
+        if (MathF.Abs(centerX) <= axisReach)
         {
-            DrawFading(output, new Vector3(0f, 0f, centerZ - reach), new Vector3(0f, 0f, centerZ + reach),
+            DrawFading(output, new Vector3(0f, 0f, centerZ - axisReach), new Vector3(0f, 0f, centerZ + axisReach),
                 zColor, eye, reach);
         }
     }
@@ -258,8 +271,8 @@ public sealed class GroundGrid
     {
         const int Segments = 5;
         var ground = new Vector3(eye.X, 0f, eye.Z);
-        float fadeStart = reach * 0.12f;
-        float fadeEnd = reach * 0.80f;
+        float fadeStart = reach * 0.05f;
+        float fadeEnd = reach * 0.62f;
 
         Vector3 previous = a;
         for (int i = 1; i <= Segments; i++)

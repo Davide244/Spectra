@@ -1,4 +1,4 @@
-// DeferredLight.spectrashade — the deferred light pass.
+﻿// DeferredLight.spectrashade — the deferred light pass.
 //
 // Reads the G-buffer and shades it with a Cook-Torrance microfacet BRDF: GGX
 // for the normal distribution, Smith height-correlated for visibility, Schlick
@@ -104,9 +104,24 @@ shader DeferredLight {
         float uShadowFilterRadius;
     }
 
+    // FOUR parallel vec4 arrays, never a struct array: a struct array
+    // generates valid-looking text and then silently does nothing on OpenGL.
+    // Four is also the minimum - an area light's bitangent is recovered by a
+    // cross product rather than stored.
+    //
+    //   uLightPositions  xyz position or travel direction   w range
+    //   uLightColors     rgb colour * intensity             w TYPE
+    //   uLightAxis       xyz facing                         w cos(outer) | halfHeight | radius
+    //   uLightTangent    xyz in-plane right                 w cos(inner) | halfWidth
+    //
+    // The type numbers are RenderLightType and are append-only: inserting a
+    // value renumbers every kind after it and lights the wrong shape with no
+    // error anywhere.
     [Binding(1)] cbuffer Lights {
         vec4[8] uLightPositions;
         vec4[8] uLightColors;
+        vec4[8] uLightAxis;
+        vec4[8] uLightTangent;
     }
 
     [Binding(2)] cbuffer Shadows {
@@ -197,21 +212,52 @@ shader DeferredLight {
 
         for (int i = 0; i < uLightCount; i = i + 1) {
             vec4 posRange = uLightPositions[i];
-            vec3 radiance = uLightColors[i].rgb;
+            vec4 colorType = uLightColors[i];
+            vec4 axis = uLightAxis[i];
+            vec4 tangent = uLightTangent[i];
+
+            vec3 radiance = colorType.rgb;
+            float type = colorType.w;
 
             vec3 l = -posRange.xyz;
             float attenuation = 1.0;
 
-            if (posRange.w > 0.0) {
-                vec3 offset = posRange.xyz - worldPosition;
+            if (type > 0.5) {
+                // The point the surface is actually lit FROM. For a point and a
+                // spot that is the light's own origin; for an area light it is
+                // the representative point - the spot on the shape closest to
+                // the reflection of the view ray, which is the standard cheap
+                // stand-in for integrating over the surface. LTC would be more
+                // faithful and needs two lookup textures and a data-dependent
+                // clipping loop, which is exactly what fxc refuses to compile.
+                vec3 source = posRange.xyz;
+
+                if (type > 2.5) {
+                    source = AreaPoint(posRange.xyz, axis, tangent, type, worldPosition, n, v, roughness);
+                }
+
+                vec3 offset = source - worldPosition;
                 float distance = Math.Length(offset);
                 l = offset / Math.Max(distance, 0.0001);
 
-                // Inverse-square, windowed to reach exactly zero at the range.
-                // Without the window a light never stops mattering and can never
-                // be culled; without the inverse square it is not light.
+                // Measured from the shape's CLOSEST point, not its centre.
+                // Without this a four-unit panel goes dark at its own ends,
+                // because the surface directly beneath a corner is two units
+                // from the middle and the falloff does not know why.
                 float window = Math.Max(1.0 - distance / posRange.w, 0.0);
                 attenuation = window * window / (1.0 + distance * distance);
+
+                if (type > 1.5) {
+                    if (type < 2.5) {
+                        attenuation = attenuation * SpotFactor(axis, tangent, l);
+                    } else {
+                        // ONE-SIDED. A panel emits from its front face only, and
+                        // without this a ceiling light also lights the room
+                        // above it - which is invisible from below and wrong
+                        // everywhere else.
+                        attenuation = attenuation * Math.Max(Math.Dot(axis.xyz, -l), 0.0);
+                    }
+                }
             }
 
             l = Math.Normalize(l);
@@ -227,6 +273,85 @@ shader DeferredLight {
         // Emissive is added after shading, never lit: a surface that emits does
         // not also receive its own light.
         return vec4(total + uEmissive.Sample(uv).rgb, 1.0);
+    }
+
+    // A spot's cone falloff: full strength inside the inner half-angle, zero
+    // outside the outer one, smoothed between. The comparison is against
+    // COSINES, computed on the CPU once per frame, because converting to an
+    // angle per pixel would put a transcendental in the inner loop for a value
+    // that does not change.
+    //
+    // -l because l points from the surface TOWARD the light, and the cone axis
+    // points the way the light travels. Getting this backwards lights a cone
+    // pointing exactly opposite to the one drawn over it in the viewport.
+    float SpotFactor(vec4 axis, vec4 tangent, vec3 l) {
+        float cosAngle = Math.Dot(axis.xyz, -l);
+        float outer = axis.w;
+        float inner = tangent.w;
+
+        // Max, not a bare subtraction: the CPU clamps inner to outer, and a
+        // zero denominator here would be a division by zero rather than a hard
+        // edge.
+        float t = (cosAngle - outer) / Math.Max(inner - outer, 0.0001);
+        t = Math.Clamp(t, 0.0, 1.0);
+
+        // Squared, so the rim fades rather than stepping. A linear ramp reads
+        // as a visible band at the cone's edge.
+        return t * t;
+    }
+
+    // The representative point on an area light: the point on the shape closest
+    // to where the view ray reflects off this surface.
+    //
+    // ONE point for both diffuse and specular here, which is the honest
+    // simplification. Separate points are more faithful - the diffuse response
+    // wants the shape's centroid and the specular wants the reflection - but a
+    // second Shade call per light is a second full BRDF evaluation, and this
+    // path already carries the frame's whole lighting cost. The visible
+    // difference is confined to a tight highlight on a smooth surface.
+    vec3 AreaPoint(vec3 center, vec4 axis, vec4 tangent, float type, vec3 world, vec3 n, vec3 v, float roughness) {
+        vec3 r = Math.Reflect(-v, n);
+
+        // Where the reflection ray meets the light's plane. A ray parallel to
+        // the plane, or pointing away from it, has no useful intersection and
+        // falls back to the centre - which is the point light this shape
+        // degrades to, and the right answer for a surface that cannot see a
+        // specular highlight on it at all.
+        float denom = Math.Dot(r, axis.xyz);
+        if (Math.Abs(denom) < 0.0001) {
+            return center;
+        }
+
+        float t = Math.Dot(center - world, axis.xyz) / denom;
+        if (t < 0.0) {
+            return center;
+        }
+
+        vec3 hit = world + r * t;
+        vec3 local = hit - center;
+
+        // The bitangent is a cross product rather than a fourth uploaded
+        // vector: the axis and the tangent are orthonormal by construction, so
+        // it carries no information they do not already.
+        vec3 bitangent = Math.Cross(axis.xyz, tangent.xyz);
+
+        float u = Math.Dot(local, tangent.xyz);
+        float vv = Math.Dot(local, bitangent);
+
+        if (type > 3.5) {
+            // A disc: clamp the offset's LENGTH rather than its components.
+            float radius = axis.w;
+            float len = Math.Sqrt(u * u + vv * vv);
+            float scale = Math.Min(len, radius) / Math.Max(len, 0.0001);
+            u = u * scale;
+            vv = vv * scale;
+        } else {
+            // A rect: clamp each axis to its own half extent.
+            u = Math.Clamp(u, -tangent.w, tangent.w);
+            vv = Math.Clamp(vv, -axis.w, axis.w);
+        }
+
+        return center + tangent.xyz * u + bitangent * vv;
     }
 
     // One texel of the chosen cascade, compared. Clamped inside the cascade

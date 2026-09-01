@@ -27,6 +27,11 @@ public sealed unsafe class D3D11ForwardPipeline : ID3D11RenderPipeline
     {
         // Same linear sky as the other two backends, from one shared constant,
         // so swapping backends looks identical when the geometry is unchanged.
+        // Outside the pass, beside where the deferred pipelines do the same:
+        // a program created inside an open pass is a state change in the
+        // middle of a recorded command list.
+        context.Renderer.PrepareWorldLines(gbuffer: false);
+
         context.Renderer.BeginPass(context.Renderer.FrameTarget, PassClear.To(ClearColors.Sky));
         try
         {

@@ -136,7 +136,10 @@ public static class PropertyEditor
         PropertyId.BrushOperation => BuildBrushOperation(node, edit),
         PropertyId.BrushSize => BuildBrushSize(node, edit),
         PropertyId.LightKind or PropertyId.LightColor or PropertyId.LightIntensity
-            or PropertyId.LightRange or PropertyId.LightEnabled => BuildLight(node, edit),
+            or PropertyId.LightRange or PropertyId.LightEnabled
+            or PropertyId.LightInnerAngle or PropertyId.LightOuterAngle
+            or PropertyId.LightWidth or PropertyId.LightHeight
+            or PropertyId.LightRadius => BuildLight(node, edit),
 
         // NodeId, MeshModel and MeshSubmesh are read-only, and PropertyId.None
         // is not a property. Silently ignored rather than thrown: the panel
@@ -262,6 +265,19 @@ public static class PropertyEditor
         return SetBrushCommand.Capture(node, brush.WithScaledExtents(factor));
     }
 
+    // Matched by NAME against the dropdown's own labels. A kind with no case
+    // falls back to Directional, which is the behaviour the two-kind ternary
+    // had; what changed is that every kind the panel OFFERS now has a case, and
+    // NodeInspector.KindLabel is its other half.
+    private static LightKind ParseKind(string? text) => text switch
+    {
+        "Point" => LightKind.Point,
+        "Spot" => LightKind.Spot,
+        "Rect" => LightKind.Rect,
+        "Disc" => LightKind.Disc,
+        _ => LightKind.Directional,
+    };
+
     private static IEditorCommand? BuildLight(SceneNode node, PropertyEdit edit)
     {
         if (node.Light is not { } light) return null;
@@ -269,16 +285,22 @@ public static class PropertyEditor
         SetLightCommand.Settings current = SetLightCommand.Settings.From(light);
         SetLightCommand.Settings next = edit.Id switch
         {
-            PropertyId.LightKind => current with
-            {
-                Kind = string.Equals(edit.Text, "Point", StringComparison.OrdinalIgnoreCase)
-                    ? LightKind.Point
-                    : LightKind.Directional,
-            },
+            PropertyId.LightKind => current with { Kind = ParseKind(edit.Text) },
             PropertyId.LightColor => current with { Color = Merge(current.Color, edit.Vector, edit.Axes) },
             PropertyId.LightIntensity => current with { Intensity = edit.Number },
             PropertyId.LightRange => current with { Range = edit.Number },
             PropertyId.LightEnabled => current with { Enabled = edit.Flag },
+
+            // Clamped by Light's own setters when they land, not refused here:
+            // an angle has a meaningful ceiling and an extent a meaningful
+            // floor, so a value past either means "as far as it goes" rather
+            // than an error - unlike range and intensity, which throw.
+            PropertyId.LightInnerAngle => current with { InnerAngle = edit.Number },
+            PropertyId.LightOuterAngle => current with { OuterAngle = edit.Number },
+            PropertyId.LightWidth => current with { Width = edit.Number },
+            PropertyId.LightHeight => current with { Height = edit.Number },
+            PropertyId.LightRadius => current with { Radius = edit.Number },
+
             _ => current,
         };
 

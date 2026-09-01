@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Bsp;
+﻿using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Core.Serialization;
 using System;
@@ -529,9 +529,18 @@ public static class MapReader
                     {
                         MapFormat.DirectionalLight => LightKind.Directional,
                         MapFormat.PointLight => LightKind.Point,
+                        MapFormat.SpotLight => LightKind.Spot,
+                        MapFormat.RectLight => LightKind.Rect,
+                        MapFormat.DiscLight => LightKind.Disc,
+
+                        // Refused, never widened to a default. A mistyped kind
+                        // falling through to directional is a map that loads,
+                        // renders, and is not the level that was saved.
                         _ => throw Fail(ref reader,
-                            $"a light '{MapFormat.KindMember}' must be '{MapFormat.DirectionalLight}' or "
-                            + $"'{MapFormat.PointLight}', not '{kind}'", state),
+                            $"a light '{MapFormat.KindMember}' must be one of "
+                            + $"'{MapFormat.DirectionalLight}', '{MapFormat.PointLight}', "
+                            + $"'{MapFormat.SpotLight}', '{MapFormat.RectLight}' or "
+                            + $"'{MapFormat.DiscLight}', not '{kind}'", state),
                     };
                     anchor = 0;
                     break;
@@ -550,6 +559,26 @@ public static class MapReader
                 case MapFormat.EnabledMember:
                     light.Enabled = ReadBool(ref reader, member, state);
                     anchor = 4;
+                    break;
+                case MapFormat.InnerAngleMember:
+                    light.InnerAngle = ReadFloat(ref reader, member, state);
+                    anchor = 5;
+                    break;
+                case MapFormat.OuterAngleMember:
+                    light.OuterAngle = ReadFloat(ref reader, member, state);
+                    anchor = 6;
+                    break;
+                case MapFormat.WidthMember:
+                    light.Width = ReadFloat(ref reader, member, state);
+                    anchor = 7;
+                    break;
+                case MapFormat.HeightMember:
+                    light.Height = ReadFloat(ref reader, member, state);
+                    anchor = 8;
+                    break;
+                case MapFormat.RadiusMember:
+                    light.Radius = ReadFloat(ref reader, member, state);
+                    anchor = 9;
                     break;
                 default:
                     light.Unknown.Add(Preserve(ref reader, utf8, member, anchor));

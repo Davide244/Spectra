@@ -42,7 +42,8 @@ public static class NodeInspector
 
     private static readonly string[] BrushKindChoices = ["World", "Part"];
     private static readonly string[] BrushOperationChoices = ["Additive", "Subtractive"];
-    private static readonly string[] LightKindChoices = ["Directional", "Point"];
+    private static readonly string[] LightKindChoices =
+        ["Directional", "Point", "Spot", "Rect", "Disc"];
 
     /// <summary>
     /// Fills <paramref name="into"/> with the node's rows, in group order.
@@ -221,8 +222,7 @@ public static class NodeInspector
     private static void DescribeLight(Light light, List<PropertyRow> into)
     {
         into.Add(PropertyRow.OfChoice(
-            LightGroup, "Kind", PropertyId.LightKind,
-            light.Kind == LightKind.Point ? "Point" : "Directional", LightKindChoices));
+            LightGroup, "Kind", PropertyId.LightKind, KindLabel(light.Kind), LightKindChoices));
 
         // Linear RGB, and labelled so, because the number here is not the number
         // in a colour picker: a .spectramat colour directive is authored in sRGB
@@ -236,5 +236,45 @@ public static class NodeInspector
         // would hide a value that can still refuse an edit.
         into.Add(PropertyRow.OfNumber(LightGroup, "Range", PropertyId.LightRange, light.Range, "su"));
         into.Add(PropertyRow.OfFlag(LightGroup, "Enabled", PropertyId.LightEnabled, light.Enabled));
+
+        // SHOWN PER KIND, unlike range above, and the difference is deliberate.
+        // Range is stored and validated for every light, so hiding it would hide
+        // a value that can still refuse an edit; a cone angle on a rect light is
+        // stored and read by nothing at all, so a row for it would be a field
+        // that accepts a number and changes no pixel - which is worse than an
+        // absent row, because it teaches that the panel's fields are decorative.
+        switch (light.Kind)
+        {
+            case LightKind.Spot:
+                into.Add(PropertyRow.OfNumber(
+                    LightGroup, "Inner angle", PropertyId.LightInnerAngle, light.InnerAngle, "deg"));
+                into.Add(PropertyRow.OfNumber(
+                    LightGroup, "Outer angle", PropertyId.LightOuterAngle, light.OuterAngle, "deg"));
+                break;
+
+            case LightKind.Rect:
+                into.Add(PropertyRow.OfNumber(
+                    LightGroup, "Width", PropertyId.LightWidth, light.Width, "su"));
+                into.Add(PropertyRow.OfNumber(
+                    LightGroup, "Height", PropertyId.LightHeight, light.Height, "su"));
+                break;
+
+            case LightKind.Disc:
+                into.Add(PropertyRow.OfNumber(
+                    LightGroup, "Radius", PropertyId.LightRadius, light.Radius, "su"));
+                break;
+        }
     }
+
+    // A switch, never a ternary. The label feeds a dropdown whose selected item
+    // is matched by TEXT, so a kind with no case would show as "Directional"
+    // and silently rewrite itself to that the moment anybody touched the row.
+    private static string KindLabel(LightKind kind) => kind switch
+    {
+        LightKind.Point => "Point",
+        LightKind.Spot => "Spot",
+        LightKind.Rect => "Rect",
+        LightKind.Disc => "Disc",
+        _ => "Directional",
+    };
 }

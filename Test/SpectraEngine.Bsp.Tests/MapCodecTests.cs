@@ -1,4 +1,4 @@
-using SpectraEngine.Core;
+﻿using SpectraEngine.Core;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Maps;
 using SpectraEngine.Core.Scene;
@@ -226,7 +226,11 @@ public sealed class MapCodecTests
     {
         MapDocument document = MapReader.Read(Utf8(Canonical));
 
-        document.FormatVersion.ShouldBe(EngineInfo.MapFormatVersion);
+        // The value the FIXTURE states, not this engine's current constant. The
+        // two happened to be equal while the format had only ever had one
+        // version, which made this assertion a constant compared against itself;
+        // reading a document is supposed to report what the document says.
+        document.FormatVersion.ShouldBe(1);
         document.Scene.Name.ShouldBe("Testmap");
         document.Nodes.Count.ShouldBe(2);
 

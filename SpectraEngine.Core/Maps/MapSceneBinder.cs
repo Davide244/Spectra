@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Assets;
+﻿using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Scene;
 using System;
@@ -57,7 +57,41 @@ public static class MapSceneBinder
         foreach (SceneNode child in scene.Root.Children)
             document.Nodes.Add(NodeToMap(child, report));
 
+        document.MinimumReadableVersion = RequiredReaderVersion(scene);
         return document;
+    }
+
+    /// <summary>
+    /// The oldest reader that can open this scene without losing anything.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Per document, not per engine.</b> A blanket floor would tell every
+    /// older editor to refuse every map this engine writes, including the
+    /// overwhelming majority carrying nothing it could not read. What actually
+    /// needs a newer reader is a light with a SHAPE, because
+    /// <see cref="NodeToMap"/> builds a fresh <c>MapLight</c> rather than
+    /// editing the loaded one - so an older editor that opened such a map and
+    /// saved it would drop every angle and extent and leave a light that is
+    /// quietly the wrong shape.
+    /// </para>
+    /// <para>
+    /// <b>The KIND is what is tested, not the numbers.</b> A point light with a
+    /// non-default width loses nothing that matters, because nothing reads a
+    /// point light's width; a rect light losing its extents is a different
+    /// light. Testing the numbers as well would raise the floor on maps that do
+    /// not need it.
+    /// </para>
+    /// </remarks>
+    private static int RequiredReaderVersion(Scene.Scene scene)
+    {
+        foreach (SceneNode node in scene.LightNodes)
+        {
+            if (node.Light is { Kind: not (LightKind.Directional or LightKind.Point) })
+                return EngineInfo.LightShapeMapVersion;
+        }
+
+        return EngineInfo.MinimumReadableMapVersion;
     }
 
     private static MapNode NodeToMap(SceneNode node, MapSaveReport? report)
@@ -76,6 +110,12 @@ public static class MapSceneBinder
 
         if (node.Light is { } light)
         {
+            // EVERY field, because this builds a FRESH MapLight rather than
+            // editing the one that was loaded: a member left out here is a
+            // member silently deleted from the file on the next save. That is
+            // exactly why MinimumReadableMapVersion had to move when these were
+            // added - an older editor opening a rect-light map and saving it
+            // would drop every extent and leave a light that is the wrong shape.
             mapped.Light = new MapLight
             {
                 Kind = light.Kind,
@@ -83,6 +123,11 @@ public static class MapSceneBinder
                 Intensity = light.Intensity,
                 Range = light.Range,
                 Enabled = light.Enabled,
+                InnerAngle = light.InnerAngle,
+                OuterAngle = light.OuterAngle,
+                Width = light.Width,
+                Height = light.Height,
+                Radius = light.Radius,
             };
         }
 
@@ -226,6 +271,11 @@ public static class MapSceneBinder
 
         if (mapped.Light is { } light)
         {
+            // The two angles are assigned INNER FIRST, because OuterAngle
+            // clamps against the inner one on read: assigned the other way
+            // round, a narrow inner angle read after a wide outer one would
+            // still land correctly, but a file whose outer is smaller than its
+            // inner would silently swap meaning depending on assignment order.
             node.Light = new Light
             {
                 Kind = light.Kind,
@@ -233,6 +283,11 @@ public static class MapSceneBinder
                 Intensity = light.Intensity,
                 Range = light.Range,
                 Enabled = light.Enabled,
+                InnerAngle = light.InnerAngle,
+                OuterAngle = light.OuterAngle,
+                Width = light.Width,
+                Height = light.Height,
+                Radius = light.Radius,
             };
         }
 

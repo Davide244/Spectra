@@ -37,6 +37,15 @@ public enum PropertyId
     LightRange,
     LightEnabled,
 
+    // Appended, and the ORDER here is the display order: a light-plus-brush
+    // selection lays out the same whichever was clicked first, and every group
+    // stays one contiguous run.
+    LightInnerAngle,
+    LightOuterAngle,
+    LightWidth,
+    LightHeight,
+    LightRadius,
+
     MeshModel,
     MeshSubmesh,
 }

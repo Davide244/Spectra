@@ -35,6 +35,11 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
     public void Execute(in OpenGLRenderContext context)
     {
         // The clear colour is linear because the target encodes; see ClearColors.
+        // Outside the pass, beside where the deferred pipelines do the same:
+        // a program created inside an open pass is a state change in the
+        // middle of a recorded command list.
+        context.Renderer.PrepareWorldLines(gbuffer: false);
+
         context.Renderer.BeginPass(context.Renderer.FrameTarget, PassClear.To(ClearColors.Sky));
         try
         {

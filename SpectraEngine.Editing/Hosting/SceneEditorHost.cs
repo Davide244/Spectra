@@ -1178,6 +1178,13 @@ public sealed class SceneEditorHost : ISceneEditor
             // A light AT a surface lights half of nothing.
             InsertKind.PointLight => 1.5f,
 
+            // A SURFACE light sits on the surface, barely clear of it. It is
+            // one-sided and faces away from the wall, so unlike a point light
+            // there is no half of its output to lose; the millimetre of
+            // clearance only keeps it out of the z-fighting the coincident
+            // plane would otherwise cause with the overlay drawn on it.
+            InsertKind.SurfaceLight => 0.01f,
+
             // Centre ON the surface, half-buried: a hole resting flush shares
             // only the boundary plane with the solid, and the carve treats a
             // resting negative as a no-op by design — it would sit on an
@@ -1192,12 +1199,47 @@ public sealed class SceneEditorHost : ISceneEditor
         Vector3 position = FindInsertPosition(clearance, viewportPoint);
 
         SceneNode node = BuildInsert(kind);
-        node.LocalPosition = position;
 
-        // Appended at the end of the root, which is where a person expects a
+        // A surface light needs the hit's FACE, not just a point: its normal is
+        // the direction the panel faces, and the node that owns the surface is
+        // the parent it belongs to. Everything else places from a point alone,
+        // which is why this is the one kind that asks a second question.
+        SceneNode parent = _scene.Root;
+
+        if (kind == InsertKind.SurfaceLight && TryFindSurface(viewportPoint, out SceneRaycastHit surface))
+        {
+            parent = surface.Node;
+
+            // RotationForDirection takes the direction the light TRAVELS, and a
+            // face normal points OUT of the solid - so travel is +normal.
+            // Backwards gives a panel shining into the wall it is mounted on:
+            // silent, dark, and precisely what that method's remarks exist to
+            // prevent.
+            Quaternion facing = Light.RotationForDirection(surface.Normal);
+
+            // Placed in the PARENT's space, because it is about to become the
+            // parent's child: a world position assigned to LocalPosition would
+            // be offset by wherever the wall happens to be.
+            Matrix4x4 toLocal = InverseOf(parent.WorldMatrix);
+            Vector3 world = position;
+
+            node.LocalTransform = new Transform
+            {
+                Position = Vector3.Transform(world, toLocal),
+                Rotation = Quaternion.Concatenate(
+                    facing, Quaternion.Inverse(RotationOf(parent.WorldMatrix))),
+                Scale = Vector3.One,
+            };
+        }
+        else
+        {
+            node.LocalPosition = position;
+        }
+
+        // Appended at the end of its parent, which is where a person expects a
         // new thing to show up in the tree.
         _undo.Execute(new AddNodesCommand(
-            [new NodePlacement(node, _scene.Root.Id, _scene.Root.Children.Count)])
+            [new NodePlacement(node, parent.Id, parent.Children.Count)])
         {
             Name = $"Insert {node.Name}",
         });
@@ -1245,6 +1287,34 @@ public sealed class SceneEditorHost : ISceneEditor
         return point + hit.Normal * clearance;
     }
 
+    // The surface the insert ray hits, for the one kind that needs the face
+    // rather than the point. Deliberately a second cast rather than a return
+    // value threaded through FindInsertPosition: every other kind wants only a
+    // position, and widening that method's contract for one caller would make
+    // four call sites carry a value they ignore.
+    private bool TryFindSurface(Vector2? viewportPoint, out SceneRaycastHit hit)
+    {
+        hit = default;
+
+        if (_viewportSize.X <= 0f || _viewportSize.Y <= 0f)
+            return false;
+
+        Ray3 ray = _scene.Camera.ScreenPointToRay(viewportPoint ?? _viewportSize * 0.5f, _viewportSize);
+        return _scene.Raycast(in ray, out hit, SceneQueryFilter.EditorPicking, InsertRayReach);
+    }
+
+    // A world matrix with no scale is invertible by construction, but a scaled
+    // parent is legal for a mesh node - so the failure is answered with the
+    // identity rather than an exception, which places the light at the parent's
+    // origin instead of throwing out of an insert.
+    private static Matrix4x4 InverseOf(Matrix4x4 world) =>
+        Matrix4x4.Invert(world, out Matrix4x4 inverse) ? inverse : Matrix4x4.Identity;
+
+    private static Quaternion RotationOf(Matrix4x4 world) =>
+        Matrix4x4.Decompose(world, out _, out Quaternion rotation, out _)
+            ? rotation
+            : Quaternion.Identity;
+
     private Vector3 SnapAllAxes(Vector3 point)
     {
         SnapSettings snap = _gizmos.Translate.Snap;
@@ -1274,6 +1344,26 @@ public sealed class SceneEditorHost : ISceneEditor
                 return new SceneNode("Hole")
                 {
                     Brush = Brush.CreateBox(-half, half).WithOperation(BrushOperation.Subtractive),
+                };
+
+            case InsertKind.SurfaceLight:
+                // The extents are a FIXED default, deliberately not fitted to
+                // the face. A face polygon is derived data that changes on
+                // every carve, so auto-fitting would put a light inside the
+                // pipeline Scene.StaticWorld is kept pure of - and would
+                // silently resize itself the next time somebody cut a doorway
+                // through the same wall.
+                return new SceneNode("Panel")
+                {
+                    Light = new Light
+                    {
+                        Kind = LightKind.Rect,
+                        Color = ColorSpace.SrgbToLinear(new Vector3(1f, 0.97f, 0.92f)),
+                        Intensity = 25f,
+                        Range = 8f,
+                        Width = 1f,
+                        Height = 1f,
+                    },
                 };
 
             case InsertKind.PointLight:

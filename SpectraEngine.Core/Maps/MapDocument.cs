@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Bsp;
+﻿using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Core.Serialization;
 using System;
@@ -333,9 +333,14 @@ public sealed class MapMeshSource
 /// <summary>A light payload.</summary>
 public sealed class MapLight
 {
+    // APPEND ONLY. The canonical order is what byte identity is defined
+    // against, so a new member goes at the END and every file written before it
+    // existed still round-trips to the same bytes.
     internal static readonly string[] MemberOrder =
         [MapFormat.KindMember, MapFormat.ColorMember, MapFormat.IntensityMember,
-         MapFormat.RangeMember, MapFormat.EnabledMember];
+         MapFormat.RangeMember, MapFormat.EnabledMember,
+         MapFormat.InnerAngleMember, MapFormat.OuterAngleMember,
+         MapFormat.WidthMember, MapFormat.HeightMember, MapFormat.RadiusMember];
 
     public LightKind Kind { get; set; } = LightKind.Directional;
 
@@ -358,6 +363,21 @@ public sealed class MapLight
     public float Range { get; set; } = 10f;
 
     public bool Enabled { get; set; } = true;
+
+    /// <summary>A spot's fully-lit half-angle in degrees.</summary>
+    public float InnerAngle { get; set; } = 25f;
+
+    /// <summary>A spot's outer half-angle in degrees.</summary>
+    public float OuterAngle { get; set; } = 35f;
+
+    /// <summary>A rect light's width in world units.</summary>
+    public float Width { get; set; } = 1f;
+
+    /// <summary>A rect light's height in world units.</summary>
+    public float Height { get; set; } = 1f;
+
+    /// <summary>A disc light's radius in world units.</summary>
+    public float Radius { get; set; } = 0.5f;
 
     public List<PreservedMember> Unknown { get; } = [];
 }

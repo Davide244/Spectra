@@ -85,10 +85,9 @@ internal sealed class FakeRenderer : Renderer
 
     protected override void FlushDebugDrawCore(SpectraEngine.Core.Scene.Camera camera) => OverlayFlushes++;
 
-    protected override ShaderProgram? DebugLineShader => null;
 
     protected override void FlushWorldLinesCore(
-        SpectraEngine.Core.Scene.Camera camera, ShaderProgram program) { }
+        SpectraEngine.Core.Scene.Camera camera, ShaderProgram program, float nudge) { }
 
     /// <summary>Full-screen passes this renderer was asked to draw.</summary>
     public int FullscreenDraws { get; private set; }

@@ -37,16 +37,25 @@ public sealed class SetLightCommand : ICoalescingCommand
 {
     /// <summary>The five settings a light carries, as a value.</summary>
     public readonly record struct Settings(
-        LightKind Kind, Vector3 Color, float Intensity, float Range, bool Enabled)
+        LightKind Kind, Vector3 Color, float Intensity, float Range, bool Enabled,
+        float InnerAngle, float OuterAngle, float Width, float Height, float Radius)
     {
         /// <summary>Reads the current settings off a light.</summary>
         public static Settings From(Light light)
         {
             ArgumentNullException.ThrowIfNull(light);
-            return new Settings(light.Kind, light.Color, light.Intensity, light.Range, light.Enabled);
+            return new Settings(
+                light.Kind, light.Color, light.Intensity, light.Range, light.Enabled,
+                light.InnerAngle, light.OuterAngle, light.Width, light.Height, light.Radius);
         }
 
         /// <summary>Writes these settings onto a light.</summary>
+        /// <remarks>
+        /// <b>Inner before outer.</b> <see cref="Light.OuterAngle"/> reports at
+        /// least the inner one, so assigning them the other way round makes the
+        /// result depend on which was written last - the same ordering the map
+        /// binder has to respect, and for the same reason.
+        /// </remarks>
         public void ApplyTo(Light light)
         {
             ArgumentNullException.ThrowIfNull(light);
@@ -55,6 +64,11 @@ public sealed class SetLightCommand : ICoalescingCommand
             light.Intensity = Intensity;
             light.Range = Range;
             light.Enabled = Enabled;
+            light.InnerAngle = InnerAngle;
+            light.OuterAngle = OuterAngle;
+            light.Width = Width;
+            light.Height = Height;
+            light.Radius = Radius;
         }
     }
 

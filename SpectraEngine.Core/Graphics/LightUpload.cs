@@ -33,6 +33,8 @@ public static class LightUpload
     // the largest single violation of that.
     [ThreadStatic] private static Vector4[]? _positions;
     [ThreadStatic] private static Vector4[]? _colors;
+    [ThreadStatic] private static Vector4[]? _axes;
+    [ThreadStatic] private static Vector4[]? _tangents;
 
     /// <summary>
     /// Writes <paramref name="view"/>'s lights and ambient level into
@@ -48,11 +50,13 @@ public static class LightUpload
     /// </remarks>
     public static void Apply(ShaderProgram shader, RenderView view, float ambient)
     {
-        (Vector4[] positions, Vector4[] colors, int count) = Fill(view);
+        Packed packed = Fill(view);
 
-        shader.SetUniform("uLightPositions", positions);
-        shader.SetUniform("uLightColors", colors);
-        shader.SetUniform("uLightCount", count);
+        shader.SetUniform("uLightPositions", packed.Positions);
+        shader.SetUniform("uLightColors", packed.Colors);
+        shader.SetUniform("uLightAxis", packed.Axes);
+        shader.SetUniform("uLightTangent", packed.Tangents);
+        shader.SetUniform("uLightCount", packed.Count);
         shader.SetUniform("uAmbient", ambient);
     }
 
@@ -67,11 +71,13 @@ public static class LightUpload
     /// </remarks>
     public static void Apply(PostPass pass, RenderView view, float ambient)
     {
-        (Vector4[] positions, Vector4[] colors, int count) = Fill(view);
+        Packed packed = Fill(view);
 
-        pass.SetUniform("uLightPositions", positions.AsSpan());
-        pass.SetUniform("uLightColors", colors.AsSpan());
-        pass.SetUniform("uLightCount", count);
+        pass.SetUniform("uLightPositions", packed.Positions.AsSpan());
+        pass.SetUniform("uLightColors", packed.Colors.AsSpan());
+        pass.SetUniform("uLightAxis", packed.Axes.AsSpan());
+        pass.SetUniform("uLightTangent", packed.Tangents.AsSpan());
+        pass.SetUniform("uLightCount", packed.Count);
         pass.SetUniform("uAmbient", ambient);
     }
 
@@ -80,18 +86,25 @@ public static class LightUpload
     // array uniform must be written whole, and a leftover light from a previous
     // frame would be inside the array but outside the count, which is invisible
     // until something reads past the count.
-    private static (Vector4[] Positions, Vector4[] Colors, int Count) Fill(RenderView view)
+    private readonly record struct Packed(
+        Vector4[] Positions, Vector4[] Colors, Vector4[] Axes, Vector4[] Tangents, int Count);
+
+    private static Packed Fill(RenderView view)
     {
         Vector4[] positions = _positions ??= new Vector4[RenderView.MaxLights];
         Vector4[] colors = _colors ??= new Vector4[RenderView.MaxLights];
+        Vector4[] axes = _axes ??= new Vector4[RenderView.MaxLights];
+        Vector4[] tangents = _tangents ??= new Vector4[RenderView.MaxLights];
 
         ReadOnlySpan<RenderLight> lights = view.Lights;
         for (int i = 0; i < RenderView.MaxLights; i++)
         {
             positions[i] = i < lights.Length ? lights[i].PositionRange : default;
             colors[i] = i < lights.Length ? lights[i].ColorIntensity : default;
+            axes[i] = i < lights.Length ? lights[i].Axis : default;
+            tangents[i] = i < lights.Length ? lights[i].Tangent : default;
         }
 
-        return (positions, colors, lights.Length);
+        return new Packed(positions, colors, axes, tangents, lights.Length);
     }
 }

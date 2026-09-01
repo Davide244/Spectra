@@ -57,6 +57,11 @@ public sealed unsafe class D3D11WireframePipeline : ID3D11RenderPipeline
         var ctx = (ID3D11DeviceContext*)context.Context.Handle;
 
         // Clear to black for contrast against the wireframe lines.
+        // Outside the pass, beside where the deferred pipelines do the same:
+        // a program created inside an open pass is a state change in the
+        // middle of a recorded command list.
+        context.Renderer.PrepareWorldLines(gbuffer: false);
+
         context.Renderer.BeginPass(context.Renderer.FrameTarget, PassClear.To(ClearColors.Wireframe));
         try
         {

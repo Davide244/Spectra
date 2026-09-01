@@ -1,0 +1,70 @@
+// WorldLine.spectrashade — the depth-tested world line, single target.
+//
+// The forward and wireframe half of the world-line lane; WorldLineGBuffer is
+// the deferred half, and the two share this vertex stage's bias verbatim.
+//
+// WHY THIS IS NOT JUST DebugLine WITH DEPTH TESTING ON. Two reasons, and the
+// second is the whole file.
+//
+// DebugLine is the OVERLAY's shader - gizmo handles, the marquee, the selection
+// outline - drawn depth-off on top of the tone-map resolve. Sharing it would
+// mean the bias below applied to those too, nudging every handle a fraction
+// toward the camera for no reason.
+//
+// And a world line needs that bias. The case this lane exists for is a grid at
+// y = 0 over a floor whose top is ALSO at y = 0: coplanar by construction. A
+// LessEqual comparison is necessary and not sufficient, because the wall's depth
+// at a pixel is interpolated across a large quad while the line's is
+// interpolated along a line, and the two land an ulp apart in whichever
+// direction the rasteriser happens to choose. Half the pixels of the line then
+// fail the test and the grid comes out as a dotted, crawling stipple - measured,
+// not predicted.
+//
+// The nudge is TOWARD THE CAMERA and PROPORTIONAL TO DISTANCE, which makes it a
+// constant offset in screen depth rather than a world-space one that would be
+// invisible up close and enormous far away. It happens in WORLD space, before
+// the projection, so it is identical on every backend - a clip-space z offset
+// would have to know whether the depth range is -1..1 or 0..1 and which way the
+// backend's correction matrix has already turned it.
+
+struct VertexInput {
+    [Location(0)] vec3 position;
+    [Location(1)] vec3 color;
+}
+
+struct VertexOutput {
+    [Position] vec4 position;
+    vec3 color;
+}
+
+struct FragmentInput {
+    vec3 color;
+}
+
+shader WorldLine {
+    [Binding(0)] cbuffer Camera {
+        mat4 uView;
+        mat4 uProjection;
+        vec3 uCameraPosition;
+
+        // How far toward the camera, as a fraction of the distance to it.
+        // Small enough to be spatially invisible (8 mm at ten units), large
+        // enough to clear the rasteriser's own disagreement about a coplanar
+        // surface by a wide margin.
+        float uDepthNudge;
+    }
+
+    [Vertex]
+    VertexOutput VertexMain(VertexInput input) {
+        var output = new VertexOutput();
+        vec3 nudged = input.position + (uCameraPosition - input.position) * uDepthNudge;
+        output.position = uProjection * uView * vec4(nudged, 1.0);
+        output.color = input.color;
+        return output;
+    }
+
+    [Fragment] [Target(0)]
+    vec4 FragmentMain(FragmentInput input) {
+        return vec4(input.color, 1.0);
+    }
+}

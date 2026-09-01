@@ -35,6 +35,11 @@ public sealed class WireframePipeline : IOpenGLRenderPipeline
     public void Execute(in OpenGLRenderContext context)
     {
         var gl = context.Gl;
+        // Outside the pass, beside where the deferred pipelines do the same:
+        // a program created inside an open pass is a state change in the
+        // middle of a recorded command list.
+        context.Renderer.PrepareWorldLines(gbuffer: false);
+
         context.Renderer.BeginPass(context.Renderer.FrameTarget, PassClear.To(ClearColors.Wireframe));
         try
         {

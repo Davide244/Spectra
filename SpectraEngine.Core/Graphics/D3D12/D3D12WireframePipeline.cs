@@ -28,6 +28,11 @@ public sealed unsafe class D3D12WireframePipeline : ID3D12RenderPipeline
         var renderer = _renderer!;
 
         // Clear to black for contrast against the wireframe lines.
+        // Outside the pass, beside where the deferred pipelines do the same:
+        // a program created inside an open pass is a state change in the
+        // middle of a recorded command list.
+        renderer.PrepareWorldLines(gbuffer: false);
+
         renderer.BeginPass(renderer.FrameTarget, PassClear.To(ClearColors.Wireframe));
         try
         {

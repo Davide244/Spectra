@@ -1,4 +1,4 @@
-// Lit.spectrashade — the engine's built-in lit shader.
+﻿// Lit.spectrashade — the engine's built-in lit shader.
 // Diffuse + ambient shading from a single directional light, modulated by a
 // 2D diffuse texture.
 
@@ -40,6 +40,8 @@ shader Lit {
     [Binding(2)] cbuffer Lights {
         vec4[8] uLightPositions;
         vec4[8] uLightColors;
+        vec4[8] uLightAxis;
+        vec4[8] uLightTangent;
         int uLightCount;
         float uAmbient;
     }
@@ -69,14 +71,18 @@ shader Lit {
 
         for (int i = 0; i < uLightCount; i = i + 1) {
             vec4 posRange = uLightPositions[i];
-            vec3 radiance = uLightColors[i].rgb;
+            vec4 colorType = uLightColors[i];
+            vec4 axis = uLightAxis[i];
 
-            // w is the range for a point light and zero for a directional one,
-            // which is how the two are told apart without a second array.
+            vec3 radiance = colorType.rgb;
+            float type = colorType.w;
+
+            // The type is in the colour's w. It used to be "range is zero, so
+            // this is directional", which encoded exactly two kinds.
             vec3 toLight = -posRange.xyz;
             float attenuation = 1.0;
 
-            if (posRange.w > 0.0) {
+            if (type > 0.5) {
                 vec3 offset = posRange.xyz - input.worldPosition;
                 float distance = Math.Length(offset);
                 toLight = offset / Math.Max(distance, 0.0001);
@@ -86,6 +92,24 @@ shader Lit {
                 // the edge of the falloff from showing as a ring.
                 float falloff = Math.Max(1.0 - distance / posRange.w, 0.0);
                 attenuation = falloff * falloff / (1.0 + distance * distance);
+
+                // SPOT is here and area lights are not, deliberately. A spot
+                // rendering as an omni is a lie you can see across the whole
+                // room; an area light rendering as a point at its centre is a
+                // highlight that is slightly too tight, and this path exists
+                // for hardware MSAA and blended transparency rather than for
+                // the game view.
+                if (type > 1.5) {
+                    if (type < 2.5) {
+                        float cosAngle = Math.Dot(axis.xyz, -toLight / Math.Max(Math.Length(toLight), 0.0001));
+                        float t = (cosAngle - axis.w) / Math.Max(uLightTangent[i].w - axis.w, 0.0001);
+                        t = Math.Clamp(t, 0.0, 1.0);
+                        attenuation = attenuation * t * t;
+                    } else {
+                        attenuation = attenuation * Math.Max(
+                            Math.Dot(axis.xyz, -toLight / Math.Max(Math.Length(toLight), 0.0001)), 0.0);
+                    }
+                }
             }
 
             // Divided by pi, like the deferred path's Lambert term, because the

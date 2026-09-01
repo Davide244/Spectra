@@ -586,6 +586,20 @@ public sealed partial class Scene
     //
     // Iterates the scene's light list, which is O(lights) rather than O(nodes)
     // and needs no bounds, which is why a light does not enter the BVH at all.
+    private static RenderLightType ToRenderType(LightKind kind) => kind switch
+    {
+        LightKind.Directional => RenderLightType.Directional,
+        LightKind.Point => RenderLightType.Point,
+        LightKind.Spot => RenderLightType.Spot,
+        LightKind.Rect => RenderLightType.Rect,
+        LightKind.Disc => RenderLightType.Disc,
+
+        // Thrown rather than defaulted. A silent fallback here lights a new kind
+        // as whatever the default happens to be, correctly-looking and wrong,
+        // which is exactly the class of failure the rest of this file refuses.
+        _ => throw new NotSupportedException($"No render type for light kind '{kind}'."),
+    };
+
     private void CollectLights(Vector3 viewer, RenderView view)
     {
         for (int i = 0; i < _lightNodes.Count; i++)
@@ -594,16 +608,25 @@ public sealed partial class Scene
             if (node.Light is not { Enabled: true } light) continue;
 
             Vector3 radiance = light.Color * light.Intensity;
-            var color = new Vector4(radiance, 0f);
+
+            // The TYPE rides in the colour's w, which was documented as unused.
+            // It used to be "range is zero, so this is directional", which
+            // encoded exactly two kinds and left a third nowhere to go.
+            var color = new Vector4(radiance, (float)(int)ToRenderType(light.Kind));
+
+            // The node's own basis, read straight out of the world matrix. The
+            // same three rows the overlay and the gizmo read, rather than a
+            // rotation applied to unit vectors: two expressions for one basis is
+            // how a cone ends up pointing the opposite way from the arrow drawn
+            // over it, with nothing anywhere reporting a disagreement.
+            Matrix4x4 world = node.WorldMatrix;
+            var forward = Vector3.Normalize(new Vector3(world.M31, world.M32, world.M33));
 
             if (light.Kind == LightKind.Directional)
             {
-                // The node's forward axis is the direction the light travels.
                 // A negative key keeps a sun ahead of every point light: it has
                 // no position, so it cannot be "far away", and dropping the sun
                 // because a lamp happens to be nearer would be absurd.
-                Matrix4x4 world = node.WorldMatrix;
-                var forward = Vector3.Normalize(new Vector3(world.M31, world.M32, world.M33));
                 view.OfferLight(new RenderLight(new Vector4(forward, 0f), color), -1f);
                 continue;
             }
@@ -611,11 +634,39 @@ public sealed partial class Scene
             Vector3 position = node.WorldPosition;
             float distance = Vector3.Distance(position, viewer);
 
+            var right = Vector3.Normalize(new Vector3(world.M11, world.M12, world.M13));
+
+            // COSINES here, not degrees: the shader compares a dot product, and
+            // converting per pixel would be a transcendental in the inner loop
+            // for a value that is constant over the frame. Half-angles, because
+            // that is what the geometry is and what the gizmo drags.
+            //
+            // The two area scalars share these two slots, which is what keeps
+            // this at four vec4s: a rect has no cone and a spot has no extent,
+            // so nothing is ever ambiguous about which meaning is live - the
+            // type says.
+            const float ToRadians = MathF.PI / 180f;
+
+            Vector4 axis = light.Kind switch
+            {
+                LightKind.Spot => new Vector4(forward, MathF.Cos(light.OuterAngle * ToRadians)),
+                LightKind.Rect => new Vector4(forward, light.Height * 0.5f),
+                LightKind.Disc => new Vector4(forward, light.Radius),
+                _ => new Vector4(forward, 0f),
+            };
+
+            Vector4 tangent = light.Kind switch
+            {
+                LightKind.Spot => new Vector4(right, MathF.Cos(light.InnerAngle * ToRadians)),
+                LightKind.Rect => new Vector4(right, light.Width * 0.5f),
+                _ => new Vector4(right, 0f),
+            };
+
             // Past its own range plus the viewer's distance it cannot reach
             // anything being drawn near the camera; skipping keeps a distant
             // lamp from occupying one of the few slots.
             view.OfferLight(
-                new RenderLight(new Vector4(position, light.Range), color),
+                new RenderLight(new Vector4(position, light.Range), color, axis, tangent),
                 distance);
         }
     }

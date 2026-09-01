@@ -1497,7 +1497,13 @@ public abstract class Renderer
     /// geometry drawn after it, so anything a pipeline happens to submit later
     /// would be sliced by an invisible lattice.
     /// </remarks>
-    protected abstract void FlushWorldLinesCore(Scene.Camera camera, ShaderProgram program);
+    /// <param name="nudge">
+    /// How far toward the camera to bias the line, as a fraction of its
+    /// distance. Passed rather than pre-written, because the order of
+    /// <c>Use()</c> and the uniform writes differs per backend.
+    /// </param>
+    protected abstract void FlushWorldLinesCore(
+        Scene.Camera camera, ShaderProgram program, float nudge);
 
     /// <summary>
     /// Draws this frame's <see cref="WorldLines"/> into the open pass.
@@ -1522,20 +1528,36 @@ public abstract class Renderer
         if (WorldLines.VertexCount == 0)
             return;
 
-        ShaderProgram? program = gbuffer ? EnsureWorldLineGBufferShader() : DebugLineShader;
-        if (program is null)
-            return;
+        ShaderProgram program = gbuffer ? EnsureWorldLineGBufferShader() : EnsureWorldLineShader();
 
-        FlushWorldLinesCore(camera, program);
+        // The nudge goes to the BACKEND, not written here, because the order
+        // of Use() and the uniform writes differs per backend and is already
+        // documented as a trap: on OpenGL glUniform writes into the ACTIVE
+        // program, so a value staged before Use() lands in whichever program
+        // was bound last - silently, and the line simply renders unbiased.
+        FlushWorldLinesCore(camera, program, WorldLineDepthNudge);
     }
 
     /// <summary>
-    /// The backend's compiled <c>DebugLine</c> program, or null before the
-    /// renderer has initialised.
+    /// How far toward the camera a world line is nudged, as a fraction of its
+    /// distance to it.
     /// </summary>
-    protected abstract ShaderProgram? DebugLineShader { get; }
+    /// <remarks>
+    /// See <c>WorldLine.spectrashade</c>: LessEqual alone is necessary and not
+    /// sufficient for a coplanar line, because a large quad's interpolated depth
+    /// and a line's land an ulp apart in whichever direction the rasteriser
+    /// happens to choose, and half the line's pixels then fail the test. Eight
+    /// millimetres at ten units.
+    /// </remarks>
+    public float WorldLineDepthNudge { get; set; } = 0.0008f;
 
+    private ShaderProgram? _worldLineShader;
     private ShaderProgram? _worldLineGBufferShader;
+
+    private ShaderProgram EnsureWorldLineShader() =>
+        _worldLineShader ??= BaseShaders.WorldLinePath is { } path
+            ? CreateShaderFromFile(path)
+            : CreateShaderFromSource(BaseShaders.WorldLine);
 
     /// <summary>
     /// Compiles the five-attachment world-line shader on first use.
@@ -1558,8 +1580,13 @@ public abstract class Renderer
     /// </summary>
     public void PrepareWorldLines(bool gbuffer)
     {
-        if (gbuffer && WorldLines.VertexCount > 0)
+        if (WorldLines.VertexCount == 0)
+            return;
+
+        if (gbuffer)
             _ = EnsureWorldLineGBufferShader();
+        else
+            _ = EnsureWorldLineShader();
     }
 
     /// <summary>
