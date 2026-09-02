@@ -42,6 +42,12 @@ public static class PackFormat
     public const int DigestSize = 16;
 
     /// <summary>
+    /// The smallest legal file: a header and the trailing digest with nothing
+    /// between them, which is what an empty pack's tables amount to.
+    /// </summary>
+    public const int MinimumFileSize = HeaderSize + DigestSize;
+
+    /// <summary>
     /// Alignment every payload starts on, and the whole reason the data section
     /// exists as a distinct region: a mapped payload is reinterpreted in place as
     /// <c>Vector4</c>, <c>Matrix4x4</c> or a flat BSP node, and none of those may
@@ -96,5 +102,25 @@ public static class PackFormat
                 "The .spack container is little-endian only: every header, entry and payload is " +
                 "reinterpreted in place, so a big-endian host would have to copy and byte-swap all of it.");
         }
+    }
+
+    /// <summary>
+    /// Refuses a file too short to hold a header and a digest.
+    /// </summary>
+    /// <remarks>
+    /// It lives here rather than at the two call sites because one of them runs
+    /// before a mapping is attempted (an empty file cannot be mapped at all, on
+    /// any platform) and the other runs at mount, and a reader that reported two
+    /// different things for one condition would make the truncation test depend
+    /// on which source answered.
+    /// </remarks>
+    /// <exception cref="PackMountException">The file is shorter than <see cref="MinimumFileSize"/>.</exception>
+    public static void RequireMinimumFileSize(string source, long length)
+    {
+        if (length >= MinimumFileSize) return;
+
+        throw new PackMountException(
+            $"'{source}' is {length} bytes, too short to hold a {HeaderSize}-byte header and a " +
+            $"{DigestSize}-byte content digest ({MinimumFileSize} bytes minimum).");
     }
 }
