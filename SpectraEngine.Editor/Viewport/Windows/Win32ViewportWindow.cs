@@ -4,14 +4,13 @@ using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Hosting;
 using SpectraEngine.Core.Input;
 using System;
-using System.Numerics;
 using System.Runtime.InteropServices;
 
 namespace SpectraEngine.Editor.Viewport.Windows;
 
 /// <summary>
-/// A real Win32 child window the engine renders into, and the whole of the
-/// shell's input path.
+/// A real Win32 child window the engine renders into, and the platform half of
+/// the shell's input path.
 /// </summary>
 /// <remarks>
 /// <b>Why the shell creates this rather than letting Avalonia supply one.</b> A
@@ -28,6 +27,15 @@ namespace SpectraEngine.Editor.Viewport.Windows;
 /// pump, lifetime) belongs to the shell around this.
 /// </para>
 /// <para>
+/// <b>What is left here is the window, and only the window.</b> Every decision
+/// about what a press MEANS lives in <see cref="ViewportInputRouter"/>, which
+/// names no platform type and is therefore testable; this class registers the
+/// class, pumps the messages, answers <c>WM_SETCURSOR</c>, translates messages
+/// into router calls, and implements <see cref="IViewportCursor"/> for it. The
+/// split exists because the input path is the one part of the shell a host swap
+/// would otherwise force somebody to rewrite blind.
+/// </para>
+/// <para>
 /// <b>Airspace is the cost of v1, and it is a real one.</b> This window sits
 /// above the XAML rather than inside it, so Avalonia cannot draw over the
 /// viewport, and it cannot be rotated or given opacity. For a docked pane that
@@ -40,7 +48,7 @@ namespace SpectraEngine.Editor.Viewport.Windows;
 /// device callbacks are in.
 /// </para>
 /// </remarks>
-internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
+internal sealed class Win32ViewportWindow : IRenderSurface, IViewportCursor, IDisposable
 {
     private const string ClassName = "SpectraViewportWindow";
 
@@ -52,49 +60,11 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
     // one is a call into freed memory the next time the mouse moves.
     private static Win32Interop.WndProc? _sharedProc;
 
+    private readonly ViewportInputRouter _router;
+
     private nint _hwnd;
     private Vector2D<int> _size;
-
-    private PointerButtons _buttonsDown;
-    private bool _cursorLocked;
-
-    // Screen-space point the cursor is pinned to while looking around, and the
-    // client-space point it goes back to when the look ends.
-    private Win32Interop.POINT _lockAnchor;
-    private Win32Interop.POINT _lockRestore;
-
-    // The last real client-space position, tracked exactly as the engine's own
-    // input manager tracks it and for the same reason: it is where the cursor
-    // goes back to when a look ends. Pinning happens at the viewport's centre,
-    // which is not where the user pressed, so restoring to the anchor would
-    // teleport the pointer every time a freelook finished.
-    private Win32Interop.POINT _lastClientPosition;
-
-    // Right-click-vs-right-drag: where the right button went down (client
-    // pixels) and how far the pointer has moved AWAY from it since. The
-    // engine's freelook owns a right DRAG, so a context menu can only mean a
-    // right press that ended before it became one.
-    //
-    // NET DISPLACEMENT, not the length of the path travelled. Windows itself
-    // draws a rectangle around the press point that the pointer has to LEAVE
-    // (SM_CXDRAG, what DragDetect implements), and that has no time
-    // component: a press held for a second while the hand shakes is still a
-    // click. Summing |dx|+|dy| per message instead makes an ordinary hesitant
-    // click on a high-dpi mouse silently open no menu, and pressing faster
-    // "fixes" it - the signature of a bug nobody can report.
-    //
-    // Accumulated from both move shapes, because the cursor lock engages
-    // within a frame or two of the press and everything after it arrives as a
-    // delta rather than a position.
-    private Win32Interop.POINT _rightPressPosition;
-    private int _rightTravelX;
-    private int _rightTravelY;
-    private bool _rightPressActive;
-    private bool _rightBecameDrag;
-
-    // Half the system's drag width, in this window's DPI: the same slack
-    // Explorer gives a click, resolved once per press.
-    private int _rightClickSlack = 4;
+    private EngineHost? _host;
 
     /// <summary>Creates the child window under <paramref name="parent"/>.</summary>
     internal Win32ViewportWindow(nint parent)
@@ -116,6 +86,10 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
         if (_hwnd == 0)
             throw new InvalidOperationException(
                 $"Could not create the viewport window (Win32 error {Marshal.GetLastWin32Error()}).");
+
+        _router = new ViewportInputRouter(this);
+        _router.ShellChord += chord => ShellChord?.Invoke(chord);
+        _router.ContextMenuRequested += (x, y) => ContextMenuRequested?.Invoke(x, y);
 
         _windows[_hwnd] = this;
         _size = ReadClientSize();
@@ -150,52 +124,35 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
 
     /// <summary>
     /// Raised on the UI thread for a Ctrl chord the shell owns rather than the
-    /// engine.
+    /// engine. Forwarded from the router, which owns the table.
     /// </summary>
-    /// <remarks>
-    /// <b>Deliberately a short, closed list.</b> Every chord added here is one
-    /// the engine can no longer see, so this is not a general keyboard hook: it
-    /// is the handful of document verbs that have no meaning inside a viewport
-    /// and every meaning outside one. Anything about the SCENE stays with the
-    /// engine, where the editor's own keymap already owns it.
-    /// </remarks>
     public event Action<ShellChord>? ShellChord;
 
     /// <summary>
     /// Raised on the UI thread when a right press ends without having become a
-    /// drag: a right-CLICK, in client pixels. The engine has already received
-    /// the balanced down/up pair (its freelook legitimately started and ended
-    /// around it); what the shell does with the click - a context menu - is
-    /// the shell's business, exactly like the document chords.
+    /// drag: a right-CLICK, in client pixels. Forwarded from the router, which
+    /// owns the arbitration.
     /// </summary>
     public event Action<int, int>? ContextMenuRequested;
-
-    private static ShellChord? ShellChordFor(int virtualKey) => virtualKey switch
-    {
-        0x4E => Viewport.ShellChord.NewMap,   // N
-        0x4F => Viewport.ShellChord.OpenMap,  // O
-        0x53 => Win32Interop.IsKeyDown(Win32Interop.VK_SHIFT)
-            ? Viewport.ShellChord.SaveMapAs
-            : Viewport.ShellChord.SaveMap,    // S
-
-        // The number row only. The numpad's own codes are deliberately absent:
-        // an insert is not a thing anyone reaches for with their right hand
-        // while the left is on the movement keys, and claiming them would take
-        // four more codes away from the engine for nothing.
-        0x31 => Viewport.ShellChord.InsertBlock, // 1
-        0x32 => Viewport.ShellChord.InsertPart,  // 2
-        0x33 => Viewport.ShellChord.InsertCut,   // 3
-        0x34 => Viewport.ShellChord.InsertLight, // 4
-
-        _ => null,
-    };
 
     /// <summary>
     /// Where submitted input goes, once the engine exists. Null before then, and
     /// input that arrives in that window is dropped rather than queued: a
     /// keystroke into a viewport that has no scene yet has nothing to mean.
     /// </summary>
-    internal EngineHost? Host { get; set; }
+    internal EngineHost? Host
+    {
+        get => _host;
+        set
+        {
+            _host = value;
+
+            // EngineHost is not itself an IInputSink (it owns one), so the
+            // router is handed an adapter rather than the host: the router must
+            // be constructible in a test with no engine at all.
+            _router.Sink = value is null ? null : new EngineHostSink(value);
+        }
+    }
 
     /// <summary>
     /// Applies the cursor mode the engine is asking for. <b>UI thread only</b>,
@@ -204,23 +161,17 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
     /// <remarks>
     /// This is the shell's half of the embedded cursor split. The engine has no
     /// device to hide behind a host-supplied surface, so it publishes a request
-    /// and this performs the capture, the pinning and the hide that only the
-    /// window's owner can. The engine's state machine is closed afterwards with
+    /// and the router performs the capture, the pinning and the hide through
+    /// this window. The engine's state machine is closed afterwards with
     /// <see cref="EngineHost.ApplyPendingCursorMode"/>, exactly as the
     /// standalone event pump does.
     /// </remarks>
     internal void PumpCursorMode()
     {
-        if (Host is not { } host)
+        if (_host is not { } host)
             return;
 
-        bool wanted = host.RequestedCursorMode == CursorMode.Locked;
-        if (wanted != _cursorLocked)
-        {
-            if (wanted) BeginCursorLock();
-            else EndCursorLock();
-        }
-
+        _router.ApplyCursorMode(host.RequestedCursorMode);
         host.ApplyPendingCursorMode();
     }
 
@@ -237,7 +188,10 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
         if (_hwnd == 0)
             return;
 
-        EndCursorLock();
+        // Before the handle goes: every platform call the lock's release makes
+        // needs a window to make it against.
+        _router.ApplyCursorMode(CursorMode.Normal);
+
         _windows.TryRemove(_hwnd, out _);
         Win32Interop.DestroyWindow(_hwnd);
         _hwnd = 0;
@@ -301,13 +255,13 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
     /// <para>
     /// <b>The degradations live here.</b> Windows has no rotate cursor, and its
     /// closest thing to a grab is the hand. A tool asking for either gets the
-    /// nearest available shape and never learns that it did - which is the
+    /// nearest available shape and never learns that it did, which is the
     /// whole reason the vocabulary is the engine's rather than the platform's.
     /// </para>
     /// </remarks>
     private nint ResolveCursor()
     {
-        CursorShape shape = Host?.RequestedCursorShape ?? CursorShape.Arrow;
+        CursorShape shape = _host?.RequestedCursorShape ?? CursorShape.Arrow;
 
         int id = shape switch
         {
@@ -355,10 +309,10 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
 
                 // HERE, and nowhere else. Windows re-asserts the window class's
                 // own cursor on every mouse move, so a SetCursor issued from
-                // anywhere but this message is reverted within a frame - which
+                // anywhere but this message is reverted within a frame, which
                 // is exactly what produces the "the cursor flickers" report
                 // that has no other explanation.
-                Win32Interop.SetCursor(_cursorLocked ? 0 : ResolveCursor());
+                Win32Interop.SetCursor(_router.IsCursorLocked ? 0 : ResolveCursor());
                 result = 1;
                 return true;
 
@@ -367,70 +321,49 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
                 return false;
 
             case Win32Interop.WM_KILLFOCUS:
-                // Everything held goes up and the cursor comes back. The keys
-                // whose release went to whoever took the focus are never coming.
-                EndCursorLock();
-                _buttonsDown = PointerButtons.None;
-                _rightPressActive = false;
-                Submit(InputEvent.FocusLost());
+                _router.OnFocusLost();
                 return false;
 
             case Win32Interop.WM_MOUSEMOVE:
-                OnMouseMove(lParam);
+                _router.OnPointerMove(Win32Interop.LowInt16(lParam), Win32Interop.HighInt16(lParam));
                 return false;
 
             case Win32Interop.WM_LBUTTONDOWN: OnButtonDown(PointerButtons.Left); return false;
             case Win32Interop.WM_RBUTTONDOWN: OnButtonDown(PointerButtons.Right); return false;
             case Win32Interop.WM_MBUTTONDOWN: OnButtonDown(PointerButtons.Middle); return false;
 
-            case Win32Interop.WM_LBUTTONUP: OnButtonUp(PointerButtons.Left); return false;
-            case Win32Interop.WM_RBUTTONUP: OnButtonUp(PointerButtons.Right); return false;
-            case Win32Interop.WM_MBUTTONUP: OnButtonUp(PointerButtons.Middle); return false;
+            case Win32Interop.WM_LBUTTONUP: _router.OnPointerUp(PointerButtons.Left); return false;
+            case Win32Interop.WM_RBUTTONUP: _router.OnPointerUp(PointerButtons.Right); return false;
+            case Win32Interop.WM_MBUTTONUP: _router.OnPointerUp(PointerButtons.Middle); return false;
 
             case Win32Interop.WM_MOUSEWHEEL:
-                Submit(InputEvent.Scroll(new Vector2(0f, Win32Interop.HighInt16(wParam) / (float)Win32Interop.WHEEL_DELTA)));
+                _router.OnScroll(0f, Win32Interop.HighInt16(wParam) / (float)Win32Interop.WHEEL_DELTA);
                 return false;
 
             case Win32Interop.WM_MOUSEHWHEEL:
-                Submit(InputEvent.Scroll(new Vector2(Win32Interop.HighInt16(wParam) / (float)Win32Interop.WHEEL_DELTA, 0f)));
+                _router.OnScroll(Win32Interop.HighInt16(wParam) / (float)Win32Interop.WHEEL_DELTA, 0f);
                 return false;
 
             case Win32Interop.WM_KEYDOWN:
             case Win32Interop.WM_SYSKEYDOWN:
-                // A Ctrl chord the SHELL owns never reaches the engine. The
-                // viewport is a native child window, so while it has focus
-                // Avalonia sees no keyboard at all and a menu accelerator is
-                // simply inert - which for Ctrl+S is the worst possible
-                // failure, because it is the one chord people press without
-                // looking and trust to have worked.
-                //
-                // Never while the cursor is locked: during a freelook Ctrl is
-                // the descend key and S flies backwards, so the chord fires
-                // from the ordinary descend-while-reversing gesture, pops a
-                // save dialog mid-flight and eats the movement key. The same
-                // rule the editor's own Ctrl chords follow while a camera
-                // claims the letters.
-                if (!_cursorLocked
-                    && Win32Interop.IsKeyDown(Win32Interop.VK_CONTROL)
-                    && ShellChordFor((int)wParam) is { } chord)
+                // The router decides whether it claimed the key: a chord the
+                // shell owns, or anything Alt is involved in. ORed with the
+                // system-key kind because Windows classifies a few more messages
+                // that way (F10 alone activates the menu bar with no Alt held),
+                // and every one of them must be claimed here or the OS treats it
+                // as a menu accelerator and eats the next keystroke.
+                if (_router.OnKeyDown(Win32Keys.ToInputKey((int)wParam, lParam), ReadModifiers()))
                 {
-                    ShellChord?.Invoke(chord);
                     result = 0;
                     return true;
                 }
 
-                Submit(InputEvent.KeyDown(Win32Keys.ToInputKey((int)wParam, lParam)));
-
-                // Claimed so the OS does not also treat it as a menu accelerator:
-                // Alt alone opens the window menu and eats the next keystroke,
-                // which is the difference between Alt-orbit working and the
-                // viewport silently going deaf mid-gesture.
                 result = 0;
                 return message == Win32Interop.WM_SYSKEYDOWN;
 
             case Win32Interop.WM_KEYUP:
             case Win32Interop.WM_SYSKEYUP:
-                Submit(InputEvent.KeyUp(Win32Keys.ToInputKey((int)wParam, lParam)));
+                _router.OnKeyUp(Win32Keys.ToInputKey((int)wParam, lParam));
                 result = 0;
                 return message == Win32Interop.WM_SYSKEYUP;
 
@@ -443,6 +376,39 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
         }
     }
 
+    /// <summary>
+    /// The modifiers as of the message being processed, in the engine's own
+    /// vocabulary.
+    /// </summary>
+    /// <remarks>
+    /// Super is deliberately not read: nothing in the chord table or the Alt
+    /// claim consults it, and a modifier nobody tests for is a P/Invoke per
+    /// keystroke for nothing.
+    /// </remarks>
+    private static KeyModifiers ReadModifiers()
+    {
+        KeyModifiers modifiers = KeyModifiers.None;
+
+        if (Win32Interop.IsKeyDown(Win32Interop.VK_CONTROL))
+            modifiers |= KeyModifiers.Control;
+        if (Win32Interop.IsKeyDown(Win32Interop.VK_SHIFT))
+            modifiers |= KeyModifiers.Shift;
+        if (Win32Interop.IsKeyDown(Win32Interop.VK_MENU))
+            modifiers |= KeyModifiers.Alt;
+
+        return modifiers;
+    }
+
+    private void OnButtonDown(PointerButtons button)
+    {
+        // Focus follows the click, because keyboard messages go to the focused
+        // window: without this the viewport would render and respond to the
+        // mouse while every shortcut went to the panel next to it. Before the
+        // router runs, so the capture it takes is taken by a focused window.
+        Win32Interop.SetFocus(_hwnd);
+        _router.OnPointerDown(button);
+    }
+
     private void OnResized()
     {
         Vector2D<int> size = ReadClientSize();
@@ -453,179 +419,82 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
         Resized?.Invoke(size);
     }
 
-    private void OnMouseMove(nint lParam)
+    // --- IViewportCursor -----------------------------------------------------
+
+    /// <inheritdoc/>
+    ViewportSize IViewportCursor.ClientSize
     {
-        if (_cursorLocked)
+        get
         {
-            // Pinned: the pointer is teleported back to the anchor after every
-            // real movement, so what the engine gets is raw motion and the
-            // cursor never reaches the edge of the screen. The SetCursorPos
-            // below generates a move of its own, which arrives here as a zero
-            // delta and is dropped by the test.
-            var screen = new Win32Interop.POINT
-            {
-                X = Win32Interop.LowInt16(lParam),
-                Y = Win32Interop.HighInt16(lParam),
-            };
-            Win32Interop.ClientToScreen(_hwnd, ref screen);
-
-            int dx = screen.X - _lockAnchor.X;
-            int dy = screen.Y - _lockAnchor.Y;
-            if (dx == 0 && dy == 0)
-                return;
-
-            if (_rightPressActive)
-                AccumulateRightTravel(dx, dy);
-
-            Submit(InputEvent.PointerDelta(new Vector2(dx, dy)));
-            Win32Interop.SetCursorPos(_lockAnchor.X, _lockAnchor.Y);
-            return;
-        }
-
-        var position = new Win32Interop.POINT
-        {
-            X = Win32Interop.LowInt16(lParam),
-            Y = Win32Interop.HighInt16(lParam),
-        };
-
-        if (_rightPressActive)
-            AccumulateRightTravel(position.X - _lastClientPosition.X, position.Y - _lastClientPosition.Y);
-
-        _lastClientPosition = position;
-
-        Submit(InputEvent.PointerMove(new Vector2(_lastClientPosition.X, _lastClientPosition.Y)));
-    }
-
-    private void OnButtonDown(PointerButtons button)
-    {
-        // Focus follows the click, because keyboard messages go to the focused
-        // window: without this the viewport would render and respond to the
-        // mouse while every shortcut went to the panel next to it.
-        Win32Interop.SetFocus(_hwnd);
-
-        if (_buttonsDown is PointerButtons.None)
-            Win32Interop.SetCapture(_hwnd);
-
-        _buttonsDown |= button;
-
-        if (button == PointerButtons.Right)
-        {
-            _rightPressActive = true;
-            _rightBecameDrag = false;
-            _rightTravelX = 0;
-            _rightTravelY = 0;
-            _rightPressPosition = _lastClientPosition;
-            _rightClickSlack = ResolveRightClickSlack();
-        }
-
-        Submit(InputEvent.PointerDown(button));
-    }
-
-    private void OnButtonUp(PointerButtons button)
-    {
-        _buttonsDown &= ~button;
-
-        // Capture is what makes a drag that leaves the viewport still end when
-        // the user lets go, so it is held until the last button comes up. Not
-        // while the cursor is locked, which needs it for its own reasons.
-        if (_buttonsDown is PointerButtons.None && !_cursorLocked)
-            Win32Interop.ReleaseCapture();
-
-        Submit(InputEvent.PointerUp(button));
-
-        // AFTER the up is submitted, so the engine's freelook has ended and
-        // released its cursor request before the shell opens anything over the
-        // viewport.
-        if (button == PointerButtons.Right && _rightPressActive)
-        {
-            _rightPressActive = false;
-            if (!_rightBecameDrag)
-                ContextMenuRequested?.Invoke(_rightPressPosition.X, _rightPressPosition.Y);
+            Vector2D<int> size = ReadClientSize();
+            return new ViewportSize(size.X, size.Y);
         }
     }
 
-    // Leaving the rectangle is what makes a press a drag, and it is one-way:
-    // coming back inside afterwards does not turn a freelook into a click.
-    private void AccumulateRightTravel(int dx, int dy)
+    /// <inheritdoc/>
+    int IViewportCursor.DragSlack
     {
-        if (_rightBecameDrag)
-            return;
-
-        _rightTravelX += dx;
-        _rightTravelY += dy;
-
-        if (Math.Abs(_rightTravelX) > _rightClickSlack || Math.Abs(_rightTravelY) > _rightClickSlack)
-            _rightBecameDrag = true;
-    }
-
-    private int ResolveRightClickSlack()
-    {
-        // Half of SM_CXDRAG, which is the full WIDTH of the rectangle while
-        // the travel here is measured from its centre. Per-window DPI, so the
-        // slack is the same physical distance on a 200% display as on a 100%
-        // one; the fallback is the metric's own default.
-        const int fallback = 4;
-
-        if (_hwnd == 0)
-            return fallback;
-
-        try
+        get
         {
-            uint dpi = Win32Interop.GetDpiForWindow(_hwnd);
-            if (dpi == 0)
+            // Half of SM_CXDRAG, which is the full WIDTH of the rectangle while
+            // the travel is measured from its centre. Per-window DPI, so the
+            // slack is the same physical distance on a 200% display as on a 100%
+            // one; the fallback is the metric's own default.
+            const int fallback = 4;
+
+            if (_hwnd == 0)
                 return fallback;
 
-            int width = Win32Interop.GetSystemMetricsForDpi(Win32Interop.SM_CXDRAG, dpi);
-            return width > 1 ? width / 2 : fallback;
-        }
-        catch (EntryPointNotFoundException)
-        {
-            // Pre-1607 Windows has neither entry point; the constant is what
-            // the metric returns at 100% anyway.
-            return fallback;
+            try
+            {
+                uint dpi = Win32Interop.GetDpiForWindow(_hwnd);
+                if (dpi == 0)
+                    return fallback;
+
+                int width = Win32Interop.GetSystemMetricsForDpi(Win32Interop.SM_CXDRAG, dpi);
+                return width > 1 ? width / 2 : fallback;
+            }
+            catch (EntryPointNotFoundException)
+            {
+                // Pre-1607 Windows has neither entry point; the constant is what
+                // the metric returns at 100% anyway.
+                return fallback;
+            }
         }
     }
 
-    // --- Cursor lock ---------------------------------------------------------
-
-    private void BeginCursorLock()
+    /// <inheritdoc/>
+    ViewportPoint IViewportCursor.ClientToScreen(ViewportPoint client)
     {
-        if (_cursorLocked || _hwnd == 0)
+        if (_hwnd == 0)
+            return client;
+
+        var point = new Win32Interop.POINT { X = client.X, Y = client.Y };
+        Win32Interop.ClientToScreen(_hwnd, ref point);
+        return new ViewportPoint(point.X, point.Y);
+    }
+
+    /// <inheritdoc/>
+    void IViewportCursor.MoveCursor(int screenX, int screenY) =>
+        Win32Interop.SetCursorPos(screenX, screenY);
+
+    /// <inheritdoc/>
+    void IViewportCursor.ClipToClient(bool clip)
+    {
+        if (!clip)
+        {
+            Win32Interop.ClipCursorRelease(0);
+            return;
+        }
+
+        if (_hwnd == 0 || !Win32Interop.GetClientRect(_hwnd, out Win32Interop.RECT client))
             return;
 
-        // The anchor is the middle of the viewport rather than wherever the
-        // cursor happens to be: pinning at an edge means half the mouse's
-        // travel leaves the window before the teleport catches it.
-        Win32Interop.GetClientRect(_hwnd, out Win32Interop.RECT client);
-        var centre = new Win32Interop.POINT
-        {
-            X = (client.Left + client.Right) / 2,
-            Y = (client.Top + client.Bottom) / 2,
-        };
-
-        _lockRestore = _lastClientPosition;
-        Win32Interop.ClientToScreen(_hwnd, ref centre);
-        _lockAnchor = centre;
-
-        _cursorLocked = true;
-        Win32Interop.SetCapture(_hwnd);
-        Win32Interop.SetCursor(0);
-        Win32Interop.SetCursorPos(_lockAnchor.X, _lockAnchor.Y);
-
-        // The hidden pointer is fenced to the VIEWPORT for the lock's duration:
-        // it cannot drift onto another monitor or another application while
-        // invisible, and however close the window sits to a screen edge the
-        // anchor keeps at least half the viewport of travel in every direction
-        // before the OS would saturate the position. The whole client rect
-        // rather than a small band around the anchor, deliberately — a tight
-        // fence SHRINKS the headroom the differencing survives a UI stall
-        // with, which is the opposite of hardening. Every release path funnels
-        // through EndCursorLock (mode change, focus loss, destruction), so the
-        // fence cannot outlive the lock.
         var topLeft = new Win32Interop.POINT { X = client.Left, Y = client.Top };
         var bottomRight = new Win32Interop.POINT { X = client.Right, Y = client.Bottom };
         Win32Interop.ClientToScreen(_hwnd, ref topLeft);
         Win32Interop.ClientToScreen(_hwnd, ref bottomRight);
+
         Win32Interop.ClipCursor(new Win32Interop.RECT
         {
             Left = topLeft.X,
@@ -635,30 +504,32 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
         });
     }
 
-    private void EndCursorLock()
+    /// <inheritdoc/>
+    void IViewportCursor.SetCursorHidden(bool hidden) =>
+        Win32Interop.SetCursor(hidden ? 0 : _arrowCursor);
+
+    /// <inheritdoc/>
+    void IViewportCursor.SetPointerCapture(bool captured)
     {
-        if (!_cursorLocked)
-            return;
-
-        _cursorLocked = false;
-
-        // Before the restore teleport, or the fence would clamp it: a cursor
-        // released outside the viewport (the press was near the pane's edge)
-        // must land where the press happened, not on the fence line.
-        Win32Interop.ClipCursorRelease(0);
-
-        Win32Interop.POINT restore = _lockRestore;
-        Win32Interop.ClientToScreen(_hwnd, ref restore);
-        Win32Interop.SetCursorPos(restore.X, restore.Y);
-        Win32Interop.SetCursor(_arrowCursor);
-
-        if (_buttonsDown is PointerButtons.None)
+        if (captured)
+        {
+            if (_hwnd != 0)
+                Win32Interop.SetCapture(_hwnd);
+        }
+        else
+        {
             Win32Interop.ReleaseCapture();
+        }
     }
 
     // --- Plumbing ------------------------------------------------------------
 
-    private void Submit(in InputEvent input) => Host?.SubmitInput(in input);
+    // The host owns an input sink rather than being one, and the router must not
+    // name EngineHost at all: it is constructed in tests against a recorder.
+    private sealed class EngineHostSink(EngineHost host) : IInputSink
+    {
+        public void Submit(in InputEvent input) => host.SubmitInput(in input);
+    }
 
     private Vector2D<int> ReadClientSize()
     {
