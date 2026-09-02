@@ -20,9 +20,20 @@
       Core; it matches the attribute family by metadata name, which is what
       makes both halves of that true.
     -->
+    <!--
+      UndefineProperties is load-bearing, not tidiness. A publish passes
+      PublishAot, RuntimeIdentifier and SelfContained as GLOBAL properties, and
+      a global property reaches every project in the graph including this one,
+      which targets netstandard2.0 because a Roslyn analyzer must. The SDK then
+      refuses it with NETSDK1207 and the whole AOT publish fails, naming the
+      generator rather than anything that is wrong. Stripping the properties at
+      the reference is what keeps the analyzer out of the publish graph's
+      runtime decisions while still building it.
+    -->
     <ProjectReference Include="..\SpectraEngine.Entities.Generator\SpectraEngine.Entities.Generator.csproj"
                      OutputItemType="Analyzer"
-                     ReferenceOutputAssembly="false" />
+                     ReferenceOutputAssembly="false"
+                     UndefineProperties="PublishAot;RuntimeIdentifier;SelfContained;PublishTrimmed;PublishSingleFile" />
   </ItemGroup>
 
 </Project>
