@@ -58,6 +58,7 @@ internal sealed record DemoStartupOptions(
     string? Pipeline = null,
     bool Shadows = true,
     bool Profile = false,
+    bool VSync = false,
     bool? DebugLayer = null,
     string? Adapter = null,
     (int Width, int Height)? WindowSize = null,
@@ -79,6 +80,7 @@ internal sealed record DemoStartupOptions(
         "Usage: SpectraEngine.Executable [opengl|d3d11|d3d12] [--selftest[=true|false]] " +
         "[--fullscreen-cycle[=seconds]] [--play[=true|false]] [--offscreen-probe[=true|false]] " +
         "[--pipeline=<name>] [--shadows[=true|false]] [--profile[=true|false]] " +
+        "[--vsync[=true|false]] " +
         "[--debug-layer[=true|false]] [--adapter=<name>] [--size=WxH] [--parts=<grid>] " +
         "[--props=<count>] [--map=<bundle.smap>] [--save-map=<bundle.smap>] " +
         "[--project=<folder>] [--save-project=<folder>].";
@@ -110,6 +112,7 @@ internal sealed record DemoStartupOptions(
         string? pipeline = null;
         bool shadows = true;
         bool profile = false;
+        bool vsync = false;
         bool? debugLayer = null;
         string? adapter = null;
         (int, int)? windowSize = null;
@@ -192,6 +195,13 @@ internal sealed record DemoStartupOptions(
                     profile = ParseBoolean(value, token);
                     continue;
 
+                // Pace Present to the display. Off by default because the demo
+                // is the measurement instrument and a frame time taken under
+                // vsync measures the monitor; the editor shell turns it on.
+                case "vsync" or "v-sync":
+                    vsync = ParseBoolean(value, token);
+                    continue;
+
                 // The graphics validation layer. Defaults to the build flavour
                 // (on in Debug, off in Release); this overrides either way.
                 // Any measurement taken with it on is measuring validation.
@@ -264,7 +274,7 @@ internal sealed record DemoStartupOptions(
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
-                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount,
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
                 loadMapPath, saveMapPath, projectPath, saveProjectPath);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
@@ -273,13 +283,13 @@ internal sealed record DemoStartupOptions(
                 selfTestEnvironmentValue.Trim(), SelfTestEnvironmentVariable);
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
-                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount,
+                fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
                 loadMapPath, saveMapPath, projectPath, saveProjectPath);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
-            fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, debugLayer, adapter, windowSize, scatterGrid, propCount,
+            fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
                 loadMapPath, saveMapPath, projectPath, saveProjectPath);
     }
 

@@ -109,6 +109,7 @@ public sealed class ConsoleCommands
         ("resize", "use the resize tool"),
         ("snap", "snap on | off"),
         ("grid <n>", "set the move grid, in world units"),
+        ("grid auto|on|off", "when the grid shows (auto = during move/resize)"),
         ("angle <n>", "set the rotate snap, in degrees"),
         ("step <n>", "set the resize step, in world units"),
         ("axes", "axes world | local"),
@@ -173,7 +174,16 @@ public sealed class ConsoleCommands
                 _ => ConsoleResult.Fail("handles takes studio or classic"),
             },
 
-            "grid" => Snap(GizmoMode.Translate, arg, "grid", "su"),
+            // One word, two payloads: a number is the increment, a mode word is
+            // visibility. Words first, so a typo'd number still reports as a
+            // number error rather than silently matching nothing.
+            "grid" => arg switch
+            {
+                "auto" => Host(EditorHostCommand.GridAuto, "grid shows during move and resize"),
+                "on" or "always" => Host(EditorHostCommand.GridOn, "grid always on"),
+                "off" => Host(EditorHostCommand.GridOff, "grid off"),
+                _ => Snap(GizmoMode.Translate, arg, "grid", "su"),
+            },
             "angle" => Snap(GizmoMode.Rotate, arg, "angle", "deg"),
             "step" => Snap(GizmoMode.Scale, arg, "step", "su"),
 

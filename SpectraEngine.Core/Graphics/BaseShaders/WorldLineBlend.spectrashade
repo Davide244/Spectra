@@ -1,0 +1,123 @@
+// WorldLineBlend.spectrashade — the world-line lane's deferred half: drawn
+// AFTER the light pass, into the lit HDR target, alpha-blended, with the depth
+// test done HERE against the G-buffer's depth rather than by the rasteriser.
+//
+// WHY THE SHADER TESTS DEPTH ITSELF. The only depth a deferred frame owns is
+// the G-buffer's, and the lit target this pass draws into never had it: its own
+// depth attachment holds stale data from whoever used it last. Binding one
+// target's colour with another target's depth would be a new pass concept on
+// all three backends (a second FBO on GL, read-only DSV flags on D3D11, a
+// cross-target state on D3D12) - the largest plumbing item available - and it
+// would buy early-Z rejection for a few hundred one-pixel lines. Sampling the
+// depth as an ordinary texture and discarding occluded fragments produces the
+// same pixels for this workload with zero new concepts: RenderTarget's depth is
+// sampleable by contract, and the light pass has already read it through the
+// same path this frame.
+//
+// This replaces the old WorldLineGBuffer shader, which wrote lines INTO the
+// G-buffer as opaque five-attachment overwrites (black albedo, colour as
+// emissive, depth as the coverage mask). That model could not fade: a line
+// pixel REPLACED the floor pixel, so "fading" a dark line toward black over a
+// lit floor kept full contrast until a hard cull removed it - the chunk pop
+// this lane was rebuilt to remove.
+//
+// The vertex stage is WorldLine's, bias included, plus the clip position as a
+// varying: the fragment derives its G-buffer uv from it, snapped to a texel
+// centre because the pass's size and the G-buffer's are independent (the
+// offscreen probe renders 640x360 against a window-sized G-buffer) - the same
+// three lines, for the same reason, as DeferredLight.FragmentMain.
+
+struct VertexInput {
+    [Location(0)] vec3 position;
+    [Location(1)] vec3 color;
+}
+
+struct VertexOutput {
+    [Position] vec4 position;
+    vec3 color;
+    vec3 world;
+    vec4 clip;
+}
+
+struct FragmentInput {
+    vec3 color;
+    vec3 world;
+    vec4 clip;
+}
+
+shader WorldLineBlend {
+    [Binding(0)] cbuffer Camera {
+        mat4 uView;
+        mat4 uProjection;
+        vec3 uCameraPosition;
+
+        // See WorldLine.spectrashade: the coplanar-tie margin, in world space
+        // so it is identical on every backend. Here it is also what the
+        // shader-side compare leans on instead of an epsilon.
+        float uDepthNudge;
+
+        // See WorldLine.spectrashade.
+        vec3 uFadeCenter;
+        float uFadeStart;
+        float uFadeEnd;
+        float uOpacity;
+
+        // ndc.xy -> uv, the inverse of the light pass's uUvToNdc. SENT rather
+        // than assumed, because the V flip differs per backend and the wrong
+        // sign samples the depth upside down - which throws nothing and
+        // occludes the grid against the wrong half of the scene.
+        vec4 uNdcToUv;
+
+        // depth-buffer value -> ndc z, the same per-backend pair the light
+        // pass reconstructs positions with.
+        vec2 uDepthToNdc;
+
+        // The DEPTH TEXTURE's size, never the pass's; see the header.
+        vec2 uGBufferSize;
+    }
+
+    [Binding(0)] sampler2D uDepth;
+
+    [Vertex]
+    VertexOutput VertexMain(VertexInput input) {
+        var output = new VertexOutput();
+        vec3 nudged = input.position + (uCameraPosition - input.position) * uDepthNudge;
+        vec4 clip = uProjection * uView * vec4(nudged, 1.0);
+        output.position = clip;
+        output.clip = clip;
+        output.color = input.color;
+        output.world = input.position;
+        return output;
+    }
+
+    [Fragment] [Target(0)]
+    vec4 FragmentMain(FragmentInput input) {
+        vec2 ndc = input.clip.xy / input.clip.w;
+        vec2 uv = ndc * uNdcToUv.xy + uNdcToUv.zw;
+        vec2 texel = Math.Floor(uv * uGBufferSize) + vec2(0.5, 0.5);
+        vec2 snapped = texel / uGBufferSize;
+
+        // Larger ndc z is farther on every backend this engine has (GL -1..1,
+        // D3D 0..1, both increasing away from the camera). A cleared texel
+        // holds depth 1, which maps to the far plane, so the sky lets every
+        // line through without a special case.
+        float stored = uDepth.Sample(snapped).r;
+        float storedNdc = stored * uDepthToNdc.x + uDepthToNdc.y;
+        float ownNdc = input.clip.z / input.clip.w;
+        if (ownNdc > storedNdc) {
+            discard;
+        }
+
+        float t = Math.Clamp(
+            (Math.Distance(input.world, uFadeCenter) - uFadeStart)
+                / Math.Max(uFadeEnd - uFadeStart, 0.0001),
+            0.0, 1.0);
+        float falloff = (1.0 - t) * (1.0 - t);
+        float alpha = falloff * uOpacity;
+        if (alpha <= 0.004) {
+            discard;
+        }
+
+        return vec4(input.color, alpha);
+    }
+}

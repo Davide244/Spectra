@@ -104,6 +104,15 @@ public sealed class LightGizmo
     /// <summary>Whether a drag is in progress.</summary>
     public bool IsDragging => _handle != LightHandle.None;
 
+    /// <summary>
+    /// Whether the live drag edits a LENGTH — range or an extent — which are
+    /// the handles that snap on the move grid. The ground grid's auto mode
+    /// asks, because those are the gestures the grid on the floor is the
+    /// ladder for; an angle drags in degrees and a grid says nothing about it.
+    /// </summary>
+    public bool IsDraggingLength => _handle is LightHandle.Range or LightHandle.Width
+        or LightHandle.Height or LightHandle.Radius;
+
     /// <summary>The handle the cursor is over, or <see cref="LightHandle.None"/>.</summary>
     public LightHandle Hovered { get; private set; }
 

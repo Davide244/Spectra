@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Numerics;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Scene;
@@ -25,6 +25,19 @@ namespace SpectraEngine.Editing.Viewport;
 /// drag rather than after it.
 /// </para>
 /// <para>
+/// <b>The fade lives in the SHADER, not here, and it is real alpha.</b> The
+/// first version split every line into five flat-coloured segments and lerped
+/// each toward black by its midpoint's distance — and that design cannot fade:
+/// a dark line lerped toward black over a lit floor keeps its contrast, so
+/// every segment stayed at full visual strength until a hard cull snapped its
+/// whole 0.4-of-the-patch body off in one frame. The grid visibly loaded and
+/// unloaded in chunks, which was the complaint verbatim. This class now emits
+/// whole lines and writes the fade as <see cref="DebugDraw"/> metadata
+/// (centre, start, end, opacity); the world-line shaders compute the
+/// <c>(1-t)²</c> falloff per pixel and blend it as transparency toward
+/// whatever is actually behind the line.
+/// </para>
+/// <para>
 /// <b>It lives in <c>SpectraEngine.Editing</c></b>, like the part and
 /// subtractive overlays, so a shipped game never links it.
 /// </para>
@@ -46,6 +59,20 @@ public sealed class GroundGrid
     /// </remarks>
     public const float MinimumCellPixels = 12f;
 
+    /// <summary>
+    /// How large a cell must project before the grid REFINES back to the finer
+    /// level, in screen pixels of that finer level.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately above <see cref="MinimumCellPixels"/>: with one threshold a
+    /// camera hovering at exactly the coarsening height flickers the whole
+    /// lattice between two spacings frame to frame, and every crossing is a
+    /// one-frame swap of half the lines. The gap is the hysteresis band —
+    /// coarsen below 12 px, refine only once the finer level would come back
+    /// at 16 px or more.
+    /// </remarks>
+    public const float RefineCellPixels = 16f;
+
     /// <summary>How many minor cells make one major cell.</summary>
     public const int MajorEvery = 5;
 
@@ -55,13 +82,32 @@ public sealed class GroundGrid
     /// <remarks>
     /// Disclosed rather than silent, like every other cap in this assembly: a
     /// grid that quietly stopped half way across the screen would read as a
-    /// rendering fault. With the minimum-cell rule above, the cap is only
-    /// reached at extreme aspect ratios.
+    /// rendering fault. One <see cref="DebugDraw.Line"/> per grid line (the
+    /// fade is per pixel now, not per segment), so the cap counts what is
+    /// actually emitted; the two axes ride outside it.
     /// </remarks>
     public int MaxLines { get; set; } = 512;
 
     /// <summary>Whether the grid draws at all.</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Whole-grid alpha, 0..1 — the host's fade envelope writes it per frame
+    /// so the grid arrives and leaves as a ramp rather than a cut.
+    /// </summary>
+    /// <remarks>
+    /// Real transparency, carried to the shader through the line buffer's
+    /// metadata: it multiplies the per-pixel falloff, never the reach, because
+    /// a reach that changed with the fade would move the visible edge every
+    /// frame of the ramp — which is the chunk-pop this lane was rebuilt to
+    /// remove.
+    /// </remarks>
+    public float Opacity { get; set; } = 1f;
+
+    // Below this the whole draw is skipped: the shader would discard every
+    // pixel anyway, and skipping early keeps a faded-out grid at exactly zero
+    // cost.
+    private const float MinimumOpacity = 0.005f;
 
     /// <summary>
     /// How far the grid extends from the camera's ground point, in world units.
@@ -72,11 +118,17 @@ public sealed class GroundGrid
     /// </remarks>
     public float Radius { get; set; } = 48f;
 
-    // LINEAR light, not display colours. These lines are flushed inside the
-    // scene pass and go through the tone curve with everything else, which is
-    // correct for world content: the grid should dim when the exposure rises. A
-    // value copied from the overlay's display palette would arrive noticeably
-    // brighter than intended.
+    // Where the per-pixel fade begins and ends, as fractions of the CONTINUOUS
+    // radius — never the step-quantised reach, whose one-cell jumps used to
+    // nudge every line's brightness on the frames the quantisation moved.
+    private const float FadeStartFraction = 0.05f;
+    private const float FadeEndFraction = 0.62f;
+
+    // LINEAR light, not display colours. These lines are blended into the lit
+    // scene before the tone curve, which is correct for world content: the
+    // grid should dim when the exposure rises. A value copied from the
+    // overlay's display palette would arrive noticeably brighter than
+    // intended.
     // DARK rather than light, which is the right way round here and not
     // obvious: the sky is a bright linear blue and the demo's ground is a light
     // green, so a pale grid disappears into both while a dark one reads against
@@ -85,7 +137,7 @@ public sealed class GroundGrid
     private static readonly Vector3 MinorColor = new(0.030f, 0.029f, 0.028f);
     private static readonly Vector3 MajorColor = new(0.011f, 0.011f, 0.012f);
 
-    /// <summary>Lines the last <see cref="Draw"/> emitted.</summary>
+    /// <summary>Lines the last <see cref="Draw"/> emitted, axes included.</summary>
     public int DrawnLastDraw { get; private set; }
 
     /// <summary>
@@ -102,11 +154,15 @@ public sealed class GroundGrid
     /// </remarks>
     public float CellSizeLastDraw { get; private set; }
 
+    // Last frame's answer, so the coarsen and refine thresholds can disagree.
+    private float _lastCell;
+    private float _lastIncrement;
+
     /// <summary>
     /// Emits the grid into <paramref name="output"/>, sized to
     /// <paramref name="camera"/> and spaced by <paramref name="increment"/>.
     /// </summary>
-    /// <param name="output">The DEPTH-TESTED line buffer, never the overlay.</param>
+    /// <param name="output">The depth-tested world-line buffer, never the overlay.</param>
     /// <param name="camera">The viewport camera.</param>
     /// <param name="increment">The live translate snap, in world units.</param>
     /// <param name="viewportHeight">Viewport height in pixels, for the coarsening rule.</param>
@@ -119,7 +175,7 @@ public sealed class GroundGrid
         SkippedLastDraw = 0;
         CellSizeLastDraw = 0f;
 
-        if (!Enabled || increment <= 0f || viewportHeight <= 0f)
+        if (!Enabled || Opacity <= MinimumOpacity || increment <= 0f || viewportHeight <= 0f)
             return;
 
         // The camera's own ground point. Everything below is measured from here
@@ -140,26 +196,36 @@ public sealed class GroundGrid
         // Snapped to the MAJOR spacing, not the minor one. Snapping to the minor
         // spacing still lets the major lines slide underfoot as the camera
         // moves, which is the whole thing the snap is for: the eye tracks the
-        // bright lines and reads their drift as the world sliding.
+        // bright lines and reads their drift as the world sliding. The jump a
+        // re-centre makes is invisible because the lines it adds and removes
+        // sit past the fade's end, at zero alpha.
         float major = cell * MajorEvery;
         float centerX = MathF.Floor(eye.X / major) * major;
         float centerZ = MathF.Floor(eye.Z / major) * major;
 
         int steps = (int)MathF.Ceiling(radius / cell);
 
-        // Two axes, and each line is one Line call: 2 * (2 * steps + 1).
-        int wanted = 2 * (2 * steps + 1);
+        // Two axes of lines, one Line call each: 2 * (2 * steps + 1).
+        int wanted = 2 * ((2 * steps) + 1);
         if (wanted > MaxLines)
         {
             // Shrink the extent rather than stopping half way across the
             // screen, which would read as a rendering fault. What is lost is
             // distance, which is the least informative part of a grid.
             steps = Math.Max(1, (MaxLines / 4) - 1);
-            SkippedLastDraw = wanted - (2 * (2 * steps + 1));
-            radius = steps * cell;
+            SkippedLastDraw = wanted - (2 * ((2 * steps) + 1));
         }
 
         float reach = steps * cell;
+
+        // The per-pixel fade window, from the CONTINUOUS radius so it never
+        // steps — clamped to the drawn reach only when the cap shrank the
+        // patch, or lines would end mid-fade in a visible square edge.
+        float fadeRadius = MathF.Min(radius, reach);
+        output.FadeCenter = new Vector3(eye.X, 0f, eye.Z);
+        output.FadeStart = fadeRadius * FadeStartFraction;
+        output.FadeEnd = fadeRadius * FadeEndFraction;
+        output.Opacity = Opacity;
 
         for (int i = -steps; i <= steps; i++)
         {
@@ -173,28 +239,32 @@ public sealed class GroundGrid
             bool majorX = IsMultiple(x, major);
             bool majorZ = IsMultiple(z, major);
 
-            DrawFading(output, new Vector3(x, 0f, centerZ - reach), new Vector3(x, 0f, centerZ + reach),
-                majorX ? MajorColor : MinorColor, eye, reach);
-            DrawFading(output, new Vector3(centerX - reach, 0f, z), new Vector3(centerX + reach, 0f, z),
-                majorZ ? MajorColor : MinorColor, eye, reach);
+            output.Line(new Vector3(x, 0f, centerZ - reach), new Vector3(x, 0f, centerZ + reach),
+                majorX ? MajorColor : MinorColor);
+            output.Line(new Vector3(centerX - reach, 0f, z), new Vector3(centerX + reach, 0f, z),
+                majorZ ? MajorColor : MinorColor);
 
             DrawnLastDraw += 2;
         }
 
-        DrawAxes(output, centerX, centerZ, reach, eye);
+        DrawAxes(output, centerX, centerZ, reach);
+        DrawnLastDraw += 2;
     }
 
     /// <summary>
     /// Doubles the cell until it projects to at least
-    /// <see cref="MinimumCellPixels"/>.
+    /// <see cref="MinimumCellPixels"/>, and halves it back only past
+    /// <see cref="RefineCellPixels"/>.
     /// </summary>
     /// <remarks>
     /// Measured at the camera's HEIGHT rather than at the grid's far edge,
     /// because the near cells are the ones a user is working in and the far ones
     /// have already faded out. Using the far edge would coarsen a grid that
-    /// looks perfectly fine underfoot.
+    /// looks perfectly fine underfoot. Stateful, because hysteresis needs last
+    /// frame's answer: starting from it is what lets the two thresholds
+    /// disagree instead of flickering at one.
     /// </remarks>
-    private static float CoarsenedCell(float increment, float height, Camera camera, float viewportHeight)
+    private float CoarsenedCell(float increment, float height, Camera camera, float viewportHeight)
     {
         // Pixels per world unit at distance `height`: the same relation
         // GizmoGeometry uses to hold a handle at a constant screen size, and
@@ -204,13 +274,26 @@ public sealed class GroundGrid
         if (worldPerPixel <= 0f || !float.IsFinite(worldPerPixel))
             return increment;
 
-        float cell = increment;
+        // Resume from last frame's level while it is still one of THIS
+        // increment's levels; a changed increment resets the ladder.
+        float cell = _lastIncrement == increment && _lastCell >= increment
+            ? _lastCell
+            : increment;
 
-        // Bounded, so a degenerate camera cannot spin here. Sixteen doublings is
-        // a factor of 65,536, well past any grid anyone would look at.
-        for (int i = 0; i < 16 && cell / worldPerPixel < MinimumCellPixels; i++)
+        // Bounded, so a degenerate camera cannot spin here. Thirty-two
+        // doublings is a factor of four billion, well past any grid anyone
+        // would look at.
+        for (int i = 0; i < 32 && cell / worldPerPixel < MinimumCellPixels; i++)
             cell *= 2f;
 
+        // Refine only while the FINER level would come back comfortably
+        // readable. Exact halving of exact doublings, so the loop lands back
+        // on the increment itself bit for bit.
+        for (int i = 0; i < 32 && cell > increment && (cell * 0.5f) / worldPerPixel >= RefineCellPixels; i++)
+            cell *= 0.5f;
+
+        _lastIncrement = increment;
+        _lastCell = cell;
         return cell;
     }
 
@@ -219,82 +302,18 @@ public sealed class GroundGrid
     // cursor and the line across the floor are recognisably the same axis. This
     // is what turns "a grid" into "the world has an origin".
     //
-    // DRAWN SHORTER THAN THE GRID, and that is the one thing about them that is
-    // not obvious. The grid plane is at y = 0 and a level's geometry straddles
-    // it - a wall standing on a floor whose top is at zero has half its height
-    // below the plane - so a grid line legitimately passes IN FRONT of the wall
-    // it appears to cross. That is correct, it is what every editor in this
-    // category does, and it is not a depth failure (WorldLineGlTests pins the
-    // depth lane in both directions). What it IS is loud: an axis at full
-    // strength running a hundred units across a room reads as a rendering
-    // fault, so the axes reach a third of the grid and the grid itself fades
-    // hard well before its own edge.
-    private static void DrawAxes(DebugDraw output, float centerX, float centerZ, float reach, Vector3 eye)
+    // ALWAYS EMITTED, never gated. The old binary distance gate popped a whole
+    // axis line into and out of existence the frame the snapped patch centre
+    // crossed a threshold; with the per-pixel fade an axis far from the camera
+    // simply renders at zero alpha, which is the same answer with no edge, for
+    // the cost of two lines.
+    private static void DrawAxes(DebugDraw output, float centerX, float centerZ, float reach)
     {
         var xColor = new Vector3(0.30f, 0.020f, 0.020f);
         var zColor = new Vector3(0.020f, 0.035f, 0.28f);
 
-        // Only where the axis actually crosses the drawn patch. An axis line
-        // pinned to the patch's own edge would be a bright line that is not the
-        // axis, which is worse than no axis at all.
-        float axisReach = reach * 0.34f;
-
-        if (MathF.Abs(centerZ) <= axisReach)
-        {
-            DrawFading(output, new Vector3(centerX - axisReach, 0f, 0f), new Vector3(centerX + axisReach, 0f, 0f),
-                xColor, eye, reach);
-        }
-
-        if (MathF.Abs(centerX) <= axisReach)
-        {
-            DrawFading(output, new Vector3(0f, 0f, centerZ - axisReach), new Vector3(0f, 0f, centerZ + axisReach),
-                zColor, eye, reach);
-        }
-    }
-
-    /// <summary>
-    /// Emits one line, split into segments that dim with distance from the
-    /// camera's ground point.
-    /// </summary>
-    /// <remarks>
-    /// <b>DebugDraw has colour but no alpha</b>, so the fade is a colour lerp
-    /// toward black rather than toward transparency - which is the same thing
-    /// against a dark ground and nothing like it against a bright sky, so the
-    /// grid deliberately stops at the fade's end rather than continuing at a
-    /// colour that would be visible against the horizon. Segments rather than
-    /// per-vertex, because a line's two ends are its only colour samples and one
-    /// long line would fade linearly across the whole patch instead of following
-    /// the actual distance. Four is enough to read as a fade and costs four
-    /// lines where one would do; the cap accounts for it.
-    /// </remarks>
-    private static void DrawFading(DebugDraw output, Vector3 a, Vector3 b, Vector3 color, Vector3 eye, float reach)
-    {
-        const int Segments = 5;
-        var ground = new Vector3(eye.X, 0f, eye.Z);
-        float fadeStart = reach * 0.05f;
-        float fadeEnd = reach * 0.62f;
-
-        Vector3 previous = a;
-        for (int i = 1; i <= Segments; i++)
-        {
-            Vector3 next = Vector3.Lerp(a, b, i / (float)Segments);
-            Vector3 mid = (previous + next) * 0.5f;
-
-            float distance = Vector3.Distance(mid, ground);
-            float t = Math.Clamp((distance - fadeStart) / MathF.Max(fadeEnd - fadeStart, 1e-4f), 0f, 1f);
-
-            // (1 - t) SQUARED, not 1 - t squared, and the difference is the
-            // whole quality of the far half. The gentler curve keeps a third of
-            // its strength at 85% of the reach, which is exactly where the lines
-            // have converged to a few pixels apart and turn into a moire that
-            // crawls as the camera moves. This one is down to two per cent there.
-            float falloff = 1f - t;
-            float k = falloff * falloff;
-            if (k > 0.02f)
-                output.Line(previous, next, color * k);
-
-            previous = next;
-        }
+        output.Line(new Vector3(centerX - reach, 0f, 0f), new Vector3(centerX + reach, 0f, 0f), xColor);
+        output.Line(new Vector3(0f, 0f, centerZ - reach), new Vector3(0f, 0f, centerZ + reach), zColor);
     }
 
     // Whole-multiple test with a tolerance proportional to the spacing, because

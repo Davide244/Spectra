@@ -468,7 +468,7 @@ internal sealed unsafe class D3D12ShaderProgram : ShaderProgram
                     DepthWriteMask = depth is DepthMode.TestWrite or DepthMode.TestWriteEqual
                         ? DepthWriteMask.All
                         : DepthWriteMask.Zero,
-                    DepthFunc = depth == DepthMode.TestWriteEqual
+                    DepthFunc = depth is DepthMode.TestWriteEqual or DepthMode.TestNoWriteEqual
                         ? ComparisonFunc.LessEqual
                         : ComparisonFunc.Less,
                     StencilEnable = 0,

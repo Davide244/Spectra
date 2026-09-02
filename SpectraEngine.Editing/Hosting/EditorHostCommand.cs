@@ -70,4 +70,20 @@ public enum EditorHostCommand
 
     /// <summary>Empties the selection.</summary>
     ClearSelection,
+
+    /// <summary>
+    /// Ground grid shows during move and resize gestures only — the default.
+    /// </summary>
+    /// <remarks>
+    /// Three SET verbs rather than a cycle, the same rule every displayed
+    /// state follows: a cycle sent against a snapshot one publish stale lands
+    /// on the wrong mode exactly when the user clicks fastest.
+    /// </remarks>
+    GridAuto,
+
+    /// <summary>Ground grid always drawn.</summary>
+    GridOn,
+
+    /// <summary>Ground grid never drawn.</summary>
+    GridOff,
 }

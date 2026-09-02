@@ -19,7 +19,7 @@ public static class BaseShaders
     private const string DeferredLightFileName = "DeferredLight.spectrashade";
     private const string ShadowDepthFileName = "ShadowDepth.spectrashade";
     private const string WorldLineFileName = "WorldLine.spectrashade";
-    private const string WorldLineGBufferFileName = "WorldLineGBuffer.spectrashade";
+    private const string WorldLineBlendFileName = "WorldLineBlend.spectrashade";
 
     /// <summary>The built-in lit shader — diffuse + ambient from one directional light, modulated by a diffuse texture.</summary>
     public static string Lit => ReadEmbedded(LitFileName);
@@ -42,8 +42,8 @@ public static class BaseShaders
     /// <summary>The depth-tested world line, single target.</summary>
     public static string WorldLine => ReadEmbedded(WorldLineFileName);
 
-    /// <summary>The depth-tested world line, written into a deferred G-buffer.</summary>
-    public static string WorldLineGBuffer => ReadEmbedded(WorldLineGBufferFileName);
+    /// <summary>The world line's deferred half: post-light, alpha-blended, depth tested in the shader.</summary>
+    public static string WorldLineBlend => ReadEmbedded(WorldLineBlendFileName);
 
 
     /// <summary>
@@ -80,8 +80,8 @@ public static class BaseShaders
     /// <summary>Source-file path for <see cref="WorldLine"/>, if locatable on disk.</summary>
     public static string? WorldLinePath => TryResolveSourcePath(WorldLineFileName);
 
-    /// <summary>Source-file path for <see cref="WorldLineGBuffer"/>, if locatable on disk.</summary>
-    public static string? WorldLineGBufferPath => TryResolveSourcePath(WorldLineGBufferFileName);
+    /// <summary>Source-file path for <see cref="WorldLineBlend"/>, if locatable on disk.</summary>
+    public static string? WorldLineBlendPath => TryResolveSourcePath(WorldLineBlendFileName);
 
     private static string ReadEmbedded(string fileName)
     {

@@ -91,6 +91,13 @@ public sealed class FrameSnapshot
     public string? NavigationModeName { get; init; }
 
     /// <summary>
+    /// When the ground grid shows — "auto" (during move and resize gestures),
+    /// "on", or "off" — or null when there is no editor. Reported so the View
+    /// menu's checkmark follows the editor rather than its own last click.
+    /// </summary>
+    public string? GridModeName { get; init; }
+
+    /// <summary>
     /// Whether play mode is active: the character has the camera and the cursor,
     /// and the editor is suspended.
     /// </summary>

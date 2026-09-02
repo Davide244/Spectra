@@ -83,7 +83,7 @@ internal sealed class CompilingRenderer : Renderer
 
 
     protected override void FlushWorldLinesCore(
-        SpectraEngine.Core.Scene.Camera camera, ShaderProgram program, float nudge)
+        SpectraEngine.Core.Scene.Camera camera, ShaderProgram program, float nudge, GBuffer? gbuffer)
     {
     }
 

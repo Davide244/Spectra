@@ -238,10 +238,17 @@ public sealed class PropertyRowModel : ObservableObject
     /// <summary>Takes a fresh value from a published row.</summary>
     internal void Refresh(PropertyRow row)
     {
+        // The IsPartial setter raises PartialLabel when the FLAG flips; this
+        // raise covers the label's other inputs, and only when they moved —
+        // Refresh runs for every row on every pump, and an unconditional raise
+        // here is binding churn for a panel that has not changed.
+        bool partialCountsChanged =
+            _presentCount != row.PresentCount || _selectionCount != row.SelectionCount;
         IsPartial = row.IsPartial;
         _presentCount = row.PresentCount;
         _selectionCount = row.SelectionCount;
-        Raise(nameof(PartialLabel));
+        if (partialCountsChanged)
+            Raise(nameof(PartialLabel));
 
         switch (Kind)
         {
@@ -278,16 +285,32 @@ public sealed class PropertyRowModel : ObservableObject
                 break;
 
             default:
-                ReadOnlyText = row.IsMixed ? "(multiple)" : row.Text;
-                Raise(nameof(ReadOnlyText));
+                string readOnly = row.IsMixed ? "(multiple)" : row.Text;
+                if (!string.Equals(ReadOnlyText, readOnly, StringComparison.Ordinal))
+                {
+                    ReadOnlyText = readOnly;
+                    Raise(nameof(ReadOnlyText));
+                }
                 break;
         }
     }
 
     private void RefreshColor(Vector3 linear)
     {
-        _color = linear;
         bool mixed = float.IsNaN(linear.X);
+
+        // Skip an unchanged colour outright: Set compares brushes by
+        // REFERENCE, so an unguarded refresh allocates a fresh SolidColorBrush
+        // and re-renders the swatch on every pump for as long as a light is
+        // selected. NaN never equals itself, which is why mixed is compared as
+        // a state rather than through the vector.
+        bool unchanged = _colorRefreshed &&
+            (mixed ? float.IsNaN(_color.X) : !float.IsNaN(_color.X) && _color == linear);
+        if (unchanged)
+            return;
+
+        _colorRefreshed = true;
+        _color = linear;
 
         Hex = mixed ? string.Empty : ToHex(linear);
         Swatch = mixed
@@ -298,6 +321,10 @@ public sealed class PropertyRowModel : ObservableObject
         // other cell's is.
         Fields[0].Refresh(Hex, mixed);
     }
+
+    // Whether RefreshColor has run at all: the skip must not swallow the FIRST
+    // refresh, or a genuinely black light would never grow a swatch.
+    private bool _colorRefreshed;
 
     /// <summary>
     /// Writes one absolute value while a drag is in flight.
@@ -530,6 +557,10 @@ public sealed class PropertyPanelModel : ObservableObject
         {
             _selectionCount = selectionCount;
             Raise(nameof(HasSelection));
+            // MultipleLabel prints this count; the IsMultiple setter only
+            // covers the FLAG flipping, so the count's raise lives here, under
+            // the count's own guard.
+            Raise(nameof(MultipleLabel));
         }
 
         if (!SameShape(rows))
@@ -546,8 +577,9 @@ public sealed class PropertyPanelModel : ObservableObject
 
     private void RefreshHeader(IReadOnlyList<PropertyRow> rows, int selectionCount)
     {
+        // Its setter raises MultipleLabel when the flag flips; the count's
+        // half of that label is raised by Apply under the count guard.
         IsMultiple = selectionCount > 1;
-        Raise(nameof(MultipleLabel));
 
         if (selectionCount == 0)
         {

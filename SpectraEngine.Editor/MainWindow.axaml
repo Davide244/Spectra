@@ -252,6 +252,17 @@
             <MenuItem Header="Node axes" InputGesture="F5" ToggleType="CheckBox"
                       IsChecked="{Binding DebugSceneGraph, Mode=OneWay}" Click="OnDebugSceneGraphClicked" />
             <Separator />
+            <!-- Three SET verbs, never a cycle, like every state a control
+                 displays; the checkmark follows the engine's echo. -->
+            <MenuItem Header="Grid">
+              <MenuItem Header="During move and resize" ToggleType="Radio"
+                        IsChecked="{Binding GridAuto, Mode=OneWay}" Click="OnGridAutoClicked" />
+              <MenuItem Header="Always" ToggleType="Radio"
+                        IsChecked="{Binding GridOn, Mode=OneWay}" Click="OnGridOnClicked" />
+              <MenuItem Header="Off" ToggleType="Radio"
+                        IsChecked="{Binding GridOff, Mode=OneWay}" Click="OnGridOffClicked" />
+            </MenuItem>
+            <Separator />
             <MenuItem Header="{Binding NavigationMenuLabel}" InputGesture="F7" Click="OnToggleNavigationClicked" />
 
           </MenuItem>

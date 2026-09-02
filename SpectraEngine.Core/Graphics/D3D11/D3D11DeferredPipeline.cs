@@ -72,15 +72,6 @@ public sealed unsafe class D3D11DeferredPipeline : ID3D11RenderPipeline
                 camera.AspectRatio = aspect;
 
             renderer.DrawGeometry(context.View, camera, surfaceShader);
-
-            // The world-line lane, INSIDE the G-buffer pass, because this is the
-            // only pass in a deferred frame that owns the scene's depth: the
-            // light pass afterwards is a full-screen triangle into a target
-            // whose own depth was never written, so a depth-tested draw there
-            // would test against a cleared buffer and show through everything.
-            // The five-attachment variant writes black albedo and the line's
-            // colour as emissive, so the light pass adds it unchanged.
-            renderer.FlushWorldLines(camera, gbuffer: true);
         }
         finally
         {
@@ -89,6 +80,14 @@ public sealed unsafe class D3D11DeferredPipeline : ID3D11RenderPipeline
         }
 
         renderer.DrawDeferredLightPass(gbuffer, context.View, camera, Ambient, shadowLight);
+
+        // The world-line lane, AFTER the light pass, alpha-blended over the lit
+        // result: the only picture a translucent line can blend toward is the
+        // finished one, and the depth test happens in the shader against the
+        // G-buffer's depth, sampled as an ordinary texture. It used to draw
+        // INTO the G-buffer as an opaque five-attachment overwrite, which is a
+        // model that cannot fade at all - see FlushWorldLinesDeferred.
+        renderer.FlushWorldLinesDeferred(camera, gbuffer);
     }
 
     public void Dispose() { }

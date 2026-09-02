@@ -482,9 +482,15 @@ public sealed class ShellModel : ObservableObject
         get => _snapEnabled;
         private set
         {
+            // Inside the guard, both of them: these setters run on every pump,
+            // and an unguarded Raise makes every binding re-read (and the
+            // summary re-interpolate its string) hundreds of times a second
+            // for a value that has not moved.
             if (Set(ref _snapEnabled, value))
+            {
                 Raise(nameof(SnapUnitLabel));
-            Raise(nameof(SnapSummary));
+                Raise(nameof(SnapSummary));
+            }
         }
     }
 
@@ -495,8 +501,10 @@ public sealed class ShellModel : ObservableObject
         private set
         {
             if (Set(ref _snapIncrement, value))
+            {
                 Raise(nameof(SnapUnitLabel));
-            Raise(nameof(SnapSummary));
+                Raise(nameof(SnapSummary));
+            }
         }
     }
 
@@ -542,6 +550,30 @@ public sealed class ShellModel : ObservableObject
 
     /// <summary>The View menu's wording for the camera toggle.</summary>
     public string NavigationMenuLabel => $"Camera: {_navigation}";
+
+    // The engine's answer, snapshot-followed with no optimistic hold: the menu
+    // is closed by the time the echo lands, so there is nothing to flicker.
+    private string _gridMode = "auto";
+
+    /// <summary>Whether the grid shows during move/resize gestures only.</summary>
+    public bool GridAuto => _gridMode == "auto";
+
+    /// <summary>Whether the grid is always drawn.</summary>
+    public bool GridOn => _gridMode == "on";
+
+    /// <summary>Whether the grid is off.</summary>
+    public bool GridOff => _gridMode == "off";
+
+    private void ApplyGridMode(string mode)
+    {
+        if (_gridMode == mode)
+            return;
+
+        _gridMode = mode;
+        Raise(nameof(GridAuto));
+        Raise(nameof(GridOn));
+        Raise(nameof(GridOff));
+    }
 
     // ─── Selection and history ───────────────────────────
 
@@ -956,6 +988,7 @@ public sealed class ShellModel : ObservableObject
                 SnapIncrement = snapshot.SnapIncrement;
 
             Navigation = snapshot.NavigationModeName ?? "-";
+            ApplyGridMode(snapshot.GridModeName ?? "auto");
 
             _playOpt.Apply(snapshot.IsPlaying);
             IsPlaying = _playOpt.Value;

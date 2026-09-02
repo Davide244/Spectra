@@ -45,9 +45,10 @@ public sealed class WorldLineGlTests
     public void A_world_line_behind_geometry_is_hidden_and_in_front_of_it_is_drawn(string pipeline)
     {
         // Both pipelines, because they flush the lane from DIFFERENT passes and
-        // with different shaders: forward from its own scene pass with the
-        // ordinary line program, deferred from the G-buffer pass with the
-        // five-attachment variant. Only one of them can be right by accident.
+        // with different depth mechanisms: forward hardware-tests inside its
+        // own scene pass, deferred draws AFTER the light pass and compares
+        // against the sampled G-buffer depth in the shader. Only one of them
+        // can be right by accident.
         (int bR, int bG, int bB) = Render(pipeline, lineZ: -4f);
         (int fR, int fG, int fB) = Render(pipeline, lineZ: 1.5f);
 
@@ -107,10 +108,74 @@ public sealed class WorldLineGlTests
             $"[{pipeline}] and the same line in front of it must still be drawn");
     }
 
+    [Theory]
+    [InlineData("Deferred")]
+    [InlineData("Forward")]
+    public void A_faded_world_line_blends_toward_the_surface_instead_of_toward_black(string pipeline)
+    {
+        // THE oracle the old lane could not pass, and the reason it was
+        // rebuilt. Lines used to render as opaque overwrites whose "fade" was
+        // a colour lerp toward black - which over a lit red wall REPLACED the
+        // wall pixel with a near-black one, so a fading line gained contrast
+        // instead of losing it and then vanished in one frame at a cull
+        // threshold. A real fade is alpha: the wall's own colour must survive
+        // underneath in proportion.
+        (int wallR, int wallG, int _) = Render(pipeline, lineZ: WallFrontZ, opacity: 0f);
+        (int fullR, int fullG, int _) = Render(pipeline, lineZ: WallFrontZ);
+        (int fadedR, int fadedG, int _) = Render(pipeline, lineZ: WallFrontZ, opacity: 0.3f);
+
+        fullG.ShouldBeGreaterThan(wallG + 60,
+            $"[{pipeline}] the control is broken: the full-strength line is not visible over " +
+            $"the wall at all (wall {wallR},{wallG} against line {fullR},{fullG})");
+
+        fadedG.ShouldBeGreaterThan(wallG + 10,
+            $"[{pipeline}] a 30% line must still be visible");
+        fadedG.ShouldBeLessThan(fullG - 10,
+            $"[{pipeline}] a 30% line must be dimmer than a full one - if these match, the " +
+            "opacity is not reaching the shader");
+
+        // The discriminator: under alpha the wall's red shows through a faded
+        // line; under the old overwrite model this pixel was black albedo plus
+        // a whisper of green emissive, and red read near zero.
+        fadedR.ShouldBeGreaterThan(wallR / 2,
+            $"[{pipeline}] the wall's red must survive under a 30% line " +
+            $"(wall red {wallR}, faded-line red {fadedR}); losing it means the line is " +
+            "REPLACING the pixel rather than blending over it");
+    }
+
+    [Theory]
+    [InlineData("Deferred")]
+    [InlineData("Forward")]
+    public void The_distance_fade_dims_a_line_per_pixel_along_its_length(string pipeline)
+    {
+        // The falloff is computed in the fragment stage from world distance,
+        // so ONE line must be bright where it is near the fade centre and gone
+        // where it is not - no segments, no per-segment culls.
+        var fade = (Center: new Vector3(0f, 0f, WallFrontZ), Start: 0.25f, End: 1.2f);
+
+        (int _, int nearG, int _) = Render(pipeline, lineZ: WallFrontZ, fade: fade);
+        (int _, int farG, int _) = Render(pipeline, lineZ: WallFrontZ, fade: fade, sampleX: (ProbeSize / 2) + 24);
+
+        // The control: without the fade, the same distant sample is bright -
+        // so the dimming below is the fade's doing, not the sampling position.
+        (int _, int farControlG, int _) = Render(pipeline, lineZ: WallFrontZ, sampleX: (ProbeSize / 2) + 24);
+
+        farControlG.ShouldBeGreaterThan(farG + 30,
+            $"[{pipeline}] the unfaded control must be brighter at the distant sample than the " +
+            $"faded line is (control {farControlG} against faded {farG}); if they match, the " +
+            "fade metadata is not reaching the shader");
+
+        nearG.ShouldBeGreaterThan(farG + 40,
+            $"[{pipeline}] one line must dim along its own length as it leaves the fade window " +
+            $"(near {nearG} against far {farG}); a flat brightness means the falloff is not per pixel");
+    }
+
     // The wall's +z face, from the scale below.
     private const float WallFrontZ = 0.25f;
 
-    private (int R, int G, int B) Render(string pipeline, float lineZ)
+    private (int R, int G, int B) Render(
+        string pipeline, float lineZ, float opacity = 1f,
+        (Vector3 Center, float Start, float End)? fade = null, int? sampleX = null)
     {
         OpenGLRenderer renderer = _fixture.Renderer;
 
@@ -130,6 +195,13 @@ public sealed class WorldLineGlTests
             renderer.WorldLines.Clear();
             renderer.WorldLines.Line(
                 new Vector3(-4f, 0f, lineZ), new Vector3(4f, 0f, lineZ), LineColor);
+            renderer.WorldLines.Opacity = opacity;
+            if (fade is { } f)
+            {
+                renderer.WorldLines.FadeCenter = f.Center;
+                renderer.WorldLines.FadeStart = f.Start;
+                renderer.WorldLines.FadeEnd = f.End;
+            }
 
             scene.BuildRenderView(scene.Camera, view);
             renderer.Render(scene, view, 1.0 / 60.0);
@@ -139,7 +211,7 @@ public sealed class WorldLineGlTests
             // centre sample is a coin flip between "the lane is broken" and
             // "the line is one row up" - which is exactly the kind of flaky
             // pixel assertion that gets deleted rather than believed.
-            return BrightestGreen(probe, ProbeSize / 2, ProbeSize / 2, radius: 3);
+            return BrightestGreen(probe, sampleX ?? ProbeSize / 2, ProbeSize / 2, radius: 3);
         }
         finally
         {

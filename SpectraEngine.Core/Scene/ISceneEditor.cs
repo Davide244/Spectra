@@ -187,6 +187,17 @@ public interface ISceneEditor
     string NavigationModeName { get; }
 
     /// <summary>
+    /// When the ground grid shows, as an interned literal: <c>"auto"</c>
+    /// (during move and resize gestures — the default), <c>"on"</c>, or
+    /// <c>"off"</c>.
+    /// </summary>
+    /// <remarks>
+    /// Reported back like every other state a control displays, so a menu's
+    /// checkmark follows the editor rather than its own last click.
+    /// </remarks>
+    string GridModeName { get; }
+
+    /// <summary>
     /// True while a gesture is in flight: a manipulator drag, a marquee, or a
     /// value being scrubbed in a property panel.
     /// </summary>

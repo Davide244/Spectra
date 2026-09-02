@@ -92,6 +92,12 @@ public partial class MainWindow : Window
     private SceneTreeModel? _tree;
     private IRenderSurface? _surface;
     private FrameSnapshot _latest = FrameSnapshot.Empty;
+
+    // The last snapshot the pump fully applied, so the 8 ms watchdog — which
+    // exists only for the cursor-mode latch — stops re-applying an unchanged
+    // one. Reference identity is the right comparison: the engine publishes a
+    // fresh instance per snapshot.
+    private FrameSnapshot _lastApplied = FrameSnapshot.Empty;
     private bool _stopping;
     private int _lastUndoDepth;
     private int _lastRedoDepth;
@@ -956,6 +962,17 @@ public partial class MainWindow : Window
         if (ReferenceEquals(snapshot, FrameSnapshot.Empty))
             return;
 
+        // The watchdog timer lands here ~125 times a second, and it exists for
+        // exactly one thing: the cursor-mode latch, already pumped above. A
+        // snapshot this pump has applied before has nothing new to say, so the
+        // full apply (selection sync, the whole property panel, the snap
+        // field) runs only when a NEW snapshot arrived — without this gate the
+        // shell re-applied the same snapshot four times over per publish,
+        // which is idle UI-thread work at its purest.
+        if (ReferenceEquals(snapshot, _lastApplied))
+            return;
+        _lastApplied = snapshot;
+
         // Selection is a state rather than a history, so it is applied once
         // from the newest snapshot instead of once per drained one; the panel
         // owns the sync guards and the reveal choreography.
@@ -1424,6 +1441,9 @@ public partial class MainWindow : Window
     private void OnUngroupClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.Ungroup);
     private void OnToggleBrushKindClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.ToggleBrushKind);
     private void OnToggleNavigationClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.ToggleNavigation);
+    private void OnGridAutoClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.GridAuto);
+    private void OnGridOnClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.GridOn);
+    private void OnGridOffClicked(object? sender, RoutedEventArgs e) => _session?.Post(EditorHostCommand.GridOff);
 
     private void OnFrameClicked(object? sender, RoutedEventArgs e) =>
         _session?.Post(EditorCameraCommand.FrameSelection);

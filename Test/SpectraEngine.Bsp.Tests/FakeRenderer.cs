@@ -87,7 +87,7 @@ internal sealed class FakeRenderer : Renderer
 
 
     protected override void FlushWorldLinesCore(
-        SpectraEngine.Core.Scene.Camera camera, ShaderProgram program, float nudge) { }
+        SpectraEngine.Core.Scene.Camera camera, ShaderProgram program, float nudge, GBuffer? gbuffer) { }
 
     /// <summary>Full-screen passes this renderer was asked to draw.</summary>
     public int FullscreenDraws { get; private set; }

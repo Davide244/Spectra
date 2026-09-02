@@ -150,6 +150,7 @@ public sealed class Engine
                 RotateSnapIncrement = editor?.RotateSnapIncrement ?? 0f,
                 ResizeSnapIncrement = editor?.ResizeSnapIncrement ?? 0f,
                 NavigationModeName = editor?.NavigationModeName,
+                GridModeName = editor?.GridModeName,
                 UndoDepth = editor?.UndoDepth ?? 0,
                 RedoDepth = editor?.RedoDepth ?? 0,
                 StaticWorldCompileCount = _sceneManager.ActiveScene?.StaticWorldCompileCount ?? 0,

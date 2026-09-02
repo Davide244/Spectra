@@ -68,6 +68,10 @@ try
         _ => throw new NotSupportedException($"Backend {options.Backend} is not yet implemented; pick opengl, d3d11, or d3d12."),
     };
 
+    // Opt-in, unlike the editor shell where it is the default: the demo is the
+    // measurement instrument, and a frame time under vsync measures the monitor.
+    renderer.VSync = options.VSync;
+
     SceneManager.ScatterGridOverride = options.ScatterGrid;
     SceneManager.PropCountOverride = options.PropCount;
     SceneManager.LoadMapPathOverride = options.LoadMapPath;

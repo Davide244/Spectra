@@ -43,14 +43,15 @@ internal sealed unsafe class D3D12LineBatch : IDisposable
     /// </param>
     /// <param name="program">
     /// The program to draw with, or null for the batch's own. A separate
-    /// program is what the depth-tested world-line lane needs on a deferred
-    /// frame, where the line has to write all five G-buffer attachments.
+    /// program is what the world-line lane needs: its shaders carry the
+    /// coplanar depth nudge and the per-pixel fade.
     /// </param>
     public void Draw(
         ReadOnlySpan<float> interleaved,
         uint vertexCount,
         DepthMode depth,
-        D3D12ShaderProgram? program = null)
+        D3D12ShaderProgram? program = null,
+        BlendMode blend = BlendMode.Opaque)
     {
         if (vertexCount == 0) return;
         var list = _renderer.CurrentList;
@@ -74,7 +75,7 @@ internal sealed unsafe class D3D12LineBatch : IDisposable
         var target = _renderer.CurrentTargetState;
         var pso = (program ?? _shader).GetPso(
             LineLayout, FillMode.Solid, PrimitiveTopologyType.Line,
-            depth, BlendMode.Opaque, DepthBias.None, in target);
+            depth, blend, DepthBias.None, in target);
         _renderer.BindPipelineState(list, pso);
         _renderer.BindTopology(list, D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
 

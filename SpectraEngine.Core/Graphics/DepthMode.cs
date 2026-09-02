@@ -25,30 +25,18 @@ public enum DepthMode
     TestWrite,
 
     /// <summary>
-    /// Test and write, but accept an exact depth tie. What a line lying ON a
-    /// surface needs.
+    /// Test and write, but accept an exact depth tie.
     /// </summary>
     /// <remarks>
-    /// <b>Two halves, and both are load-bearing for the editor's ground grid.</b>
-    /// The comparison must accept equality because a grid at y = 0 drawn over a
-    /// floor whose top is also at y = 0 is coplanar by construction, and a
-    /// strict Less rejects exactly the case the grid exists for - visibly, and
-    /// on some backends only, since GL defaults to Less while a hand-written
-    /// D3D state might not.
-    /// <para>
-    /// And it must WRITE, which is the non-obvious half: in a deferred frame the
-    /// depth buffer is the coverage mask, so the light pass returns the SKY at
-    /// every pixel whose depth is still 1. A grid line over empty space that
-    /// wrote no depth would write its colour into the G-buffer and then be
-    /// discarded, with no error anywhere - measured, and the reason the grid was
-    /// visible on the floor and absent over the horizon.
-    /// </para>
-    /// <para>
-    /// Safe only because such lines are submitted LAST in their pass: writing
-    /// depth from a plane of one-pixel lines would otherwise let the grid reject
-    /// geometry drawn after it, so anything submitted later would be sliced by
-    /// an invisible lattice.
-    /// </para>
+    /// The comparison accepts equality for anything lying exactly ON a
+    /// surface, which a strict Less rejects — visibly, and on some backends
+    /// only, since GL defaults to Less while a hand-written D3D state might
+    /// not. Nothing draws with this mode today: the editor's ground grid used
+    /// it while lines were opaque G-buffer overwrites whose depth write WAS
+    /// the deferred coverage mask, and moved to
+    /// <see cref="TestNoWriteEqual"/> when the lane became alpha-blended.
+    /// Kept because "opaque decal exactly on a surface" is a real future
+    /// draw, and the D3D12 state map already speaks it.
     /// </remarks>
     TestWriteEqual,
 
@@ -57,6 +45,15 @@ public enum DepthMode
     /// translucent surfaces do not occlude each other by depth.
     /// </summary>
     TestNoWrite,
+
+    /// <summary>
+    /// Test without writing, accepting an exact depth tie. What a BLENDED line
+    /// lying on a surface needs: LessEqual for the coplanar grid-on-floor case
+    /// (see <see cref="TestWriteEqual"/>), and no write because a translucent
+    /// pixel has no business in the depth buffer — a plane of one-pixel lines
+    /// that wrote depth would slice whatever a pipeline submits after it.
+    /// </summary>
+    TestNoWriteEqual,
 
     /// <summary>
     /// Neither test nor write: always on top, in submission order. What editor

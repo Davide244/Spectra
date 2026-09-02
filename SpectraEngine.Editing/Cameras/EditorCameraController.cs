@@ -214,7 +214,35 @@ public sealed class EditorCameraController
     /// remarks. Zero disables damping, making every gesture land on its target
     /// within the frame that produced it.
     /// </summary>
+    /// <remarks>
+    /// This is the WHEEL-AND-FLIGHT constant: it damps the dolly (where it was
+    /// tuned — it is what takes the stair-steps out of a wheel notch) and the
+    /// residual glide after a gesture ends. While a pointer gesture is live the
+    /// look and move channels use <see cref="PointerSmoothingTimeConstant"/>
+    /// instead — see that property for why one constant was wrong.
+    /// </remarks>
     public float SmoothingTimeConstant { get; set; } = DefaultSmoothingTimeConstant;
+
+    /// <summary>
+    /// The time constant for the look and move channels WHILE a pointer
+    /// gesture drives them, in seconds. Never more than
+    /// <see cref="SmoothingTimeConstant"/>, so zeroing that one still disables
+    /// all damping (which is what the tests and a deterministic host rely on).
+    /// </summary>
+    /// <remarks>
+    /// <b>This split is what un-floats the camera, and it exists because one
+    /// constant cannot serve both masters.</b> τ = 80 ms was tuned for the
+    /// wheel, where the input arrives as discrete notches and the filter turns
+    /// stairs into a dolly. A pointer is already smooth, so the same filter on
+    /// freelook is pure lag: the view trails a moving hand by τ's worth of
+    /// travel (~8° at an ordinary sweep) and keeps gliding for 3–5τ after the
+    /// hand stops — the exact "transition on a drag-path value" the shell's
+    /// motion rules ban, and the single largest contributor to the editor
+    /// feeling sluggish. Twenty milliseconds keeps the micro-smoothing that
+    /// absorbs mouse-report quantisation while staying under anyone's
+    /// perception of lag.
+    /// </remarks>
+    public float PointerSmoothingTimeConstant { get; set; } = 0.02f;
 
     /// <summary>Radians of freelook per pixel of mouse motion.</summary>
     public float LookSensitivity { get; set; } = 0.0035f;
@@ -863,26 +891,51 @@ public sealed class EditorCameraController
 
     // Damps the live state toward the target and writes the camera. Returns
     // whether anything actually moved.
+    //
+    // TWO alphas, not one: the look and move channels follow the pointer while
+    // a gesture is live (PointerSmoothingTimeConstant), and the dolly always
+    // keeps the wheel's own constant — the wheel is the channel the long
+    // constant was tuned for, and a live orbit must not stiffen a zoom that is
+    // still gliding. When no gesture is live (a frame-the-selection flight, the
+    // residue after a release), everything shares the flight constant again.
     private bool Settle(float deltaTime)
     {
         if (!IsSettling)
             return false;
 
-        float alpha = SmoothingAlpha(deltaTime);
-        if (alpha >= 1f)
+        float lookMoveTau = _gesture == EditorNavigationGesture.None
+            ? SmoothingTimeConstant
+            : MathF.Min(PointerSmoothingTimeConstant, SmoothingTimeConstant);
+
+        float alphaMove = SmoothingAlpha(deltaTime, lookMoveTau);
+        float alphaZoom = SmoothingAlpha(deltaTime, SmoothingTimeConstant);
+
+        if (alphaMove >= 1f && alphaZoom >= 1f)
         {
             SnapToTarget();
             return true;
         }
 
-        Position += (TargetPosition - Position) * alpha;
-        Yaw += (TargetYaw - Yaw) * alpha;
-        Pitch += (TargetPitch - Pitch) * alpha;
+        Position += (TargetPosition - Position) * alphaMove;
+        Yaw += (TargetYaw - Yaw) * alphaMove;
+        Pitch += (TargetPitch - Pitch) * alphaMove;
         // Geometric, because zoom is applied multiplicatively (see the type
         // remarks): equal fractions of the remaining ratio per unit time.
         Distance = Distance > 0f && TargetDistance > 0f
-            ? Distance * MathF.Pow(TargetDistance / Distance, alpha)
+            ? Distance * MathF.Pow(TargetDistance / Distance, alphaZoom)
             : TargetDistance;
+
+        // An alpha of one leaves float residue behind (gap * 1 added to the
+        // live value is exact, but the geometric dolly is not), so a channel
+        // that asked to arrive now is pinned to its target outright.
+        if (alphaMove >= 1f)
+        {
+            Position = TargetPosition;
+            Yaw = TargetYaw;
+            Pitch = TargetPitch;
+        }
+        if (alphaZoom >= 1f)
+            Distance = TargetDistance;
 
         // The focus is the derived half of a damped pose: it is what the camera
         // is actually looking at this frame, not a blend of two focus points.
@@ -896,12 +949,12 @@ public sealed class EditorCameraController
     // The standard frame-rate-independent exponential filter. A zero or
     // negative time constant, a non-positive frame time, or a frame long enough
     // that the filter would overshoot all collapse to "arrive now".
-    private float SmoothingAlpha(float deltaTime)
+    private static float SmoothingAlpha(float deltaTime, float timeConstant)
     {
-        if (SmoothingTimeConstant <= 0f || deltaTime <= 0f)
+        if (timeConstant <= 0f || deltaTime <= 0f)
             return 1f;
 
-        return 1f - MathF.Exp(-deltaTime / SmoothingTimeConstant);
+        return 1f - MathF.Exp(-deltaTime / timeConstant);
     }
 
     private void WriteCamera()

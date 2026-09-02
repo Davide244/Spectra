@@ -5,6 +5,7 @@ using Silk.NET.Windowing;
 using SpectraEngine.Core.Graphics.Shaders;
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Text;
 
 namespace SpectraEngine.Core.Graphics.OpenGL;
@@ -219,7 +220,26 @@ public class OpenGLRenderer : Renderer
     public override void AcquireContext(IRenderSurface surface)
     {
         base.AcquireContext(surface);
-        surface.GLContext?.SwapInterval(0);
+        _appliedSwapInterval = VSync ? 1 : 0;
+        surface.GLContext?.SwapInterval(_appliedSwapInterval);
+    }
+
+    // GL's swap interval is CONTEXT state, not a per-present argument like the
+    // DXGI sync interval, so a live VSync flip has to be re-applied — done at
+    // Present, on the render thread, where the context is current.
+    private int _appliedSwapInterval;
+
+    /// <inheritdoc/>
+    public override void Present(IRenderSurface surface)
+    {
+        int wanted = VSync ? 1 : 0;
+        if (wanted != _appliedSwapInterval)
+        {
+            _appliedSwapInterval = wanted;
+            surface.GLContext?.SwapInterval(wanted);
+        }
+
+        base.Present(surface);
     }
 
     /// <inheritdoc/>
@@ -426,20 +446,35 @@ public class OpenGLRenderer : Renderer
 
     /// <inheritdoc/>
     protected override void FlushWorldLinesCore(
-        Scene.Camera camera, ShaderProgram program, float nudge)
+        Scene.Camera camera, ShaderProgram program, float nudge, GBuffer? gbuffer)
     {
         if (_lineBatch is null || _gl is null)
             return;
 
-        // Test and write, accepting an exact tie. See DepthMode.TestWriteEqual
-        // for both halves. LEqual specifically: GL defaults to Less, which
-        // rejects a grid lying exactly on the floor it describes - the case the
-        // grid exists for - so leaving the default here would have made the
-        // OpenGL backend disagree with the other two about whether the grid is
-        // visible at all.
-        _gl.Enable(EnableCap.DepthTest);
-        _gl.DepthFunc(DepthFunction.Lequal);
-        _gl.DepthMask(true);
+        if (gbuffer is null)
+        {
+            // Forward/wireframe: the open pass owns the scene's live depth, so
+            // the hardware tests. LEqual specifically: GL defaults to Less,
+            // which rejects a grid lying exactly on the floor it describes -
+            // the case the grid exists for - so leaving the default here would
+            // have made the OpenGL backend disagree with the other two about
+            // whether the grid is visible at all. Write OFF: a translucent
+            // pixel has no business in the depth buffer, and a plane of
+            // one-pixel lines that wrote depth would slice later geometry.
+            _gl.Enable(EnableCap.DepthTest);
+            _gl.DepthFunc(DepthFunction.Lequal);
+            _gl.DepthMask(false);
+        }
+        else
+        {
+            // Deferred: the shader compares against the sampled G-buffer
+            // depth, and the pass target's own depth attachment holds stale
+            // data that must not participate.
+            _gl.Disable(EnableCap.DepthTest);
+        }
+
+        _gl.Enable(EnableCap.Blend);
+        _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
         // Use FIRST on this backend: glUniform writes into the active program,
         // so staging before it would write into whatever was bound last.
@@ -448,10 +483,26 @@ public class OpenGLRenderer : Renderer
         program.SetUniform("uProjection", camera.Projection);
         program.SetUniform("uCameraPosition", camera.Position);
         program.SetUniform("uDepthNudge", nudge);
+        program.SetUniform("uFadeCenter", WorldLines.FadeCenter);
+        program.SetUniform("uFadeStart", WorldLines.FadeStart);
+        program.SetUniform("uFadeEnd", WorldLines.FadeEnd);
+        program.SetUniform("uOpacity", WorldLines.Opacity);
+
+        if (gbuffer is not null)
+        {
+            program.SetUniform("uNdcToUv", NdcToUv);
+            program.SetUniform("uDepthToNdc", DepthToNdcZ);
+            program.SetUniform("uGBufferSize", new Vector2(gbuffer.Width, gbuffer.Height));
+            program.SetTexture("uDepth", 0, gbuffer.Depth);
+        }
+
         _lineBatch.Draw(WorldLines.Vertices, (uint)WorldLines.VertexCount);
 
-        // Restored, not left: the comparison is context state and the next pass
-        // in this frame is ordinary geometry, which wants strict Less.
+        // Restored, not left: all of it is context state and the next pass in
+        // this frame is ordinary opaque geometry.
+        _gl.Disable(EnableCap.Blend);
+        _gl.DepthMask(true);
+        _gl.Enable(EnableCap.DepthTest);
         _gl.DepthFunc(DepthFunction.Less);
     }
 

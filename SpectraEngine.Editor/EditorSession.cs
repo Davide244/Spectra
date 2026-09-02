@@ -83,6 +83,14 @@ public sealed class EditorSession : IDisposable
                 "WGL context and proc-address loader, which is not built. Use d3d11 or d3d12."),
         };
 
+        // The editor viewport paces to the display. Uncapped, the render thread
+        // presents thousands of frames a second on a child window nobody can see
+        // the difference in: a saturated core, the per-frame allocation rate
+        // multiplied into real gen0 pressure (whose pauses stop the UI thread
+        // too), and uneven present pacing that reads as sluggishness. The demo
+        // stays uncapped because it is the measurement instrument.
+        _renderer.VSync = true;
+
         var sceneManager = new SceneManager(loggerFactory.CreateLogger<SceneManager>())
         {
             // The shell edits projects; the authored demo belongs to the demo

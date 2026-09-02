@@ -611,6 +611,28 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
         Win32Interop.SetCapture(_hwnd);
         Win32Interop.SetCursor(0);
         Win32Interop.SetCursorPos(_lockAnchor.X, _lockAnchor.Y);
+
+        // The hidden pointer is fenced to the VIEWPORT for the lock's duration:
+        // it cannot drift onto another monitor or another application while
+        // invisible, and however close the window sits to a screen edge the
+        // anchor keeps at least half the viewport of travel in every direction
+        // before the OS would saturate the position. The whole client rect
+        // rather than a small band around the anchor, deliberately — a tight
+        // fence SHRINKS the headroom the differencing survives a UI stall
+        // with, which is the opposite of hardening. Every release path funnels
+        // through EndCursorLock (mode change, focus loss, destruction), so the
+        // fence cannot outlive the lock.
+        var topLeft = new Win32Interop.POINT { X = client.Left, Y = client.Top };
+        var bottomRight = new Win32Interop.POINT { X = client.Right, Y = client.Bottom };
+        Win32Interop.ClientToScreen(_hwnd, ref topLeft);
+        Win32Interop.ClientToScreen(_hwnd, ref bottomRight);
+        Win32Interop.ClipCursor(new Win32Interop.RECT
+        {
+            Left = topLeft.X,
+            Top = topLeft.Y,
+            Right = bottomRight.X,
+            Bottom = bottomRight.Y,
+        });
     }
 
     private void EndCursorLock()
@@ -619,6 +641,11 @@ internal sealed class Win32ViewportWindow : IRenderSurface, IDisposable
             return;
 
         _cursorLocked = false;
+
+        // Before the restore teleport, or the fence would clamp it: a cursor
+        // released outside the viewport (the press was near the pane's edge)
+        // must land where the press happened, not on the fence line.
+        Win32Interop.ClipCursorRelease(0);
 
         Win32Interop.POINT restore = _lockRestore;
         Win32Interop.ClientToScreen(_hwnd, ref restore);

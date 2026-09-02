@@ -735,7 +735,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         // it far more often than ResizeBuffers does (a TDR lands here). Same
         // treatment: a named diagnosis with the removed reason, not an opaque
         // COMException from deep inside SilkMarshal.
-        int hr = ((IDXGISwapChain3*)_swapChain.Handle)->Present(0, 0);
+        int hr = ((IDXGISwapChain3*)_swapChain.Handle)->Present(VSync ? 1u : 0u, 0);
         if (hr < 0)
         {
             if (DxgiInterop.IsDeviceLost(hr))
@@ -1214,7 +1214,7 @@ public sealed unsafe class D3D12Renderer : Renderer
     /// handed to a depth-tested draw is a wrong picture, not an error.
     /// </remarks>
     protected override void FlushWorldLinesCore(
-        Scene.Camera camera, ShaderProgram program, float nudge)
+        Scene.Camera camera, ShaderProgram program, float nudge, GBuffer? gbuffer)
     {
         if (_lineBatch is null)
             return;
@@ -1224,8 +1224,30 @@ public sealed unsafe class D3D12Renderer : Renderer
         typed.SetUniform("uProjection", camera.Projection * GlToD3dClipZ);
         typed.SetUniform("uCameraPosition", camera.Position);
         typed.SetUniform("uDepthNudge", nudge);
+        typed.SetUniform("uFadeCenter", WorldLines.FadeCenter);
+        typed.SetUniform("uFadeStart", WorldLines.FadeStart);
+        typed.SetUniform("uFadeEnd", WorldLines.FadeEnd);
+        typed.SetUniform("uOpacity", WorldLines.Opacity);
+
+        if (gbuffer is not null)
+        {
+            typed.SetUniform("uNdcToUv", NdcToUv);
+            typed.SetUniform("uDepthToNdc", DepthToNdcZ);
+            typed.SetUniform("uGBufferSize", new Vector2(gbuffer.Width, gbuffer.Height));
+            // Already in a shader-readable state: EndPassCore transitioned the
+            // G-buffer's depth for the light pass, which sampled it through
+            // this same path earlier in the frame.
+            typed.SetTexture("uDepth", 0, gbuffer.Depth);
+        }
+
         typed.Use();
-        _lineBatch.Draw(WorldLines.Vertices, (uint)WorldLines.VertexCount, DepthMode.TestWriteEqual, typed);
+
+        // Forward: hardware LessEqual/no-write against the pass's live depth.
+        // Deferred: depth off in the PSO — the shader compares and discards.
+        _lineBatch.Draw(
+            WorldLines.Vertices, (uint)WorldLines.VertexCount,
+            gbuffer is null ? DepthMode.TestNoWriteEqual : DepthMode.None,
+            typed, BlendMode.AlphaBlend);
     }
 
     // ─── Per-frame arenas ────────────────────────────────────

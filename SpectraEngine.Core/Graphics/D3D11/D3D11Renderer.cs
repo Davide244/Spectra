@@ -47,6 +47,7 @@ public sealed unsafe class D3D11Renderer : Renderer
     private ComPtr<ID3D11DepthStencilState> _defaultDepth;
     private ComPtr<ID3D11DepthStencilState> _overlayDepth;
     private ComPtr<ID3D11DepthStencilState> _worldLineDepth;
+    private ComPtr<ID3D11BlendState> _alphaBlend;
 
     // Every resource built by the Create* factories is tracked here so
     // Shutdown can free stragglers. Meshes/textures leave early through
@@ -159,7 +160,7 @@ public sealed unsafe class D3D11Renderer : Renderer
             // lands here). It gets the same treatment as the resize path: a
             // named diagnosis carrying the removed reason, not an opaque
             // COMException from deep inside SilkMarshal.
-            int hr = ((IDXGISwapChain1*)_swapChain.Handle)->Present(0, 0);
+            int hr = ((IDXGISwapChain1*)_swapChain.Handle)->Present(VSync ? 1u : 0u, 0);
             if (hr < 0)
             {
                 if (DxgiInterop.IsDeviceLost(hr))
@@ -520,7 +521,7 @@ public sealed unsafe class D3D11Renderer : Renderer
     /// this is the same trap the instance buffer already documents.
     /// </remarks>
     protected override void FlushWorldLinesCore(
-        Scene.Camera camera, ShaderProgram program, float nudge)
+        Scene.Camera camera, ShaderProgram program, float nudge, GBuffer? gbuffer)
     {
         var typed = (D3D11ShaderProgram)program;
 
@@ -537,16 +538,40 @@ public sealed unsafe class D3D11Renderer : Renderer
 
         // Use() LAST on this backend: the writes are staged into a constant
         // shadow that Use() flushes, so writing after it would leave this
-        // draw with the previous frame's values.
+        // draw with the previous frame's values. The texture bind rides the
+        // same order.
         typed.SetUniform("uView", camera.View);
         typed.SetUniform("uProjection", camera.Projection * GlToD3dClipZ);
         typed.SetUniform("uCameraPosition", camera.Position);
         typed.SetUniform("uDepthNudge", nudge);
+        typed.SetUniform("uFadeCenter", WorldLines.FadeCenter);
+        typed.SetUniform("uFadeStart", WorldLines.FadeStart);
+        typed.SetUniform("uFadeEnd", WorldLines.FadeEnd);
+        typed.SetUniform("uOpacity", WorldLines.Opacity);
+
+        if (gbuffer is not null)
+        {
+            typed.SetUniform("uNdcToUv", NdcToUv);
+            typed.SetUniform("uDepthToNdc", DepthToNdcZ);
+            typed.SetUniform("uGBufferSize", new Vector2(gbuffer.Width, gbuffer.Height));
+            // No SRV/DSV hazard: the open pass's depth is the frame target's
+            // own, never the G-buffer's, so the sampled depth is bound nowhere
+            // else.
+            typed.SetTexture("uDepth", 0, gbuffer.Depth);
+        }
+
         typed.Use();
 
         var ctx = (ID3D11DeviceContext*)_context.Handle;
-        ctx->OMSetDepthStencilState((ID3D11DepthStencilState*)_worldLineDepth.Handle, 0);
+
+        // Forward: hardware LessEqual with write off against the pass's live
+        // depth. Deferred: depth fully off (the shader compares against the
+        // sampled G-buffer depth), which is exactly the overlay state.
+        ctx->OMSetDepthStencilState(
+            (ID3D11DepthStencilState*)(gbuffer is null ? _worldLineDepth.Handle : _overlayDepth.Handle), 0);
+        ctx->OMSetBlendState((ID3D11BlendState*)_alphaBlend.Handle, null, 0xFFFFFFFF);
         batch.Draw(WorldLines.Vertices, (uint)WorldLines.VertexCount);
+        ctx->OMSetBlendState(null, null, 0xFFFFFFFF);
         ctx->OMSetDepthStencilState((ID3D11DepthStencilState*)_defaultDepth.Handle, 0);
     }
 
@@ -653,6 +678,7 @@ public sealed unsafe class D3D11Renderer : Renderer
         ComOwnership.Release(ref _defaultDepth);
         ComOwnership.Release(ref _overlayDepth);
         ComOwnership.Release(ref _worldLineDepth);
+        ComOwnership.Release(ref _alphaBlend);
         EnsureSwapChainWindowed();
         ComOwnership.Release(ref _swapChain);
         ComOwnership.Release(ref _infoQueue);
@@ -920,21 +946,40 @@ public sealed unsafe class D3D11Renderer : Renderer
         SilkMarshal.ThrowHResult(((ID3D11Device*)_device.Handle)->CreateDepthStencilState(&overlayDesc, &overlay));
         _overlayDepth = ComOwnership.Own(overlay);
 
-        // World-line state: test AND write, accepting an exact tie. See
-        // DepthMode.TestWriteEqual for both halves - LessEqual because a grid on
-        // a floor is coplanar by construction, and the write because in a
-        // deferred frame the depth buffer is the coverage mask and a line that
-        // wrote none would be discarded by the light pass as sky.
+        // World-line state: DepthMode.TestNoWriteEqual. LessEqual because a
+        // grid on a floor is coplanar by construction; write OFF because these
+        // lines are alpha-blended now, and a translucent pixel has no business
+        // in the depth buffer - a plane of one-pixel lines that wrote depth
+        // would slice whatever the pipeline submits after it.
         var worldLineDesc = new DepthStencilDesc
         {
             DepthEnable = 1,
-            DepthWriteMask = DepthWriteMask.All,
+            DepthWriteMask = DepthWriteMask.Zero,
             DepthFunc = ComparisonFunc.LessEqual,
             StencilEnable = 0,
         };
         ID3D11DepthStencilState* worldLine = null;
         SilkMarshal.ThrowHResult(((ID3D11Device*)_device.Handle)->CreateDepthStencilState(&worldLineDesc, &worldLine));
         _worldLineDepth = ComOwnership.Own(worldLine);
+
+        // Straight alpha over the lit target, the world-line lane's blend.
+        // One cached state swapped around the flush, the exact idiom the depth
+        // states above use.
+        var blendDesc = new BlendDesc();
+        blendDesc.RenderTarget[0] = new RenderTargetBlendDesc
+        {
+            BlendEnable = 1,
+            SrcBlend = Blend.SrcAlpha,
+            DestBlend = Blend.InvSrcAlpha,
+            BlendOp = BlendOp.Add,
+            SrcBlendAlpha = Blend.One,
+            DestBlendAlpha = Blend.InvSrcAlpha,
+            BlendOpAlpha = BlendOp.Add,
+            RenderTargetWriteMask = (byte)ColorWriteEnable.All,
+        };
+        ID3D11BlendState* alphaBlend = null;
+        SilkMarshal.ThrowHResult(((ID3D11Device*)_device.Handle)->CreateBlendState(&blendDesc, &alphaBlend));
+        _alphaBlend = ComOwnership.Own(alphaBlend);
     }
 
     /// <summary>

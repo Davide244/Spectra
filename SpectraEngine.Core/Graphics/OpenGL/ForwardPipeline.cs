@@ -58,7 +58,7 @@ public sealed class ForwardPipeline : IOpenGLRenderPipeline
             // scene's depth. A ground grid is world content and must be
             // occluded by the geometry it lies under; the depth-off overlay
             // that carries gizmo handles would draw it straight through walls.
-            context.Renderer.FlushWorldLines(camera, gbuffer: false);
+            context.Renderer.FlushWorldLines(camera);
         }
         finally
         {

@@ -23,7 +23,44 @@ public sealed class DebugDraw
     /// <summary>Interleaved vertex stream (position + colour) ready for GPU upload.</summary>
     public ReadOnlySpan<float> Vertices => CollectionsMarshal.AsSpan(_data);
 
-    public void Clear() => _data.Clear();
+    /// <summary>
+    /// A fade start beyond any real distance: the default, meaning "no fade",
+    /// without a flag the shader would have to branch on.
+    /// </summary>
+    public const float NoFade = 1e30f;
+
+    /// <summary>Where the world-line fade is measured from, in world space.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Metadata for the WORLD-LINE flush, ignored by the overlay's.</b> The
+    /// fade is a pure function of world position, so it rides here as four
+    /// values per frame instead of widening every line vertex by an alpha
+    /// channel: the emitter (the editor's ground grid) writes them beside its
+    /// lines, and each backend uploads them as uniforms at its own point in
+    /// the documented <c>Use()</c> order. Reset by <see cref="Clear"/> with
+    /// the vertices, so one frame's fade cannot leak onto another emitter's
+    /// lines.
+    /// </para>
+    /// </remarks>
+    public Vector3 FadeCenter { get; set; }
+
+    /// <summary>Distance from <see cref="FadeCenter"/> at which the fade begins.</summary>
+    public float FadeStart { get; set; } = NoFade;
+
+    /// <summary>Distance at which lines are fully transparent.</summary>
+    public float FadeEnd { get; set; }
+
+    /// <summary>Whole-buffer alpha multiplier, 0..1.</summary>
+    public float Opacity { get; set; } = 1f;
+
+    public void Clear()
+    {
+        _data.Clear();
+        FadeCenter = default;
+        FadeStart = NoFade;
+        FadeEnd = 0f;
+        Opacity = 1f;
+    }
 
     public void Line(Vector3 a, Vector3 b, Vector3 color)
     {

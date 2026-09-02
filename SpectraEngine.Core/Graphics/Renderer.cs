@@ -91,6 +91,35 @@ public abstract class Renderer
     public virtual void Present(IRenderSurface surface) => surface.GLContext?.SwapBuffers();
 
     /// <summary>
+    /// Whether <see cref="Present"/> waits for the display's vertical blank.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Off by default, on in the editor shell, and both defaults are
+    /// deliberate.</b> The demo is the measurement instrument — every number in
+    /// <c>docs/performance.md</c> is a frame time, and a frame time taken under
+    /// vsync measures the display, not the engine. An editor viewport is the
+    /// opposite case: presenting thousands of frames a second saturates a core,
+    /// multiplies the per-frame allocation rate into real gen0 pressure (and a
+    /// gen0 pause stops the UI thread too), and buys nothing a monitor can
+    /// show. Every DCC viewport paces to the display for exactly these reasons.
+    /// </para>
+    /// <para>
+    /// Volatile, because a host may flip it while the render thread runs; each
+    /// backend reads it at <see cref="Present"/> time (OpenGL re-applies its
+    /// context-state swap interval there when the value has changed, since GL's
+    /// interval is not a per-present argument).
+    /// </para>
+    /// </remarks>
+    public bool VSync
+    {
+        get => _vsync;
+        set => _vsync = value;
+    }
+
+    private volatile bool _vsync;
+
+    /// <summary>
     /// A backend-provided shader suitable for general lit geometry. Available
     /// after <see cref="Initialize"/> has run.
     /// </summary>
@@ -1487,15 +1516,29 @@ public abstract class Renderer
     protected abstract void FlushDebugDrawCore(Scene.Camera camera);
 
     /// <summary>
-    /// Draws <see cref="WorldLines"/> with depth testing ON and depth writing
-    /// OFF, using <paramref name="program"/>. Called inside an already-open pass
-    /// that owns the scene's depth.
+    /// Draws <see cref="WorldLines"/> alpha-blended with no depth write, using
+    /// <paramref name="program"/>. Called inside an already-open pass.
     /// </summary>
     /// <remarks>
-    /// Depth WRITE is off because a line is one pixel wide and a grid is
-    /// effectively a plane of them: writing depth would let the grid reject
-    /// geometry drawn after it, so anything a pipeline happens to submit later
-    /// would be sliced by an invisible lattice.
+    /// <para>
+    /// <b>Two configurations, told apart by <paramref name="gbuffer"/>.</b>
+    /// Null is the forward/wireframe half: the open pass owns the scene's live
+    /// depth, so the backend depth-tests in hardware
+    /// (<see cref="DepthMode.TestNoWriteEqual"/> — LessEqual for the coplanar
+    /// grid-on-floor case, no write because a translucent pixel has no
+    /// business in the depth buffer). Non-null is the deferred half: the open
+    /// pass is the lit HDR target whose own depth is stale, so the backend
+    /// binds the G-buffer's depth as an ordinary texture and the shader
+    /// compares and discards per pixel (<see cref="DepthMode.None"/> in
+    /// hardware) — sampling it is free of new pass concepts because a render
+    /// target's depth is sampleable by contract, and it is already in a
+    /// shader-readable state after the light pass read it.
+    /// </para>
+    /// <para>
+    /// The fade metadata (<see cref="DebugDraw.FadeCenter"/> and friends) and
+    /// the deferred extras are uploaded by each backend at its own point in
+    /// the documented <c>Use()</c> order.
+    /// </para>
     /// </remarks>
     /// <param name="nudge">
     /// How far toward the camera to bias the line, as a fraction of its
@@ -1503,40 +1546,71 @@ public abstract class Renderer
     /// <c>Use()</c> and the uniform writes differs per backend.
     /// </param>
     protected abstract void FlushWorldLinesCore(
-        Scene.Camera camera, ShaderProgram program, float nudge);
+        Scene.Camera camera, ShaderProgram program, float nudge, GBuffer? gbuffer);
 
     /// <summary>
-    /// Draws this frame's <see cref="WorldLines"/> into the open pass.
+    /// Draws this frame's <see cref="WorldLines"/> into the open forward or
+    /// wireframe scene pass — the pass that owns the scene's live depth.
+    /// Submitted last in that pass, like all translucency.
     /// </summary>
-    /// <param name="camera">The camera the pass is rendering with.</param>
-    /// <param name="gbuffer">
-    /// True when the open pass is a deferred G-buffer pass, which needs the
-    /// five-attachment shader; false for a single-target scene pass.
-    /// </param>
-    /// <remarks>
-    /// <b>Which pass this is called from is the whole design.</b> The only pass
-    /// in a deferred frame that owns the scene's depth is the G-buffer pass -
-    /// the light pass afterwards is a full-screen triangle into a target whose
-    /// own depth was never written, so a depth-tested draw there would test
-    /// against a cleared buffer and show through everything, which is precisely
-    /// the failure this lane exists to avoid. Forward and wireframe own their
-    /// depth in their scene pass and use the ordinary line shader there.
-    /// </remarks>
-    public void FlushWorldLines(Scene.Camera camera, bool gbuffer)
+    public void FlushWorldLines(Scene.Camera camera)
     {
         ArgumentNullException.ThrowIfNull(camera);
         if (WorldLines.VertexCount == 0)
             return;
-
-        ShaderProgram program = gbuffer ? EnsureWorldLineGBufferShader() : EnsureWorldLineShader();
 
         // The nudge goes to the BACKEND, not written here, because the order
         // of Use() and the uniform writes differs per backend and is already
         // documented as a trap: on OpenGL glUniform writes into the ACTIVE
         // program, so a value staged before Use() lands in whichever program
         // was bound last - silently, and the line simply renders unbiased.
-        FlushWorldLinesCore(camera, program, WorldLineDepthNudge);
+        FlushWorldLinesCore(camera, EnsureWorldLineShader(), WorldLineDepthNudge, null);
     }
+
+    /// <summary>
+    /// Draws this frame's <see cref="WorldLines"/> over the lit deferred
+    /// frame: its own pass on <see cref="FrameTarget"/>, after
+    /// <see cref="DrawDeferredLightPass"/>, blended, with the depth test done
+    /// in the shader against the G-buffer's depth.
+    /// </summary>
+    /// <remarks>
+    /// <b>This replaced drawing lines INTO the G-buffer as opaque
+    /// five-attachment overwrites.</b> That model rendered a line by replacing
+    /// the surface pixel under it, so its "fade" was a colour lerp toward
+    /// black — which over a lit floor barely changes a dark line's contrast,
+    /// and cannot fade at all. Real transparency needs a blend against the lit
+    /// result, and the lit result only exists after the light pass.
+    /// </remarks>
+    public void FlushWorldLinesDeferred(Scene.Camera camera, GBuffer gbuffer)
+    {
+        ArgumentNullException.ThrowIfNull(camera);
+        ArgumentNullException.ThrowIfNull(gbuffer);
+        if (WorldLines.VertexCount == 0)
+            return;
+
+        ShaderProgram program = EnsureWorldLineBlendShader();
+
+        // Keep, not clear: the light pass has already painted every pixel of
+        // this target, and these lines go over the picture.
+        BeginPass(FrameTarget, PassClear.Keep);
+        try
+        {
+            FlushWorldLinesCore(camera, program, WorldLineDepthNudge, gbuffer);
+        }
+        finally
+        {
+            EndPass();
+        }
+    }
+
+    /// <summary>
+    /// ndc.xy → uv for this backend's targets: the inverse of the light pass's
+    /// <c>uUvToNdc</c>, carrying the same per-backend V flip. Sent rather than
+    /// assumed for the same reason that one is.
+    /// </summary>
+    protected Vector4 NdcToUv => TargetOriginIsTopLeft
+        ? new Vector4(0.5f, -0.5f, 0.5f, 0.5f)
+        : new Vector4(0.5f, 0.5f, 0.5f, 0.5f);
 
     /// <summary>
     /// How far toward the camera a world line is nudged, as a fraction of its
@@ -1552,7 +1626,7 @@ public abstract class Renderer
     public float WorldLineDepthNudge { get; set; } = 0.0008f;
 
     private ShaderProgram? _worldLineShader;
-    private ShaderProgram? _worldLineGBufferShader;
+    private ShaderProgram? _worldLineBlendShader;
 
     private ShaderProgram EnsureWorldLineShader() =>
         _worldLineShader ??= BaseShaders.WorldLinePath is { } path
@@ -1560,7 +1634,8 @@ public abstract class Renderer
             : CreateShaderFromSource(BaseShaders.WorldLine);
 
     /// <summary>
-    /// Compiles the five-attachment world-line shader on first use.
+    /// Compiles the deferred (post-light, shader-depth-tested) world-line
+    /// program on first use.
     /// </summary>
     /// <remarks>
     /// Lazily, because a frame that draws no world lines - every shipped game -
@@ -1569,14 +1644,13 @@ public abstract class Renderer
     /// command list. The first grid frame therefore compiles it outside a pass:
     /// see the pipelines, which call PrepareWorldLines before opening theirs.
     /// </remarks>
-    private ShaderProgram EnsureWorldLineGBufferShader() =>
-        _worldLineGBufferShader ??= BaseShaders.WorldLineGBufferPath is { } path
+    private ShaderProgram EnsureWorldLineBlendShader() =>
+        _worldLineBlendShader ??= BaseShaders.WorldLineBlendPath is { } path
             ? CreateShaderFromFile(path)
-            : CreateShaderFromSource(BaseShaders.WorldLineGBuffer);
+            : CreateShaderFromSource(BaseShaders.WorldLineBlend);
 
     /// <summary>
-    /// Compiles whatever <see cref="FlushWorldLines"/> will need, before a pass
-    /// opens.
+    /// Compiles whatever the world-line flush will need, before a pass opens.
     /// </summary>
     public void PrepareWorldLines(bool gbuffer)
     {
@@ -1584,7 +1658,7 @@ public abstract class Renderer
             return;
 
         if (gbuffer)
-            _ = EnsureWorldLineGBufferShader();
+            _ = EnsureWorldLineBlendShader();
         else
             _ = EnsureWorldLineShader();
     }

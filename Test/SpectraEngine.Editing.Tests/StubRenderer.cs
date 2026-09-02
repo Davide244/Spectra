@@ -71,7 +71,7 @@ internal sealed class StubRenderer : Renderer
 
 
     protected override void FlushWorldLinesCore(
-        SpectraEngine.Core.Scene.Camera camera, ShaderProgram program, float nudge)
+        SpectraEngine.Core.Scene.Camera camera, ShaderProgram program, float nudge, GBuffer? gbuffer)
     {
     }
 

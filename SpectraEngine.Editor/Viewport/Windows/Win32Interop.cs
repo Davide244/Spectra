@@ -184,6 +184,16 @@ internal static partial class Win32Interop
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetCursorPos(int x, int y);
 
+    // Two entry points rather than a nullable RECT marshal: the release form
+    // takes NULL, and `in RECT` cannot express that.
+    [LibraryImport("user32.dll", EntryPoint = "ClipCursor")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool ClipCursor(in RECT rect);
+
+    [LibraryImport("user32.dll", EntryPoint = "ClipCursor")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool ClipCursorRelease(nint rect);
+
     [LibraryImport("user32.dll", EntryPoint = "ShowCursor")]
     internal static partial int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
 

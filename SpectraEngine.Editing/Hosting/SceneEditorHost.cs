@@ -134,6 +134,27 @@ public sealed class SceneEditorHost : ISceneEditor
     /// <summary>The ground grid and the world axes, drawn depth-TESTED.</summary>
     public GroundGrid Grid { get; } = new();
 
+    /// <summary>
+    /// When the grid shows. <see cref="Viewport.GridMode.Auto"/> by default:
+    /// during move and resize gestures, when the squares on the floor are the
+    /// squares the object will land on, and faded out the rest of the time.
+    /// </summary>
+    public GridMode GridMode { get; set; } = GridMode.Auto;
+
+    // The grid's fade envelope: 0..1, ramped toward where GridMode says it
+    // should be and written into Grid.Opacity each frame. A ramp rather than a
+    // cut because a full-viewport lattice appearing in one frame is an EVENT
+    // in peripheral vision (the same mechanism the shell's motion system is
+    // built on), and the thing it announces — "a drag started" — the user
+    // already knows.
+    private float _gridOpacity;
+
+    // In faster than out: the grid is information at the moment a drag starts
+    // and mere afterglow at the moment it ends, so it arrives promptly and
+    // takes its leave without flashing.
+    private const float GridFadeInSeconds = 0.10f;
+    private const float GridFadeOutSeconds = 0.25f;
+
     /// <summary>The corner axis widget, drawn depth-OFF like the manipulators.</summary>
     public AxisCompass Compass { get; } = new();
 
@@ -303,6 +324,15 @@ public sealed class SceneEditorHost : ISceneEditor
     public string NavigationModeName => _editorNavigation ? EditorNavigationLabel : FlyCameraNavigationLabel;
 
     /// <inheritdoc/>
+    /// <remarks>Interned literals, never a formatted enum — see <see cref="ISceneEditor"/>.</remarks>
+    public string GridModeName => GridMode switch
+    {
+        GridMode.On => "on",
+        GridMode.Off => "off",
+        _ => "auto",
+    };
+
+    /// <inheritdoc/>
     public int UndoDepth => _undo.UndoCount;
 
     /// <inheritdoc/>
@@ -352,8 +382,44 @@ public sealed class SceneEditorHost : ISceneEditor
         // one call that routes it to whichever owns the pointer.
         _viewport.Update(in frame, _input.WasKeyPressed(InputKey.Escape));
         UpdateCursorShape();
+        UpdateGridFade((float)deltaTime);
 
         return _editorNavigation;
+    }
+
+    // Whether a gesture the grid is the ladder for is live: a move or resize
+    // drag through the transform gizmo, an object following the cursor after a
+    // select-and-move press, or a light's length handle (range and extents
+    // snap on the move grid; angles are degrees and get nothing from it). A
+    // rotate drag deliberately shows no grid — it would read as a 15-unit
+    // lattice beside a tool snapping in degrees.
+    private bool MoveGestureLive => _viewport.DragMode switch
+    {
+        ViewportDragMode.SelectAndMove => true,
+        ViewportDragMode.Manipulate => LightGizmo.IsDragging
+            ? LightGizmo.IsDraggingLength
+            : _gizmos.Mode is GizmoMode.Translate or GizmoMode.Scale,
+        _ => false,
+    };
+
+    private void UpdateGridFade(float dt)
+    {
+        float target = GridMode switch
+        {
+            GridMode.On => 1f,
+            GridMode.Off => 0f,
+            _ => MoveGestureLive ? 1f : 0f,
+        };
+
+        float step = target > _gridOpacity
+            ? dt / GridFadeInSeconds
+            : dt / GridFadeOutSeconds;
+
+        _gridOpacity = _gridOpacity < target
+            ? MathF.Min(_gridOpacity + step, target)
+            : MathF.Max(_gridOpacity - step, target);
+
+        Grid.Opacity = _gridOpacity;
     }
 
     // --- Driving the editor from somewhere other than the keyboard -----------
@@ -419,10 +485,13 @@ public sealed class SceneEditorHost : ISceneEditor
     /// </summary>
     public void Apply(EditorHostCommand command)
     {
-        // The two mode toggles are not scene edits and stay live: navigation
-        // is the editor's own camera, and clearing a selection is how a play
-        // session should start.
-        if (command is not (EditorHostCommand.ToggleNavigation or EditorHostCommand.ClearSelection) &&
+        // The view-state verbs are not scene edits and stay live: navigation
+        // is the editor's own camera, clearing a selection is how a play
+        // session should start, and the grid mode changes what is DRAWN, not
+        // what is authored — refusing it mid-drag would gate the one moment a
+        // user reaches for it.
+        if (command is not (EditorHostCommand.ToggleNavigation or EditorHostCommand.ClearSelection
+                or EditorHostCommand.GridAuto or EditorHostCommand.GridOn or EditorHostCommand.GridOff) &&
             RefuseEdit(command.ToString()))
         {
             return;
@@ -440,6 +509,9 @@ public sealed class SceneEditorHost : ISceneEditor
             case EditorHostCommand.ToggleNavigation: ToggleNavigation(); break;
             case EditorHostCommand.SelectAll: SelectAll(); break;
             case EditorHostCommand.ClearSelection: ClearSelection(); break;
+            case EditorHostCommand.GridAuto: GridMode = GridMode.Auto; break;
+            case EditorHostCommand.GridOn: GridMode = GridMode.On; break;
+            case EditorHostCommand.GridOff: GridMode = GridMode.Off; break;
         }
     }
 
@@ -888,6 +960,14 @@ public sealed class SceneEditorHost : ISceneEditor
     /// <inheritdoc/>
     public void DrawWorld(DebugDraw output)
     {
+        // Nothing while play mode owns the scene. The engine stops calling
+        // Update during play but keeps calling this, so the fade envelope is
+        // frozen at whatever it held when play began - without the gate a grid
+        // that was mid-gesture at F8 stays painted on the floor for the whole
+        // session, in front of a person who asked to walk the level.
+        if (IsSuspended)
+            return;
+
         // The grid's spacing is the LIVE move increment, not a fixed size, so
         // the squares on the floor are the squares an object will land on. It
         // follows the translate tool specifically rather than the live tool: a

@@ -52,7 +52,7 @@ public sealed unsafe class D3D12WireframePipeline : ID3D12RenderPipeline
             // scene's depth. A ground grid is world content and must be
             // occluded by the geometry it lies under; the depth-off overlay
             // that carries gizmo handles would draw it straight through walls.
-            renderer.FlushWorldLines(camera, gbuffer: false);
+            renderer.FlushWorldLines(camera);
         }
         finally
         {
