@@ -1,5 +1,6 @@
 ﻿using SpectraEngine.Core;
 using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Maps;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Core.Serialization;
@@ -37,9 +38,17 @@ public sealed class MapCodecTests
     /// A canonical document, hand-authored so this file pins the shape rather
     /// than describing whatever the writer currently produces. Every construct
     /// the codec knows appears at least once: both brush signs, both node
-    /// kinds, an explicit texture axis, a light, nesting, and preserved members
-    /// at four different levels.
+    /// kinds, an explicit texture axis, a light, an entity, nesting, and
+    /// preserved members at four different levels.
     /// </summary>
+    /// <remarks>
+    /// <b>The <c>entity</c> member moved from the preserved side to the bound
+    /// side, and this fixture changed with it deliberately.</b> It used to sit
+    /// here on one line as an opaque unknown, which is what an unbound payload
+    /// looks like; it is now the writer's own indented record. <c>script</c>
+    /// takes over as the member that is carried and not decoded, because nothing
+    /// in Core executes Luau.
+    /// </remarks>
     private const string Canonical = """
         {
           "spectramap": 1,
@@ -99,7 +108,15 @@ public sealed class MapCodecTests
                   {}
                 ]
               },
-              "entity": {"class":"func_door","keys":{"speed":"100"}},
+              "entity": {
+                "class": "func_door",
+                "keys": {"speed":"100"},
+                "outputs": [
+                  {"output":"OnFullyOpen","target":"Lamp","input":"TurnOn"},
+                  {"output":"OnClose","target":"Lamp","input":"TurnOff","param":"1","delay":0.25,"times":2}
+                ]
+              },
+              "script": {"module":false,"source":["local part = script.Parent"]},
               "children": [
                 {
                   "id": "5b2f8a11-6c04-4e29-8d73-1af90b4e2c65",
@@ -166,19 +183,23 @@ public sealed class MapCodecTests
     [Fact]
     public void An_unrecognised_member_comes_back_exactly_where_it_was()
     {
-        // 'entity' sits between 'brush' and 'children' in the fixture. Replaying
-        // preserved members at the END of the object satisfies every rule the
-        // specification states and still produces different bytes from the file
-        // that was read - which is precisely the case preservation exists for,
-        // since a newer engine writes its own members interleaved among ours.
+        // 'script' sits between 'entity' and 'children' in the fixture.
+        // Replaying preserved members at the END of the object satisfies every
+        // rule the specification states and still produces different bytes from
+        // the file that was read - which is precisely the case preservation
+        // exists for, since a newer engine writes its own members interleaved
+        // among ours.
         byte[] written = MapWriter.Write(MapReader.Read(Utf8(Canonical)));
 
+        // The marker for "inside children" is the lamp's own 'light' record
+        // rather than its name, because the doorway's wires TARGET the lamp by
+        // name and that mention comes earlier in the file.
         string text = Encoding.UTF8.GetString(written);
-        text.IndexOf("\"entity\"", StringComparison.Ordinal)
+        text.IndexOf("\"script\"", StringComparison.Ordinal)
             .ShouldBeGreaterThan(text.IndexOf("\"Doorway\"", StringComparison.Ordinal));
-        text.IndexOf("\"entity\"", StringComparison.Ordinal)
-            .ShouldBeLessThan(text.IndexOf("\"Lamp\"", StringComparison.Ordinal),
-                "'entity' was written before 'children', and must come back before it");
+        text.IndexOf("\"script\"", StringComparison.Ordinal)
+            .ShouldBeLessThan(text.IndexOf("\"light\"", StringComparison.Ordinal),
+                "'script' was written before 'children', and must come back before it");
     }
 
     [Fact]
@@ -186,12 +207,142 @@ public sealed class MapCodecTests
     {
         MapDocument document = MapReader.Read(Utf8(Canonical));
 
+        // 'script' is the payload with no engine concept behind it now: nothing
+        // in Core executes Luau. 'entity' used to be here and is bound.
         MapNode doorway = document.Nodes[1];
         doorway.Unknown.Count.ShouldBe(1);
-        doorway.Unknown[0].Name.ShouldBe("entity");
+        doorway.Unknown[0].Name.ShouldBe("script");
         Encoding.UTF8.GetString(doorway.Unknown[0].Raw)
-            .ShouldBe("""{"class":"func_door","keys":{"speed":"100"}}""",
-                "an entity payload has no engine concept behind it yet, so it must ride through untouched");
+            .ShouldBe("""{"module":false,"source":["local part = script.Parent"]}""",
+                "a script payload has no engine concept behind it yet, so it must ride through untouched");
+    }
+
+    [Fact]
+    public void The_entity_payload_is_decoded_rather_than_carried()
+    {
+        // The deliberate oracle change. While 'entity' was preserved it survived
+        // a document round trip and was deleted by any save that went through a
+        // scene, because MapSceneBinder builds a fresh MapNode and nothing there
+        // had ever seen it.
+        MapDocument document = MapReader.Read(Utf8(Canonical));
+
+        MapEntity entity = document.Nodes[1].Entity.ShouldNotBeNull();
+        entity.Class.ShouldBe("func_door");
+        entity.Keys.Count.ShouldBe(1);
+        entity.Keys[0].Key.ShouldBe("speed");
+        entity.Keys[0].Value.ShouldBe("100", "keyvalues are string-typed on the wire");
+        entity.Unknown.ShouldBeEmpty();
+
+        entity.Outputs.Count.ShouldBe(2);
+        entity.Outputs[0].Output.ShouldBe("OnFullyOpen");
+        entity.Outputs[0].Target.ShouldBe("Lamp");
+        entity.Outputs[0].Input.ShouldBe("TurnOn");
+        entity.Outputs[0].Param.ShouldBe("", "an omitted param is empty, not null");
+        entity.Outputs[0].Delay.ShouldBe(0f);
+        entity.Outputs[0].Times.ShouldBe(EntityConnection.Infinite,
+            "an omitted 'times' is infinite, which is what almost every wire is");
+
+        entity.Outputs[1].Param.ShouldBe("1");
+        entity.Outputs[1].Delay.ShouldBe(0.25f);
+        entity.Outputs[1].Times.ShouldBe(2);
+    }
+
+    [Fact]
+    public void An_entity_record_with_no_class_is_refused()
+    {
+        // A record naming no class names no entity, the same refusal a 'mesh'
+        // with no 'model' gets. The EMPTY string is a different fact and is
+        // accepted, because EntityData models an entity carrying no class yet.
+        var thrown = Should.Throw<MapFormatException>(() => MapReader.Read(Utf8("""
+            {
+              "spectramap": 3,
+              "minimumReadableVersion": 3,
+              "engine": "1.0.0",
+              "scene": {
+                "name": "S"
+              },
+              "nodes": [
+                {
+                  "id": "3f2a1c88-4b6d-4a19-9d0e-77c1f0a2b3e4",
+                  "name": "Classless",
+                  "transform": {"p":[0,0,0]},
+                  "entity": {"keys":{"speed":"100"}},
+                  "children": []
+                }
+              ]
+            }
+            """)));
+
+        thrown.NodeName.ShouldBe("Classless");
+        thrown.Message.ShouldContain("class");
+    }
+
+    [Fact]
+    public void A_keyvalue_that_is_not_a_string_is_refused()
+    {
+        // Keyvalues are string-typed on the wire: a schema is what says whether
+        // "100" is a speed or a count. A reader that accepted a bare number would
+        // have to invent a spelling to write it back with.
+        var thrown = Should.Throw<MapFormatException>(() => MapReader.Read(Utf8("""
+            {
+              "spectramap": 3,
+              "minimumReadableVersion": 3,
+              "engine": "1.0.0",
+              "scene": {
+                "name": "S"
+              },
+              "nodes": [
+                {
+                  "id": "3f2a1c88-4b6d-4a19-9d0e-77c1f0a2b3e4",
+                  "name": "Numeric",
+                  "transform": {"p":[0,0,0]},
+                  "entity": {"class":"func_door","keys":{"speed":100}},
+                  "children": []
+                }
+              ]
+            }
+            """)));
+
+        thrown.NodeName.ShouldBe("Numeric");
+        thrown.Message.ShouldContain("speed");
+    }
+
+    [Fact]
+    public void An_entity_carrying_keys_outputs_and_an_unknown_member_round_trips_byte_for_byte()
+    {
+        // The entity record is OPEN, like a face and unlike a brush: a payload is
+        // exactly where this format grows, and none of it changes what the solid
+        // is. The unknown sits AFTER 'outputs', so it also pins that the anchor
+        // survives a member the writer emits as a record array.
+        byte[] source = Utf8("""
+            {
+              "spectramap": 3,
+              "minimumReadableVersion": 3,
+              "engine": "1.0.0",
+              "scene": {
+                "name": "Wired"
+              },
+              "nodes": [
+                {
+                  "id": "3f2a1c88-4b6d-4a19-9d0e-77c1f0a2b3e4",
+                  "name": "Button",
+                  "transform": {"p":[0,0,0]},
+                  "entity": {
+                    "class": "func_button",
+                    "keys": {"wait":"3","spawnflags":"1024"},
+                    "outputs": [
+                      {"output":"OnPressed","target":"door_*","input":"Open"},
+                      {"output":"OnPressed","target":"!activator","input":"Speak","param":"hello","delay":2,"times":1}
+                    ],
+                    "lightmapScale": 8
+                  },
+                  "children": []
+                }
+              ]
+            }
+            """);
+
+        Same(source, MapWriter.Write(MapReader.Read(source)));
     }
 
     [Fact]

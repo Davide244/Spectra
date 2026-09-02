@@ -1,9 +1,12 @@
+using SpectraEngine.Core;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Maps;
 using SpectraEngine.Core.Scene;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
 using System.Text;
@@ -255,6 +258,271 @@ public sealed class MapSceneRoundTripTests
             MapSceneBinder.ApplyTo(MapReader.Read(MapWriter.Write(MapSceneBinder.FromScene(source))), loaded));
 
         loaded.Root.Children[0].Light!.Range.ShouldBe(10f);
+    }
+
+    // -- the entity payload --------------------------------------------------
+
+    [Fact]
+    public void An_entity_payload_survives_the_projection_to_a_document()
+    {
+        // The data-loss pin. NodeToMap builds a FRESH MapNode from the scene, so
+        // while 'entity' was a preserved unknown it rode through the document
+        // path perfectly and never reached this path at all: any editor save
+        // deleted every keyvalue and wire on the node, silently.
+        Scene source = NewScene();
+        SceneNode door = source.Root.CreateChild("Door");
+        var entity = new EntityData("func_door");
+        entity.SetValue("speed", "100");
+        entity.Connections.Add(new EntityConnection("OnFullyOpen", "light1", "TurnOn", "", 0f, -1));
+        door.Entity = entity;
+
+        MapDocument document = MapSceneBinder.FromScene(source);
+
+        MapEntity mapped = document.Nodes[0].Entity.ShouldNotBeNull();
+        mapped.Class.ShouldBe("func_door");
+        mapped.Keys.ShouldBe([new KeyValuePair<string, string>("speed", "100")]);
+        mapped.Outputs.Count.ShouldBe(1);
+        mapped.Outputs[0].Output.ShouldBe("OnFullyOpen");
+        mapped.Outputs[0].Target.ShouldBe("light1");
+        mapped.Outputs[0].Input.ShouldBe("TurnOn");
+
+        Encoding.UTF8.GetString(MapWriter.Write(document)).ShouldContain("func_door");
+    }
+
+    [Fact]
+    public void An_entity_survives_a_scene_round_trip_with_every_field()
+    {
+        Scene source = NewScene();
+        source.Root.CreateChild("light1");
+        SceneNode door = source.Root.CreateChild("Door");
+        var entity = new EntityData("func_door");
+        entity.SetValue("speed", "100");
+        entity.SetValue("message", "it opens");
+        entity.Connections.Add(new EntityConnection("OnFullyOpen", "light1", "TurnOn", "3", 1.5f, 2));
+        door.Entity = entity;
+
+        Scene loaded = NewScene();
+        MapSceneBinder.ApplyTo(MapReader.Read(MapWriter.Write(MapSceneBinder.FromScene(source))), loaded);
+
+        EntityData back = loaded.Root.Children[1].Entity.ShouldNotBeNull();
+        back.ClassName.ShouldBe("func_door");
+        back.Keyvalues.ShouldBe([
+            new KeyValuePair<string, string>("speed", "100"),
+            new KeyValuePair<string, string>("message", "it opens"),
+        ], "keyvalue order is the file's order, and nothing may sort it");
+        back.Connections.ShouldBe([new EntityConnection("OnFullyOpen", "light1", "TurnOn", "3", 1.5f, 2)]);
+    }
+
+    [Fact]
+    public void An_entity_class_this_build_has_never_heard_of_still_loads()
+    {
+        // The class is TEXT and is resolved by no catalogue here. A map authored
+        // against a game that is not installed must still load, still show in the
+        // tree, and still save unchanged.
+        Scene source = NewScene();
+        source.Root.CreateChild("Mystery").Entity = new EntityData("xyzzy_unknown");
+
+        Scene loaded = NewScene();
+        Should.NotThrow(() =>
+            MapSceneBinder.ApplyTo(MapReader.Read(MapWriter.Write(MapSceneBinder.FromScene(source))), loaded));
+
+        loaded.Root.Children[0].Entity!.ClassName.ShouldBe("xyzzy_unknown");
+    }
+
+    [Fact]
+    public void A_map_for_a_game_this_build_does_not_have_comes_back_byte_for_byte()
+    {
+        // The forward-compatibility pin, and the one claim about a SCENE round
+        // trip that is exact: an entity payload has no canonicalisation in it,
+        // unlike a brush, whose constructor re-normalises every plane. So this
+        // fixture carries no geometry - it is about whether a class nothing can
+        // resolve, its keyvalues and its wiring survive the whole loop.
+        byte[] source = Encoding.UTF8.GetBytes("""
+            {
+              "spectramap": 3,
+              "minimumReadableVersion": 3,
+              "engine": "1.0.0",
+              "scene": {
+                "name": "Wired"
+              },
+              "nodes": [
+                {
+                  "id": "3f2a1c88-4b6d-4a19-9d0e-77c1f0a2b3e4",
+                  "name": "Mystery",
+                  "transform": {"p":[0,0,0]},
+                  "entity": {
+                    "class": "xyzzy_unknown",
+                    "keys": {"colour":"green","plugh":"1"},
+                    "outputs": [
+                      {"output":"OnPlugh","target":"Mystery","input":"Xyzzy","param":"y2","delay":0.5,"times":3}
+                    ]
+                  },
+                  "children": []
+                }
+              ]
+            }
+            """.ReplaceLineEndings("\n") + "\n");
+
+        Scene loaded = NewScene();
+        MapSceneBinder.ApplyTo(MapReader.Read(source), loaded);
+
+        MapWriter.Write(MapSceneBinder.FromScene(loaded)).ShouldBe(source);
+    }
+
+    [Fact]
+    public void A_duplicated_keyvalue_is_kept_rather_than_merged()
+    {
+        // EntityData.TryGetValue is first-match-wins precisely so a hand-written
+        // duplicate can survive. Building the scene with SetValue instead of Add
+        // would collapse the pair and rewrite the file on the next save.
+        byte[] bytes = Encoding.UTF8.GetBytes("""
+            {
+              "spectramap": 3,
+              "minimumReadableVersion": 3,
+              "engine": "1.0.0",
+              "scene": {
+                "name": "S"
+              },
+              "nodes": [
+                {
+                  "id": "3f2a1c88-4b6d-4a19-9d0e-77c1f0a2b3e4",
+                  "name": "Twice",
+                  "transform": {"p":[0,0,0]},
+                  "entity": {
+                    "class": "func_door",
+                    "keys": {"speed":"100","speed":"200"}
+                  },
+                  "children": []
+                }
+              ]
+            }
+            """.ReplaceLineEndings("\n") + "\n");
+
+        Scene loaded = NewScene();
+        MapSceneBinder.ApplyTo(MapReader.Read(bytes), loaded);
+
+        EntityData entity = loaded.Root.Children[0].Entity.ShouldNotBeNull();
+        entity.Keyvalues.Count.ShouldBe(2);
+        entity.TryGetValue("speed", out string first).ShouldBeTrue();
+        first.ShouldBe("100", "the first match wins, which is what a preserved duplicate needs");
+    }
+
+    [Fact]
+    public void A_map_with_no_entity_in_it_still_declares_the_oldest_reader()
+    {
+        Scene source = NewScene();
+        source.Root.CreateChild("Wall").Brush = Box();
+
+        MapSceneBinder.FromScene(source).MinimumReadableVersion
+            .ShouldBe(EngineInfo.MinimumReadableMapVersion);
+    }
+
+    [Fact]
+    public void A_map_carrying_an_entity_demands_a_reader_that_can_keep_it()
+    {
+        // An older editor read 'entity' as an opaque unknown and rebuilt each
+        // node from the scene on save, where nothing held it - so it would open
+        // this map, display it correctly, and delete the payload on Ctrl+S.
+        Scene source = NewScene();
+        source.Root.CreateChild("Door").Entity = new EntityData("func_door");
+
+        MapSceneBinder.FromScene(source).MinimumReadableVersion
+            .ShouldBe(EngineInfo.EntityMapVersion);
+    }
+
+    [Fact]
+    public void A_map_carrying_both_an_entity_and_a_light_shape_demands_the_newer_reader()
+    {
+        // The MAX of what applies, never the first hit: returning whichever floor
+        // was found first would name a reader that still eats half the document.
+        Scene source = NewScene();
+        source.Root.CreateChild("Panel").Light = new Light { Kind = LightKind.Rect };
+        source.Root.CreateChild("Door").Entity = new EntityData("func_door");
+
+        MapSceneBinder.FromScene(source).MinimumReadableVersion.ShouldBe(
+            Math.Max(EngineInfo.EntityMapVersion, EngineInfo.LightShapeMapVersion));
+    }
+
+    [Fact]
+    public void A_wire_naming_a_target_this_map_does_not_have_is_kept_and_warned_about()
+    {
+        // A mapper who renames a door must not silently lose the wiring into it:
+        // the rename is the mistake, the wire is the work, and dropping it is
+        // unrecoverable while reporting it is a line in a log.
+        byte[] bytes = Encoding.UTF8.GetBytes("""
+            {
+              "spectramap": 3,
+              "minimumReadableVersion": 3,
+              "engine": "1.0.0",
+              "scene": {
+                "name": "S"
+              },
+              "nodes": [
+                {
+                  "id": "3f2a1c88-4b6d-4a19-9d0e-77c1f0a2b3e4",
+                  "name": "Button",
+                  "transform": {"p":[0,0,0]},
+                  "entity": {
+                    "class": "func_button",
+                    "outputs": [
+                      {"output":"OnPressed","target":"door_that_was_renamed","input":"Open"}
+                    ]
+                  },
+                  "children": []
+                }
+              ]
+            }
+            """.ReplaceLineEndings("\n") + "\n");
+
+        Scene loaded = NewScene();
+        var report = new MapLoadReport();
+        MapDocument document = MapReader.Read(bytes);
+        MapSceneBinder.ApplyTo(document, loaded, report);
+
+        report.IsComplete.ShouldBeFalse();
+        report.UnresolvedTargets.Count.ShouldBe(1);
+        report.UnresolvedTargets[0].ShouldContain("door_that_was_renamed");
+        report.UnresolvedTargets[0].ShouldContain("OnPressed");
+        report.Describe().ShouldNotBeNull();
+
+        // Kept, in the scene AND in the bytes.
+        loaded.Root.Children[0].Entity!.Connections[0].TargetName.ShouldBe("door_that_was_renamed");
+        MapWriter.Write(document).ShouldBe(bytes,
+            "a warning must not change what is written, or the next save would delete the wiring");
+    }
+
+    [Theory]
+    // Resolved when the output fires, against the entity that fired it or the
+    // one that activated it, none of which a map can know.
+    [InlineData("!self", true)]
+    [InlineData("!activator", true)]
+    [InlineData("!caller", true)]
+    // A trailing star is a prefix match over the map's own names.
+    [InlineData("door_*", true)]
+    [InlineData("gate_*", false)]
+    // Names nothing rather than naming something absent, which is a state a
+    // half-wired entity legitimately sits in.
+    [InlineData("", true)]
+    [InlineData("door_left", true)]
+    [InlineData("Door_Left", false)]
+    [InlineData("door_middle", false)]
+    public void A_target_resolves_by_name_by_runtime_form_or_by_prefix(string target, bool resolves)
+    {
+        // Ordinal, like every other name in this format: a case-folding rule
+        // would need a culture, and the same file would then mean different
+        // things on different machines.
+        Scene source = NewScene();
+        source.Root.CreateChild("door_left");
+        SceneNode button = source.Root.CreateChild("Button");
+        var entity = new EntityData("func_button");
+        entity.Connections.Add(new EntityConnection("OnPressed", target, "Open", "", 0f, -1));
+        button.Entity = entity;
+
+        var report = new MapLoadReport();
+        MapSceneBinder.ApplyTo(
+            MapReader.Read(MapWriter.Write(MapSceneBinder.FromScene(source))), NewScene(), report);
+
+        report.UnresolvedTargets.Count.ShouldBe(resolves ? 0 : 1, $"target '{target}'");
     }
 
     // -- what it cannot do, said out loud ------------------------------------

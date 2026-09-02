@@ -125,10 +125,14 @@ public sealed class MapSceneInfo
 /// <summary>One authored node.</summary>
 public sealed class MapNode
 {
+    // 'entity' sits after 'light' and before 'editor', which is where the format
+    // specification puts a second payload. The indices here are ANCHORS for
+    // preserved members and are recomputed on every read, so inserting one
+    // renumbers nothing that lives in a file.
     internal static readonly string[] MemberOrder =
         [MapFormat.IdMember, MapFormat.NameMember, MapFormat.RealmMember, MapFormat.StateMember,
          MapFormat.KindMember, MapFormat.TransformMember, MapFormat.BrushMember, MapFormat.MeshMember,
-         MapFormat.LightMember, MapFormat.EditorMember, MapFormat.ChildrenMember];
+         MapFormat.LightMember, MapFormat.EntityMember, MapFormat.EditorMember, MapFormat.ChildrenMember];
 
     public Guid Id { get; set; }
 
@@ -204,6 +208,21 @@ public sealed class MapNode
     /// </remarks>
     public MapLight? Light { get; set; }
 
+    /// <summary>
+    /// The entity this node IS, if any: the class it names, its keyvalues and
+    /// the wires leaving its outputs.
+    /// </summary>
+    /// <remarks>
+    /// <b>Bound rather than preserved, and that closed a data-loss hole rather
+    /// than adding a feature.</b> An <c>entity</c> member rode through the
+    /// DOCUMENT path perfectly well as an unknown - but
+    /// <see cref="MapSceneBinder"/> builds a FRESH <see cref="MapNode"/> from the
+    /// scene on the way out, so the moment a node actually carried entity data,
+    /// any save deleted it. Preservation only ever protects members that reach a
+    /// document and leave it again without passing through a scene.
+    /// </remarks>
+    public MapEntity? Entity { get; set; }
+
     /// <summary>The reserved per-node <c>editor</c> key, carried verbatim.</summary>
     public PreservedValue? Editor { get; set; }
 
@@ -211,7 +230,7 @@ public sealed class MapNode
 
     /// <summary>
     /// Members this engine version does not recognise, including the specified
-    /// but unbuilt <c>entity</c> and <c>script</c> payloads.
+    /// but unbuilt <c>script</c> payload.
     /// </summary>
     public List<PreservedMember> Unknown { get; } = [];
 }
@@ -378,6 +397,99 @@ public sealed class MapLight
 
     /// <summary>A disc light's radius in world units.</summary>
     public float Radius { get; set; } = 0.5f;
+
+    public List<PreservedMember> Unknown { get; } = [];
+}
+
+/// <summary>An entity payload: a class name, its keyvalues, and its outgoing wires.</summary>
+/// <remarks>
+/// <para>
+/// <b>An OPEN record, like <see cref="MapFace"/> and unlike <see cref="MapBrush"/>.</b>
+/// An entity payload is exactly where this format grows - spawn flags, editor
+/// hints, per-class members a game defines for itself - and none of it changes
+/// what the solid is, so carrying an unrecognised member through is safe where
+/// carrying an unrecognised brush member would be a wall where a doorway was.
+/// </para>
+/// <para>
+/// <b>The class is TEXT and is never resolved here.</b> A map may name a class
+/// this build has no schema for, because it was authored against a game that is
+/// not installed; such a map must still load, still show in the tree and still
+/// save unchanged. A codec that looked the class up would have to decide what to
+/// do when the lookup failed, and every answer to that question loses data.
+/// </para>
+/// </remarks>
+public sealed class MapEntity
+{
+    // APPEND ONLY, for the reason stated on MapLight: the canonical order is
+    // what byte identity is defined against.
+    internal static readonly string[] MemberOrder =
+        [MapFormat.ClassMember, MapFormat.KeysMember, MapFormat.OutputsMember];
+
+    /// <summary>The entity class this node is, as the file spells it.</summary>
+    public string Class { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The authored keyvalues, in AUTHORED ORDER, values as text.
+    /// </summary>
+    /// <remarks>
+    /// <b>An ordered list, deliberately not a dictionary</b>, for the two reasons
+    /// <c>EntityData.Keyvalues</c> states: member order has to round-trip
+    /// byte-identically through a file a person hand-edits, and a hand-written
+    /// duplicate must survive rather than have one of its two entries silently
+    /// dropped. Values are strings because keyvalues are string-typed on the
+    /// wire; a schema is what says what the text means.
+    /// </remarks>
+    public List<KeyValuePair<string, string>> Keys { get; } = [];
+
+    /// <summary>The wires leaving this entity's outputs, in authored order.</summary>
+    public List<MapConnection> Outputs { get; } = [];
+
+    public List<PreservedMember> Unknown { get; } = [];
+}
+
+/// <summary>
+/// One authored wire, the document's image of
+/// <see cref="Entities.EntityConnection"/>.
+/// </summary>
+/// <remarks>
+/// Open, like the entity record that holds it and for the same reason. The one
+/// thing it cannot round-trip is <see cref="Unknown"/> through a SCENE:
+/// <c>EntityConnection</c> is a fixed-width value with nowhere to park raw bytes,
+/// so a preserved member inside a connection survives document-to-document and
+/// not document-to-scene-to-document. That is the same lossy boundary a
+/// <c>MapFace</c>'s unknowns cross, and it is why byte identity is a claim about
+/// documents.
+/// </remarks>
+public sealed class MapConnection
+{
+    internal static readonly string[] MemberOrder =
+        [MapFormat.OutputMember, MapFormat.TargetMember, MapFormat.InputMember,
+         MapFormat.ParamMember, MapFormat.DelayMember, MapFormat.TimesMember];
+
+    /// <summary>The output that fires this wire.</summary>
+    public string Output { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The name of the entity or entities to send to; <c>targetname</c> IS
+    /// <c>SceneNode.Name</c>.
+    /// </summary>
+    public string Target { get; set; } = string.Empty;
+
+    /// <summary>The input to send.</summary>
+    public string Input { get; set; } = string.Empty;
+
+    /// <summary>The argument to send. Omitted when empty.</summary>
+    public string Param { get; set; } = string.Empty;
+
+    /// <summary>Seconds to wait before sending. Omitted at zero.</summary>
+    public float Delay { get; set; }
+
+    /// <summary>
+    /// How many times this wire may fire, or
+    /// <see cref="Entities.EntityConnection.Infinite"/>. Omitted at infinite,
+    /// which is the common case.
+    /// </summary>
+    public int Times { get; set; } = Entities.EntityConnection.Infinite;
 
     public List<PreservedMember> Unknown { get; } = [];
 }

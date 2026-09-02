@@ -143,19 +143,26 @@ public static class MapWriter
         }
         CanonicalJson.Flush(writer, node.Unknown, 8);
 
+        if (node.Entity is { } entity)
+        {
+            writer.WritePropertyName(MapFormat.EntityMember);
+            WriteEntity(writer, entity);
+        }
+        CanonicalJson.Flush(writer, node.Unknown, 9);
+
         if (node.Editor is { } editor)
         {
             writer.WritePropertyName(MapFormat.EditorMember);
             writer.WriteRawValue(editor.Raw);
         }
-        CanonicalJson.Flush(writer, node.Unknown, 9);
+        CanonicalJson.Flush(writer, node.Unknown, 10);
 
         writer.WritePropertyName(MapFormat.ChildrenMember);
         writer.WriteStartArray();
         foreach (MapNode child in node.Children)
             WriteNode(writer, child);
         writer.WriteEndArray();
-        CanonicalJson.Flush(writer, node.Unknown, 10);
+        CanonicalJson.Flush(writer, node.Unknown, 11);
 
         writer.WriteEndObject();
     }
@@ -188,6 +195,50 @@ public static class MapWriter
 
         if (brush.KeepSource)
             writer.WriteBoolean(MapFormat.KeepSourceMember, true);
+
+        writer.WriteEndObject();
+    }
+
+    /// <summary>
+    /// Writes an entity record on the INDENTED writer, following the brush
+    /// precedent rather than the light one.
+    /// </summary>
+    /// <remarks>
+    /// <b>An entity is not a row of numbers.</b> A light is six values a person
+    /// reads at a glance and edits as a unit, so it is one compact line; an entity
+    /// carries a class, a keyvalue set and a wiring list, each of which is edited
+    /// on its own. So the record is indented, the class gets its own line, the
+    /// keyvalues are one compact object (a keyvalue set is small and is read
+    /// together) and each connection is its own line - a wire is the unit a person
+    /// edits and reviews, which is exactly the argument that gives a plane its own
+    /// line.
+    /// </remarks>
+    private static void WriteEntity(Utf8JsonWriter writer, MapEntity entity)
+    {
+        writer.WriteStartObject();
+        CanonicalJson.Flush(writer, entity.Unknown, -1);
+
+        // Always written, and the reader refuses a record without it: a class is
+        // what an entity IS, and one that names nothing is not an entity with a
+        // missing detail.
+        writer.WriteString(MapFormat.ClassMember, entity.Class);
+        CanonicalJson.Flush(writer, entity.Unknown, 0);
+
+        if (entity.Keys.Count > 0)
+        {
+            writer.WritePropertyName(MapFormat.KeysMember);
+            writer.WriteRawValue(CompactKeys(entity.Keys));
+        }
+        CanonicalJson.Flush(writer, entity.Unknown, 1);
+
+        if (entity.Outputs.Count > 0)
+        {
+            var outputs = new List<byte[]>(entity.Outputs.Count);
+            foreach (MapConnection connection in entity.Outputs)
+                outputs.Add(CompactConnection(connection));
+            CanonicalJson.WriteRecordArray(writer, MapFormat.OutputsMember, outputs);
+        }
+        CanonicalJson.Flush(writer, entity.Unknown, 2);
 
         writer.WriteEndObject();
     }
@@ -328,6 +379,58 @@ public static class MapWriter
 
         if (light.Radius != 0.5f) WriteFinite(w, MapFormat.RadiusMember, light.Radius);
         CanonicalJson.Flush(w, light.Unknown, 9);
+
+        w.WriteEndObject();
+    });
+
+    /// <summary>
+    /// The keyvalue set as one compact JSON object, in AUTHORED ORDER and never
+    /// sorted.
+    /// </summary>
+    /// <remarks>
+    /// Sorting is the obvious tidy-up and it is exactly wrong here: the order is
+    /// the file's own, a person put it there, and reshuffling it turns every save
+    /// into a whole-record diff. Duplicates are emitted as they were read, because
+    /// a reader that preserves a hand-written duplicate has to write both back.
+    /// </remarks>
+    private static byte[] CompactKeys(List<KeyValuePair<string, string>> keys) =>
+        CanonicalJson.Compact(w =>
+        {
+            w.WriteStartObject();
+            foreach (KeyValuePair<string, string> pair in keys)
+                w.WriteString(pair.Key, pair.Value);
+            w.WriteEndObject();
+        });
+
+    private static byte[] CompactConnection(MapConnection connection) => CanonicalJson.Compact(w =>
+    {
+        w.WriteStartObject();
+        CanonicalJson.Flush(w, connection.Unknown, -1);
+
+        // The three that identify the wire are always written, even when empty:
+        // a connection missing one of them is broken data worth seeing rather
+        // than data worth hiding.
+        w.WriteString(MapFormat.OutputMember, connection.Output);
+        CanonicalJson.Flush(w, connection.Unknown, 0);
+
+        w.WriteString(MapFormat.TargetMember, connection.Target);
+        CanonicalJson.Flush(w, connection.Unknown, 1);
+
+        w.WriteString(MapFormat.InputMember, connection.Input);
+        CanonicalJson.Flush(w, connection.Unknown, 2);
+
+        if (connection.Param.Length > 0)
+            w.WriteString(MapFormat.ParamMember, connection.Param);
+        CanonicalJson.Flush(w, connection.Unknown, 3);
+
+        if (connection.Delay != 0f)
+            WriteFinite(w, MapFormat.DelayMember, connection.Delay);
+        CanonicalJson.Flush(w, connection.Unknown, 4);
+
+        // Omitted at Infinite, which is what almost every wire is.
+        if (connection.Times != Entities.EntityConnection.Infinite)
+            w.WriteNumber(MapFormat.TimesMember, connection.Times);
+        CanonicalJson.Flush(w, connection.Unknown, 5);
 
         w.WriteEndObject();
     });

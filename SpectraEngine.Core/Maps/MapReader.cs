@@ -242,19 +242,24 @@ public static class MapReader
                     anchor = 8;
                     break;
 
+                case MapFormat.EntityMember:
+                    node.Entity = ReadEntity(ref reader, utf8, state);
+                    anchor = 9;
+                    break;
+
                 case MapFormat.EditorMember:
                     node.Editor = new PreservedValue(CanonicalJson.CaptureValue(ref reader, utf8));
-                    anchor = 9;
+                    anchor = 10;
                     break;
 
                 case MapFormat.ChildrenMember:
                     ReadNodeArray(ref reader, utf8, node.Children, state);
-                    anchor = 10;
+                    anchor = 11;
                     break;
 
                 default:
-                    // 'entity' and 'script' land here: both are specified and
-                    // neither exists in Core, so they ride through untouched.
+                    // 'script' lands here: it is specified, nothing in Core
+                    // executes Luau, and it rides through untouched.
                     node.Unknown.Add(Preserve(ref reader, utf8, member, anchor));
                     break;
             }
@@ -587,6 +592,141 @@ public static class MapReader
         }
 
         return light;
+    }
+
+    // --- entity -------------------------------------------------------------
+
+    private static MapEntity ReadEntity(
+        ref Utf8JsonReader reader, ReadOnlySpan<byte> utf8, ReadState state)
+    {
+        var entity = new MapEntity();
+        bool sawClass = false;
+        int anchor = -1;
+        Expect(ref reader, JsonTokenType.StartObject, "'entity' must be an object", state);
+
+        while (NextMember(ref reader, out string member))
+        {
+            switch (member)
+            {
+                case MapFormat.ClassMember:
+                    // Never validated against a catalogue. A map authored for a
+                    // game this build does not have must still load and still
+                    // save unchanged, which a lookup here would make impossible.
+                    entity.Class = ReadString(ref reader, member, state);
+                    sawClass = true;
+                    anchor = 0;
+                    break;
+
+                case MapFormat.KeysMember:
+                    ReadKeys(ref reader, entity.Keys, state);
+                    anchor = 1;
+                    break;
+
+                case MapFormat.OutputsMember:
+                    ReadConnections(ref reader, utf8, entity.Outputs, state);
+                    anchor = 2;
+                    break;
+
+                default:
+                    // Open, like a face record: an entity payload is where this
+                    // format grows, and none of it changes what the solid is.
+                    entity.Unknown.Add(Preserve(ref reader, utf8, member, anchor));
+                    break;
+            }
+        }
+
+        // A record naming no class names no entity, the same refusal a 'mesh'
+        // with no 'model' gets. The EMPTY string is a different fact and is
+        // accepted: EntityData models an entity carrying no class yet, so the
+        // writer can produce one and must be able to read it back.
+        if (!sawClass)
+            throw Fail(ref reader, $"'entity' needs a '{MapFormat.ClassMember}' name", state);
+
+        return entity;
+    }
+
+    private static void ReadKeys(
+        ref Utf8JsonReader reader, List<KeyValuePair<string, string>> into, ReadState state)
+    {
+        Expect(ref reader, JsonTokenType.StartObject, $"'{MapFormat.KeysMember}' must be an object", state);
+
+        while (NextMember(ref reader, out string key))
+        {
+            // Appended, never merged: a hand-written duplicate must survive, and
+            // EntityData.TryGetValue is first-match-wins for exactly that reason.
+            into.Add(new KeyValuePair<string, string>(key, ReadKeyvalue(ref reader, key, state)));
+        }
+    }
+
+    /// <summary>
+    /// Reads one keyvalue. Values are STRINGS on the wire, always: a schema is
+    /// what says whether <c>"100"</c> is a speed or a count, and a reader that
+    /// accepted a bare number would have to invent a spelling to write it back
+    /// with.
+    /// </summary>
+    private static string ReadKeyvalue(ref Utf8JsonReader reader, string key, ReadState state)
+    {
+        Read(ref reader, state);
+        if (reader.TokenType != JsonTokenType.String)
+            throw Fail(ref reader, $"keyvalue '{key}' must be a string; keyvalues are string-typed", state);
+        return reader.GetString() ?? string.Empty;
+    }
+
+    private static void ReadConnections(
+        ref Utf8JsonReader reader, ReadOnlySpan<byte> utf8, List<MapConnection> into, ReadState state)
+    {
+        Expect(ref reader, JsonTokenType.StartArray, $"'{MapFormat.OutputsMember}' must be an array", state);
+
+        while (Read(ref reader, state) && reader.TokenType != JsonTokenType.EndArray)
+        {
+            if (reader.TokenType != JsonTokenType.StartObject)
+                throw Fail(ref reader, "a connection must be an object", state);
+
+            into.Add(ReadConnection(ref reader, utf8, state));
+        }
+    }
+
+    private static MapConnection ReadConnection(
+        ref Utf8JsonReader reader, ReadOnlySpan<byte> utf8, ReadState state)
+    {
+        var connection = new MapConnection();
+        int anchor = -1;
+
+        while (NextMember(ref reader, out string member))
+        {
+            switch (member)
+            {
+                case MapFormat.OutputMember:
+                    connection.Output = ReadString(ref reader, member, state);
+                    anchor = 0;
+                    break;
+                case MapFormat.TargetMember:
+                    connection.Target = ReadString(ref reader, member, state);
+                    anchor = 1;
+                    break;
+                case MapFormat.InputMember:
+                    connection.Input = ReadString(ref reader, member, state);
+                    anchor = 2;
+                    break;
+                case MapFormat.ParamMember:
+                    connection.Param = ReadString(ref reader, member, state);
+                    anchor = 3;
+                    break;
+                case MapFormat.DelayMember:
+                    connection.Delay = ReadFloat(ref reader, member, state);
+                    anchor = 4;
+                    break;
+                case MapFormat.TimesMember:
+                    connection.Times = ReadInt(ref reader, member, state);
+                    anchor = 5;
+                    break;
+                default:
+                    connection.Unknown.Add(Preserve(ref reader, utf8, member, anchor));
+                    break;
+            }
+        }
+
+        return connection;
     }
 
     // --- preservation -------------------------------------------------------

@@ -58,6 +58,7 @@ public static class MapFormat
     public const string BrushMember = "brush";
     public const string MeshMember = "mesh";
     public const string LightMember = "light";
+    public const string EntityMember = "entity";
     public const string ChildrenMember = "children";
 
     // --- mesh ---------------------------------------------------------------
@@ -114,6 +115,39 @@ public static class MapFormat
     public const string WidthMember = "width";
     public const string HeightMember = "height";
     public const string RadiusMember = "radius";
+
+    // --- entity -------------------------------------------------------------
+
+    public const string ClassMember = "class";
+    public const string KeysMember = "keys";
+    public const string OutputsMember = "outputs";
+
+    // --- connection ---------------------------------------------------------
+
+    public const string OutputMember = "output";
+    public const string TargetMember = "target";
+    public const string InputMember = "input";
+    public const string ParamMember = "param";
+    public const string DelayMember = "delay";
+    public const string TimesMember = "times";
+
+    /// <summary>
+    /// Target names resolved at FIRE time rather than against the map, so a
+    /// document naming one of these has nothing to validate.
+    /// </summary>
+    /// <remarks>
+    /// <b>Matched ordinally, like every other name in this format.</b> A
+    /// case-folding rule would need a culture to fold in, and the same file would
+    /// then mean different things on different machines - which is the same
+    /// reason <c>EntityData</c> matches keyvalue names ordinally.
+    /// </remarks>
+    public static readonly string[] RuntimeTargets = ["!self", "!activator", "!caller"];
+
+    /// <summary>
+    /// The one wildcard a target name may carry: a trailing <c>*</c>, meaning
+    /// every name starting with what precedes it.
+    /// </summary>
+    public const char TargetWildcard = '*';
 
     // --- closed vocabularies ------------------------------------------------
 

@@ -34,7 +34,9 @@ namespace SpectraEngine.Core
         // extents they need. A document only DECLARES it needs version 2 when it
         // actually carries one of those (see MapSceneBinder), so every map
         // written before this still says 1 and still opens in an older editor.
-        public const int MapFormatVersion = 2;
+        // 3: the entity payload, bound rather than preserved. Same per-document
+        // rule: a map with no entity in it still says 1.
+        public const int MapFormatVersion = 3;
 
         // The oldest reader that can still make sense of a map this engine writes.
         // Source formats version asymmetrically from cooked ones: a cooked artifact
@@ -54,6 +56,14 @@ namespace SpectraEngine.Core
         // What a document declares when it carries a light shape older readers
         // would silently delete. See MapSceneBinder.RequiredReaderVersion.
         public const int LightShapeMapVersion = 2;
+
+        // What a document declares when it carries an entity payload. The
+        // argument is the light-shape one exactly: an older editor carried
+        // 'entity' as an opaque unknown on LOAD and then rebuilt each node from
+        // the scene on SAVE, where nothing held the payload - so it would open
+        // such a map, show it correctly, and delete every keyvalue and wire in it
+        // on the next Ctrl+S.
+        public const int EntityMapVersion = 3;
 
         // A game project is data too: a text manifest naming the maps, the display
         // defaults and the backends, read once at boot. Same asymmetric versioning

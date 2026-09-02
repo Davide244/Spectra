@@ -1,5 +1,6 @@
-﻿using SpectraEngine.Core.Assets;
+using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Scene;
 using System;
 using System.Collections.Generic;
@@ -82,16 +83,51 @@ public static class MapSceneBinder
     /// light. Testing the numbers as well would raise the floor on maps that do
     /// not need it.
     /// </para>
+    /// <para>
+    /// <b>An entity payload raises the floor on exactly the same argument.</b>
+    /// An older editor read <c>entity</c> as an opaque unknown and then rebuilt
+    /// each node from the scene on save, where nothing held it - so it would open
+    /// the map, display it correctly, and delete every keyvalue and wire in it on
+    /// the next save.
+    /// </para>
+    /// <para>
+    /// <b>The MAX of what applies, never the first hit.</b> A map carrying both a
+    /// rect light and an entity needs the newer of the two readers, and returning
+    /// whichever was found first would name a reader that still eats half the
+    /// document.
+    /// </para>
     /// </remarks>
     private static int RequiredReaderVersion(Scene.Scene scene)
     {
+        int floor = EngineInfo.MinimumReadableMapVersion;
+
         foreach (SceneNode node in scene.LightNodes)
         {
             if (node.Light is { Kind: not (LightKind.Directional or LightKind.Point) })
-                return EngineInfo.LightShapeMapVersion;
+            {
+                floor = Math.Max(floor, EngineInfo.LightShapeMapVersion);
+                break;
+            }
         }
 
-        return EngineInfo.MinimumReadableMapVersion;
+        // The root's own payload is never written - 'nodes' is Root.Children -
+        // so a walk that started at the root would raise the floor for a payload
+        // no reader will ever see.
+        if (CarriesEntity(scene.Root))
+            floor = Math.Max(floor, EngineInfo.EntityMapVersion);
+
+        return floor;
+    }
+
+    private static bool CarriesEntity(SceneNode node)
+    {
+        foreach (SceneNode child in node.Children)
+        {
+            if (child.Entity is not null || CarriesEntity(child))
+                return true;
+        }
+
+        return false;
     }
 
     private static MapNode NodeToMap(SceneNode node, MapSaveReport? report)
@@ -129,6 +165,36 @@ public static class MapSceneBinder
                 Height = light.Height,
                 Radius = light.Radius,
             };
+        }
+
+        if (node.Entity is { } entity)
+        {
+            // EVERY field, for the reason stated above the light: this builds a
+            // FRESH MapEntity rather than editing the one that was loaded, so a
+            // field left out here is a field silently deleted from the file on
+            // the next save. That is precisely the hole that existed while
+            // 'entity' rode through as a preserved unknown - the document path
+            // carried it perfectly and this path never saw it at all.
+            var payload = new MapEntity { Class = entity.ClassName };
+
+            // In authored order, duplicates included: the order is the file's
+            // own and a hand-written duplicate must come back out.
+            payload.Keys.AddRange(entity.Keyvalues);
+
+            foreach (EntityConnection wire in entity.Connections)
+            {
+                payload.Outputs.Add(new MapConnection
+                {
+                    Output = wire.Output,
+                    Target = wire.TargetName,
+                    Input = wire.Input,
+                    Param = wire.Parameter,
+                    Delay = wire.Delay,
+                    Times = wire.TimesToFire,
+                });
+            }
+
+            mapped.Entity = payload;
         }
 
         // A mesh is written as a REFERENCE, never as geometry: vertices belong
@@ -240,6 +306,86 @@ public static class MapSceneBinder
 
         foreach (MapNode node in document.Nodes)
             scene.Root.AddChild(ToSceneNode(node, scene.Assets, report));
+
+        // After the graph exists, because a wire may name a node that appears
+        // later in the document, and one pass, because the answer is a property
+        // of the whole map rather than of any node in it.
+        if (report is not null)
+            ReportUnresolvedTargets(document, report);
+    }
+
+    /// <summary>
+    /// Names every wire whose target is nowhere in this map.
+    /// </summary>
+    /// <remarks>
+    /// <b>A warning, and the wire is KEPT.</b> A mapper who renames a door must
+    /// not silently lose the wiring into it - the rename is the mistake, the wire
+    /// is the work, and dropping the wire is unrecoverable while reporting it is
+    /// a line in a log. The same reasoning that makes a missing model degrade
+    /// rather than throw, one payload over.
+    /// </remarks>
+    private static void ReportUnresolvedTargets(MapDocument document, MapLoadReport report)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var wired = new List<MapNode>();
+        CollectTargets(document.Nodes, names, wired);
+
+        foreach (MapNode node in wired)
+        {
+            foreach (MapConnection wire in node.Entity!.Outputs)
+            {
+                if (!Resolves(wire.Target, names))
+                    report.RecordUnresolvedTarget(node.Name, wire.Output, wire.Target);
+            }
+        }
+    }
+
+    private static void CollectTargets(List<MapNode> nodes, HashSet<string> names, List<MapNode> wired)
+    {
+        foreach (MapNode node in nodes)
+        {
+            // targetname IS SceneNode.Name: one identity, one field.
+            names.Add(node.Name);
+            if (node.Entity is { Outputs.Count: > 0 })
+                wired.Add(node);
+
+            CollectTargets(node.Children, names, wired);
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="target"/> names something this map could deliver
+    /// to.
+    /// </summary>
+    /// <remarks>
+    /// <b>An EMPTY target is not an unresolved one and is not reported.</b> It
+    /// names nothing rather than naming something absent, which is an authoring
+    /// state a half-wired entity legitimately sits in; warning about it would put
+    /// noise in front of the case that matters.
+    /// </remarks>
+    private static bool Resolves(string target, HashSet<string> names)
+    {
+        if (target.Length == 0)
+            return true;
+
+        // Resolved when the output fires, against the entity that fired it or
+        // the one that activated it - none of which the map can know.
+        if (Array.IndexOf(MapFormat.RuntimeTargets, target) >= 0)
+            return true;
+
+        if (target[^1] == MapFormat.TargetWildcard)
+        {
+            string prefix = target[..^1];
+            foreach (string name in names)
+            {
+                if (name.StartsWith(prefix, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
+        }
+
+        return names.Contains(target);
     }
 
     private static SceneNode ToSceneNode(MapNode mapped, AssetManager? assets, MapLoadReport? report)
@@ -289,6 +435,29 @@ public static class MapSceneBinder
                 Height = light.Height,
                 Radius = light.Radius,
             };
+        }
+
+        if (mapped.Entity is { } entity)
+        {
+            // VERBATIM, with NO catalogue lookup. That is what makes an unknown
+            // class round-trip losslessly: the map may have been authored against
+            // a game this build does not have, and a binder that resolved the
+            // class here would have to decide what to do when it could not -
+            // every answer to which drops the payload.
+            var data = new EntityData(entity.Class);
+
+            // Add, never SetValue: SetValue replaces an existing name in place,
+            // which would collapse a hand-authored duplicate to one entry and
+            // silently rewrite the file on the next save.
+            data.Keyvalues.AddRange(entity.Keys);
+
+            foreach (MapConnection wire in entity.Outputs)
+            {
+                data.Connections.Add(new EntityConnection(
+                    wire.Output, wire.Target, wire.Input, wire.Param, wire.Delay, wire.Times));
+            }
+
+            node.Entity = data;
         }
 
         // Appended in order, because child order is traversal order is
@@ -459,18 +628,45 @@ public sealed class MapSaveReport
 public sealed class MapLoadReport
 {
     private readonly List<string> _unresolved = [];
+    private readonly List<string> _danglingWires = [];
 
     /// <summary>One line per node whose model reference could not be resolved.</summary>
     public IReadOnlyList<string> UnresolvedMeshes => _unresolved;
 
+    /// <summary>
+    /// One line per wire naming a target nothing in this map answers to. The
+    /// wires themselves are KEPT.
+    /// </summary>
+    /// <remarks>
+    /// <b>Kept rather than dropped, deliberately.</b> A dangling target is
+    /// usually a rename in progress, and the wiring is the work while the name is
+    /// one edit away from being right again; a load that tidied it away would
+    /// destroy something unrecoverable in order to report nothing.
+    /// </remarks>
+    public IReadOnlyList<string> UnresolvedTargets => _danglingWires;
+
     /// <summary>Whether everything the map named was found.</summary>
-    public bool IsComplete => _unresolved.Count == 0;
+    public bool IsComplete => _unresolved.Count == 0 && _danglingWires.Count == 0;
 
     internal void RecordUnresolved(string nodeName, string modelPath, string reason) =>
         _unresolved.Add($"{nodeName} -> {modelPath} ({reason})");
 
+    internal void RecordUnresolvedTarget(string nodeName, string output, string target) =>
+        _danglingWires.Add($"{nodeName}.{output} -> {target}");
+
     /// <summary>A one-line summary for a log, or null when nothing was missing.</summary>
-    public string? Describe() => _unresolved.Count == 0
-        ? null
-        : $"{_unresolved.Count} mesh node(s) loaded without geometry: {MapSaveReport.Join(_unresolved)}";
+    public string? Describe()
+    {
+        string? meshes = _unresolved.Count == 0
+            ? null
+            : $"{_unresolved.Count} mesh node(s) loaded without geometry: {MapSaveReport.Join(_unresolved)}";
+
+        string? wires = _danglingWires.Count == 0
+            ? null
+            : $"{_danglingWires.Count} connection(s) name a target this map does not have, and were "
+              + $"kept: {MapSaveReport.Join(_danglingWires)}";
+
+        if (meshes is null) return wires;
+        return wires is null ? meshes : $"{meshes}; {wires}";
+    }
 }
