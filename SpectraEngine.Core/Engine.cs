@@ -692,12 +692,28 @@ public sealed class Engine
         // cursor lock, so the two requests cannot alternate.
         _sceneManager.Editor?.Suspend();
         character.Enter();
+
+        // Last, once both exclusive resources have changed hands. Activation
+        // runs every entity's spawn, and a spawn may already fire outputs and
+        // schedule thinks; none of that has any business happening while a
+        // gizmo drag is still open.
+        //
+        // A scene with no character never enters play mode at all today, so a
+        // level's entities never tick there. That is a real limitation of the
+        // gate rather than an oversight: this is the only moment the engine has
+        // to hand the frame over.
+        _sceneManager.StartEntityWorld();
     }
 
     private void ExitPlayMode()
     {
         if (_character is not { Active: true } character)
             return;
+
+        // First, and before the camera and the cursor go back: an entity's
+        // OnRemove runs here, and it must not run in a frame where the editor
+        // has already taken the scene back.
+        _sceneManager.StopEntityWorld();
 
         character.Exit();
 
@@ -880,13 +896,26 @@ public sealed class Engine
                 // the next step, so draining outside would silently discard
                 // every tick's events but the last on a catch-up frame.
                 //
-                // Entity logic, scripts and the touch diff take their slots in
-                // this loop when they exist; the ordering above is already the
-                // one they need.
+                // Entity logic has taken the first slot in the loop; scripts and
+                // the touch diff take theirs when they exist, and the ordering
+                // above is already the one they need.
                 IScenePhysics physics = _sceneManager.Physics;
                 int ticks = _physicsTicks.Advance(deltaTime);
                 for (int tick = 0; tick < ticks; tick++)
                 {
+                    // FIRST in the tick, and before the kinematic push: an
+                    // entity that decides where a platform is this tick has to
+                    // have decided before the step resolves against it, or the
+                    // character rides last tick's pose. It is inside the loop
+                    // and takes the FIXED step for the same reason physics
+                    // does: a heap of fire times advanced by a frame delta
+                    // makes when a door opens a function of how fast the
+                    // machine is.
+                    //
+                    // A world exists only while play mode owns the scene, so
+                    // this is a null read in an editing session.
+                    _sceneManager.EntityWorld?.Tick(_physicsTicks.FixedDeltaTime);
+
                     physics.PushKinematicTargets(_physicsTicks.FixedDeltaTime);
                     using (Profiler.Measure(FramePhase.Physics))
                         physics.Step(_physicsTicks.FixedDeltaTime);

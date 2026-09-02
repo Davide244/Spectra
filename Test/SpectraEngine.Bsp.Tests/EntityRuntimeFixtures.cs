@@ -24,6 +24,7 @@ internal static class EntityRuntime
         catalog.Add(new EntitySchema("recorder"), () => new RecordingEntity(log));
         catalog.Add(new EntitySchema("relay"), () => new RelayEntity());
         catalog.Add(new EntitySchema("speedster"), () => new SpeedEntity());
+        catalog.Add(new EntitySchema("lifecycle"), () => new LifecycleEntity(log));
         return catalog;
     }
 
@@ -87,6 +88,23 @@ internal sealed class RecordingEntity : Entity
             $"{context.Activator?.TargetName ?? "-"}:{context.Caller?.TargetName ?? "-"}");
         return true;
     }
+}
+
+/// <summary>
+/// Writes one line per lifecycle callback, so a test can assert the ORDER of the
+/// activation phases rather than only their effects.
+/// </summary>
+internal sealed class LifecycleEntity : Entity
+{
+    private readonly List<string> _log;
+
+    public LifecycleEntity(List<string> log) => _log = log;
+
+    protected internal override void OnSpawn() => _log.Add($"spawn:{TargetName}");
+
+    protected internal override void OnActivate() => _log.Add($"activate:{TargetName}");
+
+    protected internal override void OnRemove() => _log.Add($"remove:{TargetName}");
 }
 
 /// <summary>Turns one input straight back into one output, at whatever delay its wires state.</summary>

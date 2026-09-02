@@ -2,6 +2,7 @@
 using Silk.NET.Maths;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Maps;
 using SpectraEngine.Core.Physics;
@@ -304,6 +305,96 @@ public sealed class SceneManager
     /// mover is running" and "the mover was never switched on".
     /// </remarks>
     public Physics.Character.FirstPersonController? Character { get; set; }
+
+    /// <summary>
+    /// The classes <see cref="StartEntityWorld"/> can build, or null for the
+    /// process-wide <see cref="EntityCatalog.Shared"/> that generated
+    /// registrations feed.
+    /// </summary>
+    /// <remarks>
+    /// A seam for the same reason <see cref="PhysicsFactory"/> is one: the
+    /// shared catalogue freezes on its first read, which is exactly right for a
+    /// registry fed by module initializers and exactly wrong for a test suite
+    /// or for a host that wants one game's classes and no others.
+    /// </remarks>
+    public EntityCatalog? EntityCatalog { get; set; }
+
+    /// <summary>
+    /// The live entity runtime, or null when nothing is playing. Render thread
+    /// only, like the scene it runs over.
+    /// </summary>
+    /// <remarks>
+    /// <b>Entities exist only while play mode owns the scene</b>, because the
+    /// instances are a projection of the authored data rather than part of it:
+    /// there is nothing to capture when a session stops, and an editor showing
+    /// schema-driven properties needs no runtime at all. The engine starts and
+    /// stops it at the play-mode boundary; what it is held HERE for is the same
+    /// thing <see cref="Character"/> is held for, the periodic stats line, plus
+    /// the one event the engine cannot see for itself
+    /// (<see cref="OnSceneReplaced"/>).
+    /// </remarks>
+    public EntityWorld? EntityWorld { get; private set; }
+
+    /// <summary>
+    /// Builds the entity runtime over the active scene and brings it to life.
+    /// Called by the engine when play mode is entered; a no-op when a world is
+    /// already running or no scene is loaded.
+    /// </summary>
+    public void StartEntityWorld()
+    {
+        if (EntityWorld is not null || ActiveScene is not { } scene)
+            return;
+
+        var world = new EntityWorld(scene, _logger, EntityCatalog);
+        world.Activate();
+        EntityWorld = world;
+
+        // At Debug, not Information: a scene with no entities is the ordinary
+        // case today and every F8 would otherwise log a line saying nothing.
+        _logger.LogDebug(
+            "Entity runtime active: {Entities} entity(ies), {Names} name(s)",
+            world.Entities.Count, world.Index?.NameCount ?? 0);
+    }
+
+    /// <summary>
+    /// Tears the entity runtime down, running every entity's
+    /// <c>OnRemove</c> and letting go of the scene. Harmless when none is
+    /// running.
+    /// </summary>
+    public void StopEntityWorld()
+    {
+        EntityWorld?.Deactivate();
+        EntityWorld = null;
+    }
+
+    /// <summary>
+    /// The graph the entity runtime was built over is about to be replaced, so
+    /// the runtime goes with it.
+    /// </summary>
+    /// <remarks>
+    /// <b>A world that outlives its graph renders perfectly and fails later.</b>
+    /// A map load preserves node ids (that is what makes commands and undo work
+    /// across one), so reopening a map while play mode is running would leave
+    /// every stale entity to be rebound onto the fresh nodes by the target-name
+    /// index's own <c>NodeAdded</c> handler: last map's think times, fire counts
+    /// and wiring, attached to this map's scene, with nothing reporting it.
+    /// <para>
+    /// <b>Play mode itself is left alone</b> - the character keeps walking - and
+    /// re-entering play builds a world over the new graph. That is stated in the
+    /// log rather than worked around, because the alternative is entities that
+    /// silently stopped running.
+    /// </para>
+    /// </remarks>
+    public void OnSceneReplaced()
+    {
+        if (EntityWorld is null)
+            return;
+
+        StopEntityWorld();
+        _logger.LogInformation(
+            "The scene was replaced while the entity runtime was live, so it was torn down. " +
+            "Re-enter play mode to run the new scene's entities.");
+    }
 
     public void Initialize()
     {
@@ -989,6 +1080,31 @@ public sealed class SceneManager
             character.Collision.DroppedPlanes);
     }
 
+    // The same shape as DescribeCharacter above, and for the same reason: one
+    // allocating string per five seconds, only while a world is running, and an
+    // interned literal the rest of the time.
+    //
+    // It reports the disclosed counters as well as the population, because both
+    // failures are silent otherwise: a budget trip means a cascade was dropped
+    // mid-tick, and a discarded count that keeps climbing means the level has a
+    // relay loop in it that is still firing.
+    private string DescribeEntities()
+    {
+        if (EntityWorld is not { IsActive: true } world)
+            return "not running";
+
+        return string.Format(
+            System.Globalization.CultureInfo.InvariantCulture,
+            "{0} live, {1} name(s), {2} dispatch(es) last tick, {3} pending, " +
+            "{4} budget trip(s), {5} discarded",
+            world.Entities.Count,
+            world.Index?.NameCount ?? 0,
+            world.LastTickDispatchCount,
+            world.PendingEventCount,
+            world.DispatchBudgetTripCount,
+            world.DiscardedEventCount);
+    }
+
     // How many distinct material ids the uploaded chunks actually carry — the
     // machine-checkable half of the per-face proof. The brushes above name five
     // materials between them (four explicit plus the parts' default fallback),
@@ -1444,7 +1560,8 @@ public sealed class SceneManager
                     "rendering: {Pipeline} pipeline, {Shadows}{GeometryBatching}, {FrameMs:0.00} ms/frame ({Fps:0} fps) [{Phases}]; " +
                     "churn: {MeshRate:0} mesh(es)/s, {CompileRate:0} compile(s)/s, {Pooled} buffer(s) pooled; " +
                     "memory: {Memory}; " +
-                    "character: {CharacterMode}",
+                    "character: {CharacterMode}; " +
+                    "entities: {EntityRuntime}",
                     assets?.TextureCount ?? 0, assets?.MaterialCount ?? 0,
                     _modelsRequested, _modelsPlaced,
                     renderView.WorldChunksVisible, renderView.WorldChunksTotal,
@@ -1464,7 +1581,8 @@ public sealed class SceneManager
                     DescribeGeometryBatching(_renderer), FrameTimeMs, Fps,
                     _renderer?.Profiler.Describe() ?? "not measured", MeshCreationRate(), CompileRate(scene), _renderer?.PooledBufferCount ?? 0,
                     DescribeMemory(),
-                    DescribeCharacter());
+                    DescribeCharacter(),
+                    DescribeEntities());
             }
 
             if (_elapsed >= _nextScreenProbeTime)
@@ -1565,6 +1683,10 @@ public sealed class SceneManager
 
     public void Shutdown()
     {
+        // Before the scene goes: a run closed while play mode was active still
+        // owns a live runtime, and every entity is owed its OnRemove.
+        StopEntityWorld();
+
         ActiveScene = null;
         Editor = null;
 

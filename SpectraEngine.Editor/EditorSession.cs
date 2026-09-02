@@ -308,6 +308,12 @@ public sealed class EditorSession : IDisposable
             {
                 MapDocument document = MapBundle.Load(bundlePath);
 
+                // The engine's half of the same event, and it is not the
+                // editor's: a live entity runtime holds nodes that are about to
+                // leave the graph, and a load preserves node ids, so a world
+                // kept across one would be rebound onto the fresh nodes with
+                // last map's state in it.
+                SceneManager.OnSceneReplaced();
                 Editor?.OnSceneReplaced();
 
                 var report = new MapLoadReport();
@@ -340,6 +346,10 @@ public sealed class EditorSession : IDisposable
         {
             try
             {
+                // The same event as a load, for the same two subjects: every
+                // node the runtime, the selection and the history referred to
+                // is about to be gone.
+                SceneManager.OnSceneReplaced();
                 Editor?.OnSceneReplaced();
 
                 var empty = new MapDocument();
