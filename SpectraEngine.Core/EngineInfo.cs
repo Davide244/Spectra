@@ -62,7 +62,26 @@ namespace SpectraEngine.Core
         public const int ProjectFormatVersion = 1;
         public const int MinimumReadableProjectVersion = 1;
 
-        // Shader format version — must match CompiledShaderFile.FormatVersion to load
-        public const ushort ShaderFormatVersion = 1;
+        /// <summary>
+        /// Versions the SHAPE of compiled geometry: what the CSG compiler emits and
+        /// what a vertex layout is made of. Bump it by hand whenever either can
+        /// change, because a pack cooked before the change is unreadable after it and
+        /// the failure is a misinterpreted vertex buffer rather than an exception.
+        /// Nothing stamps or checks it yet: its enforcing reader arrives with the
+        /// compiled map format, which is the first artifact that can hold a stale
+        /// geometry blob. It exists now so that no pack is ever unversioned, which is
+        /// what retrofitting it would cost.
+        /// </summary>
+        public const uint GeometryFormatVersion = 1;
+
+        // Shader format version - must match CompiledShaderFile.FormatVersion to load.
+        // Cooked, so it versions the strict way described above: ShaderFileReader
+        // refuses any other value outright and says recook, because a compiled
+        // shader is a build output that can always be regenerated and the bytes
+        // past the header only mean anything under the version that wrote them.
+        // 2: the pipeline blob carries its vertex input reflection and its
+        // generated instanced vertex stage. A v1 file has neither, so a v1 blob
+        // read as v2 would take the byte after the last stage as a table length.
+        public const ushort ShaderFormatVersion = 2;
     }
 }

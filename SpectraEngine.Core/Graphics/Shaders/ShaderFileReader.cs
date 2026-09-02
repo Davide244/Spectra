@@ -1,6 +1,8 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 
 namespace SpectraEngine.Core.Graphics.Shaders;
 
@@ -15,14 +17,14 @@ public static class ShaderFileReader
     /// </summary>
     public static CompiledShaderFile Read(Stream stream)
     {
-        using var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
 
         // Header
         Span<byte> magic = stackalloc byte[4];
         if (reader.Read(magic) != 4 || !magic.SequenceEqual(CompiledShaderFile.MagicBytes))
             throw new InvalidDataException("Not a valid .specshadecomp file (bad magic bytes)");
 
-        ushort formatVersion = reader.ReadUInt16();
+        ushort formatVersion = RequireSupportedVersion(reader.ReadUInt16());
         var stages = (ShaderStageFlags)reader.ReadByte();
         byte pipelineCount = reader.ReadByte();
 
@@ -39,8 +41,7 @@ public static class ShaderFileReader
             entries[i] = new ShaderPipelineEntry(backend, format, entryStages, dataOffset, dataSize);
         }
 
-        // Data section starts here
-        long dataSectionStart = stream.Position;
+        long dataSectionStart = ShaderFileLayout.DataSectionStart(pipelineCount);
 
         var pipelines = new List<PipelineBlob>(pipelineCount);
         for (int i = 0; i < pipelineCount; i++)
@@ -64,14 +65,14 @@ public static class ShaderFileReader
     /// </summary>
     public static PipelineBlob? ReadPipeline(Stream stream, GraphicsBackend backend)
     {
-        using var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
 
         // Header
         Span<byte> magic = stackalloc byte[4];
         if (reader.Read(magic) != 4 || !magic.SequenceEqual(CompiledShaderFile.MagicBytes))
             throw new InvalidDataException("Not a valid .specshadecomp file (bad magic bytes)");
 
-        reader.ReadUInt16(); // format version
+        RequireSupportedVersion(reader.ReadUInt16());
         reader.ReadByte();   // stages
         byte pipelineCount = reader.ReadByte();
 
@@ -96,9 +97,9 @@ public static class ShaderFileReader
         if (target is null)
             return null;
 
-        // Jump to the data section start (after full entry table)
-        long dataSectionStart = 8 + (pipelineCount * 12L);
-        stream.Position = dataSectionStart + target.Value.DataOffset;
+        // The scan above stops at the matching entry, so the stream is parked
+        // mid-table and only the layout can say where the data section begins.
+        stream.Position = ShaderFileLayout.DataSectionStart(pipelineCount) + target.Value.DataOffset;
 
         return DeserializePipelineBlob(reader, target.Value);
     }
@@ -113,6 +114,25 @@ public static class ShaderFileReader
     {
         using var stream = File.OpenRead(path);
         return ReadPipeline(stream, backend);
+    }
+
+    /// <summary>
+    /// Refuses a file this engine's format does not describe.
+    /// </summary>
+    /// <remarks>
+    /// A compiled shader is a build output, so it versions the way every cooked
+    /// artifact does: an exact match, and a message that says recook. There is
+    /// nothing to carry forward and nothing to degrade to, because the bytes
+    /// past the header only mean anything under the version that wrote them.
+    /// </remarks>
+    private static ushort RequireSupportedVersion(ushort formatVersion)
+    {
+        if (formatVersion != EngineInfo.ShaderFormatVersion)
+            throw new InvalidDataException(
+                $"Compiled shader format version {formatVersion} cannot be read by this engine, "
+                + $"which reads version {EngineInfo.ShaderFormatVersion}. Recompile (recook) the shader.");
+
+        return formatVersion;
     }
 
     private static PipelineBlob DeserializePipelineBlob(BinaryReader reader, ShaderPipelineEntry entry)
@@ -134,6 +154,16 @@ public static class ShaderFileReader
         if (entry.Stages.HasFlag(ShaderStageFlags.Compute))
             computeData = ReadStageData(reader);
 
+        VertexInputElement[] vertexInputs = ReadVertexInputs(reader, entry.DataSize);
+
+        byte[]? instancedVertexData = null;
+        VertexInputElement[] instancedVertexInputs = [];
+        if (reader.ReadByte() != 0)
+        {
+            instancedVertexData = ReadStageData(reader);
+            instancedVertexInputs = ReadVertexInputs(reader, entry.DataSize);
+        }
+
         return new PipelineBlob
         {
             Backend = entry.Backend,
@@ -143,6 +173,9 @@ public static class ShaderFileReader
             FragmentData = fragmentData,
             GeometryData = geometryData,
             ComputeData = computeData,
+            VertexInputs = vertexInputs,
+            InstancedVertexData = instancedVertexData,
+            InstancedVertexInputs = instancedVertexInputs,
         };
     }
 
@@ -150,5 +183,41 @@ public static class ShaderFileReader
     {
         uint length = reader.ReadUInt32();
         return reader.ReadBytes((int)length);
+    }
+
+    private static VertexInputElement[] ReadVertexInputs(BinaryReader reader, uint blobSize)
+    {
+        uint count = reader.ReadUInt32();
+
+        // The blob's declared size bounds the table: every element costs at
+        // least a fixed record, so a larger count is a corrupt file rather than
+        // an allocation to attempt.
+        if (count > blobSize / ShaderFileLayout.VertexInputRecordSize)
+            throw new InvalidDataException(
+                $"Vertex input table declares {count} elements, more than the {blobSize}-byte pipeline blob can hold");
+
+        var inputs = new VertexInputElement[count];
+        Span<byte> record = stackalloc byte[ShaderFileLayout.VertexInputRecordSize];
+
+        for (int i = 0; i < inputs.Length; i++)
+        {
+            if (reader.Read(record) != record.Length)
+                throw new InvalidDataException("Truncated vertex input record");
+
+            uint location = BinaryPrimitives.ReadUInt32LittleEndian(record);
+            uint locationSpan = BinaryPrimitives.ReadUInt32LittleEndian(record[4..]);
+            uint componentCount = BinaryPrimitives.ReadUInt32LittleEndian(record[8..]);
+            var rate = (VertexInputRate)record[12];
+            int nameLength = BinaryPrimitives.ReadUInt16LittleEndian(record[13..]);
+
+            byte[] nameBytes = reader.ReadBytes(nameLength);
+            if (nameBytes.Length != nameLength)
+                throw new InvalidDataException("Truncated vertex input name");
+
+            inputs[i] = new VertexInputElement(
+                Encoding.UTF8.GetString(nameBytes), location, locationSpan, componentCount, rate);
+        }
+
+        return inputs;
     }
 }
