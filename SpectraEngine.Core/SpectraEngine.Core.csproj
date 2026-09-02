@@ -55,6 +55,9 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="StbImageSharp" />
+    <!-- XxHash128, for the .spack asset id and content digest. Core owns both
+         because the reader and the cooker's writer must agree on them exactly. -->
+    <PackageReference Include="System.IO.Hashing" />
     <PackageReference Include="Silk.NET.Assimp" />
     <PackageReference Include="Silk.NET.Direct3D11" />
     <PackageReference Include="Silk.NET.Direct3D12" />

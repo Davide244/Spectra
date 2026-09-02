@@ -1,0 +1,11 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Spectra.Kitchen.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Spectra.Kitchen\Spectra.Kitchen.csproj" />
+  </ItemGroup>
+
+</Project>

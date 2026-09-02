@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Spectra.Kitchen</RootNamespace>
+    <!--
+      The cooker is not part of a shipped game binary, so AOT is not forced on
+      it by the publish gate the way it is on the executable. It is on anyway:
+      the editor will host this library in process to produce cooked-accurate
+      preview, and the editor IS AOT-published. Turning the analysers on here
+      means a violation is reported against the line that wrote it rather than
+      minutes later at the editor's ILC step.
+    -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
+  </ItemGroup>
+
+</Project>

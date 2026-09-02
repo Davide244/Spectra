@@ -84,6 +84,27 @@ namespace SpectraEngine.Core
         /// </summary>
         public const uint GeometryFormatVersion = 1;
 
+        /// <summary>
+        /// Version of the .spack container a cook writes. Stamped into
+        /// PackHeader.FormatVersion.
+        /// </summary>
+        public const ushort PackFormatVersion = 1;
+
+        /// <summary>
+        /// The oldest reader that can make sense of a pack this engine writes,
+        /// stamped into PackHeader.MinReaderVersion.
+        /// </summary>
+        /// <remarks>
+        /// A pack is a cooked artifact, so the asymmetric-versioning rule would
+        /// say "exact match, else recook". The header carries the floor as a
+        /// field anyway, and that is the stronger form of the same rule: a v2
+        /// engine that only appends a header field can keep writing packs a v1
+        /// reader opens correctly, and one that changes what a payload MEANS
+        /// raises this per pack. Raising it globally instead would tell every
+        /// older reader to refuse every pack, including the ones it could read.
+        /// </remarks>
+        public const ushort MinimumReadablePackVersion = 1;
+
         // Shader format version - must match CompiledShaderFile.FormatVersion to load.
         // Cooked, so it versions the strict way described above: ShaderFileReader
         // refuses any other value outright and says recook, because a compiled

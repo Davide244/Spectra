@@ -44,6 +44,17 @@
     <!-- Image decoding (pure managed, AOT-safe: PNG/JPG/TGA/BMP) -->
     <PackageVersion Include="StbImageSharp" Version="2.30.16" />
 
+    <!--
+      XxHash128, which keys the .spack entry table and its content digest. Not in
+      the shared framework, so it is a package rather than a using. Its NativeAOT
+      posture was verified rather than inferred (this repo adopts no dependency on
+      an inferred one): a throwaway console calling the one-shot, incremental and
+      HashToUInt128 forms published with -p:PublishAot=true on win-x64 with no
+      trim or AOT warnings, ran as a 951 KB native binary, and returned the
+      reference XXH3-128 vector for the empty input.
+    -->
+    <PackageVersion Include="System.IO.Hashing" Version="10.0.11" />
+
     <!-- Testing (xunit v3 on Microsoft.Testing.Platform) -->
     <PackageVersion Include="xunit.v3.mtp-v2" Version="3.2.2" />
     <PackageVersion Include="Verify.XunitV3" Version="31.16.1" />
