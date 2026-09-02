@@ -172,7 +172,7 @@
     <Border DockPanel.Dock="Top"
             BorderBrush="{StaticResource SpectraBorderSoft}"
             BorderThickness="0,0,0,1"
-            Padding="12,8,10,8"
+            Padding="12,8,12,8"
             IsVisible="{Binding Properties.HasSelection}">
       <Grid ColumnDefinitions="*,Auto">
         <TextBox Grid.Column="0" x:Name="NameBox" Classes="nametitle"
@@ -201,7 +201,7 @@
          A panel with nothing selected is the state it is in most often, so it
          carries the level's own numbers rather than the words "Nothing
          selected" over 800px of black. -->
-    <StackPanel DockPanel.Dock="Top" Margin="14,14,14,0" Spacing="10"
+    <StackPanel DockPanel.Dock="Top" Margin="12,14,12,0" Spacing="10"
                 IsVisible="{Binding !Properties.HasSelection}">
       <TextBlock Classes="prose" TextWrapping="Wrap"
                  Foreground="{StaticResource SpectraTextMuted}"
@@ -262,7 +262,12 @@
                                      IsVisible="{Binding HasUnit}" />
                         </Grid>
 
-                        <ItemsControl ItemsSource="{Binding Fields}">
+                        <!-- The -4 right margin cancels the last cell's
+                             trailing gap: every cell carries 4 to space it
+                             from its neighbour, and without the cancel the
+                             strip ended 4px short of every other row's right
+                             edge, with the unit label overhanging it. -->
+                        <ItemsControl ItemsSource="{Binding Fields}" Margin="0,0,-4,0">
                           <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                               <UniformGrid Rows="1" />

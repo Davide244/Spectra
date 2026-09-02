@@ -28,7 +28,11 @@
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="shell:OutputEntry">
             <Grid ColumnDefinitions="Auto,*" Margin="8,0" ColumnSpacing="8">
+              <!-- Top-aligned for wrapped messages, nudged 2 so the 11px mono
+                   time and the 12px sans first line share a baseline instead
+                   of sitting a ragged pixel apart in every row. -->
               <TextBlock Grid.Column="0" Classes="value" VerticalAlignment="Top"
+                         Margin="0,2,0,0"
                          Foreground="{StaticResource SpectraTextDisabled}"
                          Text="{Binding TimeLabel}" />
               <TextBlock Grid.Column="1" Classes="line" Text="{Binding Text}"

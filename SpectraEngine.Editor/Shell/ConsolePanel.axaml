@@ -1,4 +1,4 @@
-<UserControl xmlns="https://github.com/avaloniaui"
+﻿<UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:shell="using:SpectraEngine.Editor.Shell"
              x:Class="SpectraEngine.Editor.Shell.ConsolePanel"
@@ -16,14 +16,31 @@
   -->
 
   <Grid RowDefinitions="*,Auto">
+    <Grid.Styles>
+      <Style Selector="TextBlock.line">
+        <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+        <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+        <Setter Property="Margin" Value="0,1" />
+      </Style>
+    </Grid.Styles>
 
     <ScrollViewer Grid.Row="0" Name="Scroller" HorizontalScrollBarVisibility="Disabled">
+      <!-- The SAME rows the Output tab shows, in the same geometry and the
+           same face: the two tabs share one log, and switching between them
+           used to re-typeset identical lines (10px vs 8px inset, 11px mono vs
+           12px sans). Mono is for values; a log line is a sentence. -->
       <ItemsControl ItemsSource="{Binding Output.Entries}" Margin="0,6,0,4">
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="shell:OutputEntry">
-            <TextBlock Classes="value" Margin="10,0" TextWrapping="Wrap"
-                       Foreground="{Binding SeverityBrush}"
-                       Text="{Binding Text}" />
+            <Grid ColumnDefinitions="Auto,*" Margin="8,0" ColumnSpacing="8">
+              <TextBlock Grid.Column="0" Classes="value" VerticalAlignment="Top"
+                         Margin="0,2,0,0"
+                         Foreground="{StaticResource SpectraTextDisabled}"
+                         Text="{Binding TimeLabel}" />
+              <TextBlock Grid.Column="1" Classes="line" Text="{Binding Text}"
+                         Foreground="{Binding SeverityBrush}"
+                         TextWrapping="Wrap" />
+            </Grid>
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>
@@ -38,7 +55,7 @@
                  Foreground="{StaticResource SpectraMode}" Text="&gt;" />
       <TextBox Grid.Column="1" Name="Input" Classes="field num"
                TextAlignment="Left"
-               Watermark="Type help"
+               PlaceholderText="Type help"
                KeyDown="OnInputKeyDown" />
     </Grid>
   </Grid>

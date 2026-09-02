@@ -91,6 +91,13 @@ public sealed class FrameSnapshot
     public string? NavigationModeName { get; init; }
 
     /// <summary>
+    /// The viewport camera's world position this frame. The one instrument
+    /// every engine editor's status surface carries: where am I. Published at
+    /// the snapshot rate like every readout, which is exactly right for text.
+    /// </summary>
+    public System.Numerics.Vector3 CameraPosition { get; init; }
+
+    /// <summary>
     /// When the ground grid shows — "auto" (during move and resize gestures),
     /// "on", or "off" — or null when there is no editor. Reported so the View
     /// menu's checkmark follows the editor rather than its own last click.

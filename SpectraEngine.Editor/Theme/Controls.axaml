@@ -54,7 +54,8 @@
     <SolidColorBrush x:Key="TreeViewItemBorderBrushSelected" Color="Transparent" />
     <SolidColorBrush x:Key="TreeViewItemBorderBrushPointerOver" Color="Transparent" />
     <Thickness x:Key="TreeViewItemBorderThemeThickness">0</Thickness>
-    <x:Double x:Key="TreeViewItemMinHeight">24</x:Double>
+    <!-- Aliased to the token, so the dense-row height cannot fork again. -->
+    <StaticResource x:Key="TreeViewItemMinHeight" ResourceKey="SpectraTreeRowHeight" />
 
     <!-- The dropdown list. Fluent paints a selected ComboBoxItem with the
          machine's own accent, which on this machine is purple: opening the
@@ -77,6 +78,39 @@
     <StaticResource x:Key="ComboBoxBorderBrush" ResourceKey="SpectraBorderControl" />
     <StaticResource x:Key="ComboBoxBorderBrushPointerOver" ResourceKey="SpectraBorderControl" />
     <StaticResource x:Key="ComboBoxForeground" ResourceKey="SpectraTextEmphasis" />
+    <!-- The two pressed keys the block above missed: pressing the dropdown or
+         an item flashed Fluent's stock fills, the same family as the lavender
+         leak this block was written to stop. -->
+    <StaticResource x:Key="ComboBoxBorderBrushPressed" ResourceKey="SpectraBorderControl" />
+    <StaticResource x:Key="ComboBoxItemBackgroundPressed" ResourceKey="SpectraControlPressed" />
+
+    <!-- Menu highlights. Fluent paints a hovered item INSIDE an open menu by
+         setting its PART_LayoutRoot fill from these keys at trigger priority,
+         which beats anything set on the CONTROL - so the authored hover styles
+         below only ever showed on a closed top-level item, and every dropdown
+         and context-menu row highlighted in the stock fill with an instant
+         swap where the bar's items ramp. Same mechanism, same fix, as the
+         ComboBox family above. -->
+    <StaticResource x:Key="MenuFlyoutItemBackgroundPointerOver" ResourceKey="SpectraControlHover" />
+    <StaticResource x:Key="MenuFlyoutItemBackgroundPressed" ResourceKey="SpectraControlPressed" />
+    <SolidColorBrush x:Key="MenuFlyoutItemBackgroundDisabled" Color="Transparent" />
+    <StaticResource x:Key="MenuFlyoutItemForeground" ResourceKey="SpectraTextBody" />
+    <StaticResource x:Key="MenuFlyoutItemForegroundPointerOver" ResourceKey="SpectraTextEmphasis" />
+    <StaticResource x:Key="MenuFlyoutItemForegroundPressed" ResourceKey="SpectraTextEmphasis" />
+    <StaticResource x:Key="MenuFlyoutPresenterBackground" ResourceKey="SpectraBgRaised" />
+
+    <!-- Text fields. Fluent's focused state swaps PART_BorderElement's fill
+         to stock colours AND grows a 2px bottom border (1,1,1,2), which is a
+         real 1px layout shift on every focus - the snap box, the filter, the
+         rename box, every dialog input nudged its own text the moment the
+         caret arrived. Overridden at the source so every text box keeps the
+         authored geometry and palette without a per-site part style. -->
+    <Thickness x:Key="TextControlBorderThemeThickness">1</Thickness>
+    <Thickness x:Key="TextControlBorderThemeThicknessFocused">1</Thickness>
+    <StaticResource x:Key="TextControlBackgroundPointerOver" ResourceKey="SpectraBgInput" />
+    <StaticResource x:Key="TextControlBackgroundFocused" ResourceKey="SpectraBgWindow" />
+    <StaticResource x:Key="TextControlBorderBrushPointerOver" ResourceKey="SpectraBorderControl" />
+    <StaticResource x:Key="TextControlBorderBrushFocused" ResourceKey="SpectraAccent" />
   </Styles.Resources>
 
   <Style Selector="Window">
@@ -255,7 +289,9 @@
     <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusFloat}" />
-    <Setter Property="Padding" Value="3" />
+    <!-- 4, not 3: at a 3px inset a hovered first item's 2px-radius fill can
+         poke into the popup's 5px corner; at 4 it cannot. -->
+    <Setter Property="Padding" Value="4" />
   </Style>
 
   <Style Selector="Menu MenuItem /template/ Popup > Border, ContextMenu MenuItem /template/ Popup > Border">
@@ -263,6 +299,10 @@
     <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusFloat}" />
+    <!-- The five main menus' dropdowns inherited Fluent's presenter padding
+         while context menus declared their own - two popup kinds, two edge
+         geometries. One number, and the same clip-proof 4 as above. -->
+    <Setter Property="Padding" Value="4" />
   </Style>
 
   <Style Selector="ContextMenu MenuItem, Menu MenuItem MenuItem">
@@ -384,6 +424,15 @@
   <Style Selector="Button.seg:pointerover Path.icon">
     <Setter Property="Stroke" Value="{StaticResource SpectraTextEmphasis}" />
   </Style>
+  <!-- The LABEL needs its own rule everywhere a state recolours text: the
+       global TextBlock Foreground style is Style priority, which beats the
+       value a TextBlock would otherwise inherit from its button - so the
+       Foreground setters on the button itself recolour nothing, silently.
+       Half a button changing (glyph warms, word does not) is exactly what
+       "hover effects feel buggy" looks like. -->
+  <Style Selector="Button.seg:pointerover TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
 
   <!-- The live tool, in the MODE colour rather than the accent. Red means "you
        selected this"; amber means "the machine is in this state". They were one
@@ -410,11 +459,19 @@
   <Style Selector="Button.seg.active Path.icon">
     <Setter Property="Stroke" Value="{StaticResource SpectraMode}" />
   </Style>
+  <Style Selector="Button.seg.active TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
 
   <Style Selector="Button.seg:disabled Path.icon">
     <Setter Property="Stroke" Value="{StaticResource SpectraTextDisabled}" />
   </Style>
   <Style Selector="Button.seg:disabled">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextDisabled}" />
+  </Style>
+  <!-- After the hover and active rules, so a disabled label can never be
+       out-shone by them - the same ordering the kind-tint rules rely on. -->
+  <Style Selector="Button.seg:disabled TextBlock">
     <Setter Property="Foreground" Value="{StaticResource SpectraTextDisabled}" />
   </Style>
 
@@ -493,6 +550,9 @@
   </Style>
   <Style Selector="Button.ghost:pointerover /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
+  </Style>
+  <Style Selector="Button.ghost:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraControlPressed}" />
   </Style>
   <Style Selector="Button.ghost Path.icon">
     <Setter Property="Stroke" Value="{StaticResource SpectraTextMuted}" />
@@ -637,6 +697,18 @@
     <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
     <Setter Property="BorderThickness" Value="1" />
   </Style>
+  <!-- Pinned per state: the stateless rule above is Style priority and loses
+       to Fluent's unchecked :pointerover/:pressed part triggers, so hovering
+       an unchecked box flashed the stock fill. The row's own hover is the
+       affordance; the box holds still. -->
+  <Style Selector="CheckBox:pointerover /template/ Border#NormalRectangle">
+    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
+  </Style>
+  <Style Selector="CheckBox:pressed /template/ Border#NormalRectangle">
+    <Setter Property="Background" Value="{StaticResource SpectraBgInput}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
+  </Style>
   <Style Selector="CheckBox:checked /template/ Border#NormalRectangle">
     <Setter Property="Background" Value="{StaticResource SpectraAccentRest}" />
     <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
@@ -697,6 +769,13 @@
   <Style Selector="Button.primary:pointerover">
     <Setter Property="Foreground" Value="#FFFFFF" />
   </Style>
+  <!-- String Content materialises as a plain TextBlock, which the global
+       TextBlock style then paints body-grey at Style priority - the filled
+       accent button was showing ~2.8:1 grey-on-red instead of the white the
+       AA rationale in Tokens.axaml is built on. -->
+  <Style Selector="Button.primary TextBlock">
+    <Setter Property="Foreground" Value="#FFFFFF" />
+  </Style>
   <Style Selector="Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{StaticResource SpectraAccentRest}" />
   </Style>
@@ -734,6 +813,9 @@
   <Style Selector="Button.secondary:pointerover">
     <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
   </Style>
+  <Style Selector="Button.secondary:pointerover TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
 
   <!-- ___ Scrollbars ______________________________________
        Fluent's default light thumb on a near-black panel is the single
@@ -755,6 +837,11 @@
   </Style>
   <Style Selector="ScrollBar /template/ Thumb:pointerover">
     <Setter Property="Background" Value="#3AFFFFFF" />
+  </Style>
+  <!-- Without this Fluent's :pressed trigger wins mid-drag - the thumb went
+       stock exactly while the user was staring at it. -->
+  <Style Selector="ScrollBar /template/ Thumb:pressed">
+    <Setter Property="Background" Value="#50FFFFFF" />
   </Style>
 
   <!-- ___ Splitter ________________________________________

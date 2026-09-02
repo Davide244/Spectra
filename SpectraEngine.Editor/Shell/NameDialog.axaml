@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="SpectraEngine.Editor.Shell.NameDialog"
         Width="380" SizeToContent="Height"
@@ -22,12 +22,14 @@
                  FontSize="{StaticResource SpectraFontBase}"
                  TextWrapping="Wrap" />
 
-      <TextBox x:Name="Input"
-               Background="{StaticResource SpectraBgInput}"
-               Foreground="{StaticResource SpectraTextEmphasis}"
-               BorderBrush="{StaticResource SpectraBorderStrong}"
-               BorderThickness="1"
-               Padding="8,6"
+      <!-- The .field recipe, not inline brushes: control-level values only
+           reach the template part at TemplateBinding priority, so Fluent's
+           hover and focus triggers replaced them with stock fills. The one
+           text box in the shell with zero authored state behaviour was the
+           one in a modal asking for a name. -->
+      <TextBox x:Name="Input" Classes="field"
+               Height="30" MinHeight="30"
+               Padding="8,4"
                FontSize="{StaticResource SpectraFontBase}"
                KeyDown="OnInputKeyDown" />
 
@@ -37,10 +39,12 @@
                  TextWrapping="Wrap"
                  IsVisible="False" />
 
+      <!-- The dialog recipe, not toolbar chips with hand-painted fills: a
+           chip dressed as a confirm button is two controls dressed as each
+           other, the exact failure the affordance rule exists to prevent. -->
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
-        <Button Classes="chip" Content="Cancel" Click="OnCancel" MinWidth="72" />
-        <Button Classes="chip" Content="OK" Click="OnAccept" MinWidth="72"
-                Background="{StaticResource SpectraAccentRest}" />
+        <Button Classes="secondary" Content="Cancel" Click="OnCancel" MinWidth="104" />
+        <Button Classes="primary" Content="OK" Click="OnAccept" MinWidth="104" />
       </StackPanel>
     </StackPanel>
   </Border>

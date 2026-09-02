@@ -564,6 +564,9 @@ public sealed class ShellModel : ObservableObject
     /// <summary>Whether the grid is off.</summary>
     public bool GridOff => _gridMode == "off";
 
+    /// <summary>The grid mode as the header chip's value word.</summary>
+    public string GridModeLabel => _gridMode;
+
     private void ApplyGridMode(string mode)
     {
         if (_gridMode == mode)
@@ -573,6 +576,7 @@ public sealed class ShellModel : ObservableObject
         Raise(nameof(GridAuto));
         Raise(nameof(GridOn));
         Raise(nameof(GridOff));
+        Raise(nameof(GridModeLabel));
     }
 
     // ─── Selection and history ───────────────────────────
@@ -594,13 +598,39 @@ public sealed class ShellModel : ObservableObject
     /// <summary>Whether anything is selected, for the structural buttons.</summary>
     public bool HasSelection => _selectionCount > 0;
 
-    /// <summary>The selection as a phrase.</summary>
+    /// <summary>
+    /// The selection as a phrase, NAMING the object in hand: "1 selected"
+    /// answers how-many, never what, and every engine editor's status surface
+    /// says what. The name resolves through the tree mirror, which the pump
+    /// has already brought up to date by the time the snapshot is applied, so
+    /// a rename is reflected on the same pump.
+    /// </summary>
     public string SelectionLabel => _selectionCount switch
     {
         0 => "nothing selected",
-        1 => "1 selected",
-        _ => $"{_selectionCount} selected",
+        1 => _selectionName ?? "1 selected",
+        _ => _selectionName is { } name
+            ? $"{name} +{_selectionCount - 1}"
+            : $"{_selectionCount} selected",
     };
+
+    private string? _selectionName;
+
+    private void UpdateSelectionName(FrameSnapshot snapshot)
+    {
+        string? name = null;
+        if (snapshot.SelectedIds.Count > 0 && _tree is { } tree
+            && tree.TryGetNode(snapshot.SelectedIds[0], out var node))
+        {
+            name = node.Name;
+        }
+
+        if (!string.Equals(_selectionName, name, StringComparison.Ordinal))
+        {
+            _selectionName = name;
+            Raise(nameof(SelectionLabel));
+        }
+    }
 
     /// <summary>How many edits can be undone.</summary>
     public int UndoDepth
@@ -694,6 +724,31 @@ public sealed class ShellModel : ObservableObject
     {
         get => _compileCount;
         private set => Set(ref _compileCount, value);
+    }
+
+    /// <summary>
+    /// The viewport camera's position, formatted for the header strip: mono,
+    /// one decimal, invariant, so it reads as an instrument.
+    /// </summary>
+    public string CameraPositionLabel { get; private set; } = string.Empty;
+
+    // Compared ROUNDED, so the label re-formats only when a shown digit
+    // actually moves rather than on every sub-millimetre drift; NaN seeds the
+    // first publish, since NaN never equals itself.
+    private System.Numerics.Vector3 _cameraShown = new(float.NaN);
+
+    private void UpdateCameraReadout(System.Numerics.Vector3 position)
+    {
+        var rounded = new System.Numerics.Vector3(
+            MathF.Round(position.X, 1), MathF.Round(position.Y, 1), MathF.Round(position.Z, 1));
+        if (rounded == _cameraShown)
+            return;
+
+        _cameraShown = rounded;
+        CameraPositionLabel = string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"{rounded.X:0.0}  {rounded.Y:0.0}  {rounded.Z:0.0}");
+        Raise(nameof(CameraPositionLabel));
     }
 
     /// <summary>How many nodes the tree holds.</summary>
@@ -959,6 +1014,8 @@ public sealed class ShellModel : ObservableObject
             Fps = snapshot.Fps;
             FrameTimeMs = snapshot.FrameTimeMs;
             SelectionCount = snapshot.SelectedIds.Count;
+            UpdateSelectionName(snapshot);
+            UpdateCameraReadout(snapshot.CameraPosition);
             CompileCount = snapshot.StaticWorldCompileCount;
             WorldDefect = snapshot.StaticWorldDefect;
 

@@ -1,4 +1,4 @@
-<UserControl xmlns="https://github.com/avaloniaui"
+﻿<UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:shell="clr-namespace:SpectraEngine.Editor.Shell"
              x:Class="SpectraEngine.Editor.Shell.MapsPanel"
@@ -29,7 +29,7 @@
 
   <UserControl.Styles>
     <Style Selector="Button.maprow">
-      <Setter Property="Height" Value="24" />
+      <Setter Property="Height" Value="{StaticResource SpectraTreeRowHeight}" />
       <Setter Property="Padding" Value="0" />
       <Setter Property="HorizontalAlignment" Value="Stretch" />
       <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -41,6 +41,13 @@
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+      <Setter Property="Transitions">
+        <Transitions>
+          <BrushTransition Property="Background"
+                           Duration="{StaticResource SpectraMotionFast}"
+                           Easing="{StaticResource SpectraEaseOut}" />
+        </Transitions>
+      </Setter>
     </Style>
     <Style Selector="Button.maprow:pointerover /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{StaticResource SpectraRowHover}" />
@@ -76,10 +83,13 @@
                     ToolTip.Tip="{Binding RelativePath}">
               <Grid ColumnDefinitions="10,*,Auto" Margin="4,0,8,0">
                 <!-- The startup dot: which map the project boots. -->
-                <Border Grid.Column="0" Width="5" Height="5"
-                        CornerRadius="{StaticResource SpectraRadiusControl}"
+                <!-- 6x6 radius 3: the same true circle as the dirty dot. At
+                     5px with a 2px radius this was a rounded SQUARE beside a
+                     circle, two geometries for one idiom. -->
+                <Border Grid.Column="0" Width="6" Height="6"
+                        CornerRadius="3"
                         HorizontalAlignment="Left" VerticalAlignment="Center"
-                        Margin="2,0,0,0"
+                        Margin="1,0,0,0"
                         Background="{StaticResource SpectraAccent}"
                         IsVisible="{Binding IsStartup}" />
                 <TextBlock Grid.Column="1" Classes="mapname" Text="{Binding Name}"

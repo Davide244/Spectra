@@ -1284,8 +1284,29 @@ public partial class MainWindow : Window
     private static void OnSplitterEntered(object? sender, PointerEventArgs e) =>
         SetSplitterHot(sender, hot: true);
 
-    private static void OnSplitterExited(object? sender, PointerEventArgs e) =>
+    private void OnSplitterExited(object? sender, PointerEventArgs e)
+    {
+        // Not while dragging: a fast drag leaves the nine-pixel band and the
+        // exit would revert the accent exactly while the user is pulling it.
+        if (!ReferenceEquals(sender, _draggingSplitter))
+            SetSplitterHot(sender, hot: false);
+    }
+
+    // The drag pins the hot class for its whole duration; the pointer is
+    // often far outside the band by the time the gesture ends.
+    private object? _draggingSplitter;
+
+    private void OnSplitterDragStarted(object? sender, VectorEventArgs e)
+    {
+        _draggingSplitter = sender;
+        SetSplitterHot(sender, hot: true);
+    }
+
+    private void OnSplitterDragCompleted(object? sender, VectorEventArgs e)
+    {
+        _draggingSplitter = null;
         SetSplitterHot(sender, hot: false);
+    }
 
     private static void SetSplitterHot(object? sender, bool hot)
     {

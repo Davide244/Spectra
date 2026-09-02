@@ -144,17 +144,28 @@
     <!-- Drop indicators. INTO outlines the whole row (it becomes the parent);
          BEFORE/AFTER draw the insertion edge. An edge line, not highlighting,
          because sibling order is placement order here and the drop position
-         must read exactly. -->
-    <Style Selector="Border.row.dropinto">
+         must read exactly.
+
+         Drawn by an OVERLAY border inside the row, never by the row's own
+         border: a Border reserves border space inside its bounds, so the old
+         per-class BorderThickness compressed the 24px row's content and the
+         label jittered 1-2px under every drag that crossed it. The overlay
+         paints over the content and participates in no layout. Still no
+         transition on it, for the documented reason: it moves at
+         pointer-move rate and a ramp would smear the insertion line. -->
+    <Style Selector="Border.dropink">
       <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+      <Setter Property="IsHitTestVisible" Value="False" />
+    </Style>
+    <Style Selector="Border.row.dropinto Border.dropink">
       <Setter Property="BorderThickness" Value="1" />
     </Style>
-    <Style Selector="Border.row.dropbefore">
-      <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+    <Style Selector="Border.row.dropbefore Border.dropink">
       <Setter Property="BorderThickness" Value="0,2,0,0" />
     </Style>
-    <Style Selector="Border.row.dropafter">
-      <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+    <Style Selector="Border.row.dropafter Border.dropink">
       <Setter Property="BorderThickness" Value="0,0,0,2" />
     </Style>
     <Style Selector="Border.row:pointerover">
@@ -218,7 +229,14 @@
          replaces, so nothing in the row moves when editing starts. -->
     <!-- A filter matching nothing marks itself and its count. Accent, not
          warning yellow: an empty result is not a fault, it is a state, and this
-         is the same colour the shell uses for "here is where you are". -->
+         is the same colour the shell uses for "here is where you are".
+
+         The counter's resting colour is a CLASS, declared before .nomatch so
+         the accent wins its tie: set inline it was a LocalValue, which beats
+         any class rule, and the count never turned. -->
+    <Style Selector="TextBlock.treecount">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+    </Style>
     <Style Selector="TextBox.field.nomatch /template/ Border#PART_BorderElement">
       <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
     </Style>
@@ -230,7 +248,7 @@
       <Setter Property="Height" Value="20" />
       <Setter Property="MinHeight" Value="0" />
       <Setter Property="Padding" Value="3,1" />
-      <Setter Property="Margin" Value="4,0,4,0" />
+      <Setter Property="Margin" Value="2,0,4,0" />
       <Setter Property="VerticalAlignment" Value="Center" />
       <Setter Property="VerticalContentAlignment" Value="Center" />
       <Setter Property="FontSize" Value="{StaticResource SpectraFontBase}" />
@@ -248,20 +266,19 @@
          "Scene", and a second decorative title row was vertical cost for no
          information. The count rides the filter row instead, where it is
          also the filter's own feedback. -->
-    <Grid DockPanel.Dock="Top" Margin="8,8,8,6" ColumnDefinitions="*,Auto,Auto">
+    <Grid DockPanel.Dock="Top" Margin="8,6,8,6" ColumnDefinitions="*,Auto,Auto">
       <TextBox Grid.Column="0" x:Name="FilterBox" Classes="field"
                Classes.nomatch="{Binding HasNoMatches}"
                Text="{Binding FilterText, Mode=TwoWay}"
                PlaceholderText="Filter by name, or t:light"
                KeyDown="OnFilterKeyDown" />
-      <Button Grid.Column="1" Classes="ghost" Margin="3,0,0,0"
+      <Button Grid.Column="1" Classes="ghost" Margin="6,0,0,0"
               Click="OnClearFilterClicked" IsVisible="{Binding HasFilter}"
               ToolTip.Tip="Clear the filter  (Esc)">
         <Path Classes="icon" Data="{StaticResource IconClear}" />
       </Button>
-      <TextBlock Grid.Column="2" Classes="value" Text="{Binding TreeCountLabel}"
+      <TextBlock Grid.Column="2" Classes="value treecount" Text="{Binding TreeCountLabel}"
                  Classes.nomatch="{Binding HasNoMatches}"
-                 Foreground="{StaticResource SpectraTextMuted}"
                  Margin="6,0,2,0" VerticalAlignment="Center"
                  ToolTip.Tip="Nodes shown / nodes in the scene" />
     </Grid>
@@ -315,6 +332,11 @@
       </ListBox.ItemsPanel>
       <ListBox.ItemTemplate>
         <DataTemplate x:DataType="local:SceneTreeNode">
+          <!-- The indent lives on the CONTENT, not the row: hover, selection
+               and the drop indicators span the panel (the way every outliner
+               draws them), and the hover no longer disagrees with the click -
+               the gutter left of a deep row always selected, and used to show
+               no hover at all. The selection bar stays pinned at the edge. -->
           <Border Classes="row"
                   Classes.selected="{Binding IsSelected}"
                   Classes.dim="{Binding IsDimmed}"
@@ -322,38 +344,43 @@
                   Classes.dropbefore="{Binding IsDropBefore}"
                   Classes.dropinto="{Binding IsDropInto}"
                   Classes.dropafter="{Binding IsDropAfter}"
-                  Margin="{Binding Depth, Converter={StaticResource DepthIndent}}"
                   ContextMenu="{StaticResource RowMenu}"
                   DoubleTapped="OnRowDoubleTapped">
-            <Grid ColumnDefinitions="2,14,Auto,*">
-              <Border Grid.Column="0" Classes="selbar" Margin="0,3" CornerRadius="1" />
-              <Button Grid.Column="1" Classes="chevron"
-                      Classes.open="{Binding IsExpanded}"
-                      IsVisible="{Binding HasChildren}"
-                      Click="OnChevronClicked" PointerPressed="OnChevronPressed">
-                <Path Data="{StaticResource IconChevronRight}" />
-              </Button>
-              <Path Grid.Column="2" Classes="icon"
-                    Data="{Binding Kind, Converter={StaticResource KindIcon}}"
-                    Stroke="{Binding Kind, Converter={StaticResource KindTint}}"
-                    Width="15" Height="15"
-                    RenderTransform="scale(1.05)"
-                    Margin="2,0,0,0" />
-              <!-- The tooltip is the whole name. Rows trim with an ellipsis and
-                   the panel does not scroll sideways, so at 288px a name three
-                   levels deep is unreadable and there was no way to see it at
-                   all short of dragging the splitter. -->
-              <TextBlock Grid.Column="3" Classes="rowname" Text="{Binding Name}" Margin="6,0,4,0"
-                         IsVisible="{Binding !IsRenaming}"
-                         ToolTip.Tip="{Binding Name}" />
-              <!-- Text is set imperatively when editing begins, never bound:
-                   a binding would let a ~30 Hz snapshot republish rewrite the
-                   box mid-keystroke, which reads as a broken keyboard. -->
-              <TextBox Grid.Column="3" Classes="renamebox"
-                       IsVisible="{Binding IsRenaming}"
-                       KeyDown="OnRenameKeyDown"
-                       LostFocus="OnRenameBlurred" />
-            </Grid>
+            <Panel>
+              <Grid ColumnDefinitions="2,*">
+                <Border Grid.Column="0" Classes="selbar" Margin="0,3" CornerRadius="1" />
+                <Grid Grid.Column="1" ColumnDefinitions="14,Auto,*"
+                      Margin="{Binding Depth, Converter={StaticResource DepthIndent}}">
+                  <Button Grid.Column="0" Classes="chevron"
+                          Classes.open="{Binding IsExpanded}"
+                          IsVisible="{Binding HasChildren}"
+                          Click="OnChevronClicked" PointerPressed="OnChevronPressed">
+                    <Path Data="{StaticResource IconChevronRight}" />
+                  </Button>
+                  <Path Grid.Column="1" Classes="icon"
+                        Data="{Binding Kind, Converter={StaticResource KindIcon}}"
+                        Stroke="{Binding Kind, Converter={StaticResource KindTint}}"
+                        Width="15" Height="15"
+                        RenderTransform="scale(1.05)"
+                        Margin="2,0,0,0" />
+                  <!-- The tooltip is the whole name. Rows trim with an ellipsis and
+                       the panel does not scroll sideways, so at 288px a name three
+                       levels deep is unreadable and there was no way to see it at
+                       all short of dragging the splitter. -->
+                  <TextBlock Grid.Column="2" Classes="rowname" Text="{Binding Name}" Margin="6,0,4,0"
+                             IsVisible="{Binding !IsRenaming}"
+                             ToolTip.Tip="{Binding Name}" />
+                  <!-- Text is set imperatively when editing begins, never bound:
+                       a binding would let a ~30 Hz snapshot republish rewrite the
+                       box mid-keystroke, which reads as a broken keyboard. -->
+                  <TextBox Grid.Column="2" Classes="renamebox"
+                           IsVisible="{Binding IsRenaming}"
+                           KeyDown="OnRenameKeyDown"
+                           LostFocus="OnRenameBlurred" />
+                </Grid>
+              </Grid>
+              <Border Classes="dropink" />
+            </Panel>
           </Border>
         </DataTemplate>
       </ListBox.ItemTemplate>

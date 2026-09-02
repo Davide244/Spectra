@@ -60,7 +60,14 @@
                      not. Both at the same footprint, so a folder of half-decoded
                      images does not reflow as they land. -->
                 <Panel Height="58" Margin="0,0,0,4">
+                  <!-- Uniform + no transform, deliberately breaking the icon
+                       class's shared-grid rule for this one DECORATIVE use:
+                       with Stretch=None the 16-grid ink drew at its authored
+                       coordinates inside the 22px element, visibly off-centre
+                       toward the top-left of every tile. The shared grid is
+                       about 16px icons in rows; a tile centrepiece is not one. -->
                   <Path Classes="icon" Width="22" Height="22"
+                        Stretch="Uniform" RenderTransform="none"
                         IsVisible="{Binding !HasThumbnail}"
                         Stroke="{Binding KindBrush}"
                         Data="{Binding Icon}" />

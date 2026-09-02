@@ -96,7 +96,11 @@ public sealed class SceneNodeKindBrushConverter : IValueConverter
 public sealed class TreeDepthIndentConverter : IValueConverter
 {
     /// <summary>Pixels of indent per level of depth.</summary>
-    public const double PerLevel = 13;
+    // 14, the chevron column's own width, so a child's chevron tucks exactly
+    // under its parent's: 13 aligned with nothing and was the only odd number
+    // in the shell's spacing vocabulary, off by one per level compounding
+    // down the tree.
+    public const double PerLevel = 14;
 
     /// <inheritdoc/>
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>

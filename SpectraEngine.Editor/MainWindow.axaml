@@ -102,6 +102,13 @@
     <Style Selector="Button.playbtn:pointerover /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{StaticResource SpectraBgControlHover}" />
     </Style>
+    <!-- The word needs its own rule: the global TextBlock style out-ranks the
+         Foreground a label would inherit from its button, so the setters on
+         the button itself never recolour it. Same mechanism, same fix, as the
+         seg labels in Controls.axaml. -->
+    <Style Selector="Button.playbtn TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+    </Style>
     <Style Selector="Button.playbtn Path.playglyph">
       <Setter Property="Fill" Value="{StaticResource SpectraSuccess}" />
       <Setter Property="Stroke" Value="{StaticResource SpectraSuccess}" />
@@ -116,6 +123,59 @@
     </Style>
     <Style Selector="Button.playbtn:disabled">
       <Setter Property="Foreground" Value="{StaticResource SpectraTextDisabled}" />
+    </Style>
+    <Style Selector="Button.playbtn:disabled TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextDisabled}" />
+    </Style>
+
+    <!-- The command bar wears the mode colour while play owns the scene: the
+         strongest "this is a live engine" moment the product has used to leave
+         the chrome pixel-identical, so the greyed Insert cluster read as
+         broken rather than as suspended. -->
+    <Style Selector="Border.cmdbar">
+      <Setter Property="Transitions">
+        <Transitions>
+          <BrushTransition Property="BorderBrush"
+                           Duration="{StaticResource SpectraMotionFast}"
+                           Easing="{StaticResource SpectraEaseOut}" />
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="Border.cmdbar.playing">
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraMode}" />
+    </Style>
+
+    <!-- A standing amber chip: a latched viewport overlay with no standing
+         indicator is a viewport that looks broken to whoever fat-fingered F1.
+         Clicking one turns exactly that overlay off. -->
+    <Style Selector="Button.overlaychip">
+      <Setter Property="Height" Value="18" />
+      <Setter Property="Padding" Value="6,0" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.overlaychip /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraMode}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+      <Setter Property="Transitions">
+        <Transitions>
+          <BrushTransition Property="Background"
+                           Duration="{StaticResource SpectraMotionFast}"
+                           Easing="{StaticResource SpectraEaseOut}" />
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="Button.overlaychip:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
+    </Style>
+    <Style Selector="Button.overlaychip TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource SpectraMode}" />
+      <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
     </Style>
 
     <!-- A field that lives INSIDE a raised cluster: sunken fill so it still
@@ -150,7 +210,9 @@
             Background="{StaticResource SpectraBgApp}">
       <Grid ColumnDefinitions="Auto,*,Auto">
 
-        <Menu Grid.Column="0" VerticalAlignment="Center" Margin="4,0,0,0">
+        <!-- 6 + the Menu's own 4 padding puts the first pill at x=10, the same
+             left rail as the command bar and the status bar below it. -->
+        <Menu Grid.Column="0" VerticalAlignment="Center" Margin="6,0,0,0">
 
           <MenuItem Header="_File">
             <MenuItem Header="_New project..." Click="OnNewProjectClicked" />
@@ -278,7 +340,7 @@
              document cluster otherwise sits, so the start page needs no header
              of its own and the bar never changes height. -->
         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8"
-                    VerticalAlignment="Center" Margin="0,0,12,0"
+                    VerticalAlignment="Center" Margin="0,0,10,0"
                     IsVisible="{Binding !HasSession}">
           <Border Width="10" Height="10"
                   CornerRadius="{StaticResource SpectraRadiusControl}"
@@ -304,10 +366,12 @@
                   VerticalAlignment="Center"
                   IsVisible="{Binding IsDocumentDirty}"
                   ToolTip.Tip="Unsaved changes" />
-          <Border Classes="groupsep" />
+          <!-- Inside a Spacing="8" run the separator's own 10px margin stacked
+               to 18 a side; 2 restores the status bar's 10px rhythm. -->
+          <Border Classes="groupsep" Margin="2,0" />
           <Button Classes="playbtn" Click="OnPlayClicked"
                   IsEnabled="{Binding CanPlay}" ToolTip.Tip="{Binding PlayTip}">
-            <StackPanel Orientation="Horizontal" Spacing="7">
+            <StackPanel Orientation="Horizontal" Spacing="6">
               <Panel Width="16" Height="16">
                 <Path Classes="icon playglyph" Data="{StaticResource IconPlay}"
                       StrokeThickness="0" IsVisible="{Binding !IsPlaying}" />
@@ -325,7 +389,7 @@
          One row of raised clusters. A cluster is one bordered capsule holding
          the controls of one decision, which is what makes grouping visible
          instead of implied by a hairline nobody notices. -->
-    <Border Grid.Row="1"
+    <Border Grid.Row="1" Classes="cmdbar" Classes.playing="{Binding IsPlaying}"
             Height="{StaticResource SpectraToolbarHeight}"
             Background="{StaticResource SpectraBgApp}"
             BorderBrush="{StaticResource SpectraBorderStrong}"
@@ -570,9 +634,15 @@
              either of the two controls in this window a user drags most. The
              ink carries the hover instead, driven from code because a child
              cannot read its parent's pseudo-classes from a selector. -->
+        <!-- The overhang leans AWAY from the viewport: the native child eats
+             the mouse, so any part of the band over its cell can never
+             hit-test - a symmetric -4 margin made the grab area 5px, not 9,
+             exactly while a session was live. Drag events hold the ink hot,
+             because a fast drag leaves the band mid-gesture. -->
         <GridSplitter Grid.Column="1" Grid.RowSpan="3" ResizeDirection="Columns" Cursor="SizeWestEast"
-                      Width="9" Margin="-4,0" PointerEntered="OnSplitterEntered"
+                      Width="9" Margin="-7,0,-1,0" PointerEntered="OnSplitterEntered"
                       PointerExited="OnSplitterExited"
+                      DragStarted="OnSplitterDragStarted" DragCompleted="OnSplitterDragCompleted"
                       Tag="{Binding #LeftSplitInk}" />
         <Border x:Name="LeftSplitInk" Grid.Column="1" Grid.RowSpan="3" Width="1" Classes="splitink"
                 HorizontalAlignment="Center" />
@@ -586,14 +656,103 @@
              The bezel is the darkest surface in the window and the only place
              allowed near-black: chrome, then bezel, then render, so the picture
              is framed rather than butted straight against a panel. -->
-        <Border x:Name="ViewportHost" Grid.Column="2" Grid.Row="0" MinWidth="360"
-                Background="{StaticResource SpectraViewportBezel}" />
+        <Grid Grid.Column="2" Grid.Row="0" RowDefinitions="Auto,*">
+
+          <!-- ============ Viewport header ==================
+               View-scoped state ABOVE the picture - the strip every engine
+               editor puts here, and the one row the airspace rule never
+               blocked: chrome beside the native child shrinks it, it does not
+               cross it. Everything on it wires to a verb or snapshot field
+               that already existed; nothing here is decoration. -->
+          <Border Grid.Row="0" Height="28"
+                  Background="{StaticResource SpectraBgApp}"
+                  BorderBrush="{StaticResource SpectraBorderStrong}"
+                  BorderThickness="0,0,0,1"
+                  Padding="8,0">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <!-- Which pipeline is drawing, ON the view it draws. The only
+                     passive display used to live in the inspector's EMPTY
+                     state, so it vanished the moment anything was selected.
+                     The two-way binding and its snapshot guard already
+                     existed; the View menu radio stays as the second route. -->
+                <ComboBox Width="106" Height="22" MinHeight="22" Padding="8,0"
+                          FontSize="{StaticResource SpectraFontSmall}"
+                          ItemsSource="{Binding PipelineNames}"
+                          SelectedItem="{Binding PipelineName}"
+                          ToolTip.Tip="Rendering pipeline" />
+                <Button Classes="chip" Height="22"
+                        ToolTip.Tip="When the ground grid shows. Auto means during move and resize.">
+                  <Button.Flyout>
+                    <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                      <MenuItem Header="During move and resize" ToggleType="Radio"
+                                IsChecked="{Binding GridAuto, Mode=OneWay}" Click="OnGridAutoClicked" />
+                      <MenuItem Header="Always" ToggleType="Radio"
+                                IsChecked="{Binding GridOn, Mode=OneWay}" Click="OnGridOnClicked" />
+                      <MenuItem Header="Off" ToggleType="Radio"
+                                IsChecked="{Binding GridOff, Mode=OneWay}" Click="OnGridOffClicked" />
+                    </MenuFlyout>
+                  </Button.Flyout>
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Classes="chipsubject" Text="Grid" />
+                    <TextBlock Classes="chipvalue" Text="{Binding GridModeLabel}" />
+                  </StackPanel>
+                </Button>
+                <Button Classes="chip" Height="22" Click="OnToggleNavigationClicked"
+                        ToolTip.Tip="Which camera drives the viewport.  F7">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Classes="chipsubject" Text="Camera" />
+                    <TextBlock Classes="chipvalue" Text="{Binding Navigation}" />
+                  </StackPanel>
+                </Button>
+              </StackPanel>
+
+              <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <Button Classes="overlaychip" IsVisible="{Binding DebugWireframe}" Click="OnDebugWireClicked"
+                        ToolTip.Tip="Wireframe overlay is on. Click to turn it off.  F1">
+                  <TextBlock Text="wire" />
+                </Button>
+                <Button Classes="overlaychip" IsVisible="{Binding DebugVertices}" Click="OnDebugVerticesClicked"
+                        ToolTip.Tip="CSG vertex markers are on. Click to turn them off.  F2">
+                  <TextBlock Text="verts" />
+                </Button>
+                <Button Classes="overlaychip" IsVisible="{Binding DebugAabbs}" Click="OnDebugAabbsClicked"
+                        ToolTip.Tip="Bounds overlay is on. Click to turn it off.  F3">
+                  <TextBlock Text="bounds" />
+                </Button>
+                <Button Classes="overlaychip" IsVisible="{Binding DebugNormals}" Click="OnDebugNormalsClicked"
+                        ToolTip.Tip="Face normals are on. Click to turn them off.  F4">
+                  <TextBlock Text="normals" />
+                </Button>
+                <Button Classes="overlaychip" IsVisible="{Binding DebugSceneGraph}" Click="OnDebugSceneGraphClicked"
+                        ToolTip.Tip="Node axes are on. Click to turn them off.  F5">
+                  <TextBlock Text="axes" />
+                </Button>
+                <!-- Where am I: the one instrument every engine editor's
+                     status surface carries. Mono, fixed width, one decimal,
+                     so it reads as an instrument and never jitters. -->
+                <TextBlock Classes="value" Foreground="{StaticResource SpectraTextMuted}"
+                           Text="{Binding CameraPositionLabel}" MinWidth="132"
+                           TextAlignment="Right" Margin="6,0,0,0"
+                           ToolTip.Tip="Camera position, in world units" />
+              </StackPanel>
+            </Grid>
+          </Border>
+
+          <!-- Padding is what makes the bezel EXIST: a Border's background
+               shows only through its padding ring, and with none the
+               documented chrome-bezel-render framing painted zero pixels. The
+               ring is beside the native child, never over it. -->
+          <Border x:Name="ViewportHost" Grid.Row="1" MinWidth="360" Padding="2"
+                  Background="{StaticResource SpectraViewportBezel}" />
+        </Grid>
 
         <!-- The bottom region's own splitter. Rows, not columns, and it carries
              the same ink-plus-hit-area treatment as the vertical pair. -->
         <GridSplitter Grid.Column="2" Grid.Row="1" ResizeDirection="Rows" Cursor="SizeNorthSouth"
-                      Height="9" Margin="0,-4" PointerEntered="OnSplitterEntered"
+                      Height="9" Margin="0,-1,0,-7" PointerEntered="OnSplitterEntered"
                       PointerExited="OnSplitterExited"
+                      DragStarted="OnSplitterDragStarted" DragCompleted="OnSplitterDragCompleted"
                       Tag="{Binding #BottomSplitInk}" />
         <Border x:Name="BottomSplitInk" Grid.Column="2" Grid.Row="1" Height="1" Classes="splitink"
                 VerticalAlignment="Center" />
@@ -617,8 +776,9 @@
         </dock:DockControl>
 
         <GridSplitter Grid.Column="3" Grid.RowSpan="3" ResizeDirection="Columns" Cursor="SizeWestEast"
-                      Width="9" Margin="-4,0" PointerEntered="OnSplitterEntered"
+                      Width="9" Margin="-1,0,-7,0" PointerEntered="OnSplitterEntered"
                       PointerExited="OnSplitterExited"
+                      DragStarted="OnSplitterDragStarted" DragCompleted="OnSplitterDragCompleted"
                       Tag="{Binding #RightSplitInk}" />
         <Border x:Name="RightSplitInk" Grid.Column="3" Grid.RowSpan="3" Width="1" Classes="splitink"
                 HorizontalAlignment="Center" />
@@ -651,10 +811,13 @@
             Padding="10,0">
       <Grid ColumnDefinitions="*,Auto">
 
-        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+          <!-- RenderTransform none: the icon class scales every glyph 1.2x for
+               row use, which turned this explicitly-sized 13px glyph into a
+               ~15.6px one overhanging its own layout box. -->
           <Path Classes="icon" Width="13" Height="13" Data="{StaticResource IconWarning}"
                 Stroke="{StaticResource SpectraAccent}" StrokeThickness="1.3"
-                Stretch="Uniform" IsVisible="{Binding IsError}" />
+                Stretch="Uniform" RenderTransform="none" IsVisible="{Binding IsError}" />
           <TextBlock Classes="statusmsg" Classes.errormsg="{Binding IsError}"
                      Text="{Binding Message}" TextTrimming="CharacterEllipsis" />
         </StackPanel>
@@ -668,11 +831,24 @@
                       IsVisible="{Binding HasWorldDefect}"
                       ToolTip.Tip="{Binding WorldDefectTip}">
             <Path Classes="icon" Width="13" Height="13" Stretch="Uniform"
+                  RenderTransform="none"
                   Data="{StaticResource IconWarning}"
                   Stroke="{StaticResource SpectraWarning}" StrokeThickness="1.3" />
             <TextBlock Classes="value" Text="level not rebuilding"
                        Foreground="{StaticResource SpectraWarning}" />
-            <Border Classes="groupsep" />
+            <Border Classes="groupsep" Margin="4,0" />
+          </StackPanel>
+
+          <!-- Play mode's standing chip, in the standing-state area beside the
+               world-defect slot: a session someone is walking through must say
+               so somewhere that does not scroll away. -->
+          <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                      IsVisible="{Binding IsPlaying}">
+            <Border Width="6" Height="6" CornerRadius="3"
+                    Background="{StaticResource SpectraMode}" VerticalAlignment="Center" />
+            <TextBlock Classes="value" Text="playing, F8 stops"
+                       Foreground="{StaticResource SpectraMode}" />
+            <Border Classes="groupsep" Margin="4,0" />
           </StackPanel>
           <TextBlock Classes="value" Text="{Binding SelectionLabel}" MinWidth="104"
                      Foreground="{StaticResource SpectraTextEmphasis}" />
@@ -684,6 +860,14 @@
           <TextBlock Classes="value" Text="{Binding NodeCountLabel}"
                      Foreground="{StaticResource SpectraTextMuted}" MinWidth="70"
                      ToolTip.Tip="Nodes in the scene" />
+          <Border Classes="groupsep" />
+          <!-- The engine's heartbeat: this ticks while a drag recompiles the
+               level underneath the cursor, which is the cheapest honest proof
+               there is a compiler under the picture. -->
+          <TextBlock Classes="label" Text="compiles" Margin="0,0,6,0" />
+          <TextBlock Classes="value" Text="{Binding CompileCount}"
+                     Foreground="{StaticResource SpectraTextMuted}" MinWidth="40"
+                     ToolTip.Tip="Static-world recompiles this session" />
           <Border Classes="groupsep" />
           <TextBlock Classes="label" Text="viewport" Margin="0,0,6,0" />
           <TextBlock Classes="value" Text="{Binding ViewportLabel}"

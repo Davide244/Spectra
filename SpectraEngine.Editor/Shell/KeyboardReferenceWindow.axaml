@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:SpectraEngine.Editor.Shell"
         x:Class="SpectraEngine.Editor.Shell.KeyboardReferenceWindow"
@@ -49,7 +49,7 @@
         <TextBlock Grid.Column="0" Classes="prose"
                    Foreground="{StaticResource SpectraTextMuted}"
                    Text="Letter keys stand down while a camera is driving." />
-        <Button Grid.Column="1" Classes="secondary" MinWidth="90" Height="28"
+        <Button Grid.Column="1" Classes="secondary" MinWidth="104"
                 Content="Close" Click="OnCloseClicked" IsCancel="True" IsDefault="True" />
       </Grid>
     </Border>
