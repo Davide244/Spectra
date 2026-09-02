@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Spectra.Kitchen.CLI</RootNamespace>
+    <AssemblyName>scook</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishAot>true</PublishAot>
+    <SignAssembly>false</SignAssembly>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Spectra.Kitchen\Spectra.Kitchen.csproj" />
+    <ProjectReference Include="..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
+  </ItemGroup>
+
+</Project>

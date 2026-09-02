@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Spectra.Kitchen\Spectra.Kitchen.csproj" />
+    <ProjectReference Include="..\..\Spectra.Kitchen.CLI\Spectra.Kitchen.CLI.csproj" />
   </ItemGroup>
 
 </Project>
