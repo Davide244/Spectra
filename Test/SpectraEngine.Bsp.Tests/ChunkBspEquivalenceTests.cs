@@ -291,7 +291,7 @@ public sealed class ChunkBspEquivalenceTests
     // pillars) scattered by a fixed-seed LCG over a ±160-unit region —
     // spanning many cells, negative coordinates included, with structures
     // frequently straddling borders.
-    private static List<BrushPlacement> ScatteredWorld(int structures, ulong seed)
+    internal static List<BrushPlacement> ScatteredWorld(int structures, ulong seed)
     {
         ulong state = seed;
         float NextFloat01()
@@ -320,7 +320,7 @@ public sealed class ChunkBspEquivalenceTests
 
     // 6x6x6 size-2 cubes at spacing 1.8, straddling the (32,32,32) cell
     // corner — dense mutual carving right across cell borders.
-    private static List<BrushPlacement> DenseGridWorld()
+    internal static List<BrushPlacement> DenseGridWorld()
     {
         var placements = new List<BrushPlacement>(216);
         for (int x = 0; x < 6; x++)
