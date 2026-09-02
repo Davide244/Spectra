@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Graphics;
@@ -316,7 +316,7 @@ public sealed class AssetManagerTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteTempContentRoot(root);
         }
     }
 
@@ -409,7 +409,7 @@ public sealed class AssetManagerTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteTempContentRoot(root);
         }
     }
 
@@ -441,7 +441,7 @@ public sealed class AssetManagerTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteTempContentRoot(root);
         }
     }
 
@@ -540,7 +540,7 @@ public sealed class AssetManagerTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            DeleteTempContentRoot(root);
         }
     }
 
@@ -580,6 +580,40 @@ public sealed class AssetManagerTests
         string root = Path.Combine(Path.GetTempPath(), "SpectraAssetTests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "Textures"));
         return root;
+    }
+
+    /// <summary>
+    /// Removes a temp content root, tolerating a decode that has not let go of
+    /// its file yet.
+    /// </summary>
+    /// <remarks>
+    /// A hot-reload test writes a texture, and the write raises a real watcher
+    /// event as well as the explicit notification the test sends. Windows
+    /// raises more than one event for a single write, so a re-decode can still
+    /// be reading the file on a thread-pool thread after the assertions have
+    /// passed, and deleting the directory into that window throws
+    /// <see cref="IOException"/> from the cleanup rather than from anything the
+    /// test was checking. That failure names the wrong subsystem and appears
+    /// roughly one run in ten, which is worse than a test that simply fails.
+    /// </remarks>
+    private static void DeleteTempContentRoot(string root)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+                return;
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                Thread.Sleep(25);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 20)
+            {
+                Thread.Sleep(25);
+            }
+        }
     }
 
     // Plays the render loop: pump, then yield, until the condition holds.
