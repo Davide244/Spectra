@@ -59,6 +59,19 @@ public enum SceneNodeKind
 
     /// <summary>Carries a light.</summary>
     Light,
+
+    /// <summary>
+    /// Carries entity data: a class name, keyvalues and output wiring.
+    /// </summary>
+    /// <remarks>
+    /// <b>Appended, and every kind above keeps the number it had.</b> The
+    /// members are ordered rather than numbered, so a kind inserted anywhere but
+    /// the end silently renumbers the ones after it - and this value crosses a
+    /// thread boundary as the only fact about a node beyond its id, its name and
+    /// its place in the graph, which is a wrong icon on every row of that kind
+    /// with nothing reporting it.
+    /// </remarks>
+    Entity,
 }
 
 /// <summary>
@@ -86,6 +99,14 @@ public static class SceneNodeClassifier
                 ? SceneNodeKind.BrushPart
                 : SceneNodeKind.BrushWorld;
         }
+
+        // Below the brush cases on purpose: a brush node that also carries entity
+        // data keeps reading as its brush kind, because until brush entities land
+        // there is no such thing as a volume with behaviour and the geometry is
+        // still what a level editor sees. When they do land, this is the line
+        // that decides it, and the brush block above is where the answer moves.
+        if (node.Entity is not null)
+            return SceneNodeKind.Entity;
 
         if (node.Light is not null)
             return SceneNodeKind.Light;

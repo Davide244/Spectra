@@ -182,6 +182,27 @@ public class SceneNode
     }
 
     /// <summary>
+    /// The entity this node IS, or null. Carries the class name, the authored
+    /// keyvalues and the wires leaving this entity's outputs.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A plain property with no scene-side hook, deliberately.</b> There is no
+    /// entity runtime yet: nothing spawns from this, nothing indexes it, and
+    /// nothing dirties when it changes. A membership set (the shape
+    /// <see cref="Light"/> uses) belongs with the runtime that would read it, and
+    /// one added now would be a list nothing consumes, maintained at three sites,
+    /// with no test able to say whether it is correct.
+    /// </para>
+    /// <para>
+    /// <b>It names a class rather than referencing a definition</b>, so a node
+    /// whose class this build has never heard of still loads, still shows in the
+    /// tree and still saves unchanged. See <see cref="Entities.EntityData"/>.
+    /// </para>
+    /// </remarks>
+    public Entities.EntityData? Entity { get; set; }
+
+    /// <summary>
     /// Brush geometry this node contributes to the scene's static world, if any.
     /// Brushes are the authoring primitive: all brush nodes are carved together
     /// into one derived <see cref="Bsp.CsgWorld"/> instead of being rendered
@@ -626,7 +647,7 @@ public class SceneNode
     /// payloads alone, which leaves a group node empty.
     /// </param>
     /// <remarks>
-    /// <b>Each of the three payloads a node can carry is copied differently, and
+    /// <b>Each of the four payloads a node can carry is copied differently, and
     /// the differences are not stylistic.</b>
     /// <list type="bullet">
     ///   <item><description>
@@ -642,8 +663,13 @@ public class SceneNode
     ///     every compile forever.
     ///   </description></item>
     ///   <item><description>
-    ///     <see cref="Light"/> gets a copy, because it is the one payload that is
-    ///     MUTABLE. Sharing it would make dimming the copy dim the original.
+    ///     <see cref="Light"/> gets a copy, because it is MUTABLE. Sharing it
+    ///     would make dimming the copy dim the original.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <see cref="Entity"/> gets a copy, for the same reason the light does:
+    ///     it is mutable, so a shared instance would have the duplicate's
+    ///     keyvalues rewritten by every edit to the original.
     ///   </description></item>
     /// </list>
     /// <para>
@@ -683,6 +709,7 @@ public class SceneNode
         copy.MeshSource = MeshSource;
         copy.Brush = _brush?.CloneShape();
         copy.Light = _light?.Clone();
+        copy.Entity = Entity?.Clone();
 
         if (deep)
         {

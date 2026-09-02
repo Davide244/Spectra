@@ -1,4 +1,5 @@
 ﻿using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Scene;
 using System.Numerics;
 
@@ -99,6 +100,65 @@ public sealed class SceneNodeKindTests
         node.Light = new Light();
 
         SceneNodeClassifier.Classify(node).ShouldBe(SceneNodeKind.Light);
+    }
+
+    [Fact]
+    public void An_entity_is_an_entity_even_with_children_under_it()
+    {
+        // The payload wins over the shape of the graph: an entity that parents
+        // its own props must not read as a group, or the one row in the tree
+        // that says "this thing has behaviour" is the row that hides it.
+        var scene = new Scene("Kinds");
+        SceneNode node = scene.Root.CreateChild("Door");
+        node.Entity = new EntityData("func_door");
+        node.CreateChild("Handle");
+
+        SceneNodeClassifier.Classify(node).ShouldBe(SceneNodeKind.Entity);
+    }
+
+    [Fact]
+    public void An_entity_outranks_a_light()
+    {
+        // And a mesh with it, since the light case already outranks that one:
+        // the entity test sits above both, so a lamp with behaviour reads as the
+        // behaviour rather than as the fitting.
+        var scene = new Scene("Kinds");
+        SceneNode node = scene.Root.CreateChild("Lamp");
+        node.Light = new Light();
+        node.Entity = new EntityData("light_dynamic");
+
+        SceneNodeClassifier.Classify(node).ShouldBe(SceneNodeKind.Entity);
+
+        node.Entity = null;
+        SceneNodeClassifier.Classify(node).ShouldBe(SceneNodeKind.Light);
+    }
+
+    [Fact]
+    public void A_brush_carrying_entity_data_still_reads_as_its_brush_kind()
+    {
+        // Until brush entities land there is no such thing as a volume with
+        // behaviour, and the geometry is what a level editor sees.
+        var scene = new Scene("Kinds");
+        SceneNode node = scene.Root.CreateChild("Trigger");
+        node.Brush = Box();
+        node.Entity = new EntityData("trigger_multiple");
+
+        SceneNodeClassifier.Classify(node).ShouldBe(SceneNodeKind.BrushWorld);
+
+        node.Brush = Box(BrushOperation.Subtractive);
+        SceneNodeClassifier.Classify(node).ShouldBe(SceneNodeKind.BrushSubtractive);
+    }
+
+    [Fact]
+    public void A_node_stops_being_an_entity_when_the_data_is_taken_off_it()
+    {
+        var scene = new Scene("Kinds");
+        SceneNode node = scene.Root.CreateChild("Door");
+        node.Entity = new EntityData("func_door");
+
+        node.Entity = null;
+
+        SceneNodeClassifier.Classify(node).ShouldBe(SceneNodeKind.Empty);
     }
 
     [Fact]
