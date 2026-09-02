@@ -16,6 +16,12 @@
   <ItemGroup>
     <ProjectReference Include="..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
     <ProjectReference Include="..\SpectraEngine.Editing\SpectraEngine.Editing.csproj" />
+    <!--
+      The built-in logic entities. A host references this and calls the anchor;
+      a game that wants none of them simply drops the reference, exactly as it
+      would drop the editing assembly.
+    -->
+    <ProjectReference Include="..\SpectraEngine.Entities\SpectraEngine.Entities.csproj" />
     <ProjectReference Include="..\SpectraEngine.Physics.Box3D\SpectraEngine.Physics.Box3D.csproj" />
     <ProjectReference Include="..\SpectraShade.Compiler\SpectraShade.Compiler.csproj" />
   </ItemGroup>

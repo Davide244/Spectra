@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      netstandard2.0 is not a preference, it is the only framework Roslyn loads
+      an analyzer from: the compiler that runs this is csc, and csc's analyzer
+      loader binds netstandard2.0 assemblies whatever the SDK's own runtime is.
+
+      The repo-root Directory.Build.props sets TargetFramework to net10.0 for
+      every project. That import happens BEFORE this PropertyGroup is evaluated,
+      and a later assignment to the same property wins, so nothing has to be
+      conditioned or excluded: declaring the framework here simply overrides it.
+    -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>SpectraEngine.Entities.Generator</RootNamespace>
+
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+
+    <!--
+      An analyzer is loaded, never referenced, so it ships no package output and
+      nothing may flow out of it into a consumer's compilation.
+    -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+
+    <!--
+      Explicit usings. The implicit set is framework-dependent, and a generator
+      that compiles because of a using the SDK happened to add is a generator
+      that stops compiling when the SDK changes it.
+    -->
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+
+  <!--
+    Release tracking (RS2008). The two files ARE the diagnostic id registry: an
+    id appearing here is one that has been promised to somebody's NoWarn list,
+    which is exactly why the analyzer package insists a new one be written down
+    rather than merely coded.
+  -->
+  <ItemGroup>
+    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      PrivateAssets="all": Roslyn supplies its own Microsoft.CodeAnalysis at
+      load time and an analyzer that carried a second copy alongside would be
+      refused. See Directory.Packages.props for why the version is pinned where
+      it is.
+    -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

@@ -1,5 +1,6 @@
 ﻿using Avalonia;
 using Serilog;
+using SpectraEngine.Entities;
 using System;
 
 namespace SpectraEngine.Editor;
@@ -26,6 +27,14 @@ internal static class Program
             .WriteTo.Debug()
             .WriteTo.File("logs/spectra-editor-.log", rollingInterval: RollingInterval.Day)
             .CreateLogger();
+
+        // Loads the built-in entity assembly, whose generated module initializers
+        // are what put logic_relay, logic_timer and math_counter in the catalogue.
+        // Nothing here statically calls into it - a level names those classes as
+        // text - so without the anchor a trimmed publish drops the assembly and
+        // every map naming them opens with placeholders that behave as nothing.
+        // Before any session exists, because the first read freezes the catalogue.
+        BuiltinEntities.EnsureRegistered();
 
         try
         {

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SpectraEngine.Entities</RootNamespace>
+    <!--
+      Same reasoning as SpectraEngine.Core: the engine ships NativeAOT, so the
+      trim/AOT analysers run on this project's ordinary build rather than at ILC
+      time inside whatever executable happens to pull it in.
+    -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
+
+    <!--
+      The generator is LOADED, not referenced: OutputItemType="Analyzer" hands
+      csc the assembly and ReferenceOutputAssembly="false" keeps it out of the
+      compilation. Core must never reference it and it must never reference
+      Core; it matches the attribute family by metadata name, which is what
+      makes both halves of that true.
+    -->
+    <ProjectReference Include="..\SpectraEngine.Entities.Generator\SpectraEngine.Entities.Generator.csproj"
+                     OutputItemType="Analyzer"
+                     ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

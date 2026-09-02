@@ -5,6 +5,22 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      Roslyn, for the entity source generator (and for the tests that drive it).
+
+      PINNED AT OR BELOW THE ROSLYN THE INSTALLED SDK HOSTS, and that is the
+      whole rule. An analyzer binds against the Microsoft.CodeAnalysis the
+      COMPILER loaded, not against the copy in its own package folder: a
+      reference to a newer one fails to bind and Roslyn drops the analyzer
+      SILENTLY, so the symptom is a missing generated type reported as an
+      ordinary "type or namespace could not be found" at the consumer, nowhere
+      near the cause. Measured 2026-09: SDK 10.0.201 hosts assembly version
+      5.3.0.0 and SDK 10.0.100-rc.1 hosts 5.0.0.0, so 5.0.0 is the highest pin
+      that runs on both. Raise it only after checking the SDKs that must build
+      this repo, never to pick up a language feature.
+    -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+
     <!-- Logging -->
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="9.0.4" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.4" />

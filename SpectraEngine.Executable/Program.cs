@@ -11,6 +11,7 @@ using SpectraEngine.Core.Graphics.Shaders;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Projects;
 using SpectraEngine.Core.Scene;
+using SpectraEngine.Entities;
 using SpectraEngine.Executable;
 using SpectraEngine.Editing.Hosting;
 using SpectraEngine.Executable.Editing;
@@ -58,6 +59,14 @@ try
             EditingSelfTest.IntervalSeconds,
             DemoStartupOptions.SelfTestEnvironmentVariable);
     }
+
+    // Loads the built-in entity assembly, whose generated module initializers are
+    // what put logic_relay, logic_timer and math_counter in the catalogue. Nothing
+    // in this host statically calls into it - a level names those classes as text -
+    // so without the anchor a trimmed or AOT publish drops the assembly and every
+    // map naming them loads placeholders that behave as nothing. Before anything
+    // reads the catalogue, because the first read freezes it.
+    BuiltinEntities.EnsureRegistered();
 
     var shaderCompiler = new SpectraShadeCompiler();
     Renderer renderer = options.Backend switch

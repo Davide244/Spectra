@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>SpectraEngine.Entities.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The built-in classes, and the generator that wrote half of them. -->
+    <ProjectReference Include="..\..\SpectraEngine.Entities\SpectraEngine.Entities.csproj" />
+    <!--
+      Referenced NORMALLY here, not as an analyzer: these tests drive the
+      generator themselves, over compilations they build in memory, which is the
+      only way to assert on a diagnostic that never fires in this repo's own
+      sources and the only way to observe the incremental steps at all.
+    -->
+    <ProjectReference Include="..\..\SpectraEngine.Entities.Generator\SpectraEngine.Entities.Generator.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Same version the generator is built against; see Directory.Packages.props
+      for why the pin is where it is. The driver these tests construct is the
+      one from THIS package rather than the compiler's, so a mismatch here would
+      make the tests measure a Roslyn the build never uses.
+    -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+
+</Project>
