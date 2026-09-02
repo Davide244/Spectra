@@ -839,6 +839,23 @@
             <Border Classes="groupsep" Margin="4,0" />
           </StackPanel>
 
+          <!-- The graphics detector, standing beside the world defect and for
+               the same reason. What the validation layer reports - a missing
+               barrier, a pipeline state bound to a format it was not compiled
+               for - still renders a picture, so the viewport cannot show it and
+               the message line would lose it to the next thing that happens. -->
+          <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                      IsVisible="{Binding HasDebugLayerErrors}"
+                      ToolTip.Tip="{Binding DebugLayerTip}">
+            <Path Classes="icon" Width="13" Height="13" Stretch="Uniform"
+                  RenderTransform="none"
+                  Data="{StaticResource IconWarning}"
+                  Stroke="{StaticResource SpectraWarning}" StrokeThickness="1.3" />
+            <TextBlock Classes="value" Text="{Binding DebugLayerLabel}"
+                       Foreground="{StaticResource SpectraWarning}" />
+            <Border Classes="groupsep" Margin="4,0" />
+          </StackPanel>
+
           <!-- Play mode's standing chip, in the standing-state area beside the
                world-defect slot: a session someone is walking through must say
                so somewhere that does not scroll away. -->

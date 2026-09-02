@@ -1,4 +1,5 @@
-﻿using SpectraEngine.Editor.Shell;
+﻿using SpectraEngine.Core.Hosting;
+using SpectraEngine.Editor.Shell;
 using System.Collections.Generic;
 using System.Globalization;
 
@@ -276,5 +277,88 @@ public sealed class ConsoleCommandsTests
     {
         List<string> log = [];
         Assert.Equal(ConsoleCommands.ClearMarker, Build(log).Execute("clear").Reply);
+    }
+}
+
+/// <summary>
+/// The graphics detector's standing slot. Once the viewport is a texture handed
+/// to something else there is no offscreen probe behind it, and this counter is
+/// the only continuous report of a missing barrier or a pipeline state bound to
+/// a format it was not compiled for - both of which draw a picture, so the
+/// viewport itself can never show them.
+/// </summary>
+/// <remarks>
+/// Headless: <c>ApplySnapshot</c> is a copy from an immutable value into fields,
+/// which is exactly what makes binding to the model safe in the first place.
+/// </remarks>
+public sealed class DebugLayerStatusTests
+{
+    private static ShellModel Apply(int errors, bool active)
+    {
+        var model = new ShellModel();
+        model.ApplySnapshot(new FrameSnapshot
+        {
+            DebugLayerErrorCount = errors,
+            DebugLayerActive = active,
+        });
+        return model;
+    }
+
+    [Fact]
+    public void A_clean_session_shows_nothing()
+    {
+        ShellModel model = Apply(errors: 0, active: true);
+
+        Assert.False(model.HasDebugLayerErrors);
+        Assert.True(model.DebugLayerClean);
+    }
+
+    [Fact]
+    public void A_reported_error_takes_the_standing_slot_and_names_its_count()
+    {
+        ShellModel model = Apply(errors: 3, active: true);
+
+        Assert.True(model.HasDebugLayerErrors);
+        Assert.Equal("3 graphics errors", model.DebugLayerLabel);
+        Assert.Contains("3", model.DebugLayerTip);
+
+        // The slot is standing state, not a message: nothing the shell writes
+        // to the message line may displace it, and nothing it says may land
+        // there either.
+        Assert.False(model.HasMessage);
+    }
+
+    [Fact]
+    public void One_error_is_not_pluralised()
+    {
+        Assert.Equal("1 graphics error", Apply(errors: 1, active: true).DebugLayerLabel);
+    }
+
+    [Fact]
+    public void A_layer_that_is_not_running_does_not_read_as_clean()
+    {
+        // The whole reason the snapshot carries both fields. On D3D the count
+        // exists only while validation runs, so zero-and-off and zero-and-clean
+        // are the same number and mean opposite things: "nothing is watching"
+        // must not display as "nothing is wrong".
+        ShellModel model = Apply(errors: 0, active: false);
+
+        Assert.False(model.DebugLayerClean);
+        Assert.False(model.HasDebugLayerErrors);
+        Assert.Contains("not running", model.DebugLayerTip);
+    }
+
+    [Fact]
+    public void The_count_going_back_to_zero_clears_the_slot()
+    {
+        // A fresh session against the same shell: the previous run's count must
+        // not stand over a renderer that has reported nothing.
+        var model = new ShellModel();
+        model.ApplySnapshot(new FrameSnapshot { DebugLayerErrorCount = 2, DebugLayerActive = true });
+        Assert.True(model.HasDebugLayerErrors);
+
+        model.ApplySnapshot(new FrameSnapshot { DebugLayerErrorCount = 0, DebugLayerActive = true });
+        Assert.False(model.HasDebugLayerErrors);
+        Assert.True(model.DebugLayerClean);
     }
 }

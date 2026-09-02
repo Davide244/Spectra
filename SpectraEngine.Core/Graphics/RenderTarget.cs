@@ -3,6 +3,34 @@
 namespace SpectraEngine.Core.Graphics;
 
 /// <summary>
+/// How a render target's colour attachment is made available to something
+/// outside this renderer, and how the two sides take turns on it.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>An enum rather than a bool, because a second mode is already visible from
+/// here.</b> A keyed mutex is what the shared-surface import on this machine
+/// actually accepts today, measured rather than assumed; a shared fence is the
+/// other way the same handshake is expressed, and it is not offered until a
+/// backend can honour it. A bool would have to be widened the moment that lands,
+/// and every call site written against it would have to be revisited.
+/// </para>
+/// </remarks>
+public enum RenderTargetSharing
+{
+    /// <summary>Not shared. The attachment belongs to this renderer alone.</summary>
+    None,
+
+    /// <summary>
+    /// Shared with a keyed mutex: the producer acquires key 0 and releases key
+    /// 1, the consumer acquires key 1 and releases key 0. See
+    /// <see cref="Renderer.BeginSharedWrite"/>, which is where that protocol is
+    /// written down.
+    /// </summary>
+    KeyedMutex,
+}
+
+/// <summary>
 /// What an offscreen render target is made of.
 /// </summary>
 /// <remarks>
@@ -44,6 +72,10 @@ namespace SpectraEngine.Core.Graphics;
 /// Whether to attach colour at all. False makes a depth-only target, which is
 /// what a shadow map is; see <see cref="DepthOnly"/>.
 /// </param>
+/// <param name="Sharing">
+/// Whether the colour attachment is created so something outside this renderer
+/// can import it, and under which handshake. See <see cref="RenderTargetSharing"/>.
+/// </param>
 public readonly record struct RenderTargetDesc(
     int Width,
     int Height,
@@ -52,7 +84,8 @@ public readonly record struct RenderTargetDesc(
     bool Depth = true,
     TextureFilter Filter = TextureFilter.Linear,
     TextureWrap Wrap = TextureWrap.Clamp,
-    bool Color = true)
+    bool Color = true,
+    RenderTargetSharing Sharing = RenderTargetSharing.None)
 {
     /// <summary>
     /// A target with depth and nothing else: a shadow map.
@@ -106,6 +139,28 @@ public readonly record struct RenderTargetDesc(
                 nameof(ColorFormat),
                 $"Render targets support {nameof(TextureFormat.Rgba8)} and " +
                 $"{nameof(TextureFormat.Rgba16Float)}; got {ColorFormat}.");
+
+        if (Sharing == RenderTargetSharing.None)
+            return;
+
+        // A depth-only target has no colour attachment, so there is nothing to
+        // hand out: asking to share one is a caller mistake and not a
+        // configuration a backend could honour.
+        if (!Color)
+            throw new ArgumentException(
+                "A shared render target needs a colour attachment; a depth-only target has nothing to share.",
+                nameof(Sharing));
+
+        // The external-image import a shared handle exists to feed has no
+        // half-float path AT ALL, so an Rgba16Float shared target is a request
+        // nothing can satisfy. Refused here, where the caller wrote it, rather
+        // than three layers down as a driver HRESULT that names neither the
+        // format nor the target.
+        if (ColorFormat != TextureFormat.Rgba8)
+            throw new ArgumentOutOfRangeException(
+                nameof(ColorFormat),
+                $"A shared render target must be {nameof(TextureFormat.Rgba8)}; got {ColorFormat}. " +
+                "The import that consumes a shared handle has no half-float format.");
     }
 }
 
@@ -127,6 +182,16 @@ public readonly record struct RenderTargetDesc(
 /// viewport pointing at a destroyed texture, which is the same trick
 /// <c>ShaderProgram.TryReload</c> and <c>TextureAsset</c> already use and for
 /// the same reason.
+/// </para>
+/// <para>
+/// <b>That guarantee does NOT extend to a shared handle
+/// (<see cref="RenderTargetSharing"/>).</b> A shared target is destroyed and
+/// recreated under a new <see cref="Renderer.SharedTargetHandle.Generation"/>,
+/// never resized in place. The wrapper's identity surviving is exactly what
+/// would let a caller assume the handle survived with it, and the consumer on
+/// the other side of that handle would go on sampling a resource that has been
+/// destroyed - which produces no error on either side, only a picture that has
+/// stopped changing or a device removal some frames later.
 /// </para>
 /// <para>
 /// Owned by the renderer that created it, like meshes and textures: callers

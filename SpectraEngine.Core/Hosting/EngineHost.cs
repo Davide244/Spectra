@@ -249,7 +249,12 @@ public sealed class EngineHost
     // added later cannot quietly opt out of it.
     private volatile bool _stateDirty;
 
-    private void MarkDirty() => _stateDirty = true;
+    /// <summary>
+    /// Marks engine state as news, so the next frame publishes regardless of the
+    /// interval. Called by every request latch, and by the render loop for state
+    /// it alone can read.
+    /// </summary>
+    internal void MarkDirty() => _stateDirty = true;
 
     private int _playModeRequest = -1;
     private int _debugFlagsToSet;

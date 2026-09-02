@@ -155,6 +155,39 @@ public sealed class FrameSnapshot
     public string? StaticWorldDefect { get; init; }
 
     /// <summary>
+    /// How many errors a graphics validation layer has reported over the
+    /// renderer's life. Zero on backends and builds that have no layer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The only continuous detector of the graphics faults that still draw a
+    /// picture</b> - a missing barrier, a pipeline state compiled for a format
+    /// it was not bound to. Nothing else in a running session can see either,
+    /// which is why this number leaves the engine at all: an offscreen probe
+    /// covers a diagnostic run, and an embedded surface with no probe behind it
+    /// has this and nothing else.
+    /// </para>
+    /// <para>
+    /// Read with <see cref="DebugLayerActive"/> and never alone. See that
+    /// member for why.
+    /// </para>
+    /// </remarks>
+    public int DebugLayerErrorCount { get; init; }
+
+    /// <summary>
+    /// Whether the validation layer producing
+    /// <see cref="DebugLayerErrorCount"/> is actually running.
+    /// </summary>
+    /// <remarks>
+    /// <b>Both halves are published, because a silent layer that is not running
+    /// proves nothing.</b> On D3D the count exists only while validation is on,
+    /// so zero-and-off and zero-and-clean are the same number and mean opposite
+    /// things. A slot that carried the count alone could only ever imply
+    /// all-clear; carrying this too lets it say the detector is off instead.
+    /// </remarks>
+    public bool DebugLayerActive { get; init; }
+
+    /// <summary>
     /// The selection's editable properties, merged across every selected node.
     /// </summary>
     /// <remarks>

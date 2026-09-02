@@ -28,6 +28,19 @@ public enum RenderSurfaceKind
 
     /// <summary>A Wayland surface pointer.</summary>
     Wayland,
+
+    /// <summary>
+    /// No native surface at all: the renderer draws into a shared target that
+    /// somebody else presents. There is no HWND and there is no swap chain, so
+    /// <see cref="IRenderSurface.NativeHandle"/> is zero and nothing about
+    /// presentation belongs to the engine.
+    /// </summary>
+    /// <remarks>
+    /// <b>Appended, and appended for a reason.</b> These values are compared and
+    /// stored, so renumbering them silently re-labels every surface a backend
+    /// has already refused or accepted. New kinds go on the end.
+    /// </remarks>
+    Composited,
 }
 
 /// <summary>

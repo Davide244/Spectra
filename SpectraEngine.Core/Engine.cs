@@ -118,6 +118,10 @@ public sealed class Engine
     private readonly List<Guid> _snapshotSelection = [];
     private Guid[] _publishedSelection = [];
 
+    // What the last PUBLISHED snapshot carried, so a count that moved between
+    // publishes forces the next one out rather than waiting for the clock.
+    private int _publishedDebugLayerErrors;
+
     /// <summary>
     /// Builds and publishes this frame's snapshot, if one is due. Render thread
     /// only, and the only place engine state is read for a UI.
@@ -129,9 +133,27 @@ public sealed class Engine
         // is due at all.
         bool interacting = _sceneManager.Editor?.IsInteracting ?? false;
 
+        // A debug-layer error is news in exactly the sense a command is: the
+        // count moves only when the layer has just reported something wrong, and
+        // a shell that hears about it up to a whole interval later cannot tie it
+        // to whatever the user was doing when it happened. Compared BEFORE the
+        // builder runs, because the builder runs only when a snapshot is already
+        // going out, which is the case this exists to change.
+        //
+        // Through a FIELD rather than a local: a local read here and used inside
+        // the builder is a captured variable, which turns the closure from one
+        // delegate into a display class as well, per frame, on the render
+        // thread.
+        if (_renderer.DebugLayerErrorCount != _publishedDebugLayerErrors)
+            Host.MarkDirty();
+
         Host.PublishFrame(elapsed, builder =>
         {
             ISceneEditor? editor = _sceneManager.Editor;
+
+            // The same value the check above read: this is the render thread,
+            // which is the counter's only writer, so nothing moved it between.
+            _publishedDebugLayerErrors = _renderer.DebugLayerErrorCount;
 
             return new FrameSnapshot
             {
@@ -156,6 +178,8 @@ public sealed class Engine
                 RedoDepth = editor?.RedoDepth ?? 0,
                 StaticWorldCompileCount = _sceneManager.ActiveScene?.StaticWorldCompileCount ?? 0,
                 StaticWorldDefect = _sceneManager.ActiveScene?.StaticWorldDefect,
+                DebugLayerErrorCount = _publishedDebugLayerErrors,
+                DebugLayerActive = _renderer.DebugLayerActive,
                 IsPlaying = _character is { Active: true },
                 CanPlay = _character is not null,
                 DebugFlags = _debugFlags,

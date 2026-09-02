@@ -875,6 +875,84 @@ public sealed class ShellModel : ObservableObject
     public string WorldDefectTip =>
         $"The level has stopped rebuilding, so the viewport is showing the last version that compiled. {_worldDefect}";
 
+    private int _debugLayerErrors;
+    private bool _debugLayerActive;
+
+    /// <summary>
+    /// How many errors the graphics validation layer has reported this session.
+    /// </summary>
+    /// <remarks>
+    /// <b>Its own standing slot beside the world defect, for the same reason
+    /// that one has one.</b> The faults this counts - a missing barrier, a
+    /// pipeline state bound to a format it was not compiled for - still draw a
+    /// picture, so the viewport cannot show them and the message line, which is
+    /// last-writer-wins, would lose them to the next thing that happens.
+    /// </remarks>
+    public int DebugLayerErrors
+    {
+        get => _debugLayerErrors;
+        private set
+        {
+            if (!Set(ref _debugLayerErrors, value))
+                return;
+
+            Raise(nameof(HasDebugLayerErrors));
+            Raise(nameof(DebugLayerLabel));
+            Raise(nameof(DebugLayerClean));
+            Raise(nameof(DebugLayerTip));
+        }
+    }
+
+    /// <summary>Whether the layer producing that count is running at all.</summary>
+    public bool DebugLayerActive
+    {
+        get => _debugLayerActive;
+        private set
+        {
+            if (!Set(ref _debugLayerActive, value))
+                return;
+
+            Raise(nameof(DebugLayerClean));
+            Raise(nameof(DebugLayerTip));
+        }
+    }
+
+    /// <summary>Whether to show the standing graphics warning.</summary>
+    public bool HasDebugLayerErrors => _debugLayerErrors > 0;
+
+    /// <summary>
+    /// Whether the detector is running AND has reported nothing.
+    /// </summary>
+    /// <remarks>
+    /// <b>Deliberately not "the count is zero".</b> On D3D the count exists only
+    /// while validation is on, so an inactive layer reports zero for the same
+    /// reason a clean session does, and reading the number alone turns "nothing
+    /// is watching" into "nothing is wrong".
+    /// </remarks>
+    public bool DebugLayerClean => _debugLayerActive && _debugLayerErrors == 0;
+
+    /// <summary>What the graphics detector has to say, for the slot's tooltip.</summary>
+    public string DebugLayerTip
+    {
+        get
+        {
+            if (!_debugLayerActive)
+            {
+                return "The graphics validation layer is not running, so nothing is watching for " +
+                    "driver-level faults. Re-run with --debug-layer=true for the full check.";
+            }
+
+            return _debugLayerErrors == 0
+                ? "The graphics validation layer is running and has reported nothing."
+                : $"The graphics validation layer has reported {_debugLayerErrors} error(s). These draw a " +
+                    "picture rather than stopping the frame, so the viewport cannot show them; the run log has the detail.";
+        }
+    }
+
+    /// <summary>The standing warning's text.</summary>
+    public string DebugLayerLabel =>
+        _debugLayerErrors == 1 ? "1 graphics error" : $"{_debugLayerErrors} graphics errors";
+
     /// <summary>Reports something that went normally.</summary>
     public void SetMessage(string text)
     {
@@ -1018,6 +1096,12 @@ public sealed class ShellModel : ObservableObject
             UpdateCameraReadout(snapshot.CameraPosition);
             CompileCount = snapshot.StaticWorldCompileCount;
             WorldDefect = snapshot.StaticWorldDefect;
+
+            // Active first: the count's meaning depends on it, and writing the
+            // count against a stale activity flag makes the tooltip describe a
+            // detector state that is one publish out of date.
+            DebugLayerActive = snapshot.DebugLayerActive;
+            DebugLayerErrors = snapshot.DebugLayerErrorCount;
 
             // Everything below that goes through an OptimisticValue is reported
             // BY the engine and possibly still pending FROM the user; Apply is

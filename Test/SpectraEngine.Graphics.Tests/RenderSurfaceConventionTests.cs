@@ -70,6 +70,49 @@ public sealed class RenderSurfaceConventionTests
             "host already owns, and re-couples the engine to running its own window");
     }
 
+    /// <summary>
+    /// The same seam pointed the other way: <b>nothing under <c>Graphics/</c>
+    /// may name the shell's UI framework.</b>
+    /// </summary>
+    /// <remarks>
+    /// A composited surface hands a texture to something outside the engine, and
+    /// the vocabulary for that (a shared handle, a keyed mutex, a generation) is
+    /// deliberately made of nothing but a native handle and integers. The moment
+    /// a backend names the framework on the other side, the engine can only ever
+    /// be embedded in that one shell, and the whole reason
+    /// <see cref="IRenderSurface"/> exists is gone.
+    /// <para>
+    /// <b>No file is exempt, unlike the window rule.</b> There is no adapter
+    /// here to be the exception: the shell's adapter lives in the shell, which
+    /// is the arrangement being enforced.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void No_graphics_source_names_the_shell_ui_framework()
+    {
+        var offenders = new List<string>();
+
+        foreach (string file in GraphicsSources())
+        {
+            string name = Path.GetFileName(file);
+            string[] lines = File.ReadAllLines(file);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                if (IsComment(line))
+                    continue;
+
+                if (line.Contains("Avalonia", StringComparison.Ordinal))
+                    offenders.Add($"{name}({i + 1}): {line.Trim()}");
+            }
+        }
+
+        offenders.ShouldBeEmpty(
+            "the renderer's shared-target vocabulary is a native handle and four integers, and it stays " +
+            "that way: a backend that names the shell's UI framework can be embedded in exactly one shell, " +
+            "which is the coupling IRenderSurface was introduced to remove");
+    }
+
     [Fact]
     public void Every_backend_refuses_a_surface_it_cannot_use()
     {

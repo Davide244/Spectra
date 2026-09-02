@@ -532,6 +532,89 @@ public abstract class Renderer
     /// <summary>Recorded by a backend's debug-layer drain. Render thread only.</summary>
     private protected void NoteDebugLayerErrors(int count) => DebugLayerErrorCount += count;
 
+    // ---- Shared colour targets ---------------------------------------------
+    //
+    // The vocabulary only: no backend implements any of this yet. Every member
+    // is virtual with a refusing default rather than abstract, so a backend
+    // that has not been taught to share answers "no" instead of failing to
+    // compile, and a caller has one answer to check rather than a capability
+    // table to consult first.
+
+    /// <summary>
+    /// A colour target something outside this renderer can import, named by an
+    /// NT handle.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b><see cref="Generation"/> is what makes the handle safe to hold.</b> A
+    /// shared target is never resized in place: it is destroyed and recreated
+    /// under a new generation, so a consumer holding an older one knows its
+    /// handle names a resource that is gone rather than sampling it. The
+    /// wrapper identity <see cref="RenderTarget"/> guarantees across a resize
+    /// deliberately stops at this boundary, and the note there says so.
+    /// </para>
+    /// <para>
+    /// <b>The size travels WITH the handle</b>, because it is a property of the
+    /// shared resource rather than of the renderer. Read separately, the two
+    /// can be paired a frame apart - a fresh handle against a stale size - and
+    /// the result is a correctly bound texture read at the wrong extent.
+    /// </para>
+    /// </remarks>
+    /// <param name="NtHandle">The shared resource's NT handle, or zero when there is none.</param>
+    /// <param name="Width">Pixel width of the shared resource.</param>
+    /// <param name="Height">Pixel height of the shared resource.</param>
+    /// <param name="Generation">
+    /// Bumped every time the resource behind the handle is recreated. A consumer
+    /// re-imports when it changes and never before.
+    /// </param>
+    public readonly record struct SharedTargetHandle(nint NtHandle, int Width, int Height, int Generation);
+
+    /// <summary>
+    /// The handle of this renderer's shared colour target, if it has one.
+    /// False on every backend today.
+    /// </summary>
+    public virtual bool TryGetSharedHandle(out SharedTargetHandle handle)
+    {
+        handle = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Takes the shared target's key for this frame's write. False means the key
+    /// did not arrive within <paramref name="timeoutMs"/> and nothing was
+    /// acquired.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The key protocol, both halves in one place because neither half means
+    /// anything alone:</b> the producer acquires key 0 and releases key 1; the
+    /// consumer acquires key 1 and releases key 0. Whoever holds the mutex is
+    /// the only side touching the texture, and the key it releases is what says
+    /// whose turn is next. Releasing the key you acquired instead of the other
+    /// one deadlocks both sides on the following frame.
+    /// </para>
+    /// <para>
+    /// <b>A timeout is not an error, and blocking on it is.</b> It means the
+    /// consumer has not taken its turn - it is not being drawn, so it never
+    /// acquired key 1 and never released key 0 - and a render thread that waits
+    /// for that stalls the whole engine on something which may not come back at
+    /// all. The correct response is to skip this frame's shared write and carry
+    /// on rendering; the consumer keeps the last frame it was given, which is
+    /// the right picture for something nobody is looking at.
+    /// </para>
+    /// </remarks>
+    /// <param name="timeoutMs">How long to wait for the key before giving up on this frame.</param>
+    public virtual bool BeginSharedWrite(int timeoutMs = 100) => false;
+
+    /// <summary>
+    /// Releases the shared target's key with the consumer's value, handing the
+    /// texture over. Called only after <see cref="BeginSharedWrite"/> returned
+    /// true.
+    /// </summary>
+    public virtual void EndSharedWrite()
+    {
+    }
+
     // ---- HDR and the resolve -----------------------------------------------
 
     private RenderTarget? _sceneTarget;
