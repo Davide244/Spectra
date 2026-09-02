@@ -877,6 +877,7 @@ public partial class MainWindow : Window
         // the snapshot queue is this session's history, and the dirty baseline
         // and the panel's reveal gates describe a scene that no longer exists.
         _latest = FrameSnapshot.Empty;
+        _lastApplied = FrameSnapshot.Empty;
         while (_published.TryDequeue(out _))
             Interlocked.Decrement(ref _queuedSnapshots);
         _droppedSnapshots = false;

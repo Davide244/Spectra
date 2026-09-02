@@ -473,8 +473,18 @@ public class OpenGLRenderer : Renderer
             _gl.Disable(EnableCap.DepthTest);
         }
 
+        // SEPARATE, to match the D3D backends' SrcBlendAlpha = One: the plain
+        // BlendFunc applies SrcAlpha to the alpha channel too, and the stored
+        // alpha would then be a*a + dst*(1-a) here against a + dst*(1-a) on
+        // D3D — the one blend fact differing across three backends in a lane
+        // whose premise is identical behaviour. Nothing reads FrameTarget's
+        // alpha today (the resolve writes 1 and samples rgb), which is exactly
+        // why the divergence would surface silently the day something does —
+        // a composited viewport handing the texture to a compositor, say.
         _gl.Enable(EnableCap.Blend);
-        _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        _gl.BlendFuncSeparate(
+            BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha,
+            BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
 
         // Use FIRST on this backend: glUniform writes into the active program,
         // so staging before it would write into whatever was bound last.

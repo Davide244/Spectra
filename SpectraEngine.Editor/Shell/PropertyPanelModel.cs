@@ -299,26 +299,33 @@ public sealed class PropertyRowModel : ObservableObject
     {
         bool mixed = float.IsNaN(linear.X);
 
-        // Skip an unchanged colour outright: Set compares brushes by
-        // REFERENCE, so an unguarded refresh allocates a fresh SolidColorBrush
-        // and re-renders the swatch on every pump for as long as a light is
-        // selected. NaN never equals itself, which is why mixed is compared as
-        // a state rather than through the vector.
-        bool unchanged = _colorRefreshed &&
+        // Only the SWATCH is skipped for an unchanged colour: Set compares
+        // brushes by REFERENCE, so an unguarded refresh allocates a fresh
+        // SolidColorBrush and re-renders it on every pump for as long as a
+        // light is selected. NaN never equals itself, which is why mixed is
+        // compared as a state rather than through the vector.
+        bool sameValue = _colorRefreshed &&
             (mixed ? float.IsNaN(_color.X) : !float.IsNaN(_color.X) && _color == linear);
-        if (unchanged)
-            return;
 
         _colorRefreshed = true;
         _color = linear;
-
         Hex = mixed ? string.Empty : ToHex(linear);
-        Swatch = mixed
-            ? Brushes.Transparent
-            : new SolidColorBrush(Color.FromRgb(ToByte(linear.X), ToByte(linear.Y), ToByte(linear.Z)));
 
-        // Through the field, so a focused box is left alone exactly as every
-        // other cell's is.
+        if (!sameValue)
+        {
+            Swatch = mixed
+                ? Brushes.Transparent
+                : new SolidColorBrush(Color.FromRgb(ToByte(linear.X), ToByte(linear.Y), ToByte(linear.Z)));
+        }
+
+        // The FIELD reconciles every pump like every other kind's cells do,
+        // never under the value guard: per-pump reconciliation is what
+        // visually reverts a refused or no-op commit. A hex typed while play
+        // mode owns the scene is refused by the editor, and skipping this
+        // would leave the box showing the refused value beside a swatch of
+        // the real colour, indefinitely. The field's own equality guard makes
+        // the unchanged case free, and a focused box is left alone exactly as
+        // every other cell's is.
         Fields[0].Refresh(Hex, mixed);
     }
 

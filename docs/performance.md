@@ -32,6 +32,7 @@ dotnet run --project SpectraEngine.Executable -- d3d11 --profile --debug-layer=f
 | `--props=<count>` | Scatters N part brushes **sharing one brush instance**, for measuring cost against *repetition* |
 | `--shadows=false` | Isolates what shadows cost |
 | `--pipeline=<name>` | `deferred` or `forward`, for the A/B |
+| `--vsync` | Paces Present to the display. **A frame time under vsync measures the monitor** — leave it off for every measurement; it exists so a demo run can reproduce the editor's pacing |
 
 **Read `Present` carefully.** Where a backend blocks for the GPU or for vsync,
 it blocks there, so a frame reading 1 ms of work and 15 ms of `Present` is
@@ -108,9 +109,10 @@ Scaling measured directly, not extrapolated:
 
 **5 km² and 25,000 objects at 118 fps is what this engine is good for today.**
 
-### 3a. Hosting changes the number, and D3D12 in the editor is capped
+### 3a. Hosting changes the number: the editor is capped ON PURPOSE now
 
-Measured 2026-08-28, same demo scene, same machine:
+History first, because the numbers moved twice. Measured 2026-08-28, same demo
+scene, same machine, before the cap:
 
 | host | backend | frame |
 |---|---|---|
@@ -118,21 +120,24 @@ Measured 2026-08-28, same demo scene, same machine:
 | Avalonia viewport | D3D12 | **16.69 ms (60 fps)** |
 | Avalonia viewport | D3D11 | 0.58 ms (1,715 fps) |
 
-**The editor's D3D12 viewport is pinned to the refresh interval, and it is not
-the engine's own work.** The chain is `FlipDiscard` presented with
-`Present(0, 0)` and no `ALLOW_TEARING` flag; presenting a flip-model chain into
-a child window that DWM composites honours the refresh rate regardless of the
-sync interval. D3D11 is not affected because its chain is bitblt. 16.7 ms with
-sub-millisecond work in it is exactly the shape of the vsync bug this repo has
-already paid for once (§1), so it is written down rather than left to be
-rediscovered.
+D3D12 was already pinned by accident of its chain (`FlipDiscard` with no
+`ALLOW_TEARING` flag into a DWM-composited child honours the refresh rate
+regardless of the sync interval), while D3D11's bitblt chain ran unthrottled —
+~1,700–2,700 presents a second, each one a full back-buffer copy into DWM's
+redirection surface. That was a pinned core, GPU copy bandwidth taken from the
+compositor that draws the shell's own chrome, and every per-frame allocation
+multiplied by the frame rate into gen0 pressure whose pauses stop the UI
+thread too — measurable as "the editor feels sluggish" while the engine's own
+FPS counter reads absurdly fast.
 
-**Not fixed, deliberately.** Sixty frames a second in an editor viewport is
-arguably what you want, and uncapping it means `DXGI_FEATURE_PRESENT_ALLOW_TEARING`
-support detection plus the flag on the swap chain, on `ResizeBuffers` and on
-every present, in the one backend path with a history of resize failures. What
-matters today is that **no D3D12 measurement taken in the editor means
-anything** until that is decided: measure D3D12 in the standalone demo.
+**Both backends are capped in the editor now, deliberately, via
+`Renderer.VSync`** (set by `EditorSession`; both D3D backends present with
+sync interval 1, GL re-applies its context swap interval on the render
+thread). Measured after: 60 fps flat, ~1% CPU, 0.1 MB/s allocated at rest.
+The demo stays uncapped because it is the measurement instrument — `--vsync`
+is the opt-in — so the rule is now symmetric and simple: **no measurement
+taken in the editor viewport means anything, on either backend; measure in
+the standalone demo, without `--vsync`.**
 
 ---
 

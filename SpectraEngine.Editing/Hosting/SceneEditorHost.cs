@@ -382,6 +382,7 @@ public sealed class SceneEditorHost : ISceneEditor
         // one call that routes it to whichever owns the pointer.
         _viewport.Update(in frame, _input.WasKeyPressed(InputKey.Escape));
         UpdateCursorShape();
+        TrackSelectMoveTravel(in frame);
         UpdateGridFade((float)deltaTime);
 
         return _editorNavigation;
@@ -389,18 +390,51 @@ public sealed class SceneEditorHost : ISceneEditor
 
     // Whether a gesture the grid is the ladder for is live: a move or resize
     // drag through the transform gizmo, an object following the cursor after a
-    // select-and-move press, or a light's length handle (range and extents
-    // snap on the move grid; angles are degrees and get nothing from it). A
-    // rotate drag deliberately shows no grid — it would read as a 15-unit
-    // lattice beside a tool snapping in degrees.
+    // select-and-move press THAT HAS ACTUALLY TRAVELLED, or a light's length
+    // handle (range and extents snap on the move grid; angles are degrees and
+    // get nothing from it). A rotate drag deliberately shows no grid — it
+    // would read as a 15-unit lattice beside a tool snapping in degrees.
     private bool MoveGestureLive => _viewport.DragMode switch
     {
-        ViewportDragMode.SelectAndMove => true,
+        ViewportDragMode.SelectAndMove => _selectMoveTravelled,
         ViewportDragMode.Manipulate => LightGizmo.IsDragging
             ? LightGizmo.IsDraggingLength
             : _gizmos.Mode is GizmoMode.Translate or GizmoMode.Scale,
         _ => false,
     };
+
+    // SelectAndMove is entered on the PRESS, before any travel — a plain click
+    // to select something holds it for ~100 ms, and an envelope keyed on the
+    // mode alone pulses the full-viewport lattice on the single most common
+    // viewport gesture. A handle grab is different: grabbing a handle IS
+    // announcing a drag, so Manipulate shows the grid immediately.
+    private const float SelectMoveTravelPixels = 4f;
+    private Vector2 _selectMoveAnchor;
+    private bool _selectMoveAnchorValid;
+    private bool _selectMoveTravelled;
+
+    private void TrackSelectMoveTravel(in EditorInputFrame frame)
+    {
+        if (_viewport.DragMode != ViewportDragMode.SelectAndMove)
+        {
+            _selectMoveAnchorValid = false;
+            _selectMoveTravelled = false;
+            return;
+        }
+
+        if (!_selectMoveAnchorValid)
+        {
+            _selectMoveAnchor = frame.CursorPosition;
+            _selectMoveAnchorValid = true;
+            return;
+        }
+
+        if (!_selectMoveTravelled &&
+            Vector2.Distance(frame.CursorPosition, _selectMoveAnchor) > SelectMoveTravelPixels)
+        {
+            _selectMoveTravelled = true;
+        }
+    }
 
     private void UpdateGridFade(float dt)
     {
@@ -738,7 +772,18 @@ public sealed class SceneEditorHost : ISceneEditor
         // long as play mode lasted.
         _viewport.Reset();
         _camera.SuspendNavigation();
+        ResetGridFade();
         IsSuspended = true;
+    }
+
+    // The envelope freezes while suspended (the engine stops calling Update but
+    // keeps calling DrawWorld), so a grid that was mid-gesture at F8 would
+    // otherwise come back at near-full opacity on the first frame after Resume,
+    // announcing a gesture from before the play session.
+    private void ResetGridFade()
+    {
+        _gridOpacity = 0f;
+        Grid.Opacity = 0f;
     }
 
     /// <inheritdoc/>
@@ -874,6 +919,10 @@ public sealed class SceneEditorHost : ISceneEditor
         _camera.SuspendNavigation();
         _scene.Selection.Clear();
         _undo.Clear();
+
+        // A gesture the old scene was mid-way through must not leave its grid
+        // fading over the new one.
+        ResetGridFade();
     }
 
     /// <inheritdoc/>
@@ -968,12 +1017,21 @@ public sealed class SceneEditorHost : ISceneEditor
         if (IsSuspended)
             return;
 
-        // The grid's spacing is the LIVE move increment, not a fixed size, so
-        // the squares on the floor are the squares an object will land on. It
-        // follows the translate tool specifically rather than the live tool: a
-        // rotate snap is in degrees and would silently reinterpret the grid as
-        // a 15-unit lattice.
-        Grid.Draw(output, _scene.Camera, _gizmos.Translate.Snap.Increment, _viewportSize.Y);
+        // The grid's spacing is the ladder of the gesture it is up FOR: the
+        // move grid ordinarily, and the RESIZE step during a resize drag —
+        // the two are separate SnapSettings a UI can split, and auto mode
+        // summoning 1-unit squares for a face stepping in 0.25-unit
+        // increments would be wrong at exactly the moment the grid appears.
+        // Never the rotate tool's: a rotate snap is in degrees and would
+        // silently reinterpret the grid as a 15-unit lattice.
+        bool resizing = _viewport.DragMode == ViewportDragMode.Manipulate
+            && !LightGizmo.IsDragging
+            && _gizmos.Mode == GizmoMode.Scale;
+        float increment = resizing
+            ? _gizmos.Scale.Snap.Increment
+            : _gizmos.Translate.Snap.Increment;
+
+        Grid.Draw(output, _scene.Camera, increment, _viewportSize.Y);
     }
 
     // --- Navigation keyboard -------------------------------------------------

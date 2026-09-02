@@ -381,6 +381,15 @@ public sealed class EditorCameraController
         _lastGesture = _gesture;
         _gesture = ClassifyGesture(in frame);
 
+        // The residue a released pointer gesture leaves keeps settling at the
+        // POINTER constant: the hand was tracking at 20 ms, and braking to the
+        // 80 ms flight constant on the release frame turns a flick's last few
+        // degrees into a third of a second of ooze — a shortened rerun of the
+        // exact glide the split exists to remove. A wheel notch or a framing
+        // flight hands the settle back to the flight constant below.
+        if (_gesture != EditorNavigationGesture.None)
+            _pointerSettle = true;
+
         // The cursor is captured for as long as — and only as long as — a
         // freelook is live. Requested on the press frame, so it is usually in
         // effect by the second frame of the gesture; until then the gesture runs
@@ -426,6 +435,10 @@ public sealed class EditorCameraController
                 // toward a pixel that means nothing.
                 Vector2 target = frame.IsCursorLocked ? frame.ViewportSize * 0.5f : frame.CursorPosition;
                 ApplyZoom(frame.ScrollDelta.Y, target, frame.ViewportSize);
+
+                // Zoom-to-cursor moves the position target too, and that
+                // motion wants the wheel's own glide.
+                _pointerSettle = false;
             }
         }
 
@@ -767,6 +780,9 @@ public sealed class EditorCameraController
 
         TargetFocus = center;
         TargetPosition = TargetFocus - TargetForward() * TargetDistance;
+
+        // A framing flight is the glide the long constant was made for.
+        _pointerSettle = false;
     }
 
     /// <summary>
@@ -892,20 +908,26 @@ public sealed class EditorCameraController
     // Damps the live state toward the target and writes the camera. Returns
     // whether anything actually moved.
     //
+    // Whether the look/move channels are settling POINTER-driven motion: set
+    // while a navigation gesture is live and kept through its release residue,
+    // handed back to the flight constant by a wheel zoom or a framing flight.
+    private bool _pointerSettle;
+
     // TWO alphas, not one: the look and move channels follow the pointer while
-    // a gesture is live (PointerSmoothingTimeConstant), and the dolly always
-    // keeps the wheel's own constant — the wheel is the channel the long
-    // constant was tuned for, and a live orbit must not stiffen a zoom that is
-    // still gliding. When no gesture is live (a frame-the-selection flight, the
-    // residue after a release), everything shares the flight constant again.
+    // a gesture is live or its residue is still draining
+    // (PointerSmoothingTimeConstant), and the dolly always keeps the wheel's
+    // own constant — the wheel is the channel the long constant was tuned for,
+    // and a live orbit must not stiffen a zoom that is still gliding. A
+    // framing flight and a zoom hand the look/move channels back to the flight
+    // constant.
     private bool Settle(float deltaTime)
     {
         if (!IsSettling)
             return false;
 
-        float lookMoveTau = _gesture == EditorNavigationGesture.None
-            ? SmoothingTimeConstant
-            : MathF.Min(PointerSmoothingTimeConstant, SmoothingTimeConstant);
+        float lookMoveTau = _pointerSettle
+            ? MathF.Min(PointerSmoothingTimeConstant, SmoothingTimeConstant)
+            : SmoothingTimeConstant;
 
         float alphaMove = SmoothingAlpha(deltaTime, lookMoveTau);
         float alphaZoom = SmoothingAlpha(deltaTime, SmoothingTimeConstant);
