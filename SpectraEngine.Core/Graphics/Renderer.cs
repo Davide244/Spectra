@@ -705,7 +705,7 @@ public abstract class Renderer
         BeginPass(output, PassClear.Keep);
         try
         {
-            DrawFullscreen(_resolvePass);
+            DrawFullscreen(_resolvePass, EnsureFullscreenTriangle());
 
             // The overlay rides along in the same pass, on top of the resolved
             // image and outside the tone curve. See DrawOverlay for why it must
@@ -720,15 +720,18 @@ public abstract class Renderer
     }
 
     /// <summary>
-    /// Draws the full-screen triangle with <paramref name="pass"/>'s program and
-    /// values, with depth testing off and solid fill.
+    /// Draws <paramref name="geometry"/> with <paramref name="pass"/>'s program
+    /// and values, with depth testing off and solid fill.
     /// </summary>
     /// <remarks>
     /// Abstract rather than shared because the order of <c>Use()</c> and the
     /// uniform writes differs per backend, and because each has its own ambient
-    /// raster state to neutralise. See <see cref="PostPass"/>.
+    /// raster state to neutralise. See <see cref="PostPass"/>. The geometry is
+    /// a parameter rather than always <see cref="EnsureFullscreenTriangle"/>
+    /// because the orientation measurement needs a quad with UVs that carry no
+    /// per-backend adjustment; see <see cref="OrientationQuad"/>.
     /// </remarks>
-    protected abstract void DrawFullscreen(PostPass pass);
+    protected abstract void DrawFullscreen(PostPass pass, Mesh geometry);
 
     /// <summary>
     /// Runs one resolve, for tests. Internal because nothing in a game drives a
@@ -740,6 +743,127 @@ public abstract class Renderer
 
     /// <summary>The shared clip-space triangle, for tests that drive their own shader over it.</summary>
     internal Mesh EnsureFullscreenTriangleForTest() => EnsureFullscreenTriangle();
+
+    // ---- Texture orientation, measured -------------------------------------
+
+    private Mesh? _orientationQuadFull;
+    private Mesh? _orientationQuadTopHalf;
+    private PostPass? _orientationPass;
+
+    /// <summary>
+    /// Draws <paramref name="source"/> over <paramref name="target"/> through
+    /// <see cref="OrientationQuad"/>: a clip-space quad whose UVs carry no
+    /// per-backend adjustment. The target is cleared to opaque black first, so
+    /// anything the quad does not cover reads as black.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The instrument for a question the code cannot answer.</b> Whether an
+    /// uploaded texture arrives the same way up on all three backends is not
+    /// decidable by reading either the upload path or the sampler: every call
+    /// succeeds either way and the only difference is the picture. So it is
+    /// drawn and read back. See <see cref="ReadTargetPixel"/> for the other
+    /// half.
+    /// </para>
+    /// <para>
+    /// Safe outside a frame, which is what lets a diagnostic call it: each
+    /// backend opens whatever command scope it needs around the draw and
+    /// finishes it before returning.
+    /// </para>
+    /// </remarks>
+    internal void DrawOrientationQuad(Texture source, RenderTarget target, OrientationQuad.Coverage coverage)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(target);
+
+        // Everything that creates a GPU resource happens BEFORE the command
+        // scope opens: on D3D12 a mesh upload and a shader's first pipeline
+        // state both execute and wait on their own, which a recording command
+        // list cannot survive.
+        _resolveShader ??= BaseShaders.PostResolvePath is { } path
+            ? CreateShaderFromFile(path)
+            : CreateShaderFromSource(BaseShaders.PostResolve);
+        _orientationPass ??= new PostPass(_resolveShader);
+
+        Mesh quad = coverage == OrientationQuad.Coverage.TopHalf
+            ? _orientationQuadTopHalf ??= CreateOrientationQuad(coverage)
+            : _orientationQuadFull ??= CreateOrientationQuad(coverage);
+
+        // Exposure pinned at 1 rather than read from the renderer: the run this
+        // measures may have set any exposure it likes, and a probe whose answer
+        // depends on that is not a probe.
+        _orientationPass
+            .SetUniform("uExposure", 1f)
+            .SetTexture("uSource", 0, source);
+
+        BeginOutOfFrameCommands();
+        try
+        {
+            BeginPass(target, PassClear.To(new Vector4(0f, 0f, 0f, 1f)));
+            try
+            {
+                DrawFullscreen(_orientationPass, quad);
+            }
+            finally
+            {
+                EndPass();
+            }
+        }
+        finally
+        {
+            EndOutOfFrameCommands();
+        }
+    }
+
+    private Mesh CreateOrientationQuad(OrientationQuad.Coverage coverage) => CreateMesh(
+        OrientationQuad.BuildVertices(coverage),
+        OrientationQuad.Indices,
+        VertexAttribute.StandardLayout,
+        MeshCpuAccess.None);
+
+    /// <summary>
+    /// Reads one texel of <paramref name="target"/>'s colour attachment back to
+    /// the CPU, as 8-bit RGBA.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The coordinates are PICTURE space, not memory order, and that is the
+    /// whole contract.</b> <paramref name="x"/> counts from the left edge and
+    /// <paramref name="y"/> counts from the BOTTOM - the edge a vertex at clip
+    /// y = -1 rasterises to, which is the bottom of the viewport on every
+    /// backend. Each backend converts from that to its own row order, because
+    /// stating the answer in memory order would make a comparison between two
+    /// backends meaningless: the disagreement being looked for and the
+    /// convention used to look would be the same quantity.
+    /// </para>
+    /// <para>
+    /// Render thread only, and synchronous: it stalls until the GPU has finished
+    /// whatever wrote the texel. A diagnostic and a test path, never a frame
+    /// path.
+    /// </para>
+    /// </remarks>
+    internal abstract (byte R, byte G, byte B, byte A) ReadTargetPixel(RenderTarget target, int x, int y);
+
+    /// <summary>
+    /// Opens a command scope for work issued outside a frame, on backends where
+    /// that is a thing. Immediate-mode backends need nothing and do nothing.
+    /// </summary>
+    /// <remarks>
+    /// Not a general facility: it exists so a diagnostic can draw one quad
+    /// between frames. Nothing may nest inside it and nothing in the frame path
+    /// calls it.
+    /// </remarks>
+    protected virtual void BeginOutOfFrameCommands()
+    {
+    }
+
+    /// <summary>
+    /// Closes the scope <see cref="BeginOutOfFrameCommands"/> opened and blocks
+    /// until the GPU has executed it.
+    /// </summary>
+    protected virtual void EndOutOfFrameCommands()
+    {
+    }
 
     /// <summary>
     /// Frees the intermediate targets and the shared full-screen machinery: the
@@ -777,6 +901,9 @@ public abstract class Renderer
         _geometryInstanceHighWater = 0;
 
         _fullscreenTriangle = null;
+        _orientationQuadFull = null;
+        _orientationQuadTopHalf = null;
+        _orientationPass = null;
         _resolveShader = null;
         _resolvePass = null;
         _gbufferShader = null;
@@ -1590,7 +1717,7 @@ public abstract class Renderer
         BeginPass(FrameTarget, PassClear.Keep);
         try
         {
-            DrawFullscreen(_lightPass);
+            DrawFullscreen(_lightPass, EnsureFullscreenTriangle());
         }
         finally
         {
@@ -2008,9 +2135,41 @@ public abstract class Renderer
     /// <summary>
     /// Uploads <paramref name="pixels"/> as a 2D texture in the given format and
     /// returns a renderer-owned handle. Pixel data is expected as tightly packed
-    /// rows from bottom-left to top-right (OpenGL convention).
+    /// rows, <b>row 0 first and row 0 at v = 0</b>.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// <b>All three backends agree about which way up an uploaded texture is,
+    /// and that is measured rather than reasoned about.</b> Row 0 of this span
+    /// is the row sampled at v = 0 on OpenGL, D3D11 and D3D12 alike:
+    /// <c>glTexImage2D</c>'s first row and a <c>SubresourceData</c>'s first row
+    /// are both the v = 0 end. The bottom-left-versus-top-left origin difference
+    /// the engine documents elsewhere is a fact about RENDER TARGETS - surfaces
+    /// filled by rasterisation, where GL writes the bottom of the picture into
+    /// row 0 and D3D writes the top - which is why
+    /// <see cref="FullscreenTriangle"/> flips V on D3D and why nothing here
+    /// does. Confusing the two is what makes this look like a per-backend
+    /// problem when it is not.
+    /// </para>
+    /// <para>
+    /// <b>The engine's convention is that v = 0 is the BOTTOM of the
+    /// picture</b>, which is what <c>ImageDecoder.FlipRowsInPlace</c>
+    /// establishes: image files store rows top-down, the decoder reverses them,
+    /// so a mesh whose v grows upward renders the file the way it was authored.
+    /// Since no backend disagrees, a future change of convention - the cooked
+    /// block-compressed path cannot flip rows at all, so it will arrive
+    /// top-down - belongs in exactly ONE place, the V axis of UV generation,
+    /// applied identically everywhere, and never per backend at upload. See
+    /// <c>docs/formats-and-pipeline.md</c> section 2.2.
+    /// </para>
+    /// <para>
+    /// Guarded rather than asserted in prose: <c>TextureOrientationGlTests</c>
+    /// pins OpenGL against a real driver, and <c>--offscreen-probe</c> prints a
+    /// verdict line per backend for the two that have no headless fixture. Both
+    /// draw the asymmetric fixture named by
+    /// <see cref="TextureOrientationProbe"/>; an upside-down texture raises no
+    /// error anywhere, so a picture is the only instrument there is.
+    /// </para>
     /// <para>
     /// <b><paramref name="colorSpace"/> has no default on purpose.</b> Whether a
     /// block of bytes is colour or data is a fact about the content that this

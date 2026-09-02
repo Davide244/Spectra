@@ -92,7 +92,10 @@ internal sealed class FakeRenderer : Renderer
     /// <summary>Full-screen passes this renderer was asked to draw.</summary>
     public int FullscreenDraws { get; private set; }
 
-    protected override void DrawFullscreen(PostPass pass) => FullscreenDraws++;
+    protected override void DrawFullscreen(PostPass pass, Mesh geometry) => FullscreenDraws++;
+
+    internal override (byte R, byte G, byte B, byte A) ReadTargetPixel(RenderTarget target, int x, int y)
+        => throw new NotSupportedException($"{GetType().Name} has no pixels to read.");
 
     protected override void EndPassCore(RenderTarget? target, ReadOnlySpan<RenderTarget> targets) => OpenPasses--;
 

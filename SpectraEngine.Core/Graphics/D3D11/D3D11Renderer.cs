@@ -336,10 +336,9 @@ public sealed unsafe class D3D11Renderer : Renderer
         ResolveTo(sceneTarget.ColorTexture!, null, scene);
     }
 
-    protected override void DrawFullscreen(PostPass pass)
+    protected override void DrawFullscreen(PostPass pass, Mesh geometry)
     {
         var context = (ID3D11DeviceContext*)_context.Handle;
-        Mesh triangle = EnsureFullscreenTriangle();
 
         // Depth off, and solid fill: D3D11WireframePipeline restores its OWN
         // solid rasterizer object rather than the renderer's, so the state here
@@ -352,9 +351,77 @@ public sealed unsafe class D3D11Renderer : Renderer
         // this method is per-backend at all.
         pass.ApplyTo(pass.Shader);
         pass.Shader.Use();
-        triangle.Draw();
+        geometry.Draw();
 
         context->OMSetDepthStencilState((ID3D11DepthStencilState*)_defaultDepth.Handle, 0);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <b>The row flip is here, and it is the only place a D3D readback may do
+    /// it.</b> A D3D render target's origin is top-left, so the row a clip
+    /// y = -1 vertex rasterises to is the LAST one; the contract's y counts from
+    /// the bottom of the picture, so the source row is <c>height - 1 - y</c>.
+    /// <para>
+    /// A one-texel staging copy rather than a whole-surface one: this is called
+    /// four times by a diagnostic and never by a frame, and a full staging
+    /// surface for four texels is memory nobody needs. <c>Map</c> on the
+    /// immediate context is what waits for the copy - there is no fence to take.
+    /// </para>
+    /// </remarks>
+    internal override (byte R, byte G, byte B, byte A) ReadTargetPixel(
+        RenderTarget target, int x, int y)
+    {
+        if (target.ColorTexture is not D3D11Texture color)
+            throw new ArgumentException("The target has no colour attachment to read.", nameof(target));
+
+        var dev = (ID3D11Device*)_device.Handle;
+        var context = (ID3D11DeviceContext*)_context.Handle;
+
+        var desc = new Texture2DDesc
+        {
+            Width = 1,
+            Height = 1,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = color.DxgiFormat,
+            SampleDesc = new SampleDesc(1, 0),
+            Usage = Usage.Staging,
+            BindFlags = 0,
+            CPUAccessFlags = (uint)CpuAccessFlag.Read,
+            MiscFlags = 0,
+        };
+
+        ID3D11Texture2D* stagingPtr = null;
+        SilkMarshal.ThrowHResult(dev->CreateTexture2D(&desc, null, &stagingPtr));
+        ComPtr<ID3D11Texture2D> staging = ComOwnership.Own(stagingPtr);
+
+        try
+        {
+            uint top = (uint)(target.Height - 1 - y);
+            var box = new Silk.NET.Direct3D11.Box
+            {
+                Left = (uint)x,
+                Top = top,
+                Front = 0,
+                Right = (uint)x + 1,
+                Bottom = top + 1,
+                Back = 1,
+            };
+            context->CopySubresourceRegion(
+                (ID3D11Resource*)stagingPtr, 0, 0, 0, 0, color.Resource, 0, &box);
+
+            MappedSubresource mapped = default;
+            SilkMarshal.ThrowHResult(context->Map((ID3D11Resource*)stagingPtr, 0, Map.Read, 0, &mapped));
+            byte* p = (byte*)mapped.PData;
+            var result = (p[0], p[1], p[2], p[3]);
+            context->Unmap((ID3D11Resource*)stagingPtr, 0);
+            return result;
+        }
+        finally
+        {
+            ComOwnership.Release(ref staging);
+        }
     }
 
     protected override void SetViewportCore(int x, int y, int width, int height)

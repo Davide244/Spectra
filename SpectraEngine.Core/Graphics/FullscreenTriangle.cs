@@ -29,10 +29,13 @@ namespace SpectraEngine.Core.Graphics;
 /// row zero. In OpenGL a framebuffer's origin is bottom-left, so the fragment at
 /// the bottom of the screen writes texel row 0 and sampling that texture at
 /// v = 0 reads it back. In D3D the render-target origin is top-left, so the same
-/// fragment writes the LAST row and v = 0 reads the top instead. Uploaded
-/// textures do not show this because <c>ImageDecoder</c> flips image rows on the
-/// way in, which makes v = 0 the bottom of the picture on both; a target written
-/// by rasterisation never passes through that code. Baking the flip into the
+/// fragment writes the LAST row and v = 0 reads the top instead. <b>This is a
+/// fact about targets and not about textures</b>: an UPLOADED texture's row 0 is
+/// the v = 0 end on all three backends, measured rather than assumed - see the
+/// remarks on <c>Renderer.CreateTexture</c> and
+/// <see cref="TextureOrientationProbe"/> - so nothing on the content path needs
+/// a compensation and only a surface written by rasterisation does. Baking the
+/// flip into the
 /// vertex data keeps it out of the shader, where it would need a variant or a
 /// branch, and out of the sampler, where nothing can express it.
 /// </para>

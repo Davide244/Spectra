@@ -656,23 +656,8 @@ public sealed unsafe class D3D12Renderer : Renderer
 
         if (_pipelines.Count == 0 || _surface is null) return;
 
-        var allocator = (ID3D12CommandAllocator*)_commandAllocator.Handle;
         var list = (ID3D12GraphicsCommandList*)_commandList.Handle;
-        SilkMarshal.ThrowHResult(allocator->Reset());
-        SilkMarshal.ThrowHResult(list->Reset(allocator, (ID3D12PipelineState*)null));
-        _isRecording = true;
-        CurrentProgram = null;
-        CurrentFillMode = FillMode.Solid;
-
-        // Fresh per-frame arenas — safe because the previous frame fully
-        // synced on the fence before this one starts.
-        FrameNumber++;
-        ResetLastBoundState();
-        _uploadRingOffset = 0;
-        _srvRingOffset = 0;
-        _samplerRingOffset = 0;
-        _stagedSlotCount = 0;
-        _ringOverflowReported = false;
+        BeginRecording();
 
         // Size the rings for the draw list about to be recorded, BEFORE the
         // heaps are bound. Growing between frames from the previous frame's
@@ -684,13 +669,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         // and here is the one place a heap can be swapped safely (GPU idle on
         // the Present fence, command list reset, nothing bound yet).
         ReserveDescriptorRings(view);
-
-        ID3D12DescriptorHeap** heaps = stackalloc ID3D12DescriptorHeap*[2]
-        {
-            (ID3D12DescriptorHeap*)_srvRing.Handle,
-            (ID3D12DescriptorHeap*)_samplerRing.Handle,
-        };
-        list->SetDescriptorHeaps(2, heaps);
+        BindDescriptorHeaps();
 
         Transition(list, (ID3D12Resource*)_backBuffers[_frameIndex].Handle,
             ResourceStates.Present, ResourceStates.RenderTarget);
@@ -725,6 +704,208 @@ public sealed unsafe class D3D12Renderer : Renderer
 
         ID3D12CommandList* executeList = (ID3D12CommandList*)list;
         ((ID3D12CommandQueue*)_queue.Handle)->ExecuteCommandLists(1, &executeList);
+    }
+
+    /// <summary>
+    /// Resets the allocator and the command list and clears every piece of
+    /// per-recording state that a fresh list invalidates.
+    /// </summary>
+    /// <remarks>
+    /// Factored out of <see cref="Render"/> so the out-of-frame path shares it
+    /// rather than copying it. A copy is exactly how one of these resets goes
+    /// missing on one path: nothing throws, the list simply skips a rebind it
+    /// believes is redundant and draws with whatever the previous list left.
+    /// The ring reservation the view's size decides stays at the call site,
+    /// because it has no meaning outside a frame.
+    /// <para>
+    /// <b><see cref="FrameNumber"/> belongs in here and not at the call site.</b>
+    /// A program caches the GPU address of the upload slice it wrote its
+    /// cbuffer into and rebinds it while <c>LastUploadFrame</c> still matches;
+    /// what makes that safe is that the ring rewinds exactly when the number
+    /// changes. Rewinding without bumping - which is what an out-of-frame
+    /// recording would do if the increment stayed in <see cref="Render"/> -
+    /// leaves a clean cbuffer bound to a slice this recording is about to
+    /// overwrite, which draws with somebody else's constants and reports
+    /// nothing.
+    /// </para>
+    /// </remarks>
+    private void BeginRecording()
+    {
+        var allocator = (ID3D12CommandAllocator*)_commandAllocator.Handle;
+        var list = (ID3D12GraphicsCommandList*)_commandList.Handle;
+        SilkMarshal.ThrowHResult(allocator->Reset());
+        SilkMarshal.ThrowHResult(list->Reset(allocator, (ID3D12PipelineState*)null));
+        _isRecording = true;
+        CurrentProgram = null;
+        CurrentFillMode = FillMode.Solid;
+
+        // Fresh per-recording arenas: safe because the previous submission
+        // fully synced on the fence before this one starts.
+        FrameNumber++;
+        ResetLastBoundState();
+        _uploadRingOffset = 0;
+        _srvRingOffset = 0;
+        _samplerRingOffset = 0;
+        _stagedSlotCount = 0;
+        _ringOverflowReported = false;
+    }
+
+    /// <summary>Binds the two shader-visible rings. After any reservation, before anything draws.</summary>
+    private void BindDescriptorHeaps()
+    {
+        ID3D12DescriptorHeap** heaps = stackalloc ID3D12DescriptorHeap*[2]
+        {
+            (ID3D12DescriptorHeap*)_srvRing.Handle,
+            (ID3D12DescriptorHeap*)_samplerRing.Handle,
+        };
+        ((ID3D12GraphicsCommandList*)_commandList.Handle)->SetDescriptorHeaps(2, heaps);
+    }
+
+    /// <summary>Closes, submits and waits. The other half of <see cref="BeginRecording"/>.</summary>
+    private void EndRecordingAndWait()
+    {
+        var list = (ID3D12GraphicsCommandList*)_commandList.Handle;
+        SilkMarshal.ThrowHResult(list->Close());
+        _isRecording = false;
+
+        ID3D12CommandList* executeList = (ID3D12CommandList*)list;
+        ((ID3D12CommandQueue*)_queue.Handle)->ExecuteCommandLists(1, &executeList);
+        WaitForGpu();
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// This backend has no immediate context, so work issued between frames
+    /// needs a command list of its own. The back buffer is deliberately not
+    /// transitioned here: nothing outside a frame draws to it.
+    /// </remarks>
+    protected override void BeginOutOfFrameCommands()
+    {
+        if (_isRecording)
+            throw new InvalidOperationException("Out-of-frame commands cannot be issued while a frame is recording.");
+
+        BeginRecording();
+        BindDescriptorHeaps();
+    }
+
+    /// <inheritdoc/>
+    protected override void EndOutOfFrameCommands() => EndRecordingAndWait();
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <b>The row flip is the D3D half of the contract</b>: a render target's
+    /// origin is top-left here, so the row a clip y = -1 vertex rasterises to is
+    /// the last one, and the caller's y counts from the bottom of the picture.
+    /// <para>
+    /// A readback heap plus its own command list, closed and fenced before the
+    /// map: there is no immediate context to make the copy for us, and mapping
+    /// a resource the GPU has not finished writing returns whatever is there.
+    /// The destination footprint's row pitch is 256-aligned whatever the region
+    /// asked for, which is why the buffer is sized from
+    /// <c>GetCopyableFootprints</c> rather than from four bytes.
+    /// </para>
+    /// </remarks>
+    internal override (byte R, byte G, byte B, byte A) ReadTargetPixel(
+        RenderTarget target, int x, int y)
+    {
+        if (target is not D3D12RenderTarget d3dTarget || target.ColorTexture is not D3D12Texture color)
+            throw new ArgumentException("The target has no colour attachment to read.", nameof(target));
+        if (_isRecording)
+            throw new InvalidOperationException("A pixel readback cannot be issued while a frame is recording.");
+
+        var sourceDesc = new ResourceDesc
+        {
+            Dimension = ResourceDimension.Texture2D,
+            Alignment = 0,
+            Width = 1,
+            Height = 1,
+            DepthOrArraySize = 1,
+            MipLevels = 1,
+            Format = color.DxgiFormat,
+            SampleDesc = new SampleDesc(1, 0),
+            Layout = TextureLayout.LayoutUnknown,
+            Flags = ResourceFlags.None,
+        };
+
+        PlacedSubresourceFootprint footprint;
+        uint numRows;
+        ulong rowSize;
+        ulong totalBytes;
+        DevicePtr->GetCopyableFootprints(&sourceDesc, 0, 1, 0, &footprint, &numRows, &rowSize, &totalBytes);
+
+        ComPtr<ID3D12Resource> readback = CreateReadbackBuffer((uint)totalBytes);
+        try
+        {
+            var list = (ID3D12GraphicsCommandList*)_commandList.Handle;
+            BeginRecording();
+
+            ResourceStates previous = d3dTarget.ColorState;
+            d3dTarget.TransitionColor(list, ResourceStates.CopySource);
+
+            var dst = new TextureCopyLocation
+            {
+                PResource = (ID3D12Resource*)readback.Handle,
+                Type = TextureCopyType.PlacedFootprint,
+            };
+            dst.Anonymous.PlacedFootprint = footprint;
+            var src = new TextureCopyLocation
+            {
+                PResource = color.Resource,
+                Type = TextureCopyType.SubresourceIndex,
+            };
+            src.Anonymous.SubresourceIndex = 0;
+
+            uint top = (uint)(target.Height - 1 - y);
+            var box = new Silk.NET.Direct3D12.Box
+            {
+                Left = (uint)x,
+                Top = top,
+                Front = 0,
+                Right = (uint)x + 1,
+                Bottom = top + 1,
+                Back = 1,
+            };
+            list->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
+
+            d3dTarget.TransitionColor(list, previous);
+            EndRecordingAndWait();
+
+            void* mapped = null;
+            var readRange = new Silk.NET.Direct3D12.Range { Begin = 0, End = (nuint)totalBytes };
+            SilkMarshal.ThrowHResult(((ID3D12Resource*)readback.Handle)->Map(0, &readRange, &mapped));
+            byte* p = (byte*)mapped;
+            var result = (p[0], p[1], p[2], p[3]);
+            var written = new Silk.NET.Direct3D12.Range { Begin = 0, End = 0 };
+            ((ID3D12Resource*)readback.Handle)->Unmap(0, &written);
+            return result;
+        }
+        finally
+        {
+            ComOwnership.Release(ref readback);
+        }
+    }
+
+    private ComPtr<ID3D12Resource> CreateReadbackBuffer(uint sizeBytes)
+    {
+        var heapProps = new HeapProperties { Type = HeapType.Readback };
+        var desc = new ResourceDesc
+        {
+            Dimension = ResourceDimension.Buffer,
+            Alignment = 0,
+            Width = sizeBytes,
+            Height = 1,
+            DepthOrArraySize = 1,
+            MipLevels = 1,
+            Format = Format.FormatUnknown,
+            SampleDesc = new SampleDesc(1, 0),
+            Layout = TextureLayout.LayoutRowMajor,
+            Flags = ResourceFlags.None,
+        };
+        ID3D12Resource* res = null;
+        Guid resGuid = ID3D12Resource.Guid;
+        SilkMarshal.ThrowHResult(DevicePtr->CreateCommittedResource(
+            &heapProps, HeapFlags.None, &desc, ResourceStates.CopyDest, null, &resGuid, (void**)&res));
+        return ComOwnership.Own(res);
     }
 
     public override void Present(IRenderSurface surface)
@@ -1136,10 +1317,8 @@ public sealed unsafe class D3D12Renderer : Renderer
         return ComOwnership.Own(res);
     }
 
-    protected override void DrawFullscreen(PostPass pass)
+    protected override void DrawFullscreen(PostPass pass, Mesh geometry)
     {
-        Mesh triangle = EnsureFullscreenTriangle();
-
         // Fill and depth are ambient here too, but on this backend they are
         // baked into the pipeline state rather than set on the context, so a
         // stale value cannot return a wrongly-cached PSO -- only a correctly
@@ -1154,7 +1333,7 @@ public sealed unsafe class D3D12Renderer : Renderer
         // and the pass would then sample the white fallback.
         pass.ApplyTo(pass.Shader);
         pass.Shader.Use();
-        triangle.Draw();
+        geometry.Draw();
 
         CurrentFillMode = previousFill;
         CurrentDepthMode = previousDepth;

@@ -1,5 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
+using SpectraEngine.Core.Assets;
 using System;
+using System.IO;
 
 namespace SpectraEngine.Core.Graphics;
 
@@ -39,6 +41,10 @@ public sealed class OffscreenProbe
 {
     /// <summary>Frames rendered in each stage.</summary>
     private const int FramesPerStage = 3;
+
+    // Big enough that each corner texel lands well inside one quadrant of the
+    // 8x8 fixture under nearest sampling, and small enough to be free.
+    private const int OrientationTargetSize = 16;
 
     // One stage per thing that can independently be wrong. The two formats are
     // separate DXGI formats, separate RTV formats and separate pipeline states
@@ -123,7 +129,11 @@ public sealed class OffscreenProbe
                 return;
             }
 
-            Finish(renderer, passed: true);
+            // After the target stages, because it wants the same device warmed
+            // the same way, and before Finish, because its verdict is part of
+            // this probe's.
+            bool orientationPassed = MeasureTextureOrientation(renderer);
+            Finish(renderer, passed: orientationPassed);
         }
         catch (Exception ex)
         {
@@ -161,6 +171,119 @@ public sealed class OffscreenProbe
     private static string Describe(int index) =>
         index >= 0 && index < Stages.Length ? Stages[index].What : "setup";
 
+    /// <summary>
+    /// Draws the asymmetric fixture through pinned UVs and reads the four
+    /// corners back, so this backend states which way up an uploaded texture
+    /// arrives. Returns false if the answer is not the engine's convention.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is the D3D half of a measurement OpenGL can make in a unit
+    /// test.</b> Those two backends have no headless device fixture, so a
+    /// question whose only symptom is the picture has nowhere else to be
+    /// answered; and it is a question the code cannot answer, because every call
+    /// on every path succeeds whichever way the rows go.
+    /// </para>
+    /// <para>
+    /// The readback's own picture-space convention is proved first, with
+    /// geometry and no texture at all. Without that step a wrong conversion in
+    /// the instrument would be reported as a wrong texture in the engine.
+    /// </para>
+    /// </remarks>
+    private bool MeasureTextureOrientation(Renderer renderer)
+    {
+        // Deliberately no synthetic fallback: a probe that quietly measures
+        // different bytes when the fixture is missing is worse than one that
+        // says it could not run.
+        string path = Path.Combine(
+            ContentRoot.Path, TextureOrientationProbe.TexturePath.Replace('/', Path.DirectorySeparatorChar));
+        DecodedImage image;
+        try
+        {
+            image = ImageDecoder.DecodeFile(path);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex, "Texture orientation: FAIL - the fixture {Path} could not be read, so nothing was measured", path);
+            return false;
+        }
+
+        Texture? white = null;
+        Texture? fixture = null;
+        RenderTarget? target = null;
+        try
+        {
+            target = renderer.CreateRenderTarget(new RenderTargetDesc(
+                OrientationTargetSize, OrientationTargetSize, TextureFormat.Rgba8, TextureColorSpace.Linear));
+
+            white = renderer.CreateTexture(
+                [255, 255, 255, 255], 1, 1, TextureFormat.Rgba8, TextureColorSpace.Linear,
+                TextureFilter.Nearest, TextureWrap.Clamp);
+            renderer.DrawOrientationQuad(white, target, OrientationQuad.Coverage.TopHalf);
+
+            (byte topR, _, _, _) = renderer.ReadTargetPixel(
+                target, OrientationTargetSize / 2, OrientationTargetSize - 1);
+            (byte bottomR, _, _, _) = renderer.ReadTargetPixel(target, OrientationTargetSize / 2, 0);
+            if (topR < 120 || bottomR > 80)
+            {
+                _logger.LogError(
+                    "Texture orientation: FAIL - the readback itself is wrong on {Backend}. A quad covering " +
+                    "clip y 0..1 should light the top of the picture only, and the readback returned " +
+                    "top={Top} bottom={Bottom}. No conclusion about textures can be drawn from this run.",
+                    renderer.Backend, topR, bottomR);
+                return false;
+            }
+
+            // Linear on both sides, so the only transform between the file's
+            // bytes and these is the tone curve, which is monotone per channel
+            // and cannot turn one quadrant colour into another.
+            fixture = renderer.CreateTexture(
+                image.Pixels, image.Width, image.Height, image.Format, TextureColorSpace.Linear,
+                TextureFilter.Nearest, TextureWrap.Clamp);
+            renderer.DrawOrientationQuad(fixture, target, OrientationQuad.Coverage.Full);
+
+            int high = OrientationTargetSize - 1;
+            var reading = new TextureOrientationProbe.Reading(
+                ReadQuadrant(renderer, target, 0, high),
+                ReadQuadrant(renderer, target, high, high),
+                ReadQuadrant(renderer, target, 0, 0),
+                ReadQuadrant(renderer, target, high, 0));
+
+            if (reading.MatchesAuthoredImage)
+            {
+                _logger.LogInformation(
+                    "Texture orientation on {Backend}: {Verdict} - {Reading}",
+                    renderer.Backend, reading.Verdict, reading);
+                return true;
+            }
+
+            _logger.LogError(
+                "Texture orientation on {Backend}: {Verdict} - {Reading}. The engine's convention is that " +
+                "an uploaded texture renders the way the image file was authored; this backend disagrees.",
+                renderer.Backend, reading.Verdict, reading);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Texture orientation: FAIL - the measurement threw");
+            return false;
+        }
+        finally
+        {
+            if (fixture is not null) renderer.DestroyTexture(fixture);
+            if (white is not null) renderer.DestroyTexture(white);
+            if (target is not null) renderer.DestroyRenderTarget(target);
+        }
+    }
+
+    private static TextureOrientationProbe.Quadrant ReadQuadrant(
+        Renderer renderer, RenderTarget target, int x, int y)
+    {
+        (byte r, byte g, byte b, _) = renderer.ReadTargetPixel(target, x, y);
+        return TextureOrientationProbe.Classify(r, g, b);
+    }
+
     private void Finish(Renderer renderer, bool passed)
     {
         renderer.ProbeTarget = null;
@@ -194,7 +317,7 @@ public sealed class OffscreenProbe
             _logger.LogInformation(
                 "Offscreen probe: PASS - full frames rendered into {Stages} offscreen target(s) " +
                 "({What}), the colour attachment kept its identity across an in-place resize, " +
-                "and {Validation}",
+                "the texture-orientation reading matched the authored image, and {Validation}",
                 Stages.Length, string.Join(", ", Array.ConvertAll(Stages, x => x.What)),
                 renderer.DebugLayerActive
                     ? "the debug layer stayed silent"

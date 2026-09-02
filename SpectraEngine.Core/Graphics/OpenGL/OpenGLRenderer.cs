@@ -305,10 +305,9 @@ public class OpenGLRenderer : Renderer
         ResolveTo(sceneTarget.ColorTexture!, null, scene);
     }
 
-    protected override void DrawFullscreen(PostPass pass)
+    protected override void DrawFullscreen(PostPass pass, Mesh geometry)
     {
         GL gl = _gl!;
-        Mesh triangle = EnsureFullscreenTriangle();
 
         // Both are ambient state somebody else set: WireframePipeline leaves
         // polygon mode on Line, and depth testing is on for the scene.
@@ -319,9 +318,39 @@ public class OpenGLRenderer : Renderer
         // so staging before it would write into whatever was bound last.
         pass.Shader.Use();
         pass.ApplyTo(pass.Shader);
-        triangle.Draw();
+        geometry.Draw();
 
         gl.Enable(EnableCap.DepthTest);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <b>The picture-space contract is free on this backend.</b> A GL
+    /// framebuffer's origin is bottom-left, so the row a clip y = -1 vertex
+    /// rasterises to is row 0, and that is exactly the row
+    /// <c>glReadPixels(x, 0, ...)</c> returns - no flip anywhere. The two D3D
+    /// backends have to convert.
+    /// </remarks>
+    internal override unsafe (byte R, byte G, byte B, byte A) ReadTargetPixel(
+        RenderTarget target, int x, int y)
+    {
+        if (target.ColorTexture is not OpenGLTexture color)
+            throw new ArgumentException("The target has no colour attachment to read.", nameof(target));
+
+        GL gl = _gl!;
+        uint fbo = gl.GenFramebuffer();
+        gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, fbo);
+        gl.FramebufferTexture2D(
+            FramebufferTarget.ReadFramebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, color.Handle, 0);
+
+        var pixel = new byte[4];
+        fixed (byte* p = pixel)
+            gl.ReadPixels(x, y, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+        gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, 0);
+        gl.DeleteFramebuffer(fbo);
+        return (pixel[0], pixel[1], pixel[2], pixel[3]);
     }
 
     // The sRGB fallback is what "the back buffer" means on this backend when

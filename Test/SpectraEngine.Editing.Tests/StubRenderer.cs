@@ -75,8 +75,11 @@ internal sealed class StubRenderer : Renderer
     {
     }
 
-    protected override void DrawFullscreen(PostPass pass)
+    protected override void DrawFullscreen(PostPass pass, Mesh geometry)
         => throw new NotSupportedException($"{GetType().Name} draws nothing.");
+
+    internal override (byte R, byte G, byte B, byte A) ReadTargetPixel(RenderTarget target, int x, int y)
+        => throw new NotSupportedException($"{GetType().Name} has no pixels to read.");
 
     public override RenderTarget CreateRenderTarget(in RenderTargetDesc desc)
         => throw new NotSupportedException($"{GetType().Name} creates no GPU resources.");
