@@ -719,6 +719,7 @@ public partial class MainWindow : Window
         // a dead session's data. The root docks close their own windows.
         LeftRoot.ExitWindows?.Execute(null);
         RightRoot.ExitWindows?.Execute(null);
+        BottomRoot.ExitWindows?.Execute(null);
 
         _tree = null;
         _shell.Tree = null;
