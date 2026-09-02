@@ -49,6 +49,18 @@ public static class ContentRoot
     public static bool IsDeveloperBuild => Resolved.Value.FromSourceTree;
 
     /// <summary>
+    /// Why the content root did not come from the source tree, or null when it
+    /// did. Thread-safe.
+    /// </summary>
+    /// <remarks>
+    /// A NativeAOT-published developer build has no solution file above the
+    /// executable, so this walk fails and hot-reload stops working with nothing
+    /// on screen saying so. The reason is carried rather than recomputed at the
+    /// log site because only the walk knows which of the two ways it failed.
+    /// </remarks>
+    public static string? NotFromSourceTreeReason => Resolved.Value.Reason;
+
+    /// <summary>
     /// Canonical cache-key form of <paramref name="relativePath"/>: forward
     /// slashes, no leading separator, no <c>.</c> segments. Keys compare with
     /// <see cref="StringComparer.OrdinalIgnoreCase"/> so the same asset resolves
@@ -118,12 +130,17 @@ public static class ContentRoot
         {
             string candidate = System.IO.Path.Combine(sourceRoot, DirectoryName);
             if (Directory.Exists(candidate))
-                return new Resolution(candidate, FromSourceTree: true);
+                return new Resolution(candidate, FromSourceTree: true, Reason: null);
         }
 
-        return new Resolution(
-            System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory, DirectoryName)),
-            FromSourceTree: false);
+        string fallback = System.IO.Path.GetFullPath(
+            System.IO.Path.Combine(AppContext.BaseDirectory, DirectoryName));
+        string reason = sourceRoot is null
+            ? $"no .slnx or .sln above the base directory '{AppContext.BaseDirectory}' " +
+              "(expected in a deployed or NativeAOT-published build)"
+            : $"the source tree at '{sourceRoot}' has no '{DirectoryName}' folder";
+
+        return new Resolution(fallback, FromSourceTree: false, reason);
     }
 
     // Same walk BaseShaders uses to enable shader hot-reload: the nearest
@@ -140,5 +157,5 @@ public static class ContentRoot
         return null;
     }
 
-    private readonly record struct Resolution(string Root, bool FromSourceTree);
+    private readonly record struct Resolution(string Root, bool FromSourceTree, string? Reason);
 }

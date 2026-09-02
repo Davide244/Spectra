@@ -55,8 +55,13 @@
     <PackageVersion Include="Microsoft.VisualStudio.Shell.15.0" Version="17.12.40504" />
     <PackageVersion Include="Microsoft.VSSDK.BuildTools" Version="17.12.2123" />
 
-    <!-- Silk.NET graphics/audio/input -->
-    <PackageVersion Include="Silk.NET" Version="2.23.0" />
+    <!--
+      Silk.NET graphics/audio/input. Only packages some project actually
+      references are listed: the metapackage plus OpenCL, Vulkan and XInput
+      were carried here with no consumer at all, and a version row for a
+      package nobody references is an invitation to reference it by accident.
+      Vulkan returns with the SPIR-V generator.
+    -->
     <PackageVersion Include="Silk.NET.Assimp" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Direct3D11" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Direct3D12" Version="2.23.0" />
@@ -73,13 +78,10 @@
     <PackageVersion Include="Silk.NET.Input.Glfw" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Maths" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.OpenAL" Version="2.23.0" />
-    <PackageVersion Include="Silk.NET.OpenCL" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.OpenGL" Version="2.23.0" />
-    <PackageVersion Include="Silk.NET.Vulkan" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Windowing" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Windowing.Common" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Windowing.Glfw" Version="2.23.0" />
-    <PackageVersion Include="Silk.NET.XInput" Version="2.23.0" />
   </ItemGroup>
 
 </Project>

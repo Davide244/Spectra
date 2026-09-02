@@ -259,9 +259,31 @@ public sealed partial class AssetManager : IDisposable
             return;
         }
 
-        _logger.LogInformation(
-            "Asset manager initialized; content root {Root} (hot-reload {State})",
-            ContentRootPath, HotReloadEnabled ? "on" : "off");
+        if (HotReloadEnabled)
+        {
+            _logger.LogInformation(
+                "Asset manager initialized; content root {Root} (hot-reload on)", ContentRootPath);
+            return;
+        }
+
+        // Loud and once, naming the reason: the engine keeps working off the
+        // copy beside the executable, so the only symptom of a lost content
+        // root is that saving an asset stops doing anything. A NativeAOT
+        // developer build hits this every run. A host that asked for it gets
+        // the plain line instead, because that is not a loss.
+        string? reason = ContentRoot.NotFromSourceTreeReason;
+        if (reason is null)
+        {
+            _logger.LogInformation(
+                "Asset manager initialized; content root {Root} (hot-reload off, disabled by the host)",
+                ContentRootPath);
+            return;
+        }
+
+        _logger.LogWarning(
+            "Asset manager initialized; content root {Root} (hot-reload OFF: {Reason}). " +
+            "Assets load from the copy beside the executable and edits to them will not be picked up.",
+            ContentRootPath, reason);
     }
 
     /// <summary>

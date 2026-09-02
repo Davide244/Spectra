@@ -1,5 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <!--
+      SpectraShade.Compiler.CLI publishes NativeAOT and the engine compiles
+      shaders at runtime inside the AOT demo, so this assembly is on both AOT
+      paths. Without this the trim/AOT analysers only run when one of those
+      publishes, which reports a violation here minutes later at ILC time and
+      attributes it to the exe.
+    -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
   </ItemGroup>

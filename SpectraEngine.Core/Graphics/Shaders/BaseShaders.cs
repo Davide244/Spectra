@@ -1,6 +1,8 @@
-﻿using System;
+﻿using Microsoft.Extensions.Logging;
+using System;
+using System.Collections.Generic;
 using System.IO;
-using System.Linq;
+using System.Threading;
 
 namespace SpectraEngine.Core.Graphics.Shaders;
 
@@ -20,6 +22,36 @@ public static class BaseShaders
     private const string ShadowDepthFileName = "ShadowDepth.spectrashade";
     private const string WorldLineFileName = "WorldLine.spectrashade";
     private const string WorldLineBlendFileName = "WorldLineBlend.spectrashade";
+
+    // The resource name MSBuild computes for Graphics\BaseShaders\<file>: root
+    // namespace, then the folder path with separators as dots. Naming it as a
+    // constant is the point of this class's lookup - a suffix match over
+    // GetManifestResourceNames answers "some resource ends this way", which a
+    // rename of an unrelated file can satisfy, and the wrong shader then
+    // compiles and renders rather than failing.
+    private const string ResourcePrefix = "SpectraEngine.Core.Graphics.BaseShaders.";
+
+    // Every file this class exposes, in declaration order. Surfaced through
+    // FileNames so a test can assert the constants and the embedded set have
+    // not drifted apart: dropping a file from the EmbeddedResource glob is a
+    // build-configuration failure the compiler cannot see.
+    private static readonly string[] AllFileNames =
+    [
+        LitFileName,
+        DebugLineFileName,
+        PostResolveFileName,
+        GBufferFillFileName,
+        DeferredLightFileName,
+        ShadowDepthFileName,
+        WorldLineFileName,
+        WorldLineBlendFileName,
+    ];
+
+    // One-shot latch for the hot-reload verdict below.
+    private static int _hotReloadStateLogged;
+
+    /// <summary>File names of every built-in shader. Any thread.</summary>
+    public static IReadOnlyList<string> FileNames => AllFileNames;
 
     /// <summary>The built-in lit shader — diffuse + ambient from one directional light, modulated by a diffuse texture.</summary>
     public static string Lit => ReadEmbedded(LitFileName);
@@ -83,18 +115,74 @@ public static class BaseShaders
     /// <summary>Source-file path for <see cref="WorldLineBlend"/>, if locatable on disk.</summary>
     public static string? WorldLineBlendPath => TryResolveSourcePath(WorldLineBlendFileName);
 
+    /// <summary>
+    /// Opens the embedded source for <paramref name="fileName"/> (a bare file
+    /// name, e.g. <c>Lit.spectrashade</c>). The caller owns the stream. Any thread.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// No resource is embedded under that name.
+    /// </exception>
+    public static Stream OpenEmbedded(string fileName)
+    {
+        ArgumentNullException.ThrowIfNull(fileName);
+
+        var assembly = typeof(BaseShaders).Assembly;
+        string resourceName = ResourcePrefix + fileName;
+        return assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException(
+                $"Embedded shader resource '{fileName}' (looked up as '{resourceName}') " +
+                $"not found in {assembly.GetName().Name}.");
+    }
+
     private static string ReadEmbedded(string fileName)
     {
-        var assembly = typeof(BaseShaders).Assembly;
-        string? resourceName = assembly.GetManifestResourceNames()
-            .FirstOrDefault(n => n.EndsWith(fileName, StringComparison.Ordinal));
-        if (resourceName is null)
-            throw new InvalidOperationException(
-                $"Embedded shader resource '{fileName}' not found in {assembly.GetName().Name}.");
-
-        using var stream = assembly.GetManifestResourceStream(resourceName)!;
+        using Stream stream = OpenEmbedded(fileName);
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
+    }
+
+    /// <summary>
+    /// States once, at startup, whether shader hot-reload is live and why not
+    /// when it is not. Repeated calls do nothing. Any thread.
+    /// </summary>
+    /// <remarks>
+    /// Hot-reload needs the SpectraShade sources on disk, which
+    /// <see cref="TryFindSourceRoot"/> can only find by walking up to a solution
+    /// file. A NativeAOT-published developer build has no such tree above it, so
+    /// the engine silently falls back to the embedded copies and every save is
+    /// ignored for the rest of the session. Losing it is a legitimate state, not
+    /// an error - so the engine keeps running and says so at Warning, rather
+    /// than leaving somebody to work out from an unchanging picture that their
+    /// edits stopped arriving.
+    /// </remarks>
+    public static void LogHotReloadState(ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        if (Interlocked.Exchange(ref _hotReloadStateLogged, 1) != 0) return;
+
+        string? root = TryFindSourceRoot();
+        if (root is null)
+        {
+            logger.LogWarning(
+                "Shader hot-reload off: no .slnx or .sln above the base directory {BaseDirectory}, " +
+                "so the SpectraShade sources cannot be located on disk. Shaders come from the " +
+                "embedded copies and edits to them will not be picked up (expected in a deployed " +
+                "or NativeAOT-published build).",
+                AppContext.BaseDirectory);
+            return;
+        }
+
+        string directory = Path.Combine(root, "SpectraEngine.Core", "Graphics", "BaseShaders");
+        if (!Directory.Exists(directory))
+        {
+            logger.LogWarning(
+                "Shader hot-reload off: the source tree at {Root} has no {Directory}, " +
+                "so shaders come from the embedded copies and edits will not be picked up.",
+                root, directory);
+            return;
+        }
+
+        logger.LogInformation("Shader hot-reload on; sources under {Directory}", directory);
     }
 
     // Walks up from the executable directory looking for the solution file —

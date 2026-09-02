@@ -251,6 +251,12 @@ public abstract class Renderer
         _logger = logger;
         _shaderCompiler = shaderCompiler;
         HotReloader = new ShaderHotReloader(logger, shaderCompiler, Backend);
+        // Said here rather than per backend: every backend's Initialize asks
+        // BaseShaders for a source path and quietly takes the embedded copy when
+        // there is none, so this is the one site all three share and it runs
+        // before the first such ask. The call latches, so a second renderer in
+        // one process does not repeat it.
+        BaseShaders.LogHotReloadState(logger);
     }
 
     /// <summary>

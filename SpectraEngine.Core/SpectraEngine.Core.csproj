@@ -44,10 +44,17 @@
              CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!--
+    Every Silk.NET package here is named by a using in this project, with one
+    declared exception. The metapackage (Silk.NET), OpenCL, Vulkan and XInput
+    were referenced and consumed by nothing: they widened the AOT publish's
+    input set and the restore graph for no code, which is exactly what makes
+    the publish gate meaningless. Vulkan is a planned backend and comes back
+    with the SPIR-V generator, not before.
+  -->
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="StbImageSharp" />
-    <PackageReference Include="Silk.NET" />
     <PackageReference Include="Silk.NET.Assimp" />
     <PackageReference Include="Silk.NET.Direct3D11" />
     <PackageReference Include="Silk.NET.Direct3D12" />
@@ -57,14 +64,16 @@
     <PackageReference Include="Silk.NET.Input" />
     <PackageReference Include="Silk.NET.Input.Glfw" />
     <PackageReference Include="Silk.NET.Maths" />
+    <!--
+      The declared exception: no code names it yet. Audio/ is a stub, and the
+      audio milestone consumes this package rather than a new one, so removing
+      it would only be re-added by the next milestone.
+    -->
     <PackageReference Include="Silk.NET.OpenAL" />
-    <PackageReference Include="Silk.NET.OpenCL" />
     <PackageReference Include="Silk.NET.OpenGL" />
-    <PackageReference Include="Silk.NET.Vulkan" />
     <PackageReference Include="Silk.NET.Windowing" />
     <PackageReference Include="Silk.NET.Windowing.Common" />
     <PackageReference Include="Silk.NET.Windowing.Glfw" />
-    <PackageReference Include="Silk.NET.XInput" />
   </ItemGroup>
 
 </Project>
