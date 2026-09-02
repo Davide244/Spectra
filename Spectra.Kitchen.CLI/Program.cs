@@ -1,3 +1,4 @@
+using Spectra.Kitchen.Cache;
 using Spectra.Kitchen.Cooking;
 using Spectra.Kitchen.Diagnostics;
 using SpectraEngine.Core;
@@ -88,8 +89,8 @@ internal static class Program
             // is the failure this tool refuses everywhere else.
             writer.Write(CookDiagnostic.Error(
                 CookDiagnosticCodes.VerbNotImplemented,
-                "--watch is not built yet: there is no file watcher and no incremental cache behind it. " +
-                "Run a plain cook, or --loose for a cooked tree."));
+                "--watch is not built yet: the incremental cache behind it exists, but there is no file " +
+                "watcher driving it. Run a plain cook, which is now incremental, or --loose for a cooked tree."));
             return ExitCookError;
         }
 
@@ -106,10 +107,16 @@ internal static class Program
 
         if (!opts.Quiet)
         {
+            // The cache count is only printed when something was actually skipped:
+            // "0 from cache" on a first cook is a number that answers a question
+            // nobody asked, and it would appear on every clean cook forever.
+            string cached = result.CacheHits > 0 ? $", {result.CacheHits} from cache" : string.Empty;
+
             stdout.WriteLine(
                 $"{style.Success}{ToolName}{style.Reset}: wrote {style.Path}{result.OutputPath}{style.Reset} " +
                 $"{style.Dim}({result.EntryCount} entries, {result.PayloadBytes} bytes, " +
-                $"profile {CookManifest.ToWire(opts.Profile)}, {result.WarningCount} warning(s)){style.Reset}");
+                $"profile {CookManifest.ToWire(opts.Profile)}{cached}, " +
+                $"{result.WarningCount} warning(s)){style.Reset}");
         }
 
         return ExitSuccess;
@@ -130,22 +137,33 @@ internal static class Program
             return ExitCookError;
         }
 
-        if (!Directory.Exists(target))
+        // The cache goes with the output, and that is what makes the verb true. A
+        // clean that left the cache behind would have the next cook rebuild the
+        // artifact from cached payloads, so "clean then cook" would not be a clean
+        // cook and the one thing people run clean FOR would not happen.
+        string cache = Path.Combine(Path.GetFullPath(layout.Root), CookCache.DirectoryName);
+
+        if (!Directory.Exists(target) && !Directory.Exists(cache))
         {
             if (!opts.Quiet)
                 stdout.WriteLine($"{ToolName}: nothing to clean at {style.Path}{target}{style.Reset}");
             return ExitSuccess;
         }
 
-        try
+        foreach (string directory in new[] { target, cache })
         {
-            Directory.Delete(target, recursive: true);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            writer.Write(CookDiagnostic.Error(
-                CookDiagnosticCodes.OutputNotWritable, $"Could not delete '{target}': {ex.Message}"));
-            return ExitIoError;
+            if (!Directory.Exists(directory)) continue;
+
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                writer.Write(CookDiagnostic.Error(
+                    CookDiagnosticCodes.OutputNotWritable, $"Could not delete '{directory}': {ex.Message}"));
+                return ExitIoError;
+            }
         }
 
         if (!opts.Quiet)
@@ -209,9 +227,6 @@ internal static class Program
     // and the cook it asked for still happened.
     private static void ReportUnimplementedOptions(CliOptions opts, DiagnosticWriter writer)
     {
-        if (opts.CacheGiven && opts.UseCache)
-            Say(writer, "the cook cache is not built yet, so every run is a clean cook.");
-
         if (opts.JobsGiven && opts.Jobs > 1)
             Say(writer, $"-j{opts.Jobs} is accepted and the cook runs single-threaded; the rule DAG is not built yet.");
 

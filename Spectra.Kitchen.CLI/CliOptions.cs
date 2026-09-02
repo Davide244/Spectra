@@ -390,7 +390,7 @@ internal sealed class CliOptions
             $"{s.Warning}Not built yet.{s.Reset} Will list a pack's entries, sizes,",
             "codecs and names.");
         WriteOption(w, s, "clean", null,
-            "Delete a project's cook output.");
+            "Delete a project's cook output and its cook cache.");
         w.WriteLine();
         w.WriteLine($"{s.Header}Options:{s.Reset}");
         WriteOption(w, s, "-o, --output", "<path>",
@@ -406,9 +406,10 @@ internal sealed class CliOptions
         WriteOption(w, s, "-j, --jobs", "<n>",
             $"Worker count. {s.Value}-j1{s.Reset} is the determinism-oracle mode.");
         WriteOption(w, s, "    --cache", null,
-            "Use the cook cache (default).");
+            $"Use the cook cache in {s.Value}.spectra-cook/{s.Reset} (default).");
         WriteOption(w, s, "    --no-cache", null,
-            "Ignore the cook cache and re-cook everything.");
+            "Neither read nor write the cook cache: re-cook",
+            "everything and leave what is cached alone.");
         WriteOption(w, s, "    --loose", null,
             "Emit a cooked directory tree instead of a pack.");
         WriteOption(w, s, "    --watch", null,

@@ -1,3 +1,4 @@
+using Spectra.Kitchen.Cache;
 using Spectra.Kitchen.Diagnostics;
 using Spectra.Kitchen.Packs;
 using Spectra.Kitchen.Rules;
@@ -16,11 +17,15 @@ namespace Spectra.Kitchen.Cooking;
 /// </summary>
 /// <remarks>
 /// <para><b>This is the whole spine, and today most of it is one lane wide.</b>
-/// There is no cache, no dependency DAG and no parallelism yet; what there IS is
-/// the shape those need: every asset goes through a rule, every rule reads through
-/// a context that records what it touched, and every output is placed by content
-/// path. Adding the cache means keying on what the context already recorded rather
-/// than inventing a record of it.</para>
+/// There is no dependency DAG and no parallelism yet; what there IS is the shape
+/// those need: every asset goes through a rule, every rule reads through a context
+/// that records what it touched, and every output is placed by content path.</para>
+/// <para><b>The cache sits exactly where that shape put it.</b> A rule is asked
+/// for from the cache before it is run and recorded after, keyed on what the
+/// context already recorded rather than on a separate declaration of it - which is
+/// what makes the declared input set and the accessed input set the same set. A
+/// cache miss and a cache-off run are the same code path, so nothing about a
+/// cooked byte depends on whether the cache was consulted.</para>
 /// <para><b>A failed cook writes no pack.</b> The runtime degrades and the cooker
 /// does not: a half-written pack that mounts is worse than none, because it ships.
 /// </para>
@@ -56,6 +61,18 @@ public sealed class CookSession
     /// <summary>Where output goes: <c>-o</c> if it was given, else the project's <c>cooked/</c>.</summary>
     public string OutputDirectory => _settings.OutputPath ?? _layout.CookedPath;
 
+    /// <summary>
+    /// Where the cook cache lives: <c>.spectra-cook/</c> at the project root.
+    /// </summary>
+    /// <remarks>
+    /// At the project root rather than under <c>cooked/</c>, and not moved by
+    /// <c>-o</c>: the cache is keyed on the project's own content and on the
+    /// toolchain, so pointing one cook's output somewhere else must not hand it a
+    /// different cache. It is derived data all the same, which is why a
+    /// <c>clean</c> removes it.
+    /// </remarks>
+    public string CacheDirectory => Path.Combine(_layout.Root, CookCache.DirectoryName);
+
     /// <summary>Runs the cook.</summary>
     public CookResult Run()
     {
@@ -77,41 +94,75 @@ public sealed class CookSession
                 "nothing to cook.",
                 _layout.ManifestPath));
 
-            return Finish(assets, diagnostics, null, 0, 0);
+            return Finish(assets, diagnostics, null, null, 0, 0);
         }
 
         ReportUncookedMaps(diagnostics);
 
+        CookCache? cache = OpenCache(diagnostics);
+
         IReadOnlyList<ContentFile> content = ContentWalker.Walk(contentRoot);
+        var cookedPaths = new List<string>(content.Count);
+
         foreach (ContentFile file in content)
         {
             IRule rule = _rules.Resolve(file.ContentPath);
-            var context = new RuleContext(contentRoot, file.ContentPath, _settings.Profile);
+            cookedPaths.Add(file.ContentPath);
 
-            try
+            IReadOnlyList<RuleDependency> dependencies;
+            IReadOnlyList<RuleEmission> emissions;
+            bool fromCache = false;
+
+            if (cache is not null &&
+                cache.TryReplay(contentRoot, file.ContentPath, rule, _settings, out CachedRun? replay))
             {
-                rule.Cook(context);
+                fromCache = true;
+                dependencies = replay.Dependencies;
+                emissions = replay.Emissions;
             }
-            catch (RuleInputMissingException ex)
+            else
             {
-                diagnostics.Add(CookDiagnostic.Error(
-                    CookDiagnosticCodes.InputMissing, ex.Message, file.FullPath));
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-            {
-                diagnostics.Add(CookDiagnostic.Error(
-                    CookDiagnosticCodes.RuleFailed,
-                    $"The {rule.Kind} rule failed on '{file.ContentPath}': {ex.Message}",
-                    file.FullPath));
+                var context = new RuleContext(contentRoot, file.ContentPath, _settings.Profile);
+                bool failed = false;
+
+                try
+                {
+                    rule.Cook(context);
+                }
+                catch (RuleInputMissingException ex)
+                {
+                    diagnostics.Add(CookDiagnostic.Error(
+                        CookDiagnosticCodes.InputMissing, ex.Message, file.FullPath));
+                    failed = true;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+                {
+                    diagnostics.Add(CookDiagnostic.Error(
+                        CookDiagnosticCodes.RuleFailed,
+                        $"The {rule.Kind} rule failed on '{file.ContentPath}': {ex.Message}",
+                        file.FullPath));
+                    failed = true;
+                }
+
+                // Flushed in rule order, which single-threaded is simply the order they
+                // happened in and will stay true when this loop becomes parallel.
+                foreach (CookDiagnostic diagnostic in context.Diagnostics)
+                    diagnostics.Add(_settings.Strict ? diagnostic.AsError() : diagnostic);
+
+                dependencies = context.Dependencies;
+                emissions = context.Emissions;
+
+                // A rule that failed, or that had anything to say, is not recorded.
+                // The cache stores bytes and dependencies and not diagnostics, so a
+                // later hit would serve the artifact and swallow the message, which
+                // is an incremental build quietly hiding what it was asked to be
+                // loud about.
+                if (cache is not null && !failed && context.Diagnostics.Count == 0)
+                    cache.Record(file.ContentPath, rule, _settings, dependencies, emissions);
             }
 
-            // Flushed in rule order, which single-threaded is simply the order they
-            // happened in and will stay true when this loop becomes parallel.
-            foreach (CookDiagnostic diagnostic in context.Diagnostics)
-                diagnostics.Add(_settings.Strict ? diagnostic.AsError() : diagnostic);
-
-            var outputs = new List<CookedOutput>(context.Emissions.Count);
-            foreach (RuleEmission emission in context.Emissions)
+            var outputs = new List<CookedOutput>(emissions.Count);
+            foreach (RuleEmission emission in emissions)
             {
                 if (emitted.TryGetValue(emission.Path, out string? firstOwner))
                 {
@@ -139,22 +190,82 @@ public sealed class CookSession
             }
 
             assets.Add(new CookedAsset(
-                file.ContentPath, rule.Kind, rule.Version, [.. context.Dependencies], outputs));
+                file.ContentPath, rule.Kind, rule.Version, [.. dependencies], outputs)
+            {
+                FromCache = fromCache,
+            });
         }
 
+        // Saved before the pack is written, and even when the cook then fails:
+        // every rule recorded above genuinely ran to completion with the inputs it
+        // recorded, and throwing that away because a LATER asset failed would make
+        // a project with one broken file re-cook the other thousand on every
+        // attempt to fix it.
+        CloseCache(cache, cookedPaths, diagnostics);
+
         if (CountErrors(diagnostics) > 0)
-            return Finish(assets, diagnostics, null, 0, 0);
+            return Finish(assets, diagnostics, cache, null, 0, 0);
 
         string? output = _settings.Loose
             ? WriteLoose(looseFiles, diagnostics)
             : WritePack(writer, diagnostics);
 
         if (output is null || CountErrors(diagnostics) > 0)
-            return Finish(assets, diagnostics, null, 0, 0);
+            return Finish(assets, diagnostics, cache, null, 0, 0);
 
         WriteManifest(assets, diagnostics);
 
-        return Finish(assets, diagnostics, output, entryCount, payloadBytes);
+        return Finish(assets, diagnostics, cache, output, entryCount, payloadBytes);
+    }
+
+    // Opening the cache is allowed to fail into "no cache": a hidden folder that
+    // cannot be read is a reason to do the work, never a reason to refuse to.
+    private CookCache? OpenCache(List<CookDiagnostic> diagnostics)
+    {
+        if (!_settings.UseCache) return null;
+
+        CookCache cache;
+        try
+        {
+            cache = new CookCache(CacheDirectory);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            diagnostics.Add(CookDiagnostic.Warning(
+                CookDiagnosticCodes.CacheNotWritable,
+                $"The cook cache at '{CacheDirectory}' could not be opened, so this is a clean cook: {ex.Message}"));
+
+            return null;
+        }
+
+        if (cache.DiscardedReason is not null)
+        {
+            diagnostics.Add(CookDiagnostic.Info(
+                CookDiagnosticCodes.CacheDiscarded,
+                $"The cook cache at '{CacheDirectory}' could not be read and was discarded, so this is a clean " +
+                $"cook: {cache.DiscardedReason}"));
+        }
+
+        return cache;
+    }
+
+    private void CloseCache(CookCache? cache, IReadOnlyCollection<string> cooked, List<CookDiagnostic> diagnostics)
+    {
+        if (cache is null) return;
+
+        cache.RetainOnly(cooked);
+
+        try
+        {
+            cache.Save();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            diagnostics.Add(CookDiagnostic.Warning(
+                CookDiagnosticCodes.CacheNotWritable,
+                $"The cook cache at '{CacheDirectory}' could not be written, so the next cook will not be " +
+                $"incremental: {ex.Message}"));
+        }
     }
 
     // A project's maps are not under the content root and have no rule yet, so a
@@ -255,6 +366,7 @@ public sealed class CookSession
     private static CookResult Finish(
         List<CookedAsset> assets,
         List<CookDiagnostic> diagnostics,
+        CookCache? cache,
         string? output,
         int entryCount,
         long payloadBytes)
@@ -272,6 +384,8 @@ public sealed class CookSession
             PayloadBytes = payloadBytes,
             ErrorCount = CountErrors(diagnostics),
             WarningCount = warnings,
+            CacheHits = cache?.Hits ?? 0,
+            CacheMisses = cache?.Misses ?? 0,
         };
     }
 }

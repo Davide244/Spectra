@@ -1,3 +1,5 @@
+using Spectra.Kitchen.Cache;
+
 namespace Spectra.Kitchen.Rules;
 
 /// <summary>
@@ -26,6 +28,21 @@ public interface IRule
     /// the cache key.
     /// </summary>
     int Version { get; }
+
+    /// <summary>
+    /// Which cook settings this rule's OUTPUT depends on. Part of the cache key,
+    /// and only these.
+    /// </summary>
+    /// <remarks>
+    /// <b>Declaring one too few is a stale artifact; declaring one too many is a
+    /// rebuild.</b> The asymmetry is the reason this is per rule rather than a
+    /// whole-settings hash: hashing everything would re-cook every texture in a
+    /// project the moment somebody changed <c>--script-source</c>, and the
+    /// declaration is what makes a settings change invalidate exactly the rules
+    /// that read it. Widen it in the same commit that makes a rule read a new
+    /// setting.
+    /// </remarks>
+    CookSettingKeys SettingsRead { get; }
 
     /// <summary>
     /// Cooks <see cref="IRuleContext.SourcePath"/>, reading through the context

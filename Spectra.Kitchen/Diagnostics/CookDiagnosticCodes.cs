@@ -92,6 +92,24 @@ public static class CookDiagnosticCodes
     /// </remarks>
     public static readonly CookDiagnosticId ContentNotCooked = CookDiagnosticId.Cook(1005);
 
+    /// <summary>The cook cache could not be written.</summary>
+    /// <remarks>
+    /// A warning rather than an error: the artifact this run produced is correct
+    /// and complete, and what was lost is the next run's ability to skip work. A
+    /// cook that failed because a cache file would not save would be a build tool
+    /// failing over its own optimisation.
+    /// </remarks>
+    public static readonly CookDiagnosticId CacheNotWritable = CookDiagnosticId.Cook(1006);
+
+    /// <summary>A cook cache on disk could not be read and was discarded.</summary>
+    /// <remarks>
+    /// Info rather than silence. Discarding is the right answer for derived data,
+    /// but a cook that rebuilds everything because its cache would not parse looks
+    /// exactly like a slow cook, and "why is this not incremental" is
+    /// unanswerable without a line saying so.
+    /// </remarks>
+    public static readonly CookDiagnosticId CacheDiscarded = CookDiagnosticId.Cook(1007);
+
     // --- 2xxx image, 3xxx model, 4xxx audio, 5xxx material -------------------
     // Reserved. The rules that issue them are unbuilt; see the band table above.
 

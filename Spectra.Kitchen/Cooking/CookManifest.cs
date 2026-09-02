@@ -85,6 +85,13 @@ public static class CookManifest
         writer.WriteString("rule", ToWire(asset.Rule));
         writer.WriteNumber("ruleVersion", asset.RuleVersion);
 
+        // Written only when true, so a clean cook's manifest is not carrying a
+        // "skipped": false against every asset in the project. A diff between a
+        // clean run and a cached one legitimately shows this member appearing:
+        // that IS the difference between the two runs, and the pack they produced
+        // is byte-identical regardless.
+        if (asset.FromCache) writer.WriteBoolean("skipped", true);
+
         writer.WritePropertyName("inputs");
         writer.WriteStartArray();
         foreach (RuleDependency dependency in asset.Dependencies)

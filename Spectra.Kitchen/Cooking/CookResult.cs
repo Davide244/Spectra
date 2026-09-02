@@ -30,7 +30,19 @@ public sealed record CookedAsset(
     RuleKind Rule,
     int RuleVersion,
     IReadOnlyList<RuleDependency> Dependencies,
-    IReadOnlyList<CookedOutput> Outputs);
+    IReadOnlyList<CookedOutput> Outputs)
+{
+    /// <summary>
+    /// Whether this asset was answered from the cook cache rather than cooked.
+    /// </summary>
+    /// <remarks>
+    /// <b>It is in the manifest because a reviewer has to be able to tell.</b> The
+    /// bytes are identical either way, which is the whole promise; what a skip
+    /// changes is which run actually produced them, and that is exactly the
+    /// question asked when a cached artifact turns out to be wrong.
+    /// </remarks>
+    public bool FromCache { get; init; }
+}
 
 /// <summary>
 /// What a cook did, whether it worked, and everything it had to say.
@@ -65,6 +77,12 @@ public sealed class CookResult
 
     /// <summary>Warnings among <see cref="Diagnostics"/>.</summary>
     public int WarningCount { get; init; }
+
+    /// <summary>Assets answered from the cook cache. Zero when the cache is off.</summary>
+    public int CacheHits { get; init; }
+
+    /// <summary>Assets whose rule had to run while the cache was on.</summary>
+    public int CacheMisses { get; init; }
 
     /// <summary>Whether the cook produced its artifact.</summary>
     public bool Succeeded => ErrorCount == 0 && OutputPath is not null;

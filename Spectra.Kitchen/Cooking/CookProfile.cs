@@ -4,9 +4,14 @@ namespace Spectra.Kitchen.Cooking;
 /// What a cook is FOR, which is the one setting rules are allowed to branch on.
 /// </summary>
 /// <remarks>
-/// It is part of the cache key, so two profiles never share a cached artifact.
-/// The names are the command line's (<c>ship</c>, <c>fast</c>, <c>preview</c>)
-/// and there is deliberately no second vocabulary for them.
+/// It is part of the cache key of every rule that DECLARES it
+/// (<c>CookSettingKeys.Profile</c>), so two profiles never share a cached artifact
+/// of a rule whose output varies by profile, and they do share one for a rule
+/// whose output cannot - a raw copy is the same bytes at every quality, and
+/// re-copying a project's whole content tree on a profile switch would be a cache
+/// that costs more than it saves. The names are the command line's (<c>ship</c>,
+/// <c>fast</c>, <c>preview</c>) and there is deliberately no second vocabulary for
+/// them.
 /// </remarks>
 public enum CookProfile
 {

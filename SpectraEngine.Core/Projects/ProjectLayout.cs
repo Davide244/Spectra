@@ -209,6 +209,12 @@ public sealed class ProjectLayout
         # Cook output. Derived from the authored files beside it; never authored.
         cooked/
 
+        # The cook's incremental cache: a content-addressed store of cooked
+        # payloads plus the dependency graph over them. Derived, per machine, and
+        # keyed partly on the toolchain that wrote it, so it is worth nothing in
+        # somebody else's checkout.
+        .spectra-cook/
+
         # Per-user editor state: viewport camera, selection, window layout.
         # Losing one loses nothing but a camera position.
         *.user

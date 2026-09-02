@@ -1,3 +1,4 @@
+using Spectra.Kitchen.Cache;
 using SpectraEngine.Core.Assets.Packs;
 
 namespace Spectra.Kitchen.Rules;
@@ -30,6 +31,15 @@ public sealed class RawCopyRule : IRule
     /// change to WHAT gets copied.
     /// </remarks>
     public int Version => 1;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// None, and that is a real answer rather than a stub. Copying bytes cannot
+    /// vary by profile, target, encoder or script source, so a cached raw copy is
+    /// legitimately shared across every one of them and a <c>--profile fast</c>
+    /// run must not re-copy a project's whole content tree.
+    /// </remarks>
+    public CookSettingKeys SettingsRead => CookSettingKeys.None;
 
     /// <inheritdoc/>
     public void Cook(IRuleContext context)
