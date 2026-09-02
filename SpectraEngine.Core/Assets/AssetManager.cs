@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using SpectraEngine.Core.Assets.Sources;
 using SpectraEngine.Core.Graphics;
 using System;
 using System.Collections.Concurrent;
@@ -45,6 +46,21 @@ namespace SpectraEngine.Core.Assets;
 /// thread pool, while mesh creation and material resolution happen on the render
 /// thread inside <see cref="PumpPendingUploads"/>.
 /// </para>
+/// <para><b>Where the bytes come from.</b> Every texture and material read goes
+/// through <see cref="Content"/>, the mounted <see cref="ContentSourceStack"/>,
+/// and never through <see cref="System.IO.File"/> directly — so a packed build
+/// changes what is mounted and nothing else. That matters most because there are
+/// <i>three</i> such reads and they must agree: the decode behind
+/// <see cref="LoadTexture"/>, the existence probe that decides whether a
+/// material's texture slot gets real content or the placeholder, and the parse
+/// behind <see cref="LoadMaterial"/>. Convert two of the three and a packed
+/// build resolves no material texture at all while every log line still reads
+/// healthy.</para>
+/// <para><b>Degradation is not conditional on the stack.</b> A missing material
+/// is <see cref="DefaultMaterial"/> and a missing texture is the magenta
+/// checker, whatever is mounted and whether or not the stack is strict: the
+/// probes use <see cref="IContentSource.Exists"/>, which never throws, and every
+/// open sits inside the same try that already caught an unreadable file.</para>
 /// </remarks>
 public sealed partial class AssetManager : IDisposable
 {
@@ -146,22 +162,42 @@ public sealed partial class AssetManager : IDisposable
 
     /// <summary>
     /// Creates a manager over an explicit content root — used by tests, and by
-    /// tools that ship content somewhere other than beside the executable.
+    /// tools that ship content somewhere other than beside the executable. The
+    /// content stack is a single <see cref="LooseFileSource"/> over that folder.
     /// </summary>
     /// <param name="hotReloadEnabled">
     /// Whether to watch loaded files for changes. Defaults to on for the
     /// convenience constructor when the content root came from the source tree.
     /// </param>
     public AssetManager(ILogger logger, string contentRoot, bool hotReloadEnabled = true)
+        : this(logger, contentRoot, CreateLooseStack(logger, contentRoot), hotReloadEnabled)
+    {
+    }
+
+    /// <summary>
+    /// Creates a manager over an explicit content stack — the entry point a
+    /// packed build, a mod overlay or a cook uses.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="contentRoot"/> is still required and is still the
+    /// filesystem anchor: model import and the tools that copy content around
+    /// work in real paths, and an asset's <see cref="TextureAsset.SourcePath"/>
+    /// is stated against it. What the stack decides is where the <i>bytes</i> of
+    /// a texture or a material come from.
+    /// </remarks>
+    public AssetManager(
+        ILogger logger, string contentRoot, ContentSourceStack content, bool hotReloadEnabled = true)
     {
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(contentRoot);
+        ArgumentNullException.ThrowIfNull(content);
 
         _logger = logger;
         // Resolved once here, not recomputed per lookup: resolution walks the
         // filesystem, and every Load/Request would otherwise pay for it.
         ContentRootPath = Path.GetFullPath(contentRoot);
         HotReloadEnabled = hotReloadEnabled;
+        Content = content;
 
         // Seeded like every other material the manager builds, which leaves it
         // with a white base colour: the magenta placeholder checker
@@ -171,11 +207,29 @@ public sealed partial class AssetManager : IDisposable
         SeedBuiltInParameters(_defaultMaterial);
     }
 
+    // The stack a content-root-only caller gets: one loose folder, not strict,
+    // which is what the engine has always done.
+    private static ContentSourceStack CreateLooseStack(ILogger logger, string contentRoot)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(contentRoot);
+
+        var stack = new ContentSourceStack();
+        stack.Mount(new LooseFileSource(logger, contentRoot));
+        return stack;
+    }
+
     /// <summary>
     /// Absolute content root every relative asset path resolves against.
     /// Immutable; any thread.
     /// </summary>
     public string ContentRootPath { get; }
+
+    /// <summary>
+    /// Where content bytes come from. Immutable reference; the stack itself is
+    /// thread-safe to read and is only mounted at start-up. Any thread.
+    /// </summary>
+    public ContentSourceStack Content { get; }
 
     /// <summary>
     /// Whether changed files are re-decoded and swapped in. Set before loading
@@ -252,6 +306,11 @@ public sealed partial class AssetManager : IDisposable
     /// </summary>
     public void Initialize()
     {
+        // First, and unconditionally: when content resolves wrongly the first
+        // question is always which source answered, and every line below this
+        // one is about the loose folder alone.
+        _logger.LogInformation("Content sources: {Sources}", Content.Describe());
+
         if (!Directory.Exists(ContentRootPath))
         {
             _logger.LogWarning(
@@ -367,7 +426,7 @@ public sealed partial class AssetManager : IDisposable
         // finishes while this one reads loses the race instead of overwriting
         // the newer result.
         long sequence = failed?.NextRequestSequence() ?? 0;
-        DecodedImage image = ImageDecoder.DecodeFile(absolute);
+        DecodedImage image = DecodeThroughContent(key);
         WarnIfSrgbUnavailable(key, image.Format, colorSpace);
         Texture texture = renderer.CreateTexture(
             image.Pixels, image.Width, image.Height, image.Format, colorSpace, filter, wrap);
@@ -384,7 +443,7 @@ public sealed partial class AssetManager : IDisposable
             lock (_sync) failed.LoadFailed = false;
 
             DestroyOwned(previous);
-            EnsureWatching(absolute);
+            EnsureWatching(key);
             _logger.LogInformation(
                 "Loaded texture {Path} after an earlier failure ({Width}x{Height}, {Channels}ch, {Format})",
                 key, image.Width, image.Height, image.Channels, image.Format);
@@ -413,7 +472,7 @@ public sealed partial class AssetManager : IDisposable
             AddVariant(key, asset);
         }
 
-        EnsureWatching(absolute);
+        EnsureWatching(key);
         _logger.LogInformation(
             "Loaded texture {Path} ({Width}x{Height}, {Channels}ch, {Format})",
             key, image.Width, image.Height, image.Channels, image.Format);
@@ -557,9 +616,8 @@ public sealed partial class AssetManager : IDisposable
                 return cached;
         }
 
-        string absolute = ContentRoot.ResolveAbsolute(ContentRootPath, key);
         Material material;
-        if (!File.Exists(absolute))
+        if (!Content.Exists(key))
         {
             // The single most common content bug (a renamed or never-authored
             // material) must degrade, not crash — that is what DefaultMaterial
@@ -571,7 +629,7 @@ public sealed partial class AssetManager : IDisposable
         {
             try
             {
-                material = BuildMaterial(key, absolute);
+                material = BuildMaterial(key);
             }
             catch (Exception ex)
             {
@@ -710,7 +768,7 @@ public sealed partial class AssetManager : IDisposable
         }
 
         // Every variant shares the file, so one call covers them all.
-        StopWatchingIfUnused(variants[0].SourcePath);
+        StopWatchingIfUnused(key);
 
         _logger.LogInformation("Unloaded texture {Path}", key);
         return true;
@@ -852,12 +910,12 @@ public sealed partial class AssetManager : IDisposable
         material.SetFloat(ShadingModelParameter, 0f);
     }
 
-    // Parses the file and turns the definition into a live material. Content
+    // Parses the material and turns the definition into a live material. Content
     // problems become warnings and a degraded binding; nothing here throws
-    // except the file read itself.
-    private Material BuildMaterial(string key, string absolutePath)
+    // except the read itself, which LoadMaterial catches.
+    private Material BuildMaterial(string key)
     {
-        MaterialDefinition definition = MaterialParser.ParseFile(absolutePath);
+        MaterialDefinition definition = ParseMaterialThroughContent(key);
         foreach (string warning in definition.Warnings)
             _logger.LogWarning("Material {Path}: {Warning}", key, warning);
 
@@ -920,7 +978,10 @@ public sealed partial class AssetManager : IDisposable
             return;
         }
 
-        if (!File.Exists(ContentRoot.ResolveAbsolute(ContentRootPath, textureKey)))
+        // The same stack the decode below reads from, deliberately: an existence
+        // probe that asked the filesystem while the open asked an archive would
+        // bind the placeholder into every packed material and log nothing wrong.
+        if (!Content.Exists(textureKey))
         {
             _logger.LogWarning(
                 "Material {Path}: texture {Texture} for '{Slot}' not found; using the placeholder",
@@ -976,6 +1037,34 @@ public sealed partial class AssetManager : IDisposable
                 "AssetManager has no renderer; call AttachRenderer on the render thread first.");
     }
 
+    // One of the three content reads. Any thread: opening and decoding are both
+    // pure CPU, which is what lets the async path run this on the thread pool.
+    private DecodedImage DecodeThroughContent(string key)
+    {
+        // A miss is reported as the I/O failure LoadTexture documents and
+        // QueueDecode catches, so the caller sees no difference between content
+        // that is absent and content that could not be read — neither is
+        // recoverable at this level.
+        using ContentBlob blob = OpenOrThrow(key);
+        return ImageDecoder.Decode(blob.Span, key);
+    }
+
+    // The second of the three. The bytes never touch the filesystem, so a packed
+    // material parses with no temporary file in between.
+    private MaterialDefinition ParseMaterialThroughContent(string key)
+    {
+        using ContentBlob blob = OpenOrThrow(key);
+        return MaterialParser.ParseUtf8(blob.Span, key);
+    }
+
+    private ContentBlob OpenOrThrow(string key)
+    {
+        if (!Content.TryOpen(key, out ContentBlob? blob))
+            throw new FileNotFoundException($"Content '{key}' is not available from any mounted source.", key);
+
+        return blob;
+    }
+
     // Decode off the render thread and hand the pixels back through the queue.
     // Failures are queued too, so the pump can log them on the render thread
     // instead of them vanishing into an unobserved task.
@@ -1003,7 +1092,7 @@ public sealed partial class AssetManager : IDisposable
         {
             try
             {
-                DecodedImage image = ImageDecoder.DecodeFile(asset.SourcePath);
+                DecodedImage image = DecodeThroughContent(asset.RelativePath);
                 _uploads.Enqueue(new UploadRequest(asset, sequence, image, null));
             }
             catch (Exception ex)
@@ -1072,7 +1161,7 @@ public sealed partial class AssetManager : IDisposable
         lock (_sync) asset.LoadFailed = false;
 
         DestroyOwned(previous);
-        EnsureWatching(asset.SourcePath);
+        EnsureWatching(asset.RelativePath);
 
         _logger.LogInformation(
             "Texture {Verb} {Path} ({Width}x{Height}, {Channels}ch, {Format})",
@@ -1131,11 +1220,16 @@ public sealed partial class AssetManager : IDisposable
         }
     }
 
-    private void EnsureWatching(string absoluteFilePath)
+    // Watching is a property of LOOSE content: a source that cannot name a file
+    // on disk (a packed archive) supplies no watch path and is simply not
+    // watched, which is why this takes the content-relative path and asks the
+    // stack rather than resolving one against the content root itself.
+    private void EnsureWatching(string relativePath)
     {
         if (!HotReloadEnabled || _graphicsReleased) return;
+        if (!Content.TryGetWatchPath(relativePath, out string? watchPath)) return;
 
-        string? directory = Path.GetDirectoryName(absoluteFilePath);
+        string? directory = Path.GetDirectoryName(watchPath);
         if (directory is null || !Directory.Exists(directory)) return;
         // Exactly one watcher per directory, ever: creating a second would leak
         // the first's native buffer and double every change notification.
@@ -1168,9 +1262,11 @@ public sealed partial class AssetManager : IDisposable
         _logger.LogDebug("Watching texture directory: {Directory}", directory);
     }
 
-    private void StopWatchingIfUnused(string absoluteFilePath)
+    private void StopWatchingIfUnused(string relativePath)
     {
-        string? directory = Path.GetDirectoryName(absoluteFilePath);
+        if (!Content.TryGetWatchPath(relativePath, out string? watchPath)) return;
+
+        string? directory = Path.GetDirectoryName(watchPath);
         if (directory is null || !_watchers.TryGetValue(directory, out FileSystemWatcher? watcher)) return;
 
         lock (_sync)

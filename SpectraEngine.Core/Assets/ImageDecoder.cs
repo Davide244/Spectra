@@ -1,9 +1,9 @@
+using SpectraEngine.Core.Assets.Sources;
 using SpectraEngine.Core.Graphics;
 using StbImageSharp;
 using System;
 using System.Buffers;
 using System.IO;
-using System.Threading;
 
 namespace SpectraEngine.Core.Assets;
 
@@ -18,17 +18,38 @@ namespace SpectraEngine.Core.Assets;
 /// </remarks>
 public static class ImageDecoder
 {
-    // How long an editor may plausibly hold a write lock on a file it is saving.
-    private const int ReadRetryDelayMs = 20;
-    private const int ReadAttempts = 3;
-
     /// <summary>
-    /// Reads and decodes the file at <paramref name="absolutePath"/>. Any thread.
+    /// Reads and decodes the file at <paramref name="absolutePath"/>, straight
+    /// off the filesystem. Any thread.
     /// </summary>
+    /// <remarks>
+    /// Content the engine loads goes through <see cref="IContentSource"/>
+    /// instead, so that a packed build decodes the same bytes from an archive;
+    /// this stays for tools and tests that genuinely mean one file on disk.
+    /// </remarks>
     /// <exception cref="IOException">The file could not be read.</exception>
     /// <exception cref="InvalidDataException">The bytes are not a supported image.</exception>
     public static DecodedImage DecodeFile(string absolutePath)
-        => Decode(ReadAllBytesWithRetry(absolutePath), absolutePath);
+    {
+        ArgumentNullException.ThrowIfNull(absolutePath);
+
+        using ContentBlob blob = FileContent.Read(absolutePath);
+        return Decode(blob.Span, absolutePath);
+    }
+
+    /// <summary>
+    /// Decodes an image held in a content blob (or any other span). Any thread.
+    /// </summary>
+    /// <remarks>
+    /// StbImageSharp's entry point takes a <c>byte[]</c> and a blob's backing
+    /// buffer is pooled, hence longer than the content in it, so the bytes are
+    /// copied to an exactly-sized array here. That is one memcpy on a background
+    /// decode thread, against a picture decode that costs orders of magnitude
+    /// more.
+    /// </remarks>
+    /// <exception cref="InvalidDataException">The bytes are not a supported image.</exception>
+    public static DecodedImage Decode(ReadOnlySpan<byte> fileBytes, string originForErrors = "<memory>")
+        => Decode(fileBytes.ToArray(), originForErrors);
 
     /// <summary>
     /// Decodes an in-memory image file. <paramref name="originForErrors"/> only
@@ -110,27 +131,5 @@ public static class ImageDecoder
         {
             ArrayPool<byte>.Shared.Return(scratch);
         }
-    }
-
-    // Mirrors ShaderHotReloader's read-with-retry: a hot-reload fires while the
-    // editor still holds the file open, and one transient sharing violation
-    // must not drop the reload.
-    private static byte[] ReadAllBytesWithRetry(string path)
-    {
-        for (int attempt = 0; attempt < ReadAttempts; attempt++)
-        {
-            try
-            {
-                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                var buffer = new byte[fs.Length];
-                fs.ReadExactly(buffer);
-                return buffer;
-            }
-            catch (IOException) when (attempt < ReadAttempts - 1)
-            {
-                Thread.Sleep(ReadRetryDelayMs);
-            }
-        }
-        throw new IOException($"Could not read '{path}' after {ReadAttempts} attempts.");
     }
 }

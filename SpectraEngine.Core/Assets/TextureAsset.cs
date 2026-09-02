@@ -53,7 +53,16 @@ public sealed class TextureAsset
     /// <summary>Normalised content-root-relative path this asset was loaded from. Any thread.</summary>
     public string RelativePath { get; }
 
-    /// <summary>Absolute path of the backing file on disk. Any thread.</summary>
+    /// <summary>
+    /// Absolute path under the content root this asset is stated against. Any
+    /// thread.
+    /// </summary>
+    /// <remarks>
+    /// A location, not a promise that a file is there: the bytes come from
+    /// whichever <see cref="Sources.IContentSource"/> answered, which for a
+    /// packed build is not the filesystem at all. Hot-reload asks the stack for
+    /// a watch path rather than reading this.
+    /// </remarks>
     public string SourcePath { get; }
 
     /// <summary>Sampling filter requested at load time. Any thread.</summary>

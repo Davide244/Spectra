@@ -326,7 +326,7 @@ public sealed partial class AssetManager
     /// is whatever some other tool's exporter thought — the engine's own
     /// material files know about its shaders, its sampler states and its
     /// parameters. Matching on name lets a designer re-shade imported content
-    /// without editing the model, and costs one <c>File.Exists</c> per material
+    /// without editing the model, and costs one existence probe per material
     /// per load.
     /// </remarks>
     private Material ResolveModelMaterial(string modelPath, in ModelMaterial description)
@@ -383,16 +383,11 @@ public sealed partial class AssetManager
         if (materialName.AsSpan().IndexOfAny('/', '\\') >= 0) return false;
         if (materialName.AsSpan().IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return false;
 
+        // Through the stack, like every other content probe: an override that
+        // ships inside a pack has to be found there, and Exists never throws on
+        // a name the filesystem would refuse.
         string candidate = $"{MaterialOverrideFolder}/{materialName}{MaterialParser.FileExtension}";
-        try
-        {
-            if (!File.Exists(ContentRoot.ResolveAbsolute(ContentRootPath, candidate)))
-                return false;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
+        if (!Content.Exists(candidate)) return false;
 
         path = candidate;
         return true;

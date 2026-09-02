@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Numerics;
+using System.Text;
 
 namespace SpectraEngine.Core.Assets;
 
@@ -114,6 +115,25 @@ public static class MaterialParser
     {
         ArgumentNullException.ThrowIfNull(absolutePath);
         return Parse(File.ReadAllText(absolutePath), absolutePath);
+    }
+
+    /// <summary>
+    /// Parses material-file bytes exactly as they arrive from an
+    /// <see cref="Sources.IContentSource"/>, without a temporary file in
+    /// between. Any thread.
+    /// </summary>
+    /// <remarks>
+    /// A material file is UTF-8 text. The BOM some editors write is stripped
+    /// because <see cref="File.ReadAllText(string)"/> strips it too and a stray
+    /// U+FEFF would turn line 1 into an unparseable directive; other encodings
+    /// are not recognised, which the file format has never promised.
+    /// </remarks>
+    public static MaterialDefinition ParseUtf8(ReadOnlySpan<byte> utf8, string originForErrors = "<memory>")
+    {
+        if (utf8.Length >= 3 && utf8[0] == 0xEF && utf8[1] == 0xBB && utf8[2] == 0xBF)
+            utf8 = utf8[3..];
+
+        return Parse(Encoding.UTF8.GetString(utf8), originForErrors);
     }
 
     /// <summary>
