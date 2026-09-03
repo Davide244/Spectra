@@ -34,7 +34,13 @@ namespace SpectraEngine.Graphics.Tests;
 /// all skips rather than fails, since that is an absent capability rather than
 /// a defect.
 /// </para>
+/// <para>
+/// <b>In the D3D11 collection with the shared-target tests</b>, because two
+/// classes acquiring Silk.NET's D3D11 API at once race; see
+/// <see cref="SharedTargetD3D11Collection"/> for what that looked like.
+/// </para>
 /// </remarks>
+[Collection(SharedTargetD3D11Collection.Name)]
 public sealed unsafe class D3D11InstancedLayoutTests
 {
     private static string InstancedSource =>

@@ -85,6 +85,32 @@ public sealed unsafe class D3D11Renderer : Renderer
     // failures against a dead device.
     private bool _deviceLost;
 
+    // True for a surface somebody else presents: no swap chain, no back buffer,
+    // and the frame resolves into _presentTarget instead of into the window.
+    private bool _composited;
+
+    // Where the frame is presented on a composited surface: a shared target
+    // whose NT handle the consumer imports. Null on a window surface, which is
+    // exactly what makes every "target null means the back buffer" call site
+    // below keep meaning what it always meant.
+    private D3D11RenderTarget? _presentTarget;
+
+    // The generation _presentTarget was built under, and the retired ones still
+    // held for a consumer that has not let go. See SharedTargetRetirement.
+    private SharedTargetRetirement? _retirement;
+    private int _presentGeneration;
+
+    // Whether the shared key is currently held, so EndSharedWrite is a no-op
+    // after a Begin that timed out rather than a release of a key this side
+    // never took - which the runtime reports and which hands the texture to a
+    // consumer mid-write.
+    private bool _sharedWriteHeld;
+
+    // A consumer that is not being drawn never takes its turn, so the timeout
+    // is a steady state rather than an event: logged the first time and then
+    // once more when it clears, or the log is the frame rate.
+    private bool _sharedTimeoutLogged;
+
     private D3D11LineBatch? _lineBatch;
     private ShaderProgram? _debugShader;
 
@@ -168,6 +194,15 @@ public sealed unsafe class D3D11Renderer : Renderer
                 SilkMarshal.ThrowHResult(hr);
             }
         }
+
+        // OUTSIDE the swap-chain guard, and that placement is the composited
+        // path's whole error gate. A composited surface has no chain, so the
+        // Present above is skipped every frame; it also has no offscreen probe
+        // and no back buffer to read a pixel out of, which leaves the debug
+        // layer as the only continuous detector of a missing bind or a pipeline
+        // state compiled for another target. Draining only when there is
+        // something to present would turn that off exactly where it is the only
+        // thing left.
         DrainDebugMessages();
     }
 
@@ -242,9 +277,20 @@ public sealed unsafe class D3D11Renderer : Renderer
         // The engine seeded the latch before this thread started.
         Vector2D<int> size = FramebufferSize;
         _swapChainSize = size;
+        _composited = surface.Kind == RenderSurfaceKind.Composited;
 
-        CreateDeviceAndSwapChain(surface, size.X, size.Y);
-        CreateBackBufferViews((uint)size.X, (uint)size.Y);
+        CreateDevice(surface);
+
+        // A composited surface is presented by somebody else, so there is no
+        // chain and no back buffer: everything the frame would have written into
+        // the window goes into the shared target instead, built on demand from
+        // the same size latch a swap chain would have followed.
+        if (!_composited)
+        {
+            CreateSwapChain(surface.NativeHandle, size.X, size.Y);
+            CreateBackBufferViews((uint)size.X, (uint)size.Y);
+        }
+
         CreateDefaultStates();
 
         // Build the base shaders. Same source-first / embedded-fallback pattern
@@ -262,8 +308,17 @@ public sealed unsafe class D3D11Renderer : Renderer
         RegisterPipeline(new D3D11ForwardPipeline());
         RegisterPipeline(new D3D11WireframePipeline());
 
+        // Built here rather than on the first frame, because the handle is what
+        // a host wires its consumer up with and it must exist by the time
+        // Initialize returns: a host that has to render a frame before it can be
+        // told where to look has to special-case its own startup, and would
+        // publish a zero handle if it did not.
+        EnsurePresentTarget();
+
         DrainDebugMessages();
-        _logger.LogInformation("Renderer initialized (D3D11, pipeline={Pipeline})", CurrentPipelineName);
+        _logger.LogInformation(
+            "Renderer initialized (D3D11, pipeline={Pipeline}, surface={Surface})",
+            CurrentPipelineName, _composited ? "composited (no swap chain)" : "window");
     }
 
     public void RegisterPipeline(ID3D11RenderPipeline pipeline)
@@ -308,6 +363,14 @@ public sealed unsafe class D3D11Renderer : Renderer
 
         if (_pipelines.Count == 0 || _surface is null) return;
 
+        // Null on a window surface, which is what keeps every "output null means
+        // the back buffer" decision below byte-for-byte the path it always took.
+        RenderTarget? present = EnsurePresentTarget();
+
+        // A composited surface with no target has nowhere to draw: the pane is
+        // collapsed or mid-layout, which is not an error and not a frame.
+        if (_composited && present is null) return;
+
         var ctx = new D3D11RenderContext
         {
             Renderer = this,
@@ -317,23 +380,52 @@ public sealed unsafe class D3D11Renderer : Renderer
             View = view,
             DeltaTime = deltaTime,
         };
+
+        // Outside the shared bracket on purpose: the probe writes its own target
+        // and never touches the shared one.
         if (ProbeTarget is { } probe)
         {
             FrameTarget = probe;
             _pipelines[_pipelineIndex].Execute(ctx);
         }
 
-        RenderTarget? sceneTarget = HdrEnabled ? EnsureSceneTarget() : null;
-        FrameTarget = sceneTarget;
-        _pipelines[_pipelineIndex].Execute(ctx);
+        // With HDR off there is no intermediate to resolve from, so the pipeline
+        // draws straight into whatever is being presented - which on a
+        // composited surface is the shared texture itself, and is why the
+        // bracket has to cover the pipeline as well as the resolve.
+        RenderTarget? sceneTarget = HdrEnabled ? EnsureSceneTarget() : present;
 
-        if (sceneTarget is null)
+        if (present is not null && !BeginSharedWrite())
         {
-            DrawOverlay(scene);
+            // The consumer never took its turn, so the key never came back. That
+            // is a hidden pane rather than a fault: skip this frame's write and
+            // leave it holding the last one it was given, which is the right
+            // picture for something nobody is looking at. Blocking here would
+            // stall the whole engine on a turn that may never arrive.
             return;
         }
 
-        ResolveTo(sceneTarget.ColorTexture!, null, scene);
+        try
+        {
+            FrameTarget = sceneTarget;
+            _pipelines[_pipelineIndex].Execute(ctx);
+
+            // The overlay follows the resolve's output, always. Left pointed at
+            // the window it would draw into a null render-target view on a
+            // composited surface: no error, no debug-layer message, and a
+            // viewport with no gizmo handles in it.
+            if (sceneTarget is null || ReferenceEquals(sceneTarget, present))
+            {
+                DrawOverlay(scene, present);
+                return;
+            }
+
+            ResolveTo(sceneTarget.ColorTexture!, present, scene);
+        }
+        finally
+        {
+            if (present is not null) EndSharedWrite();
+        }
     }
 
     protected override void DrawFullscreen(PostPass pass, Mesh geometry)
@@ -558,6 +650,212 @@ public sealed unsafe class D3D11Renderer : Renderer
         return target;
     }
 
+    // ─── The shared present target ───────────────────────────
+
+    /// <summary>
+    /// The shared target the frame is presented into on a composited surface,
+    /// built or rebuilt to the current size. Always null on a window surface.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Rebuilt, never resized.</b> Every other target in the engine swaps its
+    /// GPU resource inside the wrapper so materials sampling it survive; a
+    /// shared one cannot, because the consumer imported the NT handle and a
+    /// handle is not swappable. So a size change mints a fresh generation and
+    /// retires the old target rather than freeing it, since the consumer may be
+    /// reading it this instant and freeing it underneath raises nothing on
+    /// either side.
+    /// </para>
+    /// <para>
+    /// <b>The size comes from the same latch a swap chain would follow</b>, so a
+    /// composited host resizes the engine exactly as a windowed one does and
+    /// there is no second size to keep in step.
+    /// </para>
+    /// </remarks>
+    private RenderTarget? EnsurePresentTarget()
+    {
+        if (!_composited) return null;
+
+        Vector2D<int> size = FramebufferSize;
+
+        // Collapsed or mid-layout: null, so the frame is skipped whole. Same
+        // answer EnsureSceneTarget gives at zero, and they have to agree - a
+        // frame that kept the previous target while the HDR one came back null
+        // would resolve nothing and draw the overlay onto last frame's picture.
+        // The existing target is kept rather than torn down, so the consumer
+        // holds the last good frame and the handle it already imported stays
+        // valid for when the size comes back.
+        if (size.X <= 0 || size.Y <= 0) return null;
+
+        if (_presentTarget is { } existing && existing.Width == size.X && existing.Height == size.Y)
+            return existing;
+
+        _retirement ??= new SharedTargetRetirement(_logger);
+
+        if (_presentTarget is { } outgoing)
+        {
+            int retiring = _presentGeneration;
+            _presentTarget = null;
+
+            // The flag names the LIVE target's key, and the live target is
+            // changing. Unreachable while this runs at the top of Render, above
+            // every BeginSharedWrite, and stated anyway because it is the
+            // invariant rather than the call order that makes it true.
+            _sharedWriteHeld = false;
+
+            _retirement.Retire(retiring, () => DestroyRenderTarget(outgoing));
+        }
+
+        // Srgb, because this is where linear light stops: the resolve writes
+        // linear values and the target's own view encodes them, exactly as the
+        // window's back buffer does. The RESOURCE stays UNORM so the consumer
+        // does not decode a second time; see D3D11Texture.
+        //
+        // Depth, because this stands in for the back buffer and the back buffer
+        // has one. The HDR path never uses it - the scene has already been drawn
+        // and depth-tested into its own target by the time the resolve runs - so
+        // it is a full-screen surface spent on the HdrEnabled = false path,
+        // which renders the scene straight in here and cannot work without it.
+        var fresh = (D3D11RenderTarget)CreateRenderTarget(new RenderTargetDesc(
+            size.X, size.Y, TextureFormat.Rgba8, TextureColorSpace.Srgb,
+            Depth: true, TextureFilter.Linear, TextureWrap.Clamp, Color: true,
+            RenderTargetSharing.KeyedMutex));
+
+        _presentTarget = fresh;
+        _presentGeneration = _retirement.Next();
+        _sharedTimeoutLogged = false;
+
+        _logger.LogInformation(
+            "Shared present target {Width}x{Height}, generation {Generation}, handle 0x{Handle:X}.",
+            size.X, size.Y, _presentGeneration, fresh.Color?.SharedHandle ?? 0);
+
+        return fresh;
+    }
+
+    /// <summary>The present target, for tests that drive a pass into it directly.</summary>
+    /// <remarks>
+    /// Internal because nothing in a game reaches for this: the frame resolves
+    /// into it and the host reads the handle. A test needs it because the thing
+    /// being proved - that a write on this side is visible through the handle on
+    /// another device - is not observable from anywhere else.
+    /// </remarks>
+    internal RenderTarget? PresentTargetForTest => _presentTarget;
+
+    /// <summary>Runs the present target's size maintenance, for tests that resize without a scene.</summary>
+    /// <remarks>
+    /// A resize reaches the target through <see cref="Render"/>, which needs a
+    /// scene and a view. Driving exactly this step is what keeps a test of the
+    /// target from also being a test of the pipelines.
+    /// </remarks>
+    internal RenderTarget? EnsurePresentTargetForTest() => EnsurePresentTarget();
+
+    private D3D11Texture? SharedColor =>
+        _presentTarget?.Color is { IsShared: true } color ? color : null;
+
+    /// <inheritdoc/>
+    public override bool TryGetSharedHandle(out SharedTargetHandle handle)
+    {
+        if (SharedColor is { } color && _presentTarget is { } target)
+        {
+            handle = new SharedTargetHandle(
+                color.SharedHandle, target.Width, target.Height, _presentGeneration);
+            return true;
+        }
+
+        handle = default;
+        return false;
+    }
+
+    /// <inheritdoc/>
+    public override bool BeginSharedWrite(int timeoutMs = 100)
+    {
+        if (SharedColor is not { } color) return false;
+
+        // Re-entering would take the key twice and release it once, which reads
+        // as a working frame and then deadlocks the consumer forever.
+        if (_sharedWriteHeld)
+            throw new InvalidOperationException("BeginSharedWrite was called while the shared key was already held.");
+
+        int hr = color.KeyedMutex->AcquireSync(SharedProducerKey, (uint)Math.Max(0, timeoutMs));
+
+        // WAIT_TIMEOUT is 0x00000102: a SUCCESS-coded HRESULT, so `hr < 0` reads
+        // it as an acquisition, and SilkMarshal.ThrowHResult would let it
+        // through. The frame then writes a texture the consumer owns, and the
+        // ReleaseSync that follows fails because this side never held the key.
+        // Measured, because the value alone does not look like a failure.
+        if (hr == WaitTimeout)
+        {
+            if (!_sharedTimeoutLogged)
+            {
+                _sharedTimeoutLogged = true;
+                _logger.LogInformation(
+                    "Shared target key not available within {Timeout} ms; skipping the shared write while the " +
+                    "consumer is not taking its turn. It keeps the last frame it was given.", timeoutMs);
+            }
+            return false;
+        }
+
+        if (hr < 0)
+        {
+            _logger.LogError(
+                "Acquiring the shared target key failed: {Code} (0x{Hr:X8}). Skipping this frame's shared write.",
+                DxgiInterop.Describe(hr), hr);
+            return false;
+        }
+
+        // WAIT_ABANDONED (0x00000080): the key IS acquired, but whoever held it
+        // last went away without releasing. Worth saying so once - the consumer
+        // has died - and worth carrying on, because the texture is ours.
+        if (hr == WaitAbandoned)
+            _logger.LogWarning("The shared target key was abandoned by its previous holder; taking it anyway.");
+
+        if (_sharedTimeoutLogged)
+        {
+            _sharedTimeoutLogged = false;
+            _logger.LogInformation("Shared target key available again; resuming shared writes.");
+        }
+
+        _sharedWriteHeld = true;
+        return true;
+    }
+
+    /// <inheritdoc/>
+    public override void EndSharedWrite()
+    {
+        if (!_sharedWriteHeld) return;
+        _sharedWriteHeld = false;
+
+        if (SharedColor is not { } color) return;
+
+        // Flushed BEFORE the key changes hands. A composited surface never
+        // calls Present, so nothing else submits the frame at all, and the
+        // consumer runs on its own device: handing over the key with the work
+        // still queued gives it a texture the GPU has not written yet.
+        ((ID3D11DeviceContext*)_context.Handle)->Flush();
+
+        int hr = color.KeyedMutex->ReleaseSync(SharedConsumerKey);
+        if (hr < 0)
+        {
+            _logger.LogError(
+                "Releasing the shared target key failed: {Code} (0x{Hr:X8}). The consumer will not get this frame.",
+                DxgiInterop.Describe(hr), hr);
+        }
+    }
+
+    /// <inheritdoc/>
+    public override void NotifySharedTargetReleased(int generation)
+    {
+        int released = _retirement?.ConsumerReleased(generation) ?? 0;
+        if (released > 0)
+            _logger.LogDebug("Released {Count} retired shared target generation(s) up to {Generation}.", released, generation);
+    }
+
+    /// <summary>WAIT_TIMEOUT, which AcquireSync returns as a success-coded HRESULT.</summary>
+    private const int WaitTimeout = 0x00000102;
+
+    /// <summary>WAIT_ABANDONED: acquired, but the previous holder never released.</summary>
+    private const int WaitAbandoned = 0x00000080;
+
     /// <summary>
     /// Uploads and draws the accumulated <see cref="Renderer.DebugDraw"/> lines
     /// with depth-test off. Called by pipelines after their main scene pass.
@@ -724,6 +1022,17 @@ public sealed unsafe class D3D11Renderer : Renderer
         foreach (var mesh in _meshes) mesh.Dispose();
         _meshes.Clear();
 
+        // Before the target loop below, because releasing a retired generation
+        // calls DestroyRenderTarget, which mutates the very list that loop walks.
+        // Regardless of acknowledgement: the device is going with them, so there
+        // is nothing left for a consumer to hold on to. Nulled so the second
+        // Shutdown Engine's crash handler makes is a no-op.
+        _retirement?.ReleaseAll();
+        _retirement = null;
+        _presentTarget = null;
+        _presentGeneration = 0;
+        _sharedWriteHeld = false;
+
         ReleaseFrameResources();
 
         foreach (var target in _renderTargets)
@@ -760,16 +1069,27 @@ public sealed unsafe class D3D11Renderer : Renderer
 
     // ─── Device + swap chain setup ───────────────────────────
 
-    private void CreateDeviceAndSwapChain(IRenderSurface surface, int width, int height)
+    /// <summary>
+    /// Brings up the device, the immediate context and the debug-layer queues.
+    /// Knows nothing about presentation.
+    /// </summary>
+    /// <remarks>
+    /// <b>Split from the swap chain because a composited surface has no swap
+    /// chain at all</b>, and because the shape of that split is already settled
+    /// one file over: D3D12 has had <c>CreateDevice</c> and
+    /// <c>CreateQueueAndSwapChain</c> apart since it was written. A surface the
+    /// engine does not present to still needs every one of these.
+    /// </remarks>
+    private void CreateDevice(IRenderSurface surface)
     {
-        if (surface.Kind != RenderSurfaceKind.Win32 || surface.NativeHandle == 0)
+        bool composited = surface.Kind == RenderSurfaceKind.Composited;
+        if (!composited && (surface.Kind != RenderSurfaceKind.Win32 || surface.NativeHandle == 0))
         {
             throw new InvalidOperationException(
-                $"The D3D11 backend needs a Win32 surface with an HWND; this one is {surface.Kind}. " +
-                "On another platform, or for a surface that offers only a GL context, use the OpenGL backend.");
+                $"The D3D11 backend needs a Win32 surface with an HWND, or a composited surface it does not " +
+                $"present to; this one is {surface.Kind}. On another platform, or for a surface that offers only " +
+                "a GL context, use the OpenGL backend.");
         }
-
-        nint hwnd = surface.NativeHandle;
 
         D3DFeatureLevel featureLevel = default;
         D3DFeatureLevel[] requested = [D3DFeatureLevel.Level110];
@@ -836,7 +1156,11 @@ public sealed unsafe class D3D11Renderer : Renderer
                 _dxgiMessages = DxgiDebugMessages.Acquire(_dxgi);
             }
         }
+    }
 
+    /// <summary>Creates the swap chain for a window surface, and takes Alt+Enter off DXGI.</summary>
+    private void CreateSwapChain(nint hwnd, int width, int height)
+    {
         // Walk device -> DXGI device -> adapter -> factory to be able to make
         // the swap chain. Using IDXGIFactory2 so we get the flip-discard model.
         ComPtr<IDXGIDevice> dxgiDevice = default;

@@ -3,14 +3,17 @@ using Silk.NET.Direct3D11;
 using Silk.NET.DXGI;
 using System;
 using System.Buffers;
+using System.Runtime.InteropServices;
 
 namespace SpectraEngine.Core.Graphics.D3D11;
 
-internal sealed unsafe class D3D11Texture : Texture
+internal sealed unsafe partial class D3D11Texture : Texture
 {
     private ComPtr<ID3D11Texture2D> _texture;
     private ComPtr<ID3D11ShaderResourceView> _srv;
     private ComPtr<ID3D11SamplerState> _sampler;
+    private ComPtr<IDXGIKeyedMutex> _keyedMutex;
+    private nint _sharedHandle;
     private bool _disposed;
 
     public ComPtr<ID3D11ShaderResourceView> Srv => _srv;
@@ -19,15 +22,38 @@ internal sealed unsafe class D3D11Texture : Texture
     /// <summary>The underlying resource, for a render-target view over it.</summary>
     internal ID3D11Resource* Resource => (ID3D11Resource*)_texture.Handle;
 
-    /// <summary>The DXGI format actually in use, which an RTV over this texture must match.</summary>
+    /// <summary>The DXGI format the RESOURCE was created with, which the SRV must match.</summary>
     internal Silk.NET.DXGI.Format DxgiFormat { get; private set; }
+
+    /// <summary>
+    /// The DXGI format a render-target view over this texture must be created
+    /// with, which is the resource's own format everywhere except on a shared
+    /// target. See <see cref="CreateRenderTargetTexture"/> for why those differ.
+    /// </summary>
+    internal Silk.NET.DXGI.Format RtvFormat { get; private set; }
+
+    /// <summary>
+    /// The NT handle something outside this renderer imports this texture by, or
+    /// zero when it is not shared.
+    /// </summary>
+    internal nint SharedHandle => _sharedHandle;
+
+    /// <summary>Whether this texture carries a shared handle and a keyed mutex.</summary>
+    internal bool IsShared => _sharedHandle != 0;
+
+    /// <summary>
+    /// The keyed mutex that takes turns on this texture, or null when it is not
+    /// shared. See <see cref="Renderer.SharedProducerKey"/> for the protocol.
+    /// </summary>
+    internal IDXGIKeyedMutex* KeyedMutex => (IDXGIKeyedMutex*)_keyedMutex.Handle;
 
     private D3D11Texture(
         ComPtr<ID3D11Texture2D> texture,
         ComPtr<ID3D11ShaderResourceView> srv,
         ComPtr<ID3D11SamplerState> sampler,
         int width, int height, TextureFormat format, TextureColorSpace colorSpace,
-        Silk.NET.DXGI.Format dxgiFormat)
+        Silk.NET.DXGI.Format dxgiFormat,
+        Silk.NET.DXGI.Format? rtvFormat = null)
     {
         _texture = texture;
         _srv = srv;
@@ -37,6 +63,7 @@ internal sealed unsafe class D3D11Texture : Texture
         Format = format;
         ColorSpace = colorSpace;
         DxgiFormat = dxgiFormat;
+        RtvFormat = rtvFormat ?? dxgiFormat;
     }
 
     internal static D3D11Texture Create(
@@ -178,6 +205,35 @@ internal sealed unsafe class D3D11Texture : Texture
     /// Creates an empty texture usable as both a render target and a shader
     /// resource: the colour attachment of a <see cref="D3D11RenderTarget"/>.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A shared attachment is a UNORM resource with an <c>_SRGB</c> render
+    /// target view, and that split is the whole defence against a double
+    /// encode.</b> The engine's tone-map resolve writes linear light and relies
+    /// on the target's format to encode it, exactly as it does into the window;
+    /// the consumer on the other side of the handle then decodes once when it
+    /// samples. If the RESOURCE were sRGB-typed too, the consumer's own import
+    /// would decode a second time and the picture would come out washed out,
+    /// with no error anywhere. It is the same trick <c>D3D12TargetState</c>
+    /// already uses on the back buffer, for the same reason: a view carries the
+    /// colour space, and what an outside importer sees is the resource.
+    /// </para>
+    /// <para>
+    /// <b>The SRV stays UNORM, and that is not a choice.</b> Measured on this
+    /// machine: an <c>_SRGB</c> shader-resource view over an <c>_UNORM</c>
+    /// resource is refused with <c>E_INVALIDARG</c> while the <c>_SRGB</c>
+    /// render-target view over the same resource is accepted. So sampling a
+    /// shared target inside the engine reads encoded values undecoded - which
+    /// costs nothing today, because a shared target is what gets presented and
+    /// nothing samples it, and is written down because the first thing to sample
+    /// one will be surprised.
+    /// </para>
+    /// <para>
+    /// <b><c>SHARED_NTHANDLE</c> is only legal alongside <c>SHARED</c> or
+    /// <c>SHARED_KEYEDMUTEX</c></b>, and the keyed mutex is what the hand-over
+    /// wants, so both flags always travel together here.
+    /// </para>
+    /// </remarks>
     internal static D3D11Texture CreateRenderTargetTexture(
         ComPtr<ID3D11Device> device,
         int width,
@@ -185,21 +241,81 @@ internal sealed unsafe class D3D11Texture : Texture
         TextureFormat format,
         TextureColorSpace colorSpace,
         TextureFilter filter,
-        TextureWrap wrap)
+        TextureWrap wrap,
+        RenderTargetSharing sharing = RenderTargetSharing.None)
     {
         TextureColorSpace resolved = TextureFormatInfo.Resolve(format, colorSpace);
-        Silk.NET.DXGI.Format dxgiFormat = RenderTargetDxgiFormat(format, resolved);
+        Silk.NET.DXGI.Format viewFormat = RenderTargetDxgiFormat(format, resolved);
+
+        // Unshared is the path every existing target takes and is unchanged: one
+        // format for the resource and both views.
+        bool shared = sharing != RenderTargetSharing.None;
+        Silk.NET.DXGI.Format resourceFormat = shared
+            ? RenderTargetDxgiFormat(format, TextureColorSpace.Linear)
+            : viewFormat;
+
+        uint misc = shared
+            ? (uint)(ResourceMiscFlag.SharedKeyedmutex | ResourceMiscFlag.SharedNthandle)
+            : 0u;
 
         var dev = (ID3D11Device*)device.Handle;
-        ID3D11Texture2D* texPtr = CreateRenderTargetResource(dev, width, height, dxgiFormat);
-        ID3D11ShaderResourceView* srvPtr = CreateSrv(dev, texPtr, dxgiFormat, mipLevels: 1);
+        ID3D11Texture2D* texPtr = CreateRenderTargetResource(dev, width, height, resourceFormat, misc);
+        ID3D11ShaderResourceView* srvPtr = CreateSrv(dev, texPtr, resourceFormat, mipLevels: 1);
         ID3D11SamplerState* samplerPtr = CreateSampler(dev, filter, wrap);
 
-        return new D3D11Texture(
+        var texture = new D3D11Texture(
             ComOwnership.Own(texPtr),
             ComOwnership.Own(srvPtr),
             ComOwnership.Own(samplerPtr),
-            width, height, format, resolved, dxgiFormat);
+            width, height, format, resolved, resourceFormat, viewFormat);
+
+        if (shared)
+        {
+            try
+            {
+                texture.AcquireSharing();
+            }
+            catch
+            {
+                // Half a shared texture is worse than none: the caller would get
+                // a target that renders and can never be handed over, and the
+                // failure would surface as a silently black consumer instead of
+                // as the HRESULT that actually happened.
+                texture.Dispose();
+                throw;
+            }
+        }
+
+        return texture;
+    }
+
+    // Queries out the two interfaces a shared attachment is reached through and
+    // mints the NT handle. Split out so the failure path above can dispose one
+    // object rather than unwinding four raw pointers by hand.
+    private void AcquireSharing()
+    {
+        IDXGIResource1* resourcePtr = null;
+        Guid resourceGuid = IDXGIResource1.Guid;
+        SilkMarshal.ThrowHResult(((ID3D11Texture2D*)_texture.Handle)->QueryInterface(
+            &resourceGuid, (void**)&resourcePtr));
+        ComPtr<IDXGIResource1> resource = ComOwnership.Own(resourcePtr);
+        try
+        {
+            void* handle = null;
+            SilkMarshal.ThrowHResult(((IDXGIResource1*)resource.Handle)->CreateSharedHandle(
+                (SecurityAttributes*)null, SharedResourceRead | SharedResourceWrite, (char*)null, &handle));
+            _sharedHandle = (nint)handle;
+        }
+        finally
+        {
+            ComOwnership.Release(ref resource);
+        }
+
+        IDXGIKeyedMutex* mutexPtr = null;
+        Guid mutexGuid = IDXGIKeyedMutex.Guid;
+        SilkMarshal.ThrowHResult(((ID3D11Texture2D*)_texture.Handle)->QueryInterface(
+            &mutexGuid, (void**)&mutexPtr));
+        _keyedMutex = ComOwnership.Own(mutexPtr);
     }
 
     /// <summary>
@@ -273,6 +389,21 @@ internal sealed unsafe class D3D11Texture : Texture
     /// </summary>
     internal void ReplaceStorage(ComPtr<ID3D11Device> device, int width, int height)
     {
+        // A shared attachment is the one target whose storage may NOT be swapped
+        // inside its wrapper. The wrapper's identity surviving a resize is what
+        // keeps every material sampling it correct - and it is exactly what
+        // would let a caller assume the HANDLE survived too, when the consumer
+        // has already imported the old one and would go on reading a resource
+        // that no longer exists. A shared target is recreated under a new
+        // generation instead; see SharedTargetRetirement.
+        if (IsShared)
+        {
+            throw new InvalidOperationException(
+                "A shared render target cannot be resized in place: the consumer imported its NT handle, and a " +
+                "handle cannot be swapped inside the wrapper the way a plain GPU resource can. Recreate the " +
+                "target under a new generation and retire the old one.");
+        }
+
         var dev = (ID3D11Device*)device.Handle;
         ID3D11Texture2D* texPtr = CreateRenderTargetResource(dev, width, height, DxgiFormat);
         ID3D11ShaderResourceView* srvPtr = CreateSrv(dev, texPtr, DxgiFormat, mipLevels: 1);
@@ -304,7 +435,7 @@ internal sealed unsafe class D3D11Texture : Texture
     };
 
     private static ID3D11Texture2D* CreateRenderTargetResource(
-        ID3D11Device* dev, int width, int height, Silk.NET.DXGI.Format dxgiFormat)
+        ID3D11Device* dev, int width, int height, Silk.NET.DXGI.Format dxgiFormat, uint miscFlags = 0)
     {
         var desc = new Texture2DDesc
         {
@@ -318,6 +449,7 @@ internal sealed unsafe class D3D11Texture : Texture
             SampleDesc = new SampleDesc(1, 0),
             Usage = Usage.Default,
             BindFlags = (uint)(BindFlag.ShaderResource | BindFlag.RenderTarget),
+            MiscFlags = miscFlags,
         };
 
         ID3D11Texture2D* texPtr = null;
@@ -386,8 +518,41 @@ internal sealed unsafe class D3D11Texture : Texture
     {
         if (_disposed) return;
         _disposed = true;
+        ComOwnership.Release(ref _keyedMutex);
         ComOwnership.Release(ref _sampler);
         ComOwnership.Release(ref _srv);
         ComOwnership.Release(ref _texture);
+
+        // An NT handle is a kernel object with its own reference on the
+        // resource, so releasing the COM pointers is not enough: leaving it open
+        // pins the whole surface for the process's life, which on a target
+        // recreated per resize is a full-screen leak that no COM audit finds.
+        // Cleared first so a second Dispose cannot close it twice - a closed
+        // handle value is reusable, and closing somebody else's is far worse
+        // than leaking this one.
+        if (_sharedHandle != 0)
+        {
+            nint handle = _sharedHandle;
+            _sharedHandle = 0;
+            _ = Kernel32.CloseHandle(handle);
+        }
+    }
+
+    /// <summary>DXGI_SHARED_RESOURCE_READ.</summary>
+    private const uint SharedResourceRead = 0x80000000u;
+
+    /// <summary>DXGI_SHARED_RESOURCE_WRITE.</summary>
+    private const uint SharedResourceWrite = 0x00000001u;
+
+    // The one Win32 call the graphics layer needs that Silk.NET does not bind:
+    // an NT shared handle is a kernel object and CloseHandle is the only way to
+    // let go of one.
+    private static partial class Kernel32
+    {
+        // Returned as the raw BOOL rather than marshalled: Silk.NET.Core.Native
+        // also defines an UnmanagedType, so naming the marshalling attribute
+        // here would be ambiguous, and nothing reads the result anyway.
+        [LibraryImport("kernel32.dll", EntryPoint = "CloseHandle", SetLastError = true)]
+        internal static partial int CloseHandle(nint handle);
     }
 }

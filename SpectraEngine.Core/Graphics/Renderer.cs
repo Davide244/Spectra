@@ -534,11 +534,32 @@ public abstract class Renderer
 
     // ---- Shared colour targets ---------------------------------------------
     //
-    // The vocabulary only: no backend implements any of this yet. Every member
-    // is virtual with a refusing default rather than abstract, so a backend
-    // that has not been taught to share answers "no" instead of failing to
-    // compile, and a caller has one answer to check rather than a capability
-    // table to consult first.
+    // D3D11 implements all of this; D3D12 and OpenGL do not. Every member is
+    // virtual with a refusing default rather than abstract, so a backend that
+    // has not been taught to share answers "no" instead of failing to compile,
+    // and a caller has one answer to check rather than a capability table to
+    // consult first. D3D12 stays refusing on purpose: a D3D12-created handle is
+    // refused by the import this feeds (measured: E_NOINTERFACE), so its route
+    // is a D3D11On12 bridge rather than an implementation of these members.
+
+    /// <summary>
+    /// The keyed-mutex key the PRODUCER acquires and the consumer releases.
+    /// </summary>
+    /// <remarks>
+    /// <b>Both constants live here so the two sides cannot each invent one.</b>
+    /// A keyed mutex has no notion of which key means what; the numbers are
+    /// pure convention, and a consumer that picked the other pair would deadlock
+    /// on its second frame with nothing anywhere reporting a disagreement. Zero
+    /// is also the key a freshly created keyed mutex starts released on, which
+    /// is why the producer is the side that takes it first.
+    /// </remarks>
+    public const ulong SharedProducerKey = 0;
+
+    /// <summary>
+    /// The keyed-mutex key the producer releases and the CONSUMER acquires. See
+    /// <see cref="SharedProducerKey"/>.
+    /// </summary>
+    public const ulong SharedConsumerKey = 1;
 
     /// <summary>
     /// A colour target something outside this renderer can import, named by an
@@ -570,13 +591,38 @@ public abstract class Renderer
     public readonly record struct SharedTargetHandle(nint NtHandle, int Width, int Height, int Generation);
 
     /// <summary>
-    /// The handle of this renderer's shared colour target, if it has one.
-    /// False on every backend today.
+    /// The handle of this renderer's shared colour target, if it has one. True
+    /// on D3D11 when the surface is <see cref="RenderSurfaceKind.Composited"/>;
+    /// false everywhere else.
     /// </summary>
     public virtual bool TryGetSharedHandle(out SharedTargetHandle handle)
     {
         handle = default;
         return false;
+    }
+
+    /// <summary>
+    /// The consumer has stopped using <paramref name="generation"/> and every
+    /// generation before it, so the resources behind them may be freed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The other half of <see cref="SharedTargetHandle.Generation"/>, and the
+    /// only thing that makes a resize of a shared target safe.</b> A resize
+    /// retires the old resource rather than freeing it, because the consumer may
+    /// be sampling it this instant and freeing it underneath throws nothing on
+    /// either side. Without this call every retired generation is held until a
+    /// hard cap forces it out, which is reported but is still a full-screen
+    /// surface per resize step of a drag.
+    /// </para>
+    /// <para>
+    /// Render thread only, like every other member here. A host learns of the
+    /// consumer's release on its own thread and posts it across the same way it
+    /// posts everything else.
+    /// </para>
+    /// </remarks>
+    public virtual void NotifySharedTargetReleased(int generation)
+    {
     }
 
     /// <summary>
@@ -587,11 +633,22 @@ public abstract class Renderer
     /// <remarks>
     /// <para>
     /// <b>The key protocol, both halves in one place because neither half means
-    /// anything alone:</b> the producer acquires key 0 and releases key 1; the
-    /// consumer acquires key 1 and releases key 0. Whoever holds the mutex is
-    /// the only side touching the texture, and the key it releases is what says
-    /// whose turn is next. Releasing the key you acquired instead of the other
-    /// one deadlocks both sides on the following frame.
+    /// anything alone:</b> the producer acquires <see cref="SharedProducerKey"/>
+    /// and releases <see cref="SharedConsumerKey"/>; the consumer acquires
+    /// <see cref="SharedConsumerKey"/> and releases
+    /// <see cref="SharedProducerKey"/>. Whoever holds the mutex is the only side
+    /// touching the texture, and the key it releases is what says whose turn is
+    /// next. Releasing the key you acquired instead of the other one deadlocks
+    /// both sides on the following frame.
+    /// </para>
+    /// <para>
+    /// <b>Every touch of the texture belongs inside the bracket, not just the
+    /// draws.</b> Measured: a clear issued against a keyed-mutex resource whose
+    /// key is not held completes with <c>S_OK</c>, raises nothing on the debug
+    /// layer, and writes nothing at all - the readback is zeros. There is no
+    /// diagnostic anywhere for getting this wrong, only a picture that never
+    /// changes, so the bracket goes around the whole of the frame's work on the
+    /// shared target rather than around the draw calls alone.
     /// </para>
     /// <para>
     /// <b>A timeout is not an error, and blocking on it is.</b> It means the
@@ -1880,10 +1937,19 @@ public abstract class Renderer
     }
 
     /// <summary>
-    /// Draws the debug overlay into the window, in its own pass on top of
-    /// whatever the frame already rendered.
+    /// Draws the debug overlay into <paramref name="output"/> (the window when
+    /// it is null), in its own pass on top of whatever the frame already
+    /// rendered.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// <b><paramref name="output"/> must be whatever the frame actually resolved
+    /// into.</b> On a composited surface there is no back buffer at all, so an
+    /// overlay that kept drawing to the window would draw to a null render
+    /// target view: no error, no debug-layer message, and a viewport with no
+    /// gizmo handles in it. It defaults to the window so the two backends that
+    /// only ever draw there need not say so.
+    /// </para>
     /// <para>
     /// <b>The overlay must not go through the scene's pass.</b> Gizmo handles,
     /// the selection highlight and the marquee are authored as display colours
@@ -1898,11 +1964,11 @@ public abstract class Renderer
     /// never reads scene depth and does not care that this pass has none.
     /// </para>
     /// </remarks>
-    protected void DrawOverlay(Scene.Scene? scene)
+    protected void DrawOverlay(Scene.Scene? scene, RenderTarget? output = null)
     {
         if (scene is null || DebugDraw.VertexCount == 0) return;
 
-        BeginPass(PassClear.Keep);
+        BeginPass(output, PassClear.Keep);
         try
         {
             FlushDebugDrawCore(scene.Camera);

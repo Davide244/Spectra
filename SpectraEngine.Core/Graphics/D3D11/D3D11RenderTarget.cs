@@ -43,7 +43,8 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
         if (desc.Color)
         {
             _color = D3D11Texture.CreateRenderTargetTexture(
-                device, desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap);
+                device, desc.Width, desc.Height, desc.ColorFormat, desc.ColorSpace, desc.Filter, desc.Wrap,
+                desc.Sharing);
         }
 
         if (desc.Depth)
@@ -56,12 +57,28 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
 
     public override Texture? DepthTexture => _depth;
 
+    /// <summary>The colour attachment as this backend sees it, for the shared handle and its keyed mutex.</summary>
+    internal D3D11Texture? Color => _color;
+
     public override void Resize(int width, int height)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (width == Width && height == Height) return;
         if (width <= 0 || height <= 0)
             throw new ArgumentOutOfRangeException(nameof(width), $"Render target size must be positive; got {width}x{height}.");
+
+        // Refused HERE as well as inside ReplaceStorage, and not because one
+        // guard is unreliable: a no-op resize returns above without touching the
+        // texture at all, so this is the only place that can say why a caller
+        // asking for a genuinely different size is wrong before any of the views
+        // have been released. See RenderTarget's remarks on where the
+        // identity-survives-a-resize guarantee stops.
+        if (Desc.Sharing != RenderTargetSharing.None)
+        {
+            throw new InvalidOperationException(
+                $"A shared render target cannot be resized in place ({Width}x{Height} to {width}x{height}): " +
+                "the consumer imported its NT handle. Recreate it under a new generation and retire the old one.");
+        }
 
         ReleaseViews();
         // Swaps the resource and the SRV inside the existing wrapper, so every
@@ -80,7 +97,12 @@ internal sealed unsafe class D3D11RenderTarget : RenderTarget
             ID3D11RenderTargetView* rtv = null;
             var rtvDesc = new RenderTargetViewDesc
             {
-                Format = _color.DxgiFormat,
+                // The VIEW's format, which is the resource's own everywhere but
+                // on a shared attachment: there the resource is UNORM so an
+                // outside importer does not decode a second time, and the sRGB
+                // encode lives on this view. Measured legal on this machine;
+                // see D3D11Texture.CreateRenderTargetTexture.
+                Format = _color.RtvFormat,
                 ViewDimension = RtvDimension.Texture2D,
             };
             rtvDesc.Anonymous.Texture2D = new Tex2DRtv { MipSlice = 0 };
