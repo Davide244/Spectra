@@ -84,6 +84,16 @@ public sealed class CookResult
     /// <summary>Assets whose rule had to run while the cache was on.</summary>
     public int CacheMisses { get; init; }
 
+    /// <summary>How many workers the cook actually ran at; zero when it scheduled nothing.</summary>
+    /// <remarks>
+    /// <b>What was used, never what was asked for.</b> It is
+    /// <see cref="CookSettings.Jobs"/> clamped by how much there was to cook, so a
+    /// <c>-j8</c> over three assets reports three: a tool that echoes the request
+    /// back is a tool that cannot be used to find out what happened, and "why is
+    /// -j16 no faster" is exactly the question this number exists to answer.
+    /// </remarks>
+    public int Workers { get; init; }
+
     /// <summary>Whether the cook produced its artifact.</summary>
     public bool Succeeded => ErrorCount == 0 && OutputPath is not null;
 }

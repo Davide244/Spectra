@@ -8,6 +8,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Hashing;
+using System.Runtime.ExceptionServices;
+using System.Threading.Tasks;
 
 namespace Spectra.Kitchen.Cooking;
 
@@ -16,10 +18,18 @@ namespace Spectra.Kitchen.Cooking;
 /// pack.
 /// </summary>
 /// <remarks>
-/// <para><b>This is the whole spine, and today most of it is one lane wide.</b>
-/// There is no dependency DAG and no parallelism yet; what there IS is the shape
-/// those need: every asset goes through a rule, every rule reads through a context
-/// that records what it touched, and every output is placed by content path.</para>
+/// <para><b>This is the whole spine, and the scheduler is what the rest of its
+/// shape was for.</b> Every asset goes through a rule, every rule reads through a
+/// context that records what it touched, and every output is placed by content
+/// path - so the only thing a worker ever owns is one rule's own answer, and the
+/// pack is assembled from those answers on the calling thread.</para>
+/// <para><b>Nothing a worker produces is applied where it lands.</b> Outcomes go
+/// into an array indexed by work item, never appended in completion order, and the
+/// diagnostics, the pack entries, the loose files, the byte counts and the manifest
+/// records are all applied afterwards in that index order. That is the whole
+/// determinism argument, and it is stronger than a promise about any one of those
+/// consumers: a cooked byte cannot depend on which worker won a race, because no
+/// cooked byte is written by a worker.</para>
 /// <para><b>The cache sits exactly where that shape put it.</b> A rule is asked
 /// for from the cache before it is run and recorded after, keyed on what the
 /// context already recorded rather than on a separate declaration of it - which is
@@ -94,87 +104,73 @@ public sealed class CookSession
                 "nothing to cook.",
                 _layout.ManifestPath));
 
-            return Finish(assets, diagnostics, null, null, 0, 0);
+            return Finish(assets, diagnostics, null, null, 0, 0, 0);
         }
 
         ReportUncookedMaps(diagnostics);
 
         CookCache? cache = OpenCache(diagnostics);
 
+        // The work list is built whole, in walk order, before anything runs: every
+        // ordering promise this class makes is an index into it - an outcome slot,
+        // a diagnostic's position, a manifest row. Each rule is resolved here
+        // rather than inside a worker, which keeps CookRuleSet on one thread and
+        // keeps a rule set that grows state out of the shared-state question
+        // entirely.
         IReadOnlyList<ContentFile> content = ContentWalker.Walk(contentRoot);
+        var work = new WorkItem[content.Count];
         var cookedPaths = new List<string>(content.Count);
 
-        foreach (ContentFile file in content)
+        for (int i = 0; i < content.Count; i++)
         {
-            IRule rule = _rules.Resolve(file.ContentPath);
-            cookedPaths.Add(file.ContentPath);
+            work[i] = new WorkItem(content[i], _rules.Resolve(content[i].ContentPath));
+            cookedPaths.Add(content[i].ContentPath);
+        }
 
-            IReadOnlyList<RuleDependency> dependencies;
-            IReadOnlyList<RuleEmission> emissions;
-            bool fromCache = false;
+        // Clamped to the work, so what a summary line reports is the parallelism
+        // this cook could actually have had rather than the number somebody typed.
+        // A project with nothing in it scheduled nothing and reports none, which is
+        // the same answer the content-root failure above gives.
+        int workers = work.Length == 0 ? 0 : Math.Clamp(_settings.Jobs, 1, work.Length);
+        var outcomes = new RuleOutcome[work.Length];
 
-            if (cache is not null &&
-                cache.TryReplay(contentRoot, file.ContentPath, rule, _settings, out CachedRun? replay))
-            {
-                fromCache = true;
-                dependencies = replay.Dependencies;
-                emissions = replay.Emissions;
-            }
-            else
-            {
-                var context = new RuleContext(contentRoot, file.ContentPath, _settings.Profile);
-                bool failed = false;
+        // Level-synchronous, and today there is exactly ONE level, because nothing
+        // in this build can order two work items: no rule declares a dependency on
+        // another rule's OUTPUT, so a topological sort would sort one group. A
+        // level is therefore a RANGE of the work list rather than a set - the day a
+        // rule does declare one, the list is sorted into level order and this
+        // becomes a loop over ranges, and none of the ordering rules below, which
+        // are what the byte-identity oracles rest on, has to move.
+        RunLevel(contentRoot, cache, work, outcomes, 0, work.Length, workers);
 
-                try
-                {
-                    rule.Cook(context);
-                }
-                catch (RuleInputMissingException ex)
-                {
-                    diagnostics.Add(CookDiagnostic.Error(
-                        CookDiagnosticCodes.InputMissing, ex.Message, file.FullPath));
-                    failed = true;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-                {
-                    diagnostics.Add(CookDiagnostic.Error(
-                        CookDiagnosticCodes.RuleFailed,
-                        $"The {rule.Kind} rule failed on '{file.ContentPath}': {ex.Message}",
-                        file.FullPath));
-                    failed = true;
-                }
+        for (int i = 0; i < work.Length; i++)
+        {
+            WorkItem item = work[i];
+            RuleOutcome outcome = outcomes[i];
 
-                // Flushed in rule order, which single-threaded is simply the order they
-                // happened in and will stay true when this loop becomes parallel.
-                foreach (CookDiagnostic diagnostic in context.Diagnostics)
-                    diagnostics.Add(_settings.Strict ? diagnostic.AsError() : diagnostic);
+            // Buffered per rule and flushed here rather than written where they
+            // happened: N workers writing to one stream tear lines apart, and the
+            // whole diagnostic contract is that each line is IDE-parseable. That
+            // makes this a correctness requirement of the output format.
+            if (outcome.Failure is not null) diagnostics.Add(outcome.Failure);
 
-                dependencies = context.Dependencies;
-                emissions = context.Emissions;
+            foreach (CookDiagnostic diagnostic in outcome.Reports)
+                diagnostics.Add(_settings.Strict ? diagnostic.AsError() : diagnostic);
 
-                // A rule that failed, or that had anything to say, is not recorded.
-                // The cache stores bytes and dependencies and not diagnostics, so a
-                // later hit would serve the artifact and swallow the message, which
-                // is an incremental build quietly hiding what it was asked to be
-                // loud about.
-                if (cache is not null && !failed && context.Diagnostics.Count == 0)
-                    cache.Record(file.ContentPath, rule, _settings, dependencies, emissions);
-            }
-
-            var outputs = new List<CookedOutput>(emissions.Count);
-            foreach (RuleEmission emission in emissions)
+            var outputs = new List<CookedOutput>(outcome.Emissions.Count);
+            foreach (RuleEmission emission in outcome.Emissions)
             {
                 if (emitted.TryGetValue(emission.Path, out string? firstOwner))
                 {
                     diagnostics.Add(CookDiagnostic.Error(
                         CookDiagnosticCodes.PackEntryCollision,
-                        $"'{emission.Path}' is emitted by both '{firstOwner}' and '{file.ContentPath}'. " +
+                        $"'{emission.Path}' is emitted by both '{firstOwner}' and '{item.File.ContentPath}'. " +
                         "One content path is one asset.",
-                        file.FullPath));
+                        item.File.FullPath));
                     continue;
                 }
 
-                emitted.Add(emission.Path, file.ContentPath);
+                emitted.Add(emission.Path, item.File.ContentPath);
 
                 if (_settings.Loose) looseFiles.Add(emission);
                 else writer.Add(emission.Path, emission.Kind, emission.Payload);
@@ -190,9 +186,9 @@ public sealed class CookSession
             }
 
             assets.Add(new CookedAsset(
-                file.ContentPath, rule.Kind, rule.Version, [.. dependencies], outputs)
+                item.File.ContentPath, item.Rule.Kind, item.Rule.Version, [.. outcome.Dependencies], outputs)
             {
-                FromCache = fromCache,
+                FromCache = outcome.FromCache,
             });
         }
 
@@ -204,18 +200,119 @@ public sealed class CookSession
         CloseCache(cache, cookedPaths, diagnostics);
 
         if (CountErrors(diagnostics) > 0)
-            return Finish(assets, diagnostics, cache, null, 0, 0);
+            return Finish(assets, diagnostics, cache, null, 0, 0, workers);
 
         string? output = _settings.Loose
             ? WriteLoose(looseFiles, diagnostics)
             : WritePack(writer, diagnostics);
 
         if (output is null || CountErrors(diagnostics) > 0)
-            return Finish(assets, diagnostics, cache, null, 0, 0);
+            return Finish(assets, diagnostics, cache, null, 0, 0, workers);
 
         WriteManifest(assets, diagnostics);
 
-        return Finish(assets, diagnostics, cache, output, entryCount, payloadBytes);
+        return Finish(assets, diagnostics, cache, output, entryCount, payloadBytes, workers);
+    }
+
+    // One asset and the rule that will cook it: the unit a worker is handed, and
+    // the index every ordering promise above is stated against.
+    private readonly record struct WorkItem(ContentFile File, IRule Rule);
+
+    // What one rule run answered, and the only thing that crosses back from a
+    // worker. The failure is kept apart from the reports rather than placed first
+    // in one list, because --strict promotes what a rule SAID and never the failure
+    // that stopped it, and one list would need the promotion to know which entry it
+    // was looking at.
+    private sealed record RuleOutcome(
+        bool FromCache,
+        IReadOnlyList<RuleDependency> Dependencies,
+        IReadOnlyList<RuleEmission> Emissions,
+        CookDiagnostic? Failure,
+        IReadOnlyList<CookDiagnostic> Reports);
+
+    // The parallel phase, and the only thing in a cook that runs on more than one
+    // thread. It writes one outcome slot per work item and touches nothing else:
+    // not the pack writer, not the diagnostic list, not a counter that decides a
+    // byte.
+    private void RunLevel(
+        string contentRoot,
+        CookCache? cache,
+        WorkItem[] work,
+        RuleOutcome[] outcomes,
+        int start,
+        int count,
+        int workers)
+    {
+        if (count == 0) return;
+
+        // -j1 goes through this same call rather than a serial branch beside it. A
+        // second implementation of the level is a second thing to keep in step, and
+        // the oracle that -j1 and -jN produce one pack would then be comparing two
+        // code paths instead of proving one.
+        var options = new ParallelOptions { MaxDegreeOfParallelism = workers };
+
+        try
+        {
+            Parallel.For(
+                start, start + count, options, i => outcomes[i] = RunOne(contentRoot, cache, work[i]));
+        }
+        catch (AggregateException ex) when (ex.InnerExceptions.Count == 1)
+        {
+            // A rule that throws something the per-rule catch below does not name is
+            // a bug in that rule, and it has to reach the top carrying its own
+            // message and its own stack. Parallel.For would otherwise deliver it
+            // wrapped, and what a person would then see is "One or more errors
+            // occurred" where the actual fault used to be.
+            ExceptionDispatchInfo.Capture(ex.InnerExceptions[0]).Throw();
+        }
+    }
+
+    // One work item, start to finish, on whichever worker took it. Everything it
+    // touches is either immutable (the settings, the rule) or its own (the
+    // context); the cache is the one shared thing, and it is safe for the workers
+    // by construction rather than by this method's care.
+    private RuleOutcome RunOne(string contentRoot, CookCache? cache, WorkItem item)
+    {
+        if (cache is not null &&
+            cache.TryReplay(contentRoot, item.File.ContentPath, item.Rule, _settings, out CachedRun? replay))
+        {
+            // A replayed run reported nothing, because a rule that reported anything
+            // was never recorded in the first place.
+            return new RuleOutcome(true, replay.Dependencies, replay.Emissions, null, []);
+        }
+
+        var context = new RuleContext(contentRoot, item.File.ContentPath, _settings.Profile);
+        CookDiagnostic? failure = null;
+
+        try
+        {
+            item.Rule.Cook(context);
+        }
+        catch (RuleInputMissingException ex)
+        {
+            failure = CookDiagnostic.Error(
+                CookDiagnosticCodes.InputMissing, ex.Message, item.File.FullPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            failure = CookDiagnostic.Error(
+                CookDiagnosticCodes.RuleFailed,
+                $"The {item.Rule.Kind} rule failed on '{item.File.ContentPath}': {ex.Message}",
+                item.File.FullPath);
+        }
+
+        // A rule that failed, or that had anything to say, is not recorded. The
+        // cache stores bytes and dependencies and not diagnostics, so a later hit
+        // would serve the artifact and swallow the message, which is an incremental
+        // build quietly hiding what it was asked to be loud about.
+        if (cache is not null && failure is null && context.Diagnostics.Count == 0)
+        {
+            cache.Record(
+                item.File.ContentPath, item.Rule, _settings, context.Dependencies, context.Emissions);
+        }
+
+        return new RuleOutcome(
+            false, context.Dependencies, context.Emissions, failure, context.Diagnostics);
     }
 
     // Opening the cache is allowed to fail into "no cache": a hidden folder that
@@ -369,7 +466,8 @@ public sealed class CookSession
         CookCache? cache,
         string? output,
         int entryCount,
-        long payloadBytes)
+        long payloadBytes,
+        int workers)
     {
         int warnings = 0;
         for (int i = 0; i < diagnostics.Count; i++)
@@ -386,6 +484,7 @@ public sealed class CookSession
             WarningCount = warnings,
             CacheHits = cache?.Hits ?? 0,
             CacheMisses = cache?.Misses ?? 0,
+            Workers = workers,
         };
     }
 }

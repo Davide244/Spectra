@@ -55,8 +55,8 @@ internal sealed class CliOptions
     public bool UseColor { get; init; }
 
     // Which switches were TYPED, kept separately from their values so the tool can
-    // say "this build does not act on your -j8" without saying it to everybody who
-    // never passed one.
+    // say "this build does not act on your --target" without saying it to everybody
+    // who never passed one.
     public bool ProfileGiven { get; init; }
     public bool TargetsGiven { get; init; }
     public bool JobsGiven { get; init; }

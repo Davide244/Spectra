@@ -35,6 +35,10 @@ public sealed class CookSettings
     /// Worker count. <c>1</c> is the determinism-oracle mode: a cook at <c>-j1</c>
     /// and a cook at <c>-jN</c> must be byte-identical.
     /// </summary>
+    /// <remarks>
+    /// A request rather than a fact: the scheduler clamps it to how much there is
+    /// to cook and reports what it ran at on <see cref="CookResult.Workers"/>.
+    /// </remarks>
     public int Jobs { get; init; } = 1;
 
     /// <summary>Whether the content-addressed cache may be read and written.</summary>

@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Threading;
 
 namespace Spectra.Kitchen.Cache;
 
@@ -42,6 +43,16 @@ public sealed record CachedRun(
 /// payload that has left the store, a dependency the filesystem refuses: each one
 /// means the rule runs, which is slow and correct. The cache has exactly one way
 /// to be wrong, and it is to claim a hit it should not have.</para>
+/// <para><b>The scheduler calls this from N workers, and each of the three parts
+/// is safe for its own reason rather than all of them behind one lock.</b>
+/// <see cref="CookGraph"/> and <see cref="StatCache"/> each hold a lock, because
+/// each is a dictionary somebody mutates; <see cref="ContentStore"/> holds none,
+/// because its temp-file-plus-rename already survives concurrent writers and
+/// survives them across processes too. One lock over the whole cache would have
+/// been simpler and would have put the payload write - the slowest step - inside
+/// it, which is most of what there is to parallelise. What makes the COMPOSITION
+/// safe is the work list rather than any lock: exactly one work item per source
+/// path, so no two workers ever read and write one record.</para>
 /// </remarks>
 public sealed class CookCache
 {
@@ -55,6 +66,9 @@ public sealed class CookCache
     private readonly CookGraph _graph;
     private readonly StatCache _stat;
     private readonly ContentStore _store;
+
+    private int _hits;
+    private int _misses;
 
     /// <summary>Opens the cache rooted at <paramref name="root"/>, reading what is there.</summary>
     public CookCache(string root)
@@ -71,10 +85,10 @@ public sealed class CookCache
     public string Root => _root;
 
     /// <summary>Rules answered from the cache.</summary>
-    public int Hits { get; private set; }
+    public int Hits => Volatile.Read(ref _hits);
 
     /// <summary>Rules that had to run.</summary>
-    public int Misses { get; private set; }
+    public int Misses => Volatile.Read(ref _misses);
 
     /// <summary>Inputs whose hash was answered without reading them.</summary>
     public int StatShortCircuits => _stat.ShortCircuits;
@@ -108,7 +122,7 @@ public sealed class CookCache
 
         if (!_graph.TryGet(sourcePath, out CookGraphRecord record))
         {
-            Misses++;
+            Interlocked.Increment(ref _misses);
             return false;
         }
 
@@ -127,7 +141,7 @@ public sealed class CookCache
 
         if (generation is null)
         {
-            Misses++;
+            Interlocked.Increment(ref _misses);
             return false;
         }
 
@@ -140,14 +154,14 @@ public sealed class CookCache
                 // A payload that has left the store is a miss, not a failure. The
                 // rule runs, emits the same bytes, and Put restores the entry, so
                 // a cache somebody deleted half of repairs itself.
-                Misses++;
+                Interlocked.Increment(ref _misses);
                 return false;
             }
 
             emissions.Add(new RuleEmission(output.Path, output.Kind, payload));
         }
 
-        Hits++;
+        Interlocked.Increment(ref _hits);
 
         // The RESTATED dependencies rather than the recorded ones. They are equal
         // in every field the key hashes - that is what made this a hit - and the

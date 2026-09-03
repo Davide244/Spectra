@@ -74,6 +74,11 @@ public sealed record CookGraphRecord(
 /// assets identically, and a table keyed on the key alone would then serve one
 /// asset's bytes for the other. Keeping generations inside the record makes that
 /// unreachable rather than merely unlikely.</para>
+/// <para><b>Locked, because the scheduler reads and writes it from N workers.</b>
+/// Every critical section here is dictionary work over records that are already
+/// immutable once built, so the lock is never held across a file read; the one
+/// exception is <see cref="Save"/>, which runs once at the end of a cook on the
+/// calling thread.</para>
 /// </remarks>
 public sealed class CookGraph
 {
@@ -83,13 +88,16 @@ public sealed class CookGraph
     /// <summary>How many past runs of one rule are remembered.</summary>
     public const int GenerationsKept = 4;
 
+    private readonly object _gate = new();
     private readonly Dictionary<string, CookGraphRecord> _records = new(StringComparer.OrdinalIgnoreCase);
 
+    private bool _dirty;
+
     /// <summary>Records held.</summary>
-    public int Count => _records.Count;
+    public int Count { get { lock (_gate) return _records.Count; } }
 
     /// <summary>Whether anything changed since this was loaded.</summary>
-    public bool IsDirty { get; private set; }
+    public bool IsDirty { get { lock (_gate) return _dirty; } }
 
     /// <summary>
     /// Why a graph file on disk was discarded, or null when there was nothing
@@ -103,8 +111,10 @@ public sealed class CookGraph
     public string? DiscardedReason { get; private set; }
 
     /// <summary>The record for <paramref name="sourcePath"/>, if there is one.</summary>
-    public bool TryGet(string sourcePath, out CookGraphRecord record) =>
-        _records.TryGetValue(sourcePath, out record!);
+    public bool TryGet(string sourcePath, out CookGraphRecord record)
+    {
+        lock (_gate) return _records.TryGetValue(sourcePath, out record!);
+    }
 
     /// <summary>
     /// Records one rule run: it becomes the newest generation and the current
@@ -122,20 +132,23 @@ public sealed class CookGraph
 
         var generations = new List<CookGeneration>(GenerationsKept) { new(key, outputs) };
 
-        if (_records.TryGetValue(sourcePath, out CookGraphRecord? existing))
+        lock (_gate)
         {
-            // The re-recorded key is dropped from its old position rather than
-            // left there: a duplicate would spend one of the remembered slots on
-            // an answer the newest generation already gives.
-            for (int i = 0; i < existing.Generations.Count && generations.Count < GenerationsKept; i++)
+            if (_records.TryGetValue(sourcePath, out CookGraphRecord? existing))
             {
-                if (existing.Generations[i].Key == key) continue;
-                generations.Add(existing.Generations[i]);
+                // The re-recorded key is dropped from its old position rather than
+                // left there: a duplicate would spend one of the remembered slots on
+                // an answer the newest generation already gives.
+                for (int i = 0; i < existing.Generations.Count && generations.Count < GenerationsKept; i++)
+                {
+                    if (existing.Generations[i].Key == key) continue;
+                    generations.Add(existing.Generations[i]);
+                }
             }
-        }
 
-        _records[sourcePath] = new CookGraphRecord(sourcePath, [.. dependencies], generations);
-        IsDirty = true;
+            _records[sourcePath] = new CookGraphRecord(sourcePath, [.. dependencies], generations);
+            _dirty = true;
+        }
     }
 
     /// <summary>
@@ -155,18 +168,21 @@ public sealed class CookGraph
         var keep = new HashSet<string>(live, StringComparer.OrdinalIgnoreCase);
         List<string>? drop = null;
 
-        foreach (string path in _records.Keys)
+        lock (_gate)
         {
-            if (keep.Contains(path)) continue;
+            foreach (string path in _records.Keys)
+            {
+                if (keep.Contains(path)) continue;
 
-            drop ??= [];
-            drop.Add(path);
+                drop ??= [];
+                drop.Add(path);
+            }
+
+            if (drop is null) return;
+
+            foreach (string path in drop) _records.Remove(path);
+            _dirty = true;
         }
-
-        if (drop is null) return;
-
-        foreach (string path in drop) _records.Remove(path);
-        IsDirty = true;
     }
 
     /// <summary>Loads the graph, or an empty one when it is absent or unreadable.</summary>
@@ -207,6 +223,11 @@ public sealed class CookGraph
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
 
+        lock (_gate) Write(path);
+    }
+
+    private void Write(string path)
+    {
         var keys = new List<string>(_records.Keys);
         keys.Sort(StringComparer.Ordinal);
 
@@ -248,7 +269,7 @@ public sealed class CookGraph
         }
 
         File.WriteAllBytes(path, [.. bytes]);
-        IsDirty = false;
+        _dirty = false;
     }
 
     private void Read(ReadOnlySpan<byte> bytes)

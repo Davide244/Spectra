@@ -137,7 +137,7 @@ public class ScookCliTests
         using var project = new TempProject();
         project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(40));
 
-        var run = Invoke("cook", project.Root, "-j", "8", "--strict");
+        var run = Invoke("cook", project.Root, "-t", "opengl", "--strict");
 
         // A warning rather than an error even under --strict: the request is
         // legitimate and the cook it asked for still happened. It is reported by
@@ -148,6 +148,41 @@ public class ScookCliTests
         match.Groups["severity"].Value.ShouldBe("warning");
         match.Groups["code"].Value.ShouldBe("SC0003");
         match.Groups["origin"].Value.ShouldBe("scook");
+    }
+
+    [Fact]
+    public void A_worker_count_is_acted_on_rather_than_warned_about()
+    {
+        using var project = new TempProject();
+        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(40));
+
+        var run = Invoke("cook", project.Root, "-j", "8");
+
+        // This used to be the tool's own example of a switch it accepted and
+        // ignored. A tool that keeps apologising for something it now does is
+        // worse than one that never said anything, because the warning is what a
+        // reader would believe over the behaviour.
+        run.ExitCode.ShouldBe(ExitSuccess);
+        run.Stderr.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void The_summary_reports_the_workers_the_cook_ran_at_not_the_ones_asked_for()
+    {
+        using var project = new TempProject();
+        for (int i = 0; i < 3; i++)
+            project.WriteAsset($"Textures/t{i}.png", TempProject.Bytes(16, seed: (byte)i));
+
+        // Three assets under -j8 is three workers, and saying "8" would hide the
+        // clamp, which is the one thing somebody asking why -j16 is no faster
+        // needs to see.
+        Invoke("cook", project.Root, "-j", "8").Stdout.ShouldContain("3 workers");
+
+        // One worker is the resting state of every default cook, so it is not
+        // printed at all: a number that never changes is not information.
+        using var single = new TempProject();
+        single.WriteAsset("Textures/one.png", TempProject.Bytes(16));
+        Invoke("cook", single.Root).Stdout.ShouldNotContain("worker");
     }
 
     [Fact]

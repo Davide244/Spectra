@@ -31,6 +31,14 @@ namespace Spectra.Kitchen.Cache;
 /// name, and if one somehow does the read reports a miss and the rule re-runs.
 /// Re-hashing costs a pass over bytes that were just read from disk, against a
 /// wrong artifact shipping, which is not a trade worth thinking about twice.</para>
+/// <para><b>It holds no lock, and that is the stronger answer rather than the
+/// lazier one.</b> The scheduler stores payloads from N workers, but the design
+/// above already survives concurrent writers: a temp file per writer, an atomic
+/// rename onto a name that is a hash of the bytes being written, and a read that
+/// verifies what it got. That survives two <c>scook</c> PROCESSES sharing one
+/// project's cache, which no lock taken in this one could, and it means the disk
+/// write - the slowest thing in a cook that is hitting its cache - is not
+/// serialised behind the graph.</para>
 /// </remarks>
 public sealed class ContentStore
 {

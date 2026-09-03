@@ -112,10 +112,16 @@ internal static class Program
             // nobody asked, and it would appear on every clean cook forever.
             string cached = result.CacheHits > 0 ? $", {result.CacheHits} from cache" : string.Empty;
 
+            // The worker count follows the same rule, and it is the count the cook
+            // ACTUALLY ran at: printing "1 worker" on every default cook is noise,
+            // and printing the -j that was typed would hide the clamp, which is the
+            // one thing somebody asking about it wants to see.
+            string workers = result.Workers > 1 ? $", {result.Workers} workers" : string.Empty;
+
             stdout.WriteLine(
                 $"{style.Success}{ToolName}{style.Reset}: wrote {style.Path}{result.OutputPath}{style.Reset} " +
                 $"{style.Dim}({result.EntryCount} entries, {result.PayloadBytes} bytes, " +
-                $"profile {CookManifest.ToWire(opts.Profile)}{cached}, " +
+                $"profile {CookManifest.ToWire(opts.Profile)}{cached}{workers}, " +
                 $"{result.WarningCount} warning(s)){style.Reset}");
         }
 
@@ -227,9 +233,6 @@ internal static class Program
     // and the cook it asked for still happened.
     private static void ReportUnimplementedOptions(CliOptions opts, DiagnosticWriter writer)
     {
-        if (opts.JobsGiven && opts.Jobs > 1)
-            Say(writer, $"-j{opts.Jobs} is accepted and the cook runs single-threaded; the rule DAG is not built yet.");
-
         if (opts.TargetsGiven)
             Say(writer, "--target selects nothing yet: the shader cook rule is not built.");
 
