@@ -54,13 +54,21 @@ public sealed record ModelImportOptions
     /// Flip the v texture coordinate.
     /// </summary>
     /// <remarks>
-    /// The engine samples with v = 0 at the BOTTOM of the image, because
+    /// <para>The engine samples with v = 0 at the BOTTOM of the image, because
     /// <see cref="ImageDecoder"/> flips decoded rows to the bottom-up upload
     /// convention the renderers document. OBJ already agrees with that, so the
-    /// default is off. glTF and most DCC exports put v = 0 at the top; content
-    /// authored that way needs this on, and the symptom of forgetting is a
-    /// texture that is mirrored vertically rather than one that is missing.
-    /// </remarks>
+    /// default is off, and the symptom of getting it wrong is a texture that is
+    /// mirrored vertically rather than one that is missing.</para>
+    /// <para><b>It is NOT what a glTF file needs, and this remark used to say the
+    /// opposite.</b> glTF does put v = 0 at the top, but the importer underneath
+    /// converts that on the way in - Assimp's own convention is bottom-up, the
+    /// same one this engine samples with - so turning this on for a glTF flips a
+    /// coordinate that has already been flipped and hands back exactly the
+    /// numbers the file was written with. Measured, not reasoned about: the
+    /// cooked path applies the glTF flip itself, from the specification, and the
+    /// two agree on every UV of <c>Models/signpost.gltf</c> only with this OFF
+    /// (<c>ModelRuleTests</c>). What the switch is for is a format the importer
+    /// does not normalise for you.</para>
     public bool FlipTextureV { get; init; }
 
     /// <summary>

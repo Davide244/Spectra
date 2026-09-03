@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging;
+using SpectraEngine.Core.Assets.Models;
+using SpectraEngine.Core.Assets.Sources;
 using SpectraEngine.Core.Graphics;
 using System;
 using System.Collections.Concurrent;
@@ -21,12 +23,6 @@ namespace SpectraEngine.Core.Assets;
 /// </remarks>
 public sealed partial class AssetManager
 {
-    /// <summary>
-    /// Folder (under the content root) searched for a <c>.spectramat</c> whose
-    /// name matches an imported material's — see <see cref="ResolveModelMaterial"/>.
-    /// </summary>
-    private const string MaterialOverrideFolder = "Materials";
-
     // Guards _models only. A third lock rather than reusing _materialSync:
     // building a model's materials calls LoadMaterial, which takes that one.
     private readonly object _modelSync = new();
@@ -70,7 +66,7 @@ public sealed partial class AssetManager
         // missing prop, and swallowing it would leave an empty handle with no
         // stack to explain it.
         long sequence = asset.NextRequestSequence();
-        ModelData data = ModelImporter.Import(asset.SourcePath, ContentRootPath, asset.Options);
+        ModelData data = ReadModelThroughContent(asset);
         ApplyImport(asset, sequence, data, error: null);
         return asset;
     }
@@ -147,6 +143,51 @@ public sealed partial class AssetManager
         return true;
     }
 
+    // ---- where a model's bytes come from ---------------------------------
+
+    /// <summary>
+    /// Whether the model at <paramref name="relativePath"/> would be served from
+    /// a cooked <c>.smodel</c> rather than imported from its authored file.
+    /// </summary>
+    /// <remarks>
+    /// For a host that wants to say which path a load took - a log line, an
+    /// editor badge, a test. It asks <see cref="ModelContentPath.Resolve"/>, the
+    /// same function the read asks, rather than probing for itself: a second
+    /// spelling of the redirection is the failure this whole content layer has
+    /// already paid for once.
+    /// </remarks>
+    public bool IsModelCooked(string relativePath)
+    {
+        string key = ContentRoot.NormalizeRelativePath(relativePath);
+        return ModelContentPath.IsCooked(ModelContentPath.Resolve(Content, key));
+    }
+
+    // The model read, and the second of the two that FORK. Any thread: opening a
+    // blob, validating a .smodel and copying its arrays are all pure CPU, exactly
+    // like the image read beside it, which is what lets the async path run this on
+    // the thread pool.
+    //
+    // The asymmetry between the two arms is real and is documented on
+    // ModelContentPath: a cooked model is one self-contained payload and comes
+    // through the mounted stack, while an authored one is handed to a native
+    // importer that opens the FILE itself and follows the material library beside
+    // it, so it can only come from a folder.
+    private ModelData ReadModelThroughContent(ModelAsset asset)
+    {
+        string resolved = ModelContentPath.Resolve(Content, asset.RelativePath);
+        if (!ModelContentPath.IsCooked(resolved))
+            return ModelImporter.Import(asset.SourcePath, ContentRootPath, asset.Options);
+
+        using ContentBlob blob = OpenOrThrow(resolved);
+
+        // The span dies with the blob at the end of this statement, which is safe
+        // for exactly one reason: CookedModelData copies. A builder that handed a
+        // span onward would have made this blob's lifetime the model's, and
+        // unmapping a pack view under a live span is an access violation with no
+        // managed stack.
+        return CookedModelData.Build(SmodelReader.Read(blob.Span, resolved), asset.RelativePath);
+    }
+
     // ---- pump ------------------------------------------------------------
 
     // Drains finished background imports. Called by PumpPendingUploads, so
@@ -194,7 +235,7 @@ public sealed partial class AssetManager
         {
             try
             {
-                ModelData data = ModelImporter.Import(asset.SourcePath, ContentRootPath, asset.Options);
+                ModelData data = ReadModelThroughContent(asset);
                 _modelImports.Enqueue(new ModelImportResult(asset, sequence, data, null));
             }
             catch (Exception ex)
@@ -331,6 +372,19 @@ public sealed partial class AssetManager
     /// </remarks>
     private Material ResolveModelMaterial(string modelPath, in ModelMaterial description)
     {
+        // A COOKED model already answered this question, once, at cook time, and
+        // recorded the answer as a path. Re-deriving it from the name here would
+        // be the second spelling of a rule the cooker applied - identical today
+        // and silently wrong the day a material lives outside Materials/ - so the
+        // recorded path is asked for directly and nothing below it runs.
+        if (description.AssetPath is { Length: > 0 } assetPath)
+        {
+            _logger.LogDebug(
+                "Model {Path}: material '{Material}' is the cooked reference {Asset}",
+                modelPath, description.Name, assetPath);
+            return LoadMaterial(assetPath);
+        }
+
         if (TryFindMaterialOverride(description.Name, out string? overridePath))
         {
             _logger.LogDebug(
@@ -374,23 +428,18 @@ public sealed partial class AssetManager
         }
     }
 
-    // A material name is content, so it may be empty, contain separators, or
-    // contain characters no filesystem accepts — none of which may throw here.
+    // The name-to-path half is ModelMaterialOverride's, shared with the cook so
+    // the two cannot disagree about which file an imported material's name means;
+    // the existence half is this manager's, asked of the mounted stack, because an
+    // override that ships inside a pack has to be found there and Exists never
+    // throws on a name the filesystem would refuse.
     private bool TryFindMaterialOverride(string materialName, [NotNullWhen(true)] out string? path)
     {
+        path = ModelMaterialOverride.PathFor(materialName);
+        if (path is not null && Content.Exists(path)) return true;
+
         path = null;
-        if (string.IsNullOrWhiteSpace(materialName)) return false;
-        if (materialName.AsSpan().IndexOfAny('/', '\\') >= 0) return false;
-        if (materialName.AsSpan().IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return false;
-
-        // Through the stack, like every other content probe: an override that
-        // ships inside a pack has to be found there, and Exists never throws on
-        // a name the filesystem would refuse.
-        string candidate = $"{MaterialOverrideFolder}/{materialName}{MaterialParser.FileExtension}";
-        if (!Content.Exists(candidate)) return false;
-
-        path = candidate;
-        return true;
+        return false;
     }
 
     // ---- lifetime --------------------------------------------------------

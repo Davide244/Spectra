@@ -155,10 +155,26 @@ public readonly record struct ModelMesh(
 /// The material's diffuse colour, defaulting to white when the file carried
 /// none. Applied as the <c>uBaseColor</c> tint over the diffuse texture.
 /// </param>
+/// <param name="AssetPath">
+/// The content path of the <c>.spectramat</c> this material IS, when the model
+/// named one rather than describing one. Null for an imported material, which
+/// describes itself and is matched to an override by <see cref="Name"/>.
+/// </param>
+/// <remarks>
+/// <b><see cref="AssetPath"/> is what a COOKED model carries, and it is a path
+/// rather than a name for one reason.</b> A cooked submesh's material reference
+/// is a logical asset path resolved once, at cook time, and recorded; a loader
+/// that rebuilt <c>Materials/&lt;name&gt;.spectramat</c> from the stem would be a
+/// second spelling of a rule the cooker already applied, agreeing with it exactly
+/// until a material lives somewhere else and then missing silently. The two
+/// fields are therefore not alternatives: a name is a lookup KEY, a path is an
+/// answer.
+/// </remarks>
 public readonly record struct ModelMaterial(
     string Name,
     string? DiffuseTexturePath,
-    Vector3 BaseColor);
+    Vector3 BaseColor,
+    string? AssetPath = null);
 
 /// <summary>
 /// A node in the imported hierarchy: a name, a local transform, the submeshes

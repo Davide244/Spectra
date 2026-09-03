@@ -19,6 +19,15 @@
     <Compile Include="..\SpectraEngine.Bsp.Tests\FakeRenderer.cs" Link="FakeRenderer.cs" />
     <Compile Include="..\SpectraEngine.Bsp.Tests\SpatialTestHelpers.cs" Link="SpatialTestHelpers.cs" />
     <Compile Include="..\SpectraEngine.Bsp.Tests\CapturingLogger.cs" Link="CapturingLogger.cs" />
+    <!--
+      The .smodel writer transcribed from docs/formats-and-pipeline.md 2.3 rather
+      than from the engine's own types. Linked rather than copied so there is one
+      transcription: the reader's tests hold it against SmodelReader over there,
+      and SmodelCodecTests holds SmodelWriter's own bytes against it here, which
+      is the only oracle that can catch a writer and a reader agreeing with each
+      other and with nothing else.
+    -->
+    <Compile Include="..\SpectraEngine.Bsp.Tests\HandBuiltSmodel.cs" Link="HandBuiltSmodel.cs" />
   </ItemGroup>
 
 </Project>

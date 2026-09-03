@@ -1,0 +1,9 @@
+// SignFace.spectramat - the signpost's board.
+//
+// See PostWood.spectramat for why the signpost's two glTF materials are authored
+// here rather than left inline in the model.
+
+shader = lit
+
+texture uDiffuse = Textures/dev_grid.png, linearmipmap, repeat
+color   uBaseColor = #E6E6D9

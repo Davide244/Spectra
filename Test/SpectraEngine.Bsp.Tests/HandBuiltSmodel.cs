@@ -31,6 +31,12 @@ internal sealed class HandBuiltSmodel
     public const int PayloadAlignment = 16;
     public const uint NameOffsetAbsent = 0xFFFFFFFFu;
 
+    // Every field below exists to be assigned by a caller building a file that
+    // is wrong in one specific way, so a project that links this fixture and only
+    // builds VALID files legitimately assigns none of them. CS0649 is a report
+    // about this file from that project's point of view and says nothing about
+    // either.
+#pragma warning disable CS0649
     public uint Magic = FourCc("SMDL");
     public ushort FormatVersion = 1;
     public ushort Flags;
@@ -42,6 +48,7 @@ internal sealed class HandBuiltSmodel
 
     /// <summary>Written instead of the real number of table records.</summary>
     public uint? SectionCountOverride;
+#pragma warning restore CS0649
 
     private readonly List<Entry> _sections = [];
     private uint _layoutId = FnvOffsetBasis;
@@ -133,6 +140,24 @@ internal sealed class HandBuiltSmodel
     /// </summary>
     public HandBuiltSmodel Submeshes(params (uint Start, uint Count, uint MaterialName)[] submeshes)
     {
+        var withBounds = new (uint, uint, uint, float[])[submeshes.Length];
+        for (int i = 0; i < submeshes.Length; i++)
+        {
+            withBounds[i] = (
+                submeshes[i].Start, submeshes[i].Count, submeshes[i].MaterialName,
+                [-1f, -1f, -1f, 1f, 1f, 1f]);
+        }
+
+        return Submeshes(withBounds);
+    }
+
+    /// <summary>
+    /// The same record with its bounds stated, which a caller comparing this
+    /// fixture's bytes against a real writer's needs.
+    /// </summary>
+    public HandBuiltSmodel Submeshes(
+        params (uint Start, uint Count, uint MaterialName, float[] Bounds)[] submeshes)
+    {
         var buffer = new Buf();
         foreach (var submesh in submeshes)
         {
@@ -140,8 +165,7 @@ internal sealed class HandBuiltSmodel
             buffer.U32(submesh.Count);
             buffer.U32(submesh.MaterialName);
             buffer.U32(0);
-            for (int axis = 0; axis < 3; axis++) buffer.F32(-1f);
-            for (int axis = 0; axis < 3; axis++) buffer.F32(1f);
+            foreach (float value in submesh.Bounds) buffer.F32(value);
         }
 
         return Section("SUBM", buffer.ToArray());

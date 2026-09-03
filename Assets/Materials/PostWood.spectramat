@@ -1,0 +1,13 @@
+// PostWood.spectramat - the signpost's post.
+//
+// It exists because a COOKED model can only reference a material by path: a
+// .smodel submesh stores a logical asset path, so a glTF material that describes
+// its own surface inline has nothing for the cooked file to point at, and the
+// cooked prop would bind the engine's default material where a loose import used
+// the file's own base colour texture. Named after the material inside
+// Models/signpost.gltf, which is the lookup key ModelMaterialOverride builds.
+
+shader = lit
+
+texture uDiffuse = Textures/wall_brick.png, linearmipmap, repeat
+color   uBaseColor = #FFFFFF

@@ -6,6 +6,7 @@ using Spectra.Kitchen.Rules;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Assets.Audio;
 using SpectraEngine.Core.Assets.Images;
+using SpectraEngine.Core.Assets.Models;
 using SpectraEngine.Core.Assets.Packs;
 using SpectraEngine.Core.Assets.Sources;
 using SpectraEngine.Core.Graphics;
@@ -269,9 +270,10 @@ public static class PackVerifier
     /// companion (a streamed mip tail), and would report in the 2xxx
     /// band.</description></item>
     /// <item><description><c>.smodel</c> - its material references, in the 3xxx
-    /// band. The authored <c>.obj</c>/<c>.mtl</c> pair already expresses one
-    /// today and is deliberately not checked here: it is raw-copied rather than
-    /// cooked, so the reference it carries is resolved by the importer at load
+    /// band, and its own readability with them, since resolving them means
+    /// parsing the file anyway. The authored <c>.obj</c>/<c>.mtl</c> pair also
+    /// expresses a reference and is deliberately not checked: it is raw-copied
+    /// rather than cooked, so what it names is resolved by the importer at load
     /// time and not by anything in the pack.</description></item>
     /// <item><description><c>.scmap</c> - every material, model and script a
     /// level names, in the 7xxx band. The largest arm, and the one that turns
@@ -290,6 +292,9 @@ public static class PackVerifier
         CookDiagnosticLog diagnostics,
         string packFile)
     {
+        if (ModelContentPath.IsCooked(name))
+            return CheckModel(name, payload, strictStack, diagnostics, packFile);
+
         if (!name.EndsWith(MaterialParser.FileExtension, StringComparison.OrdinalIgnoreCase))
             return 0;
 
@@ -340,6 +345,74 @@ public static class PackVerifier
                 $"'{name}' binds sampler '{slot.Name}' to '{slot.TexturePath}', which is not in this pack. " +
                 "The running engine would show the magenta placeholder and carry on; a shipped build would " +
                 "ship that.",
+                packFile));
+        }
+
+        return resolved;
+    }
+
+    /// <summary>
+    /// Proves a cooked model loads and that every material it names is here.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Both claims in one pass, because resolving the references means
+    /// parsing the file anyway.</b> The parse is the same
+    /// <see cref="SmodelReader"/> a load takes, so a verify cannot pass a file the
+    /// engine would then refuse; the reference walk is what the digest cannot
+    /// see, since a model naming a material nobody cooked hashes perfectly and
+    /// binds the default material at runtime, which is a grey prop and no message
+    /// anywhere.</para>
+    /// <para><b>A submesh naming NOTHING is not a failure here.</b> That is the
+    /// cook's own SC3002 - a model whose materials this project does not author -
+    /// reported once, where the author's file is in hand, rather than a second
+    /// time against a pack that is exactly what that cook decided to write.</para>
+    /// </remarks>
+    private static int CheckModel(
+        string name,
+        ReadOnlySpan<byte> payload,
+        ContentSourceStack strictStack,
+        CookDiagnosticLog diagnostics,
+        string packFile)
+    {
+        SmodelModel model;
+        try
+        {
+            model = SmodelReader.Read(payload, name);
+        }
+        catch (SmodelFormatException ex)
+        {
+            diagnostics.Add(CookDiagnostic.Error(CookDiagnosticCodes.ModelFileUnreadable, ex.Message, packFile));
+            return 0;
+        }
+
+        int resolved = 0;
+        for (int i = 0; i < model.Submeshes.Length; i++)
+        {
+            SmodelSubmesh submesh = model.Submeshes[i];
+            if (!submesh.HasMaterial) continue;
+
+            resolved++;
+            string material = model.GetName(submesh.MaterialNameOffset);
+
+            try
+            {
+                if (strictStack.TryOpen(material, out ContentBlob? blob))
+                {
+                    blob.Dispose();
+                    continue;
+                }
+            }
+            catch (FileNotFoundException)
+            {
+                // The strict stack's whole job: a miss THROWS here, where the
+                // identical miss degrades to the default material in a frame.
+            }
+
+            diagnostics.Add(CookDiagnostic.Error(
+                CookDiagnosticCodes.ModelMaterialMissing,
+                $"'{name}' submesh {i} names material '{material}', which is not in this pack. The running " +
+                "engine would bind the default material and carry on; a shipped build would ship a grey " +
+                "prop.",
                 packFile));
         }
 

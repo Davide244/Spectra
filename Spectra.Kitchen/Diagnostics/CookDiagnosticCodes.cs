@@ -139,7 +139,82 @@ public static class CookDiagnosticCodes
     public static readonly CookDiagnosticId ImageFileUnreadable = CookDiagnosticId.Cook(2003);
 
     // --- 3xxx: model ---------------------------------------------------------
-    // Reserved. The rule that issues them is unbuilt; see the band table above.
+    //
+    // Issued by BOTH the model rule and the verifier, which is the band's rule
+    // working rather than two answers to one question: the cook asks whether the
+    // AUTHOR's content is consistent and the verify asks whether the ARTIFACT is,
+    // and a model whose material is not there is a model problem either way.
+
+    /// <summary>A model file the glTF reader could not read.</summary>
+    /// <remarks>
+    /// An error rather than a fall-through to the raw copy, for the reason
+    /// <see cref="ImageUndecodable"/> gives two bands over: copied, the file
+    /// would sit in the pack under a path the engine resolves, the runtime would
+    /// hand it to the loose importer that is not there in a shipped build, and
+    /// this build log would say a model cooked. It carries the reader's own
+    /// message, which names the construct that was refused - a primitive mode, a
+    /// required extension, a component type - because "re-export triangulated" is
+    /// actionable and "could not read the model" is not.
+    /// </remarks>
+    public static readonly CookDiagnosticId ModelUndecodable = CookDiagnosticId.Cook(3001);
+
+    /// <summary>A model names a material this project does not author.</summary>
+    /// <remarks>
+    /// <b>Soft, and the reason it is soft is that the file being blamed is not
+    /// the one that is wrong.</b> A <c>SUBM</c> material reference is a logical
+    /// asset path, so a cooked model can only name a material that EXISTS as a
+    /// <c>.spectramat</c>; a glTF that describes its own surface inline - a base
+    /// colour texture and a factor, which is what every exporter writes - has
+    /// nothing for the cooked format to point at, and the cooked submesh falls
+    /// back to the engine's default material. That is a real difference between
+    /// the loose path and the packed one and it deserves saying out loud, but the
+    /// author's model is valid and the limitation is <c>.smodel</c> v1's, so
+    /// refusing the build over it would blame the wrong party. Authoring
+    /// <c>Materials/&lt;name&gt;.spectramat</c> is what silences it, and
+    /// <c>--strict</c> is how a ship gate asks for the stricter reading.
+    /// </remarks>
+    public static readonly CookDiagnosticId ModelMaterialUnauthored = CookDiagnosticId.Cook(3002);
+
+    /// <summary>A model read and could not be written into a cooked container.</summary>
+    /// <remarks>
+    /// Distinct from <see cref="ModelUndecodable"/> because the two point at
+    /// different things: that one is the author's file, this one is the reader or
+    /// the writer disagreeing about a count, which is the cooker's own problem
+    /// and not something re-exporting would fix.
+    /// </remarks>
+    public static readonly CookDiagnosticId ModelEncodeFailed = CookDiagnosticId.Cook(3003);
+
+    /// <summary>A model carried something the cooked format does not.</summary>
+    /// <remarks>
+    /// Info, and it exists so that dropping is never SILENT. A vertex colour set,
+    /// a tangent, a second UV, a skin, a morph target: none of them makes a model
+    /// unusable and none survives into a v1 <c>.smodel</c>, so the geometry is
+    /// carried and the loss is named. Without this line, "my vertex colours do
+    /// nothing in the engine" is a question with no answer anywhere in a build
+    /// log.
+    /// </remarks>
+    public static readonly CookDiagnosticId ModelDataDropped = CookDiagnosticId.Cook(3004);
+
+    /// <summary>A cooked model in a pack is not a readable <c>.smodel</c>.</summary>
+    /// <remarks>
+    /// Issued by the VERIFIER, and the sibling of <see cref="ImageFileUnreadable"/>
+    /// and <see cref="AudioFileUnreadable"/>. The reader's own message travels
+    /// verbatim, since it already names which rule the file broke and every one
+    /// of them has the same answer, which is to recook.
+    /// </remarks>
+    public static readonly CookDiagnosticId ModelFileUnreadable = CookDiagnosticId.Cook(3005);
+
+    /// <summary>A cooked model names a material that is not in the pack.</summary>
+    /// <remarks>
+    /// <b>The failure a cook structurally cannot see.</b> The model rule checks
+    /// its material reference against the project folder and the material rule
+    /// cooks materials, and both can succeed while the entry one of them needed
+    /// never reaches the file - a rule that failed for its own reasons, an
+    /// entry-path collision, a pack somebody edited. At runtime the submesh binds
+    /// the default material and carries on, so the shipped game renders a grey
+    /// prop and nothing anywhere says why.
+    /// </remarks>
+    public static readonly CookDiagnosticId ModelMaterialMissing = CookDiagnosticId.Cook(3006);
 
     // --- 4xxx: audio ---------------------------------------------------------
 

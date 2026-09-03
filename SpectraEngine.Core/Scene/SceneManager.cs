@@ -153,13 +153,18 @@ public sealed class SceneManager
     // the 2.2-unit pillars instead of a 32-unit wall of box.
     private const float ModelUnitsPerWorldUnit = 32f;
 
-    // glTF puts v = 0 at the TOP of the image; the engine samples bottom-up
-    // (ImageDecoder flips decoded rows on upload), so the .gltf signpost needs
-    // its v flipped where the .obj crate does not. Getting this wrong renders a
-    // vertically mirrored texture rather than a missing one — too quiet a
-    // failure to leave to a shared default.
-    private static readonly ModelImportOptions GltfImportOptions =
-        ModelImportOptions.Default with { FlipTextureV = true };
+    // glTF puts v = 0 at the TOP of the image and the engine samples bottom-up,
+    // and the importer ALREADY converts between the two: Assimp's own convention
+    // is bottom-up, so asking it to flip as well returns the file's own numbers
+    // and renders a vertically mirrored texture. This constant asked for the flip
+    // for most of its life, which nobody could see because the signpost wears a
+    // brick and a grid, both near enough symmetric. It was caught by the cooked
+    // path, which applies the glTF flip itself from the specification: the two
+    // agree on every UV of the signpost with the flip OFF and disagree on every
+    // one of them with it on (ModelRuleTests). Defaults now, and the file is
+    // named rather than the option, so the next reader knows there was a
+    // question here.
+    private static readonly ModelImportOptions GltfImportOptions = ModelImportOptions.Default;
 
     // The two floor corners the pillars do not occupy. Far enough from the
     // origin that the orbiting cube's radius-2 sweep clears them.

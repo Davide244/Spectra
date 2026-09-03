@@ -42,6 +42,9 @@ public class CookDeterminismTests
     // And the one material over them, counted for the same reason.
     private const int MaterialCount = 1;
 
+    // And the one model that wears it.
+    private const int ModelCount = 1;
+
     private static readonly string[] Folders = ["Textures", "Models", "Materials", "Audio"];
 
     // Out of step with the folder cycle deliberately: four folders and six sizes
@@ -83,7 +86,7 @@ public class CookDeterminismTests
         // Asserted rather than assumed: without this the oracle silently degrades
         // into a second copy of the one above the moment anything stops the cache
         // hitting, and it would keep passing.
-        cached.Stdout.ShouldContain($"{AssetCount + ImageCount + MaterialCount} from cache");
+        cached.Stdout.ShouldContain($"{AssetCount + ImageCount + MaterialCount + ModelCount} from cache");
 
         cached.Pack.ShouldBe(clean.Pack);
     }
@@ -178,6 +181,16 @@ public class CookDeterminismTests
         project.WriteAsset(
             "Materials/tile.spectramat",
             "shader = lit\ntexture uDiffuse = Textures/tile_0.png, linearmipmap, repeat\n");
+
+        // A model, so the oracles cover the one rule whose output is FLOATS laid
+        // out by arithmetic this repo wrote. Every other cooked artifact here is
+        // bytes copied or bytes an encoder produced; a vertex buffer is a matrix
+        // composition and a walk, which is the shape a scheduling or ordering
+        // leak would show up in. Its material is the one authored above, so it
+        // reports nothing and is therefore cacheable - a model with a diagnostic
+        // is never cached, and the cached oracle would then be measuring one
+        // asset fewer than it thinks.
+        project.WriteAsset("Models/prop.gltf", GltfFixture.Json(materialName: "tile"));
     }
 
     private static CookRun Cook(TempProject project, string label, params string[] extra)

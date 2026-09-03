@@ -25,6 +25,9 @@ namespace SpectraEngine.Core.Assets.Models;
 /// </remarks>
 public static class SmodelFormat
 {
+    /// <summary>The cooked extension, dot included.</summary>
+    public const string FileExtension = ".smodel";
+
     /// <summary>
     /// File magic, <c>"SMDL"</c>. Stored as a little-endian <see cref="uint"/>,
     /// so the first four bytes on disk read <c>S M D L</c> in a hex dump.

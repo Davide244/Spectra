@@ -191,6 +191,14 @@ public static class CookGate
         2002 => CookGateVerdict.Fatal,             // SC2002 ImageEncodeFailed
         2003 => CookGateVerdict.Fatal,             // SC2003 ImageFileUnreadable
 
+        // --- 3xxx: model ------------------------------------------------------
+        3001 => CookGateVerdict.Fatal,             // SC3001 ModelUndecodable
+        3002 => CookGateVerdict.WarningUnlessStrict, // SC3002 ModelMaterialUnauthored
+        3003 => CookGateVerdict.Fatal,             // SC3003 ModelEncodeFailed
+        3004 => CookGateVerdict.Note,              // SC3004 ModelDataDropped
+        3005 => CookGateVerdict.Fatal,             // SC3005 ModelFileUnreadable
+        3006 => CookGateVerdict.Fatal,             // SC3006 ModelMaterialMissing
+
         // --- 4xxx: audio ------------------------------------------------------
         4001 => CookGateVerdict.Fatal,             // SC4001 AudioUndecodable
         4002 => CookGateVerdict.Fatal,             // SC4002 AudioEncodeFailed
