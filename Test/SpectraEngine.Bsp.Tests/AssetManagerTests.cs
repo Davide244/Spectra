@@ -598,20 +598,32 @@ public sealed class AssetManagerTests
     /// </remarks>
     private static void DeleteTempContentRoot(string root)
     {
-        for (int attempt = 0; ; attempt++)
+        // Budgeted in TIME rather than in attempts. The first version spent
+        // twenty tries of 25 ms, which is half a second, and that was enough on
+        // an idle machine and not enough on a loaded one: two separate runs on a
+        // box with several builds and a driver test suite going reported one
+        // failed test in this assembly and neither could reproduce it afterwards.
+        // A decode holding the file for longer than the budget is the same
+        // situation either way, so the budget should be set by how long a stuck
+        // handle is worth waiting for, not by a count that silently means
+        // different things on different hardware. The happy path returns on the
+        // first attempt and pays none of it.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        int delayMs = 5;
+
+        while (true)
         {
             try
             {
                 Directory.Delete(root, recursive: true);
                 return;
             }
-            catch (IOException) when (attempt < 20)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                Thread.Sleep(25);
-            }
-            catch (UnauthorizedAccessException) when (attempt < 20)
-            {
-                Thread.Sleep(25);
+                if (DateTime.UtcNow >= deadline) throw;
+
+                Thread.Sleep(delayMs);
+                delayMs = Math.Min(delayMs * 2, 100);
             }
         }
     }
