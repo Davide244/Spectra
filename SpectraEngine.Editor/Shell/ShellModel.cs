@@ -851,6 +851,53 @@ public sealed class ShellModel : ObservableObject
         Raise(nameof(ViewportLabel));
     }
 
+    // ─── The drop overlay ────────────────────────────────
+
+    private ViewportDropPrompt _dropPrompt = ViewportDropPrompt.None;
+
+    /// <summary>
+    /// What the viewport draws over the picture while an asset drag is over it.
+    /// </summary>
+    /// <remarks>
+    /// <b>Assigned whole and compared whole, because the source fires at
+    /// pointer rate.</b> A record struct's equality is the guard: an unchanged
+    /// prompt raises nothing, so a drag crossing the pane costs one comparison
+    /// per pointer move rather than five property-changed notifications and the
+    /// bindings behind them. The four bindable halves below are read-only views
+    /// of this one value, so they cannot disagree with each other.
+    /// </remarks>
+    public ViewportDropPrompt DropPrompt
+    {
+        get => _dropPrompt;
+        set
+        {
+            if (_dropPrompt == value)
+                return;
+
+            _dropPrompt = value;
+            Raise(nameof(DropVisible));
+            Raise(nameof(DropAccepts));
+            Raise(nameof(DropHeadline));
+            Raise(nameof(DropSubject));
+            Raise(nameof(DropReason));
+        }
+    }
+
+    /// <summary>Whether the drop overlay is drawn.</summary>
+    public bool DropVisible => _dropPrompt.IsVisible;
+
+    /// <summary>Whether letting go would place something.</summary>
+    public bool DropAccepts => _dropPrompt.Accepts;
+
+    /// <summary>The overlay's verdict.</summary>
+    public string DropHeadline => _dropPrompt.Headline;
+
+    /// <summary>What would be placed, as the path the engine names it by.</summary>
+    public string DropSubject => _dropPrompt.Subject;
+
+    /// <summary>Why not, when the answer is no.</summary>
+    public string DropReason => _dropPrompt.Reason;
+
     // ─── Message line ────────────────────────────────────
 
     /// <summary>The transient message zone, at the left of the status bar.</summary>

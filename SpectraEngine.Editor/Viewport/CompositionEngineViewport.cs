@@ -78,6 +78,10 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
     private IPointer? _pointer;
     private bool _releasingCapture;
 
+    // The asset hovering over this pane, so AssetDragChanged is raised on a
+    // change rather than per pointer move.
+    private ContentDragPayload? _dragPayload;
+
     // Whether the shell has a surface from this viewport with an engine on it,
     // and whether the shell has said the viewport is finished. Two bits, and the
     // distinction between them is the whole of what makes this viewport
@@ -126,6 +130,7 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
         // scene tree already is.
         DragDrop.SetAllowDrop(this, true);
         AddHandler(DragDrop.DragOverEvent, OnAssetDragOver);
+        AddHandler(DragDrop.DragLeaveEvent, OnAssetDragLeave);
         AddHandler(DragDrop.DropEvent, OnAssetDrop);
 
         LostFocus += OnViewportLostFocus;
@@ -145,6 +150,9 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
 
     /// <inheritdoc/>
     public event Action<ContentDragPayload, int, int>? AssetDropped;
+
+    /// <inheritdoc/>
+    public event Action<ContentDragPayload?>? AssetDragChanged;
 
     /// <inheritdoc/>
     public bool AcceptsAssetDrops => true;
@@ -335,6 +343,11 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
             SurfaceDestroying?.Invoke();
 
         _pump?.Stop();
+
+        // Closing a session while a drag is in flight is unlikely and entirely
+        // reachable (Ctrl+W is a window chord, and a drag does not stop the
+        // keyboard). The overlay belongs to the pane, so it goes with it.
+        ReportDrag(null);
     }
 
     /// <summary>
@@ -591,6 +604,17 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
     {
         _pointer = e.Pointer;
 
+        // THE STUCK-OVERLAY GUARD, and it is here rather than anywhere else
+        // because this is the only event that PROVES a drag is over. An OLE drag
+        // loop owns the pointer for its whole duration and delivers drag events
+        // instead of pointer ones, so an ordinary move cannot be raised until it
+        // has ended - by a drop, by Escape, or by a cancel that leaves no leave
+        // behind. DragLeave is the ordinary path and it is not guaranteed; a
+        // frame and a label left painted over the picture with no gesture behind
+        // them is a viewport that looks broken and has no verb to clear it.
+        // Free when there is nothing to clear: one reference comparison.
+        ReportDrag(null);
+
         // INTERMEDIATE points, not just the current one. A pointer moving fast
         // between two UI frames arrives as one event carrying the whole path,
         // and a handler that reads only the last position loses every bit of
@@ -711,14 +735,28 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
     /// </remarks>
     private void OnAssetDragOver(object? sender, DragEventArgs e)
     {
-        if (!e.DataTransfer.Contains(ContentDrag.Format))
+        if (e.DataTransfer.TryGetValue(ContentDrag.Format) is not { } payload)
             return;
+
+        // What the overlay draws. Set here rather than only on DragEnter,
+        // because a drag that begins INSIDE this pane (the browser floated over
+        // it, which docking now allows) can produce its first event here.
+        ReportDrag(payload);
 
         // Copy, not Move: the file stays where it is and the scene gains a
         // reference to it.
         e.DragEffects = DragDropEffects.Copy;
         e.Handled = true;
     }
+
+    /// <remarks>
+    /// <b>Not claimed (<c>Handled</c>), unlike its two siblings.</b> Leaving is
+    /// not a gesture this viewport owns the outcome of - the pane the pointer
+    /// moved ONTO needs the same event to answer for itself, and a leave
+    /// swallowed here would make the scene tree stop showing its own drop line
+    /// after a drag had once crossed the viewport.
+    /// </remarks>
+    private void OnAssetDragLeave(object? sender, RoutedEventArgs e) => ReportDrag(null);
 
     private void OnAssetDrop(object? sender, DragEventArgs e)
     {
@@ -727,11 +765,36 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
 
         e.Handled = true;
 
+        // Before the drop is reported, not after: the shell's handler runs the
+        // insert and writes a line to the status bar, and an overlay still
+        // saying "drop to place" over the result would outlive the gesture that
+        // asked for it.
+        ReportDrag(null);
+
         // The SAME conversion a press goes through, so a drop and a click on one
         // pixel aim at one pixel. A high-DPI pane's dips are not its framebuffer
         // pixels, and the insert ray is cast in the latter.
         (int x, int y) = ToPixels(e.GetPosition(this));
         AssetDropped?.Invoke(payload, x, y);
+    }
+
+    /// <summary>
+    /// Publishes what is being dragged over this pane, on a change only.
+    /// </summary>
+    /// <remarks>
+    /// <b>The guard is not an optimisation.</b> <c>DragOver</c> arrives per
+    /// pointer move, and every one of them carries the payload the gesture
+    /// started with; raised unguarded this would re-evaluate the overlay's
+    /// bindings a few hundred times per crossing, for a frame and a label that
+    /// never change - the same churn the shell's pump was fixed for.
+    /// </remarks>
+    private void ReportDrag(ContentDragPayload? payload)
+    {
+        if (ReferenceEquals(_dragPayload, payload))
+            return;
+
+        _dragPayload = payload;
+        AssetDragChanged?.Invoke(payload);
     }
 
     // --- Keyboard and focus --------------------------------------------------

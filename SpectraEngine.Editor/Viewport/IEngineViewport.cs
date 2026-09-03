@@ -97,6 +97,32 @@ public interface IEngineViewport
     event Action<ContentDragPayload, int, int>? AssetDropped;
 
     /// <summary>
+    /// Raised on the UI thread with the asset currently being dragged over this
+    /// viewport, or null the moment there is none.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The state, not the transitions, because the consumer draws a
+    /// picture.</b> A shell fed enter and leave separately has to keep its own
+    /// idea of which came last, and the one thing that must never happen here is
+    /// an overlay stuck on screen after the drag ended - which is exactly what a
+    /// missed leave produces. One last-write-wins value, in the shape of every
+    /// other latch that crosses a boundary in this engine.
+    /// </para>
+    /// <para>
+    /// <b>Raised only on a CHANGE</b>, because the underlying
+    /// <c>DragOver</c> fires per pointer move and the answer is constant for a
+    /// whole gesture.
+    /// </para>
+    /// <para>
+    /// Never raised by a viewport whose <see cref="AcceptsAssetDrops"/> is
+    /// false: it sees no drag at all, and an overlay drawn over a native child
+    /// would be painted and invisible.
+    /// </para>
+    /// </remarks>
+    event Action<ContentDragPayload?>? AssetDragChanged;
+
+    /// <summary>
     /// Whether this viewport is a drop target at all.
     /// </summary>
     /// <remarks>

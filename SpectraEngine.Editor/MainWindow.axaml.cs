@@ -825,6 +825,7 @@ public partial class MainWindow : Window
         viewport.ShellChord += OnShellChord;
         viewport.ContextMenuRequested += OnViewportContextMenu;
         viewport.AssetDropped += OnViewportAssetDropped;
+        viewport.AssetDragChanged += OnViewportAssetDragChanged;
         _viewport = viewport;
 
         // A one-millisecond timer for as long as a session is open. Without it
@@ -847,7 +848,10 @@ public partial class MainWindow : Window
         // SurfaceCreated, and everything above must be in place by then. The
         // engine focus makes the tool keys live from the first frame instead
         // of after a first click into the scene.
-        ViewportHost.Child = viewport.Control;
+        // Index 0, so the drop overlay declared in the markup stays LAST in the
+        // list and therefore on top. Children.Add would put the picture over
+        // the overlay and nothing would report it.
+        ViewportHost.Children.Insert(0, viewport.Control);
         viewport.FocusEngine();
     }
 
@@ -990,8 +994,14 @@ public partial class MainWindow : Window
         // The child leaves the tree: destroying the native window raises
         // SurfaceDestroying, which stops the engine before the HWND dies. The
         // explicit stop after it covers a viewport that never got a surface.
-        ViewportHost.Child = null;
+        ViewportHost.Children.Remove(viewport.Control);
         StopSession();
+
+        // A drag in flight when a session closes leaves a prompt behind, and
+        // the next session would open with a frame painted over its first
+        // frame. The viewport clears it on its own Shutdown too; this is the
+        // half that covers a viewport that never reached the tree.
+        _shell.DropPrompt = ViewportDropPrompt.None;
 
         // The engine those requests were aimed at is gone: an unconfirmed tool
         // pick would otherwise still be pending when the next project opens,
@@ -1005,6 +1015,7 @@ public partial class MainWindow : Window
         viewport.ShellChord -= OnShellChord;
         viewport.ContextMenuRequested -= OnViewportContextMenu;
         viewport.AssetDropped -= OnViewportAssetDropped;
+        viewport.AssetDragChanged -= OnViewportAssetDragChanged;
         _viewport = null;
         _pendingLaunch = null;
 
@@ -1816,6 +1827,20 @@ public partial class MainWindow : Window
             new System.Numerics.Vector2(x, y),
             report => Dispatcher.UIThread.Post(() => ReportModelInsert(report)));
     }
+
+    /// <summary>
+    /// Draws the drop affordance over the picture, or takes it away.
+    /// </summary>
+    /// <remarks>
+    /// <b>The overlay's verdict is asked of the same policy the drop is, and
+    /// that is the whole of what makes it honest.</b> A frame drawn from any
+    /// other reasoning would be free to promise a placement that
+    /// <see cref="OnViewportAssetDropped"/> then refuses, and the moment it
+    /// would be discovered is the moment somebody let go of the mouse.
+    /// </remarks>
+    private void OnViewportAssetDragChanged(ContentDragPayload? payload) =>
+        _shell.DropPrompt = ViewportDropPrompt.For(
+            payload, _session is not null, _viewport?.AcceptsAssetDrops ?? false);
 
     // Marshalled back deliberately: EditorSession runs its completion on the
     // RENDER thread, which is the whole point of that contract.

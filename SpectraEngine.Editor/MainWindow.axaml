@@ -183,6 +183,108 @@
       <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
     </Style>
 
+    <!-- ============ The drop overlay ==================
+         THE FIRST THING THIS SHELL DRAWS OVER THE RENDER, and the whole of what
+         makes it possible is that a composited pane has no child window in it.
+         The markup below is unremarkable Avalonia; over a native child every
+         pixel of it would be painted and then composited away, which is the
+         airspace rule and the reason nothing like this could ship until now.
+         ViewportDropPrompt refuses to be visible in a native session for that
+         exact reason - see its remarks.
+
+         AMBER, NOT THE ACCENT. The accent means SELECTION here and one thing
+         only, and a drop target selects nothing; the palette's own history is
+         that red once meant selected, live tool, focus, primary, error, drop
+         target and no-match at once, and untangling it is what stopped the
+         window reading as monochrome-plus-one. What this says is "the viewport
+         is in a state where letting go does something", which is the definition
+         SpectraMode carries - the live gizmo tool, snap on, the standing
+         overlay chips eighteen lines above this. And the refusing arm is a
+         WARNING, which is deliberately the same amber told apart by its icon
+         and its place: one hue for one affordance, with the words carrying the
+         difference, rather than two colours to learn for one gesture.
+
+         NOT HIT TEST VISIBLE, and that one is a silent killer. This element is
+         in the tree at all times with its opacity at zero; hit-testable, it
+         would sit between the pointer and the viewport, so DragOver would be
+         raised on IT and bubble to the window instead of reaching the pane -
+         the effect would go to None, the drop would never land, and there is no
+         error anywhere in that. -->
+    <Style Selector="Border.dropoverlay">
+      <Setter Property="IsHitTestVisible" Value="False" />
+      <Setter Property="Opacity" Value="0" />
+      <Setter Property="BorderThickness" Value="2" />
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraMode}" />
+      <Setter Property="Background" Value="{StaticResource SpectraDropWash}" />
+      <!-- The ONE transition here, and it is on the appear and the disappear
+           because those are the only two things that move. Nothing in this
+           overlay follows the cursor: the frame is the pane and the chip is
+           pinned under the header, so there is no value a pointer writes per
+           frame and therefore no lag machine to build. A badge that tracked the
+           pointer would have to carry no transition at all, exactly like the
+           tree's drop ink, and it would still obscure the point being aimed at.
+
+           One duration in both directions rather than the faster exit the
+           budget prefers: expressing that means re-declaring Transitions inside
+           the state frame and relying on the order Avalonia applies and reverts
+           setters when one deactivates, which is not a guarantee it makes. A
+           55ms exit that is sometimes 90 is a coin flip, not a choice. -->
+      <Setter Property="Transitions">
+        <Transitions>
+          <DoubleTransition Property="Opacity"
+                            Duration="{StaticResource SpectraMotionFast}"
+                            Easing="{StaticResource SpectraEaseOut}" />
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="Border.dropoverlay.shown">
+      <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <!-- Chrome over the picture, so it is opaque and wears a chrome surface.
+         A translucent label over a render is unreadable against whatever
+         happens to be behind it, which for a viewport is anything at all. -->
+    <Style Selector="Border.dropchip">
+      <Setter Property="Background" Value="{StaticResource SpectraBgApp}" />
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraMode}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+      <Setter Property="Padding" Value="10,7" />
+      <Setter Property="MaxWidth" Value="420" />
+    </Style>
+
+    <!-- Every one of these names Foreground explicitly, and none of them may
+         stop. The global bare-TextBlock style sets it at StyleTrigger's
+         expense, so a colour inherited from the chip is beaten by a selector
+         that names no class and the label arrives body-grey - the mechanism
+         that has silently eaten hover states in this window four times. A
+         class in the selector is what wins the tie. -->
+    <Style Selector="Border.dropchip Path.dropicon">
+      <Setter Property="Stroke" Value="{StaticResource SpectraMode}" />
+    </Style>
+    <Style Selector="Border.dropchip TextBlock.dropheadline">
+      <Setter Property="Foreground" Value="{StaticResource SpectraMode}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontBase}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <!-- Mono, because this is a VALUE: it is the content-relative path, the
+         string the asset caches, the map codec and the pack's id hash all key
+         on, and seeing it is how somebody knows the drag is carrying what they
+         think it is. -->
+    <Style Selector="Border.dropchip TextBlock.dropsubject">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+      <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+    <Style Selector="Border.dropchip TextBlock.dropreason">
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="Margin" Value="0,4,0,0" />
+    </Style>
+
     <!-- A field that lives INSIDE a raised cluster: sunken fill so it still
          reads as somewhere you type, no resting border because the capsule
          around it already draws one, and an accent border while focused. -->
@@ -842,8 +944,60 @@
                MinWidth is not cosmetic either: dragging a splitter to zero can
                leave the swap chain unable to recover, and a floated pane has no
                column MinWidth behind it at all. -->
-          <Border x:Name="ViewportHost" Grid.Row="1" MinWidth="360" Padding="2"
-                  Background="{StaticResource SpectraViewportBezel}" />
+          <Border Grid.Row="1" MinWidth="360" Padding="2"
+                  Background="{StaticResource SpectraViewportBezel}">
+            <!-- A Grid rather than the Border's own Child, and that is the
+                 whole structural cost of H12: the pane now holds the viewport
+                 AND something drawn on top of it. The viewport control is
+                 inserted at index 0 from code, which pushes the overlay to the
+                 back of the list and therefore to the FRONT of the z order -
+                 later children draw over earlier ones. Declaring the overlay
+                 second in the markup would look tidier and break the moment
+                 the viewport is inserted, silently, by putting the frame
+                 behind the picture.
+
+                 INSIDE the padding ring, so the bezel stays a bezel: the
+                 overlay frames the render, not the chrome around it. -->
+            <Grid x:Name="ViewportHost">
+              <Border Classes="dropoverlay" Classes.shown="{Binding DropVisible}">
+                <!-- TOP, not centred. The cursor is somewhere in this rectangle
+                     carrying the drag, and the surface people aim a prop at is
+                     below the horizon in almost every editor view; a chip in
+                     the middle would sit on the drop point it is describing.
+                     Under the header strip it reads as an extension of the
+                     chrome directly above it instead. -->
+                <Border Classes="dropchip" VerticalAlignment="Top"
+                        HorizontalAlignment="Center" Margin="0,16,0,0">
+                  <StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <!-- Two glyphs with one visible, rather than a converter:
+                           the icon is half of how the accepting and refusing
+                           arms are told apart, since they share a hue by
+                           design. A mesh is what would land; a warning is what
+                           the palette means by the same amber when nothing
+                           will. -->
+                      <Path Classes="icon dropicon" Data="{StaticResource IconMesh}"
+                            IsVisible="{Binding DropAccepts}" />
+                      <Path Classes="icon dropicon" Data="{StaticResource IconWarning}"
+                            IsVisible="{Binding !DropAccepts}" />
+                      <TextBlock Classes="dropheadline" Text="{Binding DropHeadline}" />
+                      <TextBlock Classes="dropsubject" Text="{Binding DropSubject}"
+                                 IsVisible="{Binding DropAccepts}" />
+                    </StackPanel>
+                    <!-- The refusal, verbatim from AssetDropPolicy. H11 chose a
+                         sentence over a "no entry" cursor on the reasoning that
+                         a refusal cursor says the shell did not understand the
+                         gesture when in fact it understood it perfectly; this
+                         is where that sentence finally sits, at the place the
+                         gesture is happening rather than in the status bar
+                         behind the pointer. -->
+                    <TextBlock Classes="dropreason" Text="{Binding DropReason}"
+                               IsVisible="{Binding !DropAccepts}" />
+                  </StackPanel>
+                </Border>
+              </Border>
+            </Grid>
+          </Border>
         </Grid>
 
         <!-- The bottom region's own splitter. Rows, not columns, and it carries

@@ -82,6 +82,18 @@ public sealed class Win32EngineViewport : NativeControlHost, IEngineViewport
     public event Action<ContentDragPayload, int, int>? AssetDropped;
 #pragma warning restore CS0067
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Never raised either, and for one reason more than <see cref="AssetDropped"/>
+    /// has. This window sees no drag at all, and even if it did, the overlay the
+    /// event exists to drive is markup in the main window's Avalonia layer -
+    /// which a child HWND composites over. Reporting a drag from here would put
+    /// a frame and a label somewhere no pixel of them could reach.
+    /// </remarks>
+#pragma warning disable CS0067
+    public event Action<ContentDragPayload?>? AssetDragChanged;
+#pragma warning restore CS0067
+
     /// <summary>
     /// Always false: the OS delivers input to the child HWND, and that window
     /// is not a registered OLE drop target.

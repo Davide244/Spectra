@@ -202,6 +202,20 @@
   <SolidColorBrush x:Key="SpectraControlPressed" Color="#FFFFFF" Opacity="0.13" />
   <SolidColorBrush x:Key="SpectraControlChecked" Color="{DynamicResource SpectraModeColor}" Opacity="0.22" />
 
+  <!-- The drop-target wash, over the VIEWPORT and nowhere else, and it is a
+       third of SpectraControlChecked deliberately rather than by taste. Those
+       two fills are the same colour doing the same job at two areas four orders
+       of magnitude apart: a lit chip is sixty pixels wide, where 0.22 reads as a
+       tint, and a viewport is nine hundred thousand, where the same value is a
+       colour cast over the render. Weber again, in the direction the shell has
+       already been caught by once.
+
+       The thing under this fill is the thing being dropped ONTO, so the picture
+       has to stay readable through it: what marks the region is the 2px frame
+       around the edge, and the wash only stops that frame reading as a stray
+       rectangle somebody left on screen. -->
+  <SolidColorBrush x:Key="SpectraDropWash" Color="{DynamicResource SpectraModeColor}" Opacity="0.07" />
+
   <!-- ___ Axis identity ___________________________________
        X, Y and Z wear the same hues here as the gizmo handles do in the
        viewport (GizmoColors: 1,0.25,0.25 / 0.25,1,0.25 / 0.35,0.55,1), so the

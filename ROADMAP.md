@@ -114,7 +114,7 @@ Everything else is off the path. In particular: **the Uno shell, offscreen rende
 - **Shader authoring** — `F4 → S2 → S3 → S4 → S5 → S6 → S8 → S9`. `S3` needs `F1` and `F3` landed first.
 - **Entities & no-code logic** — `P4 → P5 → P6 → P7 → P8 → P9 → P10`, with **`P7a` (`BrushKind`) landing before `P7`** on its own — it needs only `F1`, not `P4`, so it may run any time the tree is quiet of `E4`/`E6` (ruling R‑9). Needs `F2`; `P9` needs `P2`; `P8` also needs `physics.md` `Y0` for the BVH overlap queries.
 - **Negative brushes** — **`P7a → P7b`**, and nothing else in the `P` arc is on that path. `P7b` needs `P7a` (it edits `Scene.UpdatePartBrushMembership` and depends on `BrushKind.Part` for its inert-projectile case) and `F1` (cavity walls carry `FaceSurface` payloads), but it needs **no** entity system, no physics and no `P7`. It is off the critical path.
-- **Hosting**: `H1 -> H2 -> H3 -> H10 -> H11`. Needs `E1`; `H3` needs `R3`; `H11` needs `H3` for a pane that can be a drop target at all.
+- **Hosting**: `H1 -> H2 -> H3 -> H10 -> H11 -> H12`, and the arc is COMPLETE at `H12`. Needs `E1`; `H3` needs `R3`; `H11` needs `H3` for a pane that can be a drop target at all, and `H12` needs `H11` for a gesture to draw an affordance FOR. What the arc still owes is not a hosting stage: the Linux viewport is an embedded OpenGL context (`H2`'s flagged risk, still open), and `Auto` still has to earn the composited flip per machine.
 
 ---
 
@@ -730,6 +730,16 @@ The content browser becomes a drag source and a composited viewport becomes a dr
 - **A model that cannot be resolved places a node with no renderer and a line in the report**, which is the map loader's rule and matters more here because a drag has no keyboard equivalent to fall back on. `ModelInsertReport` keeps a refusal and an unresolved model apart, because flattened they read as one message and mean opposite things.
 - **Deliberately out of scope:** dropping a material onto a face (a different gesture - it needs the face under the cursor, not the point), and native-child drop support.
 - **Depends on**: `H3`, `H10`. **Size**: **S.**
+
+### H12 - The first thing drawn over the render ✅ **landed**
+A drop affordance over the viewport while an asset drag is over it: a frame around the pane and a chip naming what would land, or the refusal `H11` already had words for. The feature is small and the point of the stage is what shipping it PROVES - the airspace rule's composited half stops being an argument from how compositing works and becomes a thing on screen.
+- **The overlay refuses to appear in a NATIVE session, and that is the rule rather than a gap.** Over a child HWND every pixel of it would be painted and composited away, so `ViewportDropPrompt` is not visible there at all and a native session keeps the status-bar refusal `H11` built. An overlay nobody can see is worse than none, because the code then claims to have reported something - which is why the visibility rule is a pure type with a test on it rather than an `if` inside a handler.
+- **Amber, never the accent.** The accent means selection and a drop target selects nothing; this says the viewport is in a state where letting go does something, which is `SpectraMode`. Both arms share the hue deliberately - the refusing arm is a warning, and warning IS Mode, told apart by its icon and its place.
+- **Nothing in it follows the cursor**, which is what makes the 90ms opacity ramp legal at all: a transition on a value a pointer writes every frame trails the hand by exactly its duration. `IsHitTestVisible` false is the silent one - hit-testable, an always-present overlay takes the `DragOver` the pane needed and the drop stops landing, with no error anywhere.
+- **The verdict is `AssetDropPolicy`'s, asked rather than restated**, or the frame is free to promise a placement the drop then refuses at the instant somebody lets go. The drag state crosses as one last-write-wins value raised on a CHANGE, because `DragOver` fires per pointer move with a constant answer; and the stuck-overlay guard is the next ordinary pointer move rather than `DragLeave`, which is the ordinary path and not a guaranteed one.
+- **The visual result is UNVERIFIED, and that is recorded rather than glossed.** A drag cannot be driven headlessly and the shell is not an installed application, so no screenshot of the overlay exists. What was run: a live composited session end to end with the markup in it (58 fps, zero errors, zero warnings) and a window capture showing the layout intact. What a person still owes it: drag a `.obj` onto the pane, then a `.png`, and look.
+- **Deliberately out of scope:** a cursor-following badge (it would be on the drag path), an overlay for anything but the asset drag, and native-child drop support - all three unchanged from `H11`.
+- **Depends on**: `H11`. **Size**: **S.**
 
 ---
 
