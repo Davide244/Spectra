@@ -35,6 +35,10 @@ public class CookDeterminismTests
 {
     private const int AssetCount = 36;
 
+    // Images in WriteFixtureWithImages, counted so the cache oracle's own
+    // assertion cannot drift from the fixture.
+    private const int ImageCount = 3;
+
     private static readonly string[] Folders = ["Textures", "Models", "Materials", "Audio"];
 
     // Out of step with the folder cycle deliberately: four folders and six sizes
@@ -48,7 +52,7 @@ public class CookDeterminismTests
         ScookProcess.Require();
 
         using var project = new TempProject();
-        WriteFixture(project);
+        WriteFixtureWithImages(project);
 
         CookRun first = Cook(project, "clean-a", "--no-cache");
         CookRun second = Cook(project, "clean-b", "--no-cache");
@@ -66,7 +70,7 @@ public class CookDeterminismTests
         ScookProcess.Require();
 
         using var project = new TempProject();
-        WriteFixture(project);
+        WriteFixtureWithImages(project);
 
         // The first run fills .spectra-cook/ as a side effect; the second is the
         // one under test.
@@ -76,7 +80,7 @@ public class CookDeterminismTests
         // Asserted rather than assumed: without this the oracle silently degrades
         // into a second copy of the one above the moment anything stops the cache
         // hitting, and it would keep passing.
-        cached.Stdout.ShouldContain($"{AssetCount} from cache");
+        cached.Stdout.ShouldContain($"{AssetCount + ImageCount} from cache");
 
         cached.Pack.ShouldBe(clean.Pack);
     }
@@ -87,7 +91,7 @@ public class CookDeterminismTests
         ScookProcess.Require();
 
         using var project = new TempProject();
-        WriteFixture(project);
+        WriteFixtureWithImages(project);
 
         CookRun serial = Cook(project, "j1", "--no-cache", "-j", "1");
         CookRun parallel = Cook(project, "j8", "--no-cache", "-j", "8");
@@ -145,6 +149,23 @@ public class CookDeterminismTests
                 $"{Folders[i % Folders.Length]}/asset_{i:D2}.bin",
                 TempProject.Bytes(Sizes[i % Sizes.Length], seed: (byte)i));
         }
+    }
+
+    // The same fixture plus real images, for the three BYTE-IDENTITY oracles.
+    //
+    // Block compression is the one step in a cook that SEARCHES rather than
+    // transcribes, and the search is measurably sensitive to the instruction-set
+    // baseline (docs/spikes/2026-09-cook-dependency-spikes.md), so a determinism
+    // oracle with no image in it measures the easy half. It is deliberately not in
+    // the PAIRING fixture: that test reads a record's three paths and asserts they
+    // are one string, which is true of a raw copy and false of an image, whose
+    // output is the .simage beside its source.
+    private static void WriteFixtureWithImages(TempProject project)
+    {
+        WriteFixture(project);
+
+        for (int i = 0; i < ImageCount; i++)
+            project.WriteAsset($"Textures/tile_{i}.png", TempProject.Png(16, 16, seed: (byte)(i * 40)));
     }
 
     private static CookRun Cook(TempProject project, string label, params string[] extra)

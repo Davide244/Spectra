@@ -110,7 +110,35 @@ public static class CookDiagnosticCodes
     /// </remarks>
     public static readonly CookDiagnosticId CacheDiscarded = CookDiagnosticId.Cook(1007);
 
-    // --- 2xxx image, 3xxx model, 4xxx audio ----------------------------------
+    // --- 2xxx: image and texture ---------------------------------------------
+
+    /// <summary>An image file the decoder could not read.</summary>
+    /// <remarks>
+    /// An error rather than a fall-through to the raw copy, and the difference
+    /// matters: copied, the broken file would sit in the pack under a path the
+    /// engine resolves, the runtime would degrade it to the magenta placeholder
+    /// with a warning, and this build log would say a texture cooked.
+    /// </remarks>
+    public static readonly CookDiagnosticId ImageUndecodable = CookDiagnosticId.Cook(2001);
+
+    /// <summary>An image decoded and could not be turned into a cooked container.</summary>
+    /// <remarks>
+    /// Distinct from <see cref="ImageUndecodable"/> because the two point at
+    /// different things: that one is the author's file, this one is the encoder
+    /// or the container disagreeing about a mip chain, which is the cooker's own
+    /// problem and not something re-saving the PNG would fix.
+    /// </remarks>
+    public static readonly CookDiagnosticId ImageEncodeFailed = CookDiagnosticId.Cook(2002);
+
+    /// <summary>A cooked image in a pack is not a readable <c>.simage</c>.</summary>
+    /// <remarks>
+    /// Issued by the VERIFIER. The reader's own message travels verbatim, since
+    /// it already names which rule the file broke and every one of them has the
+    /// same answer, which is to recook.
+    /// </remarks>
+    public static readonly CookDiagnosticId ImageFileUnreadable = CookDiagnosticId.Cook(2003);
+
+    // --- 3xxx model, 4xxx audio ----------------------------------------------
     // Reserved. The rules that issue them are unbuilt; see the band table above.
 
     // --- 5xxx: material ------------------------------------------------------

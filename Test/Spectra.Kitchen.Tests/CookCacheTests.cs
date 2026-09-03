@@ -33,8 +33,8 @@ public class CookCacheTests
     public void A_checkout_that_rewrites_timestamps_without_changing_bytes_is_a_no_op_cook()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(64, seed: 1));
-        project.WriteAsset("Textures/b.png", TempProject.Bytes(65, seed: 2));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(64, seed: 1));
+        project.WriteAsset("Data/b.bin", TempProject.Bytes(65, seed: 2));
         project.WriteAsset("Materials/wall.spectramat", "shader = Lit\n");
 
         CookResult first = Cook(project);
@@ -59,16 +59,16 @@ public class CookCacheTests
     public void Reverting_a_file_to_identical_content_restores_the_cache_hit()
     {
         using var project = new TempProject();
-        byte[] original = project.WriteAsset("Textures/a.png", TempProject.Bytes(32, seed: 5));
+        byte[] original = project.WriteAsset("Data/a.bin", TempProject.Bytes(32, seed: 5));
 
         byte[] originalPack = File.ReadAllBytes(Cook(project).OutputPath!);
 
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(32, seed: 6));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(32, seed: 6));
         CookResult edited = Cook(project);
         edited.CacheHits.ShouldBe(0);
         edited.CacheMisses.ShouldBe(1);
 
-        project.WriteAsset("Textures/a.png", original);
+        project.WriteAsset("Data/a.bin", original);
         CookResult reverted = Cook(project);
 
         // A rebuild here would be correct and wasteful: the artifact it produces
@@ -117,21 +117,27 @@ public class CookCacheTests
     public void A_settings_change_invalidates_exactly_the_rules_that_read_that_setting()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(16, seed: 3));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(16, seed: 3));
         project.WriteAsset("Scripts/notes.txt", "hello\n");
+        project.WriteAsset("Textures/wall_brick.png", TempProject.Png(8, 8, seed: 4));
 
-        Cook(project).CacheMisses.ShouldBe(2);
+        Cook(project).CacheMisses.ShouldBe(3);
 
-        // Every rule in this build is a raw copy, which declares no settings, so
-        // switching profile must skip everything. The other half of the claim -
-        // that a rule declaring a setting IS invalidated - is pinned on the key
-        // itself in CookCacheKeyTests, because no rule here reads one yet.
+        // BOTH halves of the claim, which needed a rule that actually reads a
+        // setting: the image rule declares Profile, so a profile change must
+        // re-encode it - the encoder searches harder for a ship build than for a
+        // preview one, so the bytes really are different - while the two raw
+        // copies declare nothing and must be skipped.
         CookResult underFast = Cook(project, new CookSettings { Profile = CookProfile.Fast });
         underFast.CacheHits.ShouldBe(2);
-        underFast.CacheMisses.ShouldBe(0);
+        underFast.CacheMisses.ShouldBe(1);
 
+        // And a setting NO rule declares invalidates nothing at all, which is why
+        // the declaration is per rule rather than a hash of the whole settings
+        // block: otherwise changing --script-source would re-encode every texture
+        // in the project.
         CookResult stripped = Cook(project, new CookSettings { ScriptSource = ScriptSourceMode.Strip });
-        stripped.CacheHits.ShouldBe(2);
+        stripped.CacheHits.ShouldBe(3);
         stripped.CacheMisses.ShouldBe(0);
     }
 
@@ -139,8 +145,8 @@ public class CookCacheTests
     public void A_cook_from_cache_and_a_cook_from_clean_produce_one_pack()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(50, seed: 3));
-        project.WriteAsset("Textures/b.png", TempProject.Bytes(51, seed: 4));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(50, seed: 3));
+        project.WriteAsset("Data/b.bin", TempProject.Bytes(51, seed: 4));
         project.WriteAsset("Deep/Nested/Folder/c.txt", "hello\n");
 
         byte[] clean = File.ReadAllBytes(Cook(project).OutputPath!);
@@ -163,13 +169,13 @@ public class CookCacheTests
     public void A_changed_input_re_cooks_the_asset_that_reads_it_and_nothing_else()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(20, seed: 7));
-        project.WriteAsset("Textures/b.png", TempProject.Bytes(20, seed: 8));
-        project.WriteAsset("Textures/c.png", TempProject.Bytes(20, seed: 9));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(20, seed: 7));
+        project.WriteAsset("Data/b.bin", TempProject.Bytes(20, seed: 8));
+        project.WriteAsset("Data/c.bin", TempProject.Bytes(20, seed: 9));
 
         Cook(project).CacheMisses.ShouldBe(3);
 
-        project.WriteAsset("Textures/b.png", TempProject.Bytes(21, seed: 8));
+        project.WriteAsset("Data/b.bin", TempProject.Bytes(21, seed: 8));
         CookResult second = Cook(project);
 
         second.CacheMisses.ShouldBe(1);
@@ -182,7 +188,7 @@ public class CookCacheTests
     public void No_cache_neither_reads_nor_writes_the_cache_folder()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(12));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(12));
 
         string cacheRoot = Path.Combine(project.Root, CookCache.DirectoryName);
 
@@ -203,7 +209,7 @@ public class CookCacheTests
     public void A_cached_rule_reports_as_skipped_in_the_manifest()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(12));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(12));
 
         string manifestPath = Path.Combine(project.Root, "cook-manifest.json");
 
@@ -224,7 +230,7 @@ public class CookCacheTests
     public void A_payload_that_left_the_content_store_is_a_miss_rather_than_a_failure()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(28, seed: 11));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(28, seed: 11));
 
         byte[] pack = File.ReadAllBytes(Cook(project).OutputPath!);
         Directory.Delete(Path.Combine(project.Root, CookCache.DirectoryName, "cas"), recursive: true);
@@ -243,7 +249,7 @@ public class CookCacheTests
     public void A_graph_file_that_does_not_parse_is_discarded_out_loud_rather_than_thrown()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(18));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(18));
 
         byte[] pack = File.ReadAllBytes(Cook(project).OutputPath!);
         File.WriteAllBytes(
@@ -267,13 +273,13 @@ public class CookCacheTests
     public void A_stale_record_for_an_asset_that_left_the_project_is_dropped()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(10));
-        project.WriteAsset("Textures/gone.png", TempProject.Bytes(11));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(10));
+        project.WriteAsset("Data/gone.bin", TempProject.Bytes(11));
 
         Cook(project).CacheMisses.ShouldBe(2);
         long twoRecords = GraphSize(project);
 
-        File.Delete(Path.Combine(project.Layout.AssetsPath, "Textures", "gone.png"));
+        File.Delete(Path.Combine(project.Layout.AssetsPath, "Data", "gone.bin"));
         Cook(project).EntryCount.ShouldBe(1);
 
         // A graph that never forgets grows for the life of the project and keeps

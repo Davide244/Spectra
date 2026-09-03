@@ -4,6 +4,7 @@ using Spectra.Kitchen.Cache;
 using Spectra.Kitchen.Diagnostics;
 using Spectra.Kitchen.Rules;
 using SpectraEngine.Core.Assets;
+using SpectraEngine.Core.Assets.Images;
 using SpectraEngine.Core.Assets.Packs;
 using SpectraEngine.Core.Assets.Sources;
 using SpectraEngine.Core.Graphics;
@@ -211,6 +212,7 @@ public static class PackVerifier
                     }
 
                     references += CheckReferences(name, blob.Span, strict, diagnostics, file);
+                    CheckImage(name, blob.Span, diagnostics, file);
                     CollectShader(name, blob.Span, shaders, diagnostics, file);
                 }
             }
@@ -234,9 +236,11 @@ public static class PackVerifier
     /// reports in the band that names its subsystem, so the code a build log
     /// carries says which kind of asset was wrong before it says anything else:
     /// <list type="bullet">
-    /// <item><description><c>.simage</c> - nothing to resolve; an image is a
-    /// leaf. It joins this switch only if a cooked image ever names a companion
-    /// (a streamed mip tail), and would report in the 2xxx band.</description></item>
+    /// <item><description><c>.simage</c> - nothing to RESOLVE; an image is a
+    /// leaf, so it is checked for readability by <see cref="CheckImage"/>
+    /// instead. It joins this switch only if a cooked image ever names a
+    /// companion (a streamed mip tail), and would report in the 2xxx
+    /// band.</description></item>
     /// <item><description><c>.smodel</c> - its material references, in the 3xxx
     /// band. The authored <c>.obj</c>/<c>.mtl</c> pair already expresses one
     /// today and is deliberately not checked here: it is raw-copied rather than
@@ -278,7 +282,15 @@ public static class PackVerifier
 
             try
             {
-                if (strict.TryOpen(slot.TexturePath, out ContentBlob? texture))
+                // Through the SAME redirection the engine uses: a material names
+                // the authored PNG and the pack holds its cooked .simage, so
+                // asking for the literal path would report every texture in every
+                // cooked pack as missing. ImageContentPath is the one expression
+                // of that rule and both callers go through it, which is what
+                // makes this check a claim about what the engine would actually
+                // resolve rather than about what the table happens to spell.
+                string imagePath = ImageContentPath.Resolve(strict, slot.TexturePath);
+                if (strict.TryOpen(imagePath, out ContentBlob? texture))
                 {
                     texture.Dispose();
                     continue;
@@ -300,6 +312,33 @@ public static class PackVerifier
         }
 
         return resolved;
+    }
+
+    /// <summary>
+    /// Proves a cooked image is one this engine can actually upload.
+    /// </summary>
+    /// <remarks>
+    /// <b>The digest cannot catch what this catches.</b> A <c>.simage</c> whose
+    /// profile version does not match this build, or whose level index disagrees
+    /// with its own format, hashes perfectly and is still a texture nothing can
+    /// bind - so a pack would mount, every log line would read healthy, and the
+    /// shipped game would show magenta. Reported through the reader's own
+    /// message, which already names which rule the file broke; every one of them
+    /// has the same answer, which is to recook.
+    /// </remarks>
+    private static void CheckImage(
+        string name, ReadOnlySpan<byte> payload, List<CookDiagnostic> diagnostics, string packFile)
+    {
+        if (!ImageContentPath.IsCooked(name)) return;
+
+        try
+        {
+            _ = SimageReader.Read(payload, name);
+        }
+        catch (InvalidDataException ex)
+        {
+            diagnostics.Add(CookDiagnostic.Error(CookDiagnosticCodes.ImageFileUnreadable, ex.Message, packFile));
+        }
     }
 
     /// <summary>

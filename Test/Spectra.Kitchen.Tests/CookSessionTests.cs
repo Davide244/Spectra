@@ -28,7 +28,7 @@ public class CookSessionTests
     public void A_cooked_project_mounts_as_one_pack_of_raw_entries()
     {
         using var project = new TempProject();
-        byte[] texture = project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(300, seed: 1));
+        byte[] texture = project.WriteAsset("Data/strings.bin", TempProject.Bytes(300, seed: 1));
         byte[] material = project.WriteAsset("Materials/wall.spectramat", "shader = Lit\n");
         byte[] model = project.WriteAsset("Models/crate.obj", TempProject.Bytes(64, seed: 2));
 
@@ -44,7 +44,7 @@ public class CookSessionTests
         pack.EntryCount.ShouldBe(3);
         pack.TombstoneCount.ShouldBe(0);
 
-        ReadEntry(pack, "Textures/wall_brick.png").ShouldBe(texture);
+        ReadEntry(pack, "Data/strings.bin").ShouldBe(texture);
         ReadEntry(pack, "Materials/wall.spectramat").ShouldBe(material);
         ReadEntry(pack, "Models/crate.obj").ShouldBe(model);
     }
@@ -53,7 +53,7 @@ public class CookSessionTests
     public void A_cooked_asset_resolves_by_the_same_path_a_loose_file_did()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(16));
+        project.WriteAsset("Data/strings.bin", TempProject.Bytes(16));
 
         CookResult result = Cook(project);
         var pack = project.Track(new PackSource(NullLogger.Instance, result.OutputPath!));
@@ -62,19 +62,25 @@ public class CookSessionTests
         // asset's identity is one thing whether it came from a folder or an
         // archive, which is what makes the asset layer a source swap rather than
         // a rewrite. Every spelling below is the same asset.
-        pack.Exists("Textures/wall_brick.png").ShouldBeTrue();
-        pack.Exists(@"Textures\wall_brick.png").ShouldBeTrue();
-        pack.Exists("/Textures/wall_brick.png").ShouldBeTrue();
-        pack.Exists("Textures/absent.png").ShouldBeFalse();
+        pack.Exists("Data/strings.bin").ShouldBeTrue();
+        pack.Exists(@"Data\strings.bin").ShouldBeTrue();
+        pack.Exists("/Data/strings.bin").ShouldBeTrue();
+        pack.Exists("Data/absent.bin").ShouldBeFalse();
     }
 
     [Fact]
     public void Two_cooks_of_one_project_are_byte_identical()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(50, seed: 3));
-        project.WriteAsset("Textures/b.png", TempProject.Bytes(51, seed: 4));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(50, seed: 3));
+        project.WriteAsset("Data/b.bin", TempProject.Bytes(51, seed: 4));
         project.WriteAsset("Deep/Nested/Folder/c.txt", "hello\n");
+
+        // A real image among them, because the block encoder is the one step in a
+        // cook that searches rather than transcribes: a BC7 encode is measurably
+        // baseline-sensitive (see docs/spikes/2026-09-cook-dependency-spikes.md),
+        // so a determinism oracle with no image in it measures the easy half.
+        project.WriteAsset("Textures/wall_brick.png", TempProject.Png(16, 16, seed: 5));
 
         byte[] first = File.ReadAllBytes(Cook(project).OutputPath!);
         byte[] second = File.ReadAllBytes(Cook(project).OutputPath!);
@@ -89,16 +95,16 @@ public class CookSessionTests
     public void Every_asset_records_the_input_it_read()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(8));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(8));
 
         CookResult result = Cook(project);
 
         CookedAsset asset = result.Assets.Single();
         asset.Rule.ShouldBe(RuleKind.RawCopy);
         asset.RuleVersion.ShouldBe(1);
-        asset.Dependencies.Single().Path.ShouldBe("Textures/a.png");
+        asset.Dependencies.Single().Path.ShouldBe("Data/a.bin");
         asset.Dependencies.Single().Kind.ShouldBe(RuleDependencyKind.Read);
-        asset.Outputs.Single().Path.ShouldBe("Textures/a.png");
+        asset.Outputs.Single().Path.ShouldBe("Data/a.bin");
         asset.Outputs.Single().Length.ShouldBe(8);
     }
 
@@ -106,7 +112,7 @@ public class CookSessionTests
     public void A_loose_cook_writes_the_tree_instead_of_a_pack()
     {
         using var project = new TempProject();
-        byte[] payload = project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(24));
+        byte[] payload = project.WriteAsset("Data/strings.bin", TempProject.Bytes(24));
 
         CookResult result = Cook(project, new CookSettings { Loose = true });
 
@@ -115,7 +121,7 @@ public class CookSessionTests
 
         // The overlay input for the editor's cooked-accurate preview: files at the
         // same content-relative paths, so a loose source can layer over them.
-        string written = Path.Combine(project.CookedPath, "Textures", "wall_brick.png");
+        string written = Path.Combine(project.CookedPath, "Data", "strings.bin");
         File.Exists(written).ShouldBeTrue();
         File.ReadAllBytes(written).ShouldBe(payload);
         Directory.GetFiles(project.CookedPath, "*.spack").ShouldBeEmpty();
@@ -142,7 +148,7 @@ public class CookSessionTests
     public void A_map_bundle_is_reported_as_not_cooked_rather_than_dropped_silently()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(4));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(4));
         WriteMapBundle(project, "Lobby.smap");
 
         CookResult result = Cook(project);
@@ -161,7 +167,7 @@ public class CookSessionTests
     public void The_manifest_lists_every_asset_its_inputs_and_its_output_hash()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/a.png", TempProject.Bytes(12));
+        project.WriteAsset("Data/a.bin", TempProject.Bytes(12));
 
         string manifestPath = Path.Combine(project.Root, "cook-manifest.json");
         CookResult result = Cook(project, new CookSettings { ManifestPath = manifestPath });
@@ -173,7 +179,7 @@ public class CookSessionTests
 
         // One asset per line, because an asset is the unit a reviewer diffs: the
         // document is indented and each record inside it is compact.
-        manifest.ShouldContain("\"path\":\"Textures/a.png\"");
+        manifest.ShouldContain("\"path\":\"Data/a.bin\"");
         manifest.ShouldContain("\"rule\":\"rawcopy\"");
         manifest.ShouldContain(
             result.Assets.Single().Outputs.Single().ContentHash.ToString("X32"));

@@ -61,6 +61,20 @@
     <PackageVersion Include="StbImageSharp" Version="2.30.16" />
 
     <!--
+      Block compression for the cook, and the ONE dependency in this file whose
+      determinism was measured before it was adopted:
+      docs/spikes/2026-09-cook-dependency-spikes.md encoded the same PNG twice,
+      in parallel and serially, and in two processes, and got byte-equal BC7 both
+      ways - but got DIFFERENT bytes between an AVX2 baseline and a non-AVX2 one
+      (310 of 1,024 blocks), which is why InstructionSetBaseline is part of every
+      cook cache key. MIT OR Unlicense, one managed dependency
+      (CommunityToolkit.HighPerformance), no native dependency, and it publishes
+      and runs under NativeAOT with no warnings, which the editor needs because it
+      hosts the cooker in process.
+    -->
+    <PackageVersion Include="BCnEncoder.Net" Version="2.3.0" />
+
+    <!--
       XxHash128, which keys the .spack entry table and its content digest. Not in
       the shared framework, so it is a package rather than a using. Its NativeAOT
       posture was verified rather than inferred (this repo adopts no dependency on

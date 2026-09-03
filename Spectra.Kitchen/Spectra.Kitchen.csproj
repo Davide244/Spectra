@@ -25,4 +25,13 @@
     <ProjectReference Include="..\SpectraShade.Compiler\SpectraShade.Compiler.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The block encoder, and it lives HERE rather than in Core deliberately: a
+      shipped game reads cooked blocks and never makes any, so the runtime must
+      not link an encoder. Same split as the pack writer.
+    -->
+    <PackageReference Include="BCnEncoder.Net" />
+  </ItemGroup>
+
 </Project>

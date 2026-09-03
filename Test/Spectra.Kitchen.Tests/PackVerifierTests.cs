@@ -28,7 +28,7 @@ public class PackVerifierTests
     public void A_freshly_cooked_project_verifies_clean()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(300, seed: 1));
+        project.WriteAsset("Textures/wall_brick.png", TempProject.Png(16, 16, seed: 1));
         project.WriteAsset(
             "Materials/wall.spectramat",
             "shader = lit\ntexture uDiffuse = Textures/wall_brick.png, linearmipmap, repeat\n");
@@ -101,7 +101,7 @@ public class PackVerifierTests
     public void A_flipped_payload_byte_is_reported_as_a_broken_digest()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(300, seed: 2));
+        project.WriteAsset("Textures/wall_brick.png", TempProject.Png(16, 16, seed: 2));
 
         string pack = Cook(project);
         PackSurgery.CorruptFirstPayload(pack);
@@ -119,7 +119,7 @@ public class PackVerifierTests
     public void A_rewritten_digest_is_reported_against_the_bytes_it_does_not_match()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(64, seed: 3));
+        project.WriteAsset("Textures/wall_brick.png", TempProject.Png(16, 16, seed: 3));
 
         string pack = Cook(project);
         PackSurgery.CorruptDigest(pack);
@@ -165,7 +165,7 @@ public class PackVerifierTests
     {
         using var project = new TempProject();
         for (int i = 0; i < 6; i++)
-            project.WriteAsset($"Textures/t{i}.png", TempProject.Bytes(32, seed: (byte)i));
+            project.WriteAsset($"Data/t{i}.bin", TempProject.Bytes(32, seed: (byte)i));
 
         string pack = Cook(project);
         PackSurgery.SwapFirstTwoEntries(pack);
@@ -179,7 +179,7 @@ public class PackVerifierTests
         // survives the file being edited afterwards - and it names the two
         // entries, where the mount's refusal below can only name their ids.
         CookDiagnostic unsorted = result.Diagnostics.Single(d => d.Id.ToString() == "SC9005");
-        unsorted.Message.ShouldContain("Textures/t");
+        unsorted.Message.ShouldContain("Data/t");
         unsorted.Message.ShouldContain("out of order");
 
         result.Diagnostics.ShouldContain(d => d.Id.ToString() == "SC9003");
@@ -189,7 +189,7 @@ public class PackVerifierTests
     public void An_unusable_material_line_is_carried_rather_than_swallowed()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(16, seed: 5));
+        project.WriteAsset("Textures/wall_brick.png", TempProject.Png(8, 8, seed: 5));
         project.WriteAsset(
             "Materials/wall.spectramat",
             "shader = lit\ntexture uDiffuse = Textures/wall_brick.png\nfrobnicate uThing = 3\n");

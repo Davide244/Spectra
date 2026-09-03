@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using SpectraEngine.Core.Assets.Images;
 using SpectraEngine.Core.Assets.Sources;
 using SpectraEngine.Core.Graphics;
 using System;
@@ -56,6 +57,22 @@ namespace SpectraEngine.Core.Assets;
 /// behind <see cref="LoadMaterial"/>. Convert two of the three and a packed
 /// build resolves no material texture at all while every log line still reads
 /// healthy.</para>
+/// <para><b>An image read FORKS, and the fork is a fourth thing those reads must
+/// agree about.</b> A texture's bytes are the cooked <c>.simage</c> beside the
+/// authored file when a mounted source has one, and the authored file otherwise;
+/// <see cref="ImageContentPath.Resolve"/> is the single expression of that rule,
+/// shared with <c>scook verify</c>, and the material slot's existence probe asks
+/// it too. The cooked branch runs no decoder and performs no row flip - a
+/// block-compressed payload cannot be flipped at all - and the flip that
+/// establishes the engine's v = 0 convention has therefore already happened, at
+/// cook time, through this same <see cref="ImageDecoder"/>.</para>
+/// <para><b>A cooked upload carries its <see cref="ContentBlob"/> across the
+/// queue.</b> The payload is a span straight into a mounted pack's memory-mapped
+/// view, so whatever hands it to the render thread has to hand the reference over
+/// with it: unmapping a view under a live span is an access violation with no
+/// managed stack rather than an exception. Every path that drops a queued upload
+/// disposes it, which is why the disposal sits in the pump's loop rather than
+/// inside <c>ApplyUpload</c>'s several early returns.</para>
 /// <para><b>Degradation is not conditional on the stack.</b> A missing material
 /// is <see cref="DefaultMaterial"/> and a missing texture is the magenta
 /// checker, whatever is mounted and whether or not the stack is strict: the
@@ -426,10 +443,21 @@ public sealed partial class AssetManager : IDisposable
         // finishes while this one reads loses the race instead of overwriting
         // the newer result.
         long sequence = failed?.NextRequestSequence() ?? 0;
-        DecodedImage image = DecodeThroughContent(key);
-        WarnIfSrgbUnavailable(key, image.Format, colorSpace);
-        Texture texture = renderer.CreateTexture(
-            image.Pixels, image.Width, image.Height, image.Format, colorSpace, filter, wrap);
+        ImageSource image = ReadImageThroughContent(key);
+        Texture texture;
+        try
+        {
+            texture = CreateTextureFrom(renderer, key, in image, colorSpace, filter, wrap);
+        }
+        finally
+        {
+            // The upload is over the moment CreateTexture returns, so a cooked
+            // image's pack reference is released here rather than being held for
+            // the texture's life. Held longer it would keep a mount alive
+            // forever, which is a leak that presents as an unmountable patch
+            // pack much later.
+            image.Dispose();
+        }
 
         if (failed is not null)
         {
@@ -445,8 +473,7 @@ public sealed partial class AssetManager : IDisposable
             DestroyOwned(previous);
             EnsureWatching(key);
             _logger.LogInformation(
-                "Loaded texture {Path} after an earlier failure ({Width}x{Height}, {Channels}ch, {Format})",
-                key, image.Width, image.Height, image.Channels, image.Format);
+                "Loaded texture {Path} after an earlier failure ({Description})", key, image.Describe());
             return failed;
         }
 
@@ -473,9 +500,7 @@ public sealed partial class AssetManager : IDisposable
         }
 
         EnsureWatching(key);
-        _logger.LogInformation(
-            "Loaded texture {Path} ({Width}x{Height}, {Channels}ch, {Format})",
-            key, image.Width, image.Height, image.Channels, image.Format);
+        _logger.LogInformation("Loaded texture {Path} ({Description})", key, image.Describe());
         return asset;
     }
 
@@ -735,8 +760,20 @@ public sealed partial class AssetManager : IDisposable
             // first so a retry is possible even when the apply below drops the
             // result. Mirrors EndImport on the model side.
             EndDecode(request.Asset);
-            if (ApplyUpload(in request))
-                applied++;
+            try
+            {
+                if (ApplyUpload(in request))
+                    applied++;
+            }
+            finally
+            {
+                // ONE disposal site, covering every early return inside
+                // ApplyUpload. A cooked upload holds a pack reference, and a
+                // dropped request (an unloaded handle, a stale ticket, a GPU
+                // failure) that leaked one would defer that pack's unmount for
+                // the life of the process with nothing reporting it.
+                request.Image.Dispose();
+            }
         }
 
         return applied + PumpPendingModelImports();
@@ -790,8 +827,11 @@ public sealed partial class AssetManager : IDisposable
             watcher.Dispose();
         _watchers.Clear();
 
-        // Late arrivals from decodes still in flight have nowhere to go.
-        while (_uploads.TryDequeue(out _)) { }
+        // Late arrivals from decodes still in flight have nowhere to go - but a
+        // cooked one holds a pack reference, so they are drained THROUGH their
+        // disposal rather than discarded. Dropped silently, a session teardown
+        // would leave every in-flight texture pinning its mount.
+        while (_uploads.TryDequeue(out UploadRequest stranded)) stranded.Image.Dispose();
         while (_changedFiles.TryDequeue(out _)) { }
 
         // Models first: their meshes are destroyed through the renderer, which
@@ -842,6 +882,14 @@ public sealed partial class AssetManager : IDisposable
     /// </summary>
     public void Shutdown()
     {
+        // Again, and deliberately: a background decode can land in the window
+        // between ReleaseGraphicsResources draining the queue and the manager
+        // being disposed, and the pump is no longer running to take it. A cooked
+        // one holds a pack reference, so leaving it there would defer that
+        // pack's unmount for the life of the process - which in a shell that
+        // opens and closes sessions is a mount leaked per session.
+        while (_uploads.TryDequeue(out UploadRequest stranded)) stranded.Image.Dispose();
+
         if (!_graphicsReleased && _renderer is not null)
         {
             _logger.LogWarning(
@@ -978,10 +1026,12 @@ public sealed partial class AssetManager : IDisposable
             return;
         }
 
-        // The same stack the decode below reads from, deliberately: an existence
-        // probe that asked the filesystem while the open asked an archive would
-        // bind the placeholder into every packed material and log nothing wrong.
-        if (!Content.Exists(textureKey))
+        // The same stack AND the same fork the read below uses, deliberately: an
+        // existence probe that asked the filesystem while the open asked an
+        // archive - or that looked for the PNG while the open took the cooked
+        // .simage - would bind the placeholder into every packed material and log
+        // nothing wrong.
+        if (!ImageExists(textureKey))
         {
             _logger.LogWarning(
                 "Material {Path}: texture {Texture} for '{Slot}' not found; using the placeholder",
@@ -1037,16 +1087,83 @@ public sealed partial class AssetManager : IDisposable
                 "AssetManager has no renderer; call AttachRenderer on the render thread first.");
     }
 
-    // One of the three content reads. Any thread: opening and decoding are both
-    // pure CPU, which is what lets the async path run this on the thread pool.
-    private DecodedImage DecodeThroughContent(string key)
+    // Where an image's bytes come from, asked exactly once per read and shared
+    // with the material slot's existence probe below. The whole redirection is
+    // ImageContentPath's, so the cooker, the verifier and this class cannot
+    // disagree about which of two files an image is.
+    private string ResolveImagePath(string key) => ImageContentPath.Resolve(Content, key);
+
+    // The probe half of the same rule. It asks the SAME stack the open asks, on
+    // the SAME resolved path, which is the whole reason it is expressed here
+    // rather than inline: a probe that looked only for the authored file would
+    // bind the magenta placeholder into every material of a build whose textures
+    // are all cooked, and every log line would read healthy.
+    private bool ImageExists(string key) => Content.Exists(ResolveImagePath(key));
+
+    // One of the content reads, and the only one that forks. Any thread: opening,
+    // decoding and parsing a .simage header are all pure CPU, which is what lets
+    // the async path run this on the thread pool.
+    private ImageSource ReadImageThroughContent(string key)
     {
         // A miss is reported as the I/O failure LoadTexture documents and
         // QueueDecode catches, so the caller sees no difference between content
         // that is absent and content that could not be read — neither is
         // recoverable at this level.
-        using ContentBlob blob = OpenOrThrow(key);
-        return ImageDecoder.Decode(blob.Span, key);
+        string resolved = ResolveImagePath(key);
+        ContentBlob blob = OpenOrThrow(resolved);
+
+        if (!ImageContentPath.IsCooked(resolved))
+        {
+            // The loose path, unchanged: decode, and flip the rows on the way in.
+            // Nothing needs the blob's bytes past this call.
+            using (blob) return new ImageSource(ImageDecoder.Decode(blob.Span, key), null, null);
+        }
+
+        try
+        {
+            // No decode, no row flip, no copy. The blob TRAVELS with the result,
+            // because the mips it describes are offsets into these very bytes.
+            SimageInfo cooked = SimageReader.Read(blob.Span, resolved);
+            return new ImageSource(null, blob, cooked);
+        }
+        catch
+        {
+            // A refusal here leaves nobody holding the reference, so it is
+            // released before the message goes up. Without this a project whose
+            // .simage files are one version stale would leak a pack reference per
+            // texture.
+            blob.Dispose();
+            throw;
+        }
+    }
+
+    // The two ways a texture reaches the GPU, in one place so the colour-space
+    // warning and the sampler state cannot be applied to one and not the other.
+    private Texture CreateTextureFrom(
+        Renderer renderer,
+        string key,
+        in ImageSource image,
+        TextureColorSpace colorSpace,
+        TextureFilter filter,
+        TextureWrap wrap)
+    {
+        WarnIfSrgbUnavailable(key, image.Format, colorSpace);
+
+        if (image.Decoded is { } decoded)
+        {
+            return renderer.CreateTexture(
+                decoded.Pixels, decoded.Width, decoded.Height, decoded.Format, colorSpace, filter, wrap);
+        }
+
+        SimageInfo cooked = image.Cooked!;
+
+        // The CALLER's colour space, never the file's. Whether a block of bytes
+        // is colour or data is a property of the material slot rather than of the
+        // image - which is exactly why this cache keys on it - so the cooker
+        // writes the UNORM form and one cooked artifact serves both an albedo and
+        // a mask. See SimageFormat.TryResolveVkFormat.
+        return renderer.CreateTexture(new TextureUploadDesc(
+            cooked.Format, colorSpace, image.Blob!.Span, cooked.Mips, filter, wrap));
     }
 
     // The second of the three. The bytes never touch the filesystem, so a packed
@@ -1092,12 +1209,15 @@ public sealed partial class AssetManager : IDisposable
         {
             try
             {
-                DecodedImage image = DecodeThroughContent(asset.RelativePath);
+                // Ownership of a cooked image's pack reference transfers to the
+                // queue here and is released by the pump, which is the one place
+                // that sees every outcome.
+                ImageSource image = ReadImageThroughContent(asset.RelativePath);
                 _uploads.Enqueue(new UploadRequest(asset, sequence, image, null));
             }
             catch (Exception ex)
             {
-                _uploads.Enqueue(new UploadRequest(asset, sequence, null, ex.Message));
+                _uploads.Enqueue(new UploadRequest(asset, sequence, default, ex.Message));
             }
         });
     }
@@ -1124,7 +1244,7 @@ public sealed partial class AssetManager : IDisposable
         if (request.Sequence <= asset.AppliedSequence)
             return false;
 
-        if (request.Image is null)
+        if (!request.Image.HasContent)
         {
             _logger.LogError("Texture load failed ({Path}): {Error}", asset.RelativePath, request.Error);
             // Keep whatever is bound (placeholder, or the previous version on a
@@ -1137,14 +1257,12 @@ public sealed partial class AssetManager : IDisposable
             return false;
         }
 
-        DecodedImage image = request.Image;
+        ImageSource image = request.Image;
         Texture created;
         try
         {
-            WarnIfSrgbUnavailable(asset.RelativePath, image.Format, asset.ColorSpace);
-            created = _renderer!.CreateTexture(
-                image.Pixels, image.Width, image.Height, image.Format,
-                asset.ColorSpace, asset.Filter, asset.Wrap);
+            created = CreateTextureFrom(
+                _renderer!, asset.RelativePath, in image, asset.ColorSpace, asset.Filter, asset.Wrap);
         }
         catch (Exception ex)
         {
@@ -1164,9 +1282,9 @@ public sealed partial class AssetManager : IDisposable
         EnsureWatching(asset.RelativePath);
 
         _logger.LogInformation(
-            "Texture {Verb} {Path} ({Width}x{Height}, {Channels}ch, {Format})",
+            "Texture {Verb} {Path} ({Description})",
             asset.Version > 1 ? "reloaded" : "ready",
-            asset.RelativePath, image.Width, image.Height, image.Channels, image.Format);
+            asset.RelativePath, image.Describe());
         return true;
     }
 
@@ -1204,8 +1322,7 @@ public sealed partial class AssetManager : IDisposable
                 {
                     for (int i = 0; i < variants.Count; i++)
                     {
-                        if (string.Equals(variants[i].SourcePath, path, StringComparison.OrdinalIgnoreCase))
-                            _reloadTargets.Add(variants[i]);
+                        if (IsSourceOf(variants[i], path)) _reloadTargets.Add(variants[i]);
                     }
                 }
             }
@@ -1220,6 +1337,20 @@ public sealed partial class AssetManager : IDisposable
         }
     }
 
+    // Whether a changed file is one this handle would read. BOTH names count,
+    // because the read resolves between them every time: a cook landing a
+    // .simage beside a PNG must reach a texture already loaded from the PNG, and
+    // an edit to the PNG must reach one already loaded from a .simage that is now
+    // stale. Compared as strings rather than probed, because this runs once per
+    // variant per change notification and a probe here would be a stack lookup
+    // per texture per save.
+    private static bool IsSourceOf(TextureAsset asset, string fullPath) =>
+        string.Equals(asset.SourcePath, fullPath, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(
+            Path.ChangeExtension(asset.SourcePath, SimageFormat.FileExtension),
+            fullPath,
+            StringComparison.OrdinalIgnoreCase);
+
     // Watching is a property of LOOSE content: a source that cannot name a file
     // on disk (a packed archive) supplies no watch path and is simply not
     // watched, which is why this takes the content-relative path and asks the
@@ -1227,7 +1358,10 @@ public sealed partial class AssetManager : IDisposable
     private void EnsureWatching(string relativePath)
     {
         if (!HotReloadEnabled || _graphicsReleased) return;
-        if (!Content.TryGetWatchPath(relativePath, out string? watchPath)) return;
+        // The RESOLVED path, so a tree whose textures are all cooked still gets a
+        // watcher: asking for the authored PNG in a folder that holds only
+        // .simage files finds no watch path and silently watches nothing.
+        if (!Content.TryGetWatchPath(ResolveImagePath(relativePath), out string? watchPath)) return;
 
         string? directory = Path.GetDirectoryName(watchPath);
         if (directory is null || !Directory.Exists(directory)) return;
@@ -1264,7 +1398,7 @@ public sealed partial class AssetManager : IDisposable
 
     private void StopWatchingIfUnused(string relativePath)
     {
-        if (!Content.TryGetWatchPath(relativePath, out string? watchPath)) return;
+        if (!Content.TryGetWatchPath(ResolveImagePath(relativePath), out string? watchPath)) return;
 
         string? directory = Path.GetDirectoryName(watchPath);
         if (directory is null || !_watchers.TryGetValue(directory, out FileSystemWatcher? watcher)) return;
@@ -1371,5 +1505,41 @@ public sealed partial class AssetManager : IDisposable
 
     // Struct, so an empty drain does not allocate.
     private readonly record struct UploadRequest(
-        TextureAsset Asset, long Sequence, DecodedImage? Image, string? Error);
+        TextureAsset Asset, long Sequence, ImageSource Image, string? Error);
+
+    /// <summary>
+    /// One image read, in whichever of the two forms the content actually holds
+    /// it, plus the pack reference that keeps a cooked one alive.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The blob is not a convenience.</b> A cooked payload is a span straight
+    /// into a mounted pack's memory-mapped view, and this value crosses from a
+    /// thread-pool decode to the render thread through a queue, so the thing
+    /// keeping those bytes valid has to travel with it rather than with the call
+    /// that opened them. Unmapping under a live span is an access violation with
+    /// no managed stack, not an exception anybody can catch.
+    /// </para>
+    /// <para>
+    /// A struct, so an empty drain allocates nothing, and
+    /// <see cref="Dispose"/> is idempotent because <see cref="ContentBlob"/>'s
+    /// is.
+    /// </para>
+    /// </remarks>
+    private readonly record struct ImageSource(DecodedImage? Decoded, ContentBlob? Blob, SimageInfo? Cooked)
+    {
+        /// <summary>Whether this carries a real image rather than standing for a failure.</summary>
+        public bool HasContent => Decoded is not null || Cooked is not null;
+
+        /// <summary>The format the texture will be created in.</summary>
+        public TextureFormat Format => Decoded?.Format ?? Cooked!.Format;
+
+        /// <summary>One phrase for a log line, naming which of the two forms this was.</summary>
+        public string Describe() => Decoded is { } decoded
+            ? $"{decoded.Width}x{decoded.Height}, {decoded.Channels}ch, {decoded.Format}"
+            : $"{Cooked!.Width}x{Cooked.Height}, {Cooked.MipCount} mips, {Cooked.Format}, cooked";
+
+        /// <summary>Releases the pack reference a cooked read holds. Safe on a failure value.</summary>
+        public void Dispose() => Blob?.Dispose();
+    }
 }

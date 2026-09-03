@@ -10,6 +10,17 @@
   <ItemGroup>
     <ProjectReference Include="..\..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
     <ProjectReference Include="..\..\SpectraShade.Compiler\SpectraShade.Compiler.csproj" />
+    <!--
+      The cooker, for CookedTextureGlTests. The claim it makes spans two
+      assemblies and cannot be made from either alone: the writer lives in the
+      Kitchen because no shipped game writes a pack, the reader and the uploader
+      live in Core because every shipped game reads one, and what nobody had
+      proved is that bytes the first produces render correctly through the second
+      on a real driver. Cooking a fixture here rather than checking one in also
+      means the oracle re-encodes on every run, so an encoder change cannot leave
+      a stale artifact passing.
+    -->
+    <ProjectReference Include="..\..\Spectra.Kitchen\Spectra.Kitchen.csproj" />
   </ItemGroup>
 
   <ItemGroup>

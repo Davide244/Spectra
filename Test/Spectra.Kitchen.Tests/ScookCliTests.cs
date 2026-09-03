@@ -94,7 +94,7 @@ public class ScookCliTests
     public void Verify_passes_a_cooked_pack_and_fails_one_missing_a_texture()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(64));
+        project.WriteAsset("Textures/wall_brick.png", TempProject.Png(8, 8, seed: 1));
         project.WriteAsset(
             "Materials/wall.spectramat",
             "shader = lit\ntexture uDiffuse = Textures/wall_brick.png\n");
@@ -107,9 +107,11 @@ public class ScookCliTests
         passed.Stderr.ShouldBeEmpty();
         passed.Stdout.ShouldContain("1 reference(s) resolved");
 
-        // Remove the texture and recook: the cook is still happy, because there
-        // is no material rule and nothing in a cook ever reads what is inside a
-        // raw-copied file. Verify is the step that notices.
+        // Remove the texture and recook: the cook is still happy, because there is
+        // no material rule and nothing in a cook reads what a raw-copied
+        // .spectramat names. Verify is the step that notices - and it resolves the
+        // slot through the same .simage redirection the engine uses, so what it
+        // reports is what a running game would actually fail to find.
         File.Delete(Path.Combine(project.Layout.AssetsPath, "Textures", "wall_brick.png"));
         Invoke("cook", project.Root, "-q").ExitCode.ShouldBe(ExitSuccess);
 
@@ -122,14 +124,19 @@ public class ScookCliTests
     public void Inspect_prints_the_header_and_every_entry_in_both_forms()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(64));
+        project.WriteAsset("Textures/wall_brick.png", TempProject.Png(8, 8, seed: 1));
 
         Invoke("cook", project.Root, "-q").ExitCode.ShouldBe(ExitSuccess);
         string pack = Directory.GetFiles(project.CookedPath, "*.spack").Single();
 
         var text = Invoke("inspect", pack);
         text.ExitCode.ShouldBe(ExitSuccess);
-        text.Stdout.ShouldContain("Textures/wall_brick.png");
+
+        // The COOKED name, which is also this surface's only statement that the
+        // image rule ran at all: a pack whose textures still said .png would be a
+        // pack of raw copies, and it would mount and render perfectly.
+        text.Stdout.ShouldContain("Textures/wall_brick.simage");
+        text.Stdout.ShouldNotContain("Textures/wall_brick.png");
         text.Stdout.ShouldContain("sorted, names");
         text.Stdout.ShouldContain("1 entries");
 
@@ -139,7 +146,7 @@ public class ScookCliTests
         var json = Invoke("inspect", pack, "--json");
         json.ExitCode.ShouldBe(ExitSuccess);
         json.Stdout.ShouldContain("\"scookInspect\": 1");
-        json.Stdout.ShouldContain("\"name\":\"Textures/wall_brick.png\"");
+        json.Stdout.ShouldContain("\"name\":\"Textures/wall_brick.simage\"");
         json.Stdout.ShouldContain("\"codec\":\"none\"");
         json.Stdout.ShouldNotContain("\r\n");
     }
@@ -161,7 +168,7 @@ public class ScookCliTests
     public void A_cook_writes_a_pack_into_the_projects_cooked_folder()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(40));
+        project.WriteAsset("Data/strings.bin", TempProject.Bytes(40));
 
         var run = Invoke("cook", project.Root);
 
@@ -178,7 +185,7 @@ public class ScookCliTests
     public void Quiet_says_nothing_on_a_successful_cook()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(40));
+        project.WriteAsset("Data/strings.bin", TempProject.Bytes(40));
 
         var run = Invoke("cook", project.Root, "-q");
 
@@ -191,7 +198,7 @@ public class ScookCliTests
     public void An_option_this_build_does_not_act_on_says_so_without_failing_the_cook()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(40));
+        project.WriteAsset("Data/strings.bin", TempProject.Bytes(40));
 
         // --keep-brush-source, because the map rule is genuinely unbuilt.
         // This case used to be spelled with -t, which stopped being an example
@@ -213,7 +220,7 @@ public class ScookCliTests
     public void A_worker_count_is_acted_on_rather_than_warned_about()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(40));
+        project.WriteAsset("Data/strings.bin", TempProject.Bytes(40));
 
         var run = Invoke("cook", project.Root, "-j", "8");
 
@@ -230,7 +237,7 @@ public class ScookCliTests
     {
         using var project = new TempProject();
         for (int i = 0; i < 3; i++)
-            project.WriteAsset($"Textures/t{i}.png", TempProject.Bytes(16, seed: (byte)i));
+            project.WriteAsset($"Data/t{i}.bin", TempProject.Bytes(16, seed: (byte)i));
 
         // Three assets under -j8 is three workers, and saying "8" would hide the
         // clamp, which is the one thing somebody asking why -j16 is no faster
@@ -240,7 +247,7 @@ public class ScookCliTests
         // One worker is the resting state of every default cook, so it is not
         // printed at all: a number that never changes is not information.
         using var single = new TempProject();
-        single.WriteAsset("Textures/one.png", TempProject.Bytes(16));
+        single.WriteAsset("Data/one.bin", TempProject.Bytes(16));
         Invoke("cook", single.Root).Stdout.ShouldNotContain("worker");
     }
 
@@ -248,7 +255,7 @@ public class ScookCliTests
     public void Clean_removes_the_cook_output_and_refuses_anything_else()
     {
         using var project = new TempProject();
-        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(40));
+        project.WriteAsset("Data/strings.bin", TempProject.Bytes(40));
 
         Invoke("cook", project.Root).ExitCode.ShouldBe(ExitSuccess);
         Directory.Exists(project.CookedPath).ShouldBeTrue();
