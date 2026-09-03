@@ -68,11 +68,19 @@
     <PackageReference Include="Silk.NET.Input.Glfw" />
     <PackageReference Include="Silk.NET.Maths" />
     <!--
-      The declared exception: no code names it yet. Audio/ is a stub, and the
-      audio milestone consumes this package rather than a new one, so removing
-      it would only be re-added by the next milestone.
+      No longer the declared exception: Audio/OpenAlBackend.cs names it. The
+      device, the context, the source pool and the streaming buffer queues all
+      come from here.
     -->
     <PackageReference Include="Silk.NET.OpenAL" />
+    <!--
+      The native runtime beside those bindings, and the one package here no C#
+      file names. It is not the old declared exception coming back: Windows has
+      shipped no OpenAL since 2007, so with bindings alone the loader finds
+      nothing, every machine falls into AudioManager's disabled mode, and the
+      audio path is dead in a way that looks like a deliberate degradation.
+    -->
+    <PackageReference Include="Silk.NET.OpenAL.Soft.Native" />
     <PackageReference Include="Silk.NET.OpenGL" />
     <PackageReference Include="Silk.NET.Windowing" />
     <PackageReference Include="Silk.NET.Windowing.Common" />

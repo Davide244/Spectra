@@ -966,6 +966,22 @@ public sealed class Engine
                 using (Profiler.Measure(FramePhase.Assets))
                     _assetManager.PumpPendingUploads();
 
+                // Audio rides the same slot and for the same reason: the render
+                // thread owns the AL context (see AudioManager's threading
+                // note), and this is the one place per frame guaranteed to run
+                // on it. A frame that skipped it would not merely stop
+                // reclaiming finished sources, it would let every streaming
+                // queue drain, so it sits here unconditionally. The listener
+                // follows the active camera first, or every positional sound
+                // plays at the world origin and the feature reads as broken.
+                if (_sceneManager.ActiveScene is { } listenerScene)
+                {
+                    Camera listener = listenerScene.Camera;
+                    _audioManager.SetListener(listener.Position, listener.Forward, listener.Up);
+                }
+
+                _audioManager.Update();
+
                 // Render poses last, once per frame: the blend between the two
                 // most recent ticks. A render-only overlay — it must never
                 // write back through a node's transform setters.
