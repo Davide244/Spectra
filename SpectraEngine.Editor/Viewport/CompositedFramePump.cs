@@ -5,6 +5,7 @@ using SpectraEngine.Editor.Viewport.Windows;
 using System;
 using System.Collections.Generic;
 using System.Runtime.ExceptionServices;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace SpectraEngine.Editor.Viewport;
@@ -82,7 +83,14 @@ internal interface ICompositedImageSource : IAsyncDisposable
 /// frame and not a fraction of one.
 /// </para>
 /// <para>
-/// <b>So the hand-over is re-issued at <see cref="DispatcherPriority.Send"/>,
+/// <b>The re-issue is posted at <see cref="DispatcherPriority.Send"/> and the
+/// rest of the loop runs INSIDE that post</b>, never after awaiting it: awaiting
+/// an already-completed task continues synchronously on the awaiting thread, so
+/// a resume that has already run hands the loop back to the compositor's render
+/// thread and the next update throws from <c>Dispatcher.VerifyAccess</c>. That
+/// shipped once and faulted every composited session. See
+/// <see cref="IssueHandOver"/>.
+/// <b>Formerly: the hand-over was re-issued at <see cref="DispatcherPriority.Send"/>,
 /// and an ordinary <c>await</c> is what this fixes.</b> Avalonia completes the
 /// update's task from the compositor's own render thread with
 /// <c>RunContinuationsAsynchronously</c>, so a bare <c>await</c> hands the
@@ -393,80 +401,101 @@ internal sealed class CompositedFramePump
             return;
 
         _looping = true;
-        _ = RunAsync(live);
-    }
-
-    private async Task RunAsync(Import import)
-    {
-        try
-        {
-            while (!_stopped && !_stalled && _visible && ReferenceEquals(_live, import))
-            {
-                import.UpdatesInFlight++;
-                _updateStartedAt = Environment.TickCount64;
-
-                // Captured rather than rethrown from a finally, because the
-                // resume below has to happen either way and has to happen
-                // FIRST: the bookkeeping under it and the catch that reports a
-                // fault are both UI-thread work.
-                ExceptionDispatchInfo? failure = null;
-                try
-                {
-                    // ConfigureAwait(false), so the resume is not handed to
-                    // Avalonia's synchronization context - which posts it at the
-                    // lowest foreground priority there is. See the class remarks.
-                    await import.Image.UpdateAsync(
-                            (uint)Renderer.SharedConsumerKey, (uint)Renderer.SharedProducerKey)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    failure = ExceptionDispatchInfo.Capture(ex);
-                }
-
-                await ResumeOnUiThreadAsync().ConfigureAwait(false);
-
-                _updateStartedAt = null;
-                import.UpdatesInFlight--;
-                SettleIfRetired(import);
-
-                failure?.Throw();
-            }
-        }
-        catch (Exception ex)
-        {
-            _stalled = true;
-            _logger.LogError(ex, "The composited viewport's frame pump stopped.");
-            _onFault?.Invoke();
-        }
-        finally
-        {
-            _looping = false;
-
-            // A generation that replaced this one while its last hand-over was
-            // still in flight has been sitting with no loop behind it: the loop
-            // is per import, and the one that adopted the new import found this
-            // one still running and stood down.
-            StartLoop();
-        }
+        IssueHandOver(live);
     }
 
     /// <summary>
-    /// Completes on the UI thread, ahead of whatever the shell has queued.
+    /// Issues one hand-over. <b>UI thread only.</b>
     /// </summary>
     /// <remarks>
-    /// <b>No <c>RunContinuationsAsynchronously</c>, and <c>ConfigureAwait(false)</c>
-    /// at the call site</b>: together those make the loop resume INLINE on
-    /// whichever thread the posted action lands on, which is the UI thread.
-    /// Either one alone would hand the rest of the loop - and the next
-    /// <c>UpdateAsync</c>, which verifies UI-thread access - back to a thread
-    /// pool.
+    /// <b>Not an async loop, and that is the whole point.</b> The obvious shape
+    /// is <c>while (...) await UpdateAsync(); await ResumeOnUiThread();</c>, and
+    /// it is wrong in a way that reads as correct: awaiting a task that is
+    /// ALREADY COMPLETE continues synchronously on the awaiting thread, so a
+    /// resume posted at <see cref="DispatcherPriority.Send"/> - which usually
+    /// runs before the caller reaches its await - hands the rest of the loop
+    /// back to the compositor's render thread rather than to the UI thread. The
+    /// next <c>UpdateAsync</c> then calls <c>Dispatcher.VerifyAccess</c> from
+    /// the wrong thread and the pump reports a fault on a viewport that is
+    /// working perfectly. Measured, in a real composited session.
+    /// <para>
+    /// So the continuation is not awaited at all: everything after the
+    /// hand-over runs INSIDE the posted action, where the thread is not in
+    /// question. The chain does not grow a stack, because each pass ends by
+    /// posting rather than by returning into its caller.
+    /// </para>
     /// </remarks>
-    private Task ResumeOnUiThreadAsync()
+    private void IssueHandOver(Import import)
     {
-        var resumed = new TaskCompletionSource();
-        _resumeOnUiThread(() => resumed.TrySetResult());
-        return resumed.Task;
+        if (_stopped || _stalled || !_visible || !ReferenceEquals(_live, import))
+        {
+            EndLoop();
+            return;
+        }
+
+        import.UpdatesInFlight++;
+        _updateStartedAt = Environment.TickCount64;
+
+        Task handOver;
+        try
+        {
+            handOver = import.Image.UpdateAsync(
+                (uint)Renderer.SharedConsumerKey, (uint)Renderer.SharedProducerKey);
+        }
+        catch (Exception ex)
+        {
+            // Threw before a task existed, so there is nothing to continue from
+            // and this is already the UI thread.
+            CompleteHandOver(import, ExceptionDispatchInfo.Capture(ex));
+            return;
+        }
+
+        handOver.ContinueWith(
+            finished => _resumeOnUiThread(() => CompleteHandOver(import, Failure(finished))),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Finishes one hand-over and issues the next. <b>UI thread only</b>, which
+    /// is structural: every path here arrives through
+    /// <see cref="_resumeOnUiThread"/> or from <see cref="IssueHandOver"/>
+    /// itself, which is UI-thread only in turn.
+    /// </summary>
+    private void CompleteHandOver(Import import, ExceptionDispatchInfo? failure)
+    {
+        _updateStartedAt = null;
+        import.UpdatesInFlight--;
+        SettleIfRetired(import);
+
+        if (failure is not null)
+        {
+            _stalled = true;
+            _logger.LogError(
+                failure.SourceException, "The composited viewport's frame pump stopped.");
+            _onFault?.Invoke();
+            EndLoop();
+            return;
+        }
+
+        IssueHandOver(import);
+    }
+
+    private static ExceptionDispatchInfo? Failure(Task finished) =>
+        finished.Exception is { } aggregate
+            ? ExceptionDispatchInfo.Capture(aggregate.InnerException ?? aggregate)
+            : null;
+
+    private void EndLoop()
+    {
+        _looping = false;
+
+        // A generation that replaced this one while its last hand-over was
+        // still in flight has been sitting with no loop behind it: the loop
+        // is per import, and the one that adopted the new import found this
+        // one still running and stood down.
+        StartLoop();
     }
 
     /// <summary>

@@ -47,6 +47,16 @@ public sealed class CompositedFramePumpTests
 
         internal int Updates { get; private set; }
 
+        /// <summary>
+        /// Answers whether the pump is currently inside a UI-thread post.
+        /// Set by <see cref="FakeSource"/> so an update can record where it was
+        /// issued from.
+        /// </summary>
+        internal Func<bool>? InsideResume { get; set; }
+
+        /// <summary>One entry per update: was it issued from inside a resume?</summary>
+        internal List<bool> UpdateSites { get; } = [];
+
         internal bool Disposed { get; private set; }
 
         internal uint LastAcquireKey { get; private set; }
@@ -60,6 +70,7 @@ public sealed class CompositedFramePumpTests
         public Task UpdateAsync(uint acquireKey, uint releaseKey)
         {
             Updates++;
+            UpdateSites.Add(InsideResume?.Invoke() ?? true);
             LastAcquireKey = acquireKey;
             LastReleaseKey = releaseKey;
             _update = new TaskCompletionSource();
@@ -93,6 +104,8 @@ public sealed class CompositedFramePumpTests
 
     private sealed class FakeSource : ICompositedImageSource
     {
+        internal Func<bool>? InsideResume { get; set; }
+
         internal List<FakeImage> Images { get; } = [];
 
         internal List<nint> ImportedHandles { get; } = [];
@@ -108,7 +121,7 @@ public sealed class CompositedFramePumpTests
         public ICompositedImage Import(nint ntHandle, int width, int height)
         {
             ImportedHandles.Add(ntHandle);
-            var image = new FakeImage();
+            var image = new FakeImage { InsideResume = InsideResume };
             Images.Add(image);
             return image;
         }
@@ -122,6 +135,13 @@ public sealed class CompositedFramePumpTests
 
     private sealed class Rig
     {
+        /// <summary>
+        /// True while the rig is running a posted UI-thread action, which is
+        /// what stands in for "this is the UI thread" in a test with no
+        /// dispatcher of its own.
+        /// </summary>
+        internal bool InsideResume { get; private set; }
+
         internal FakeSource Source { get; } = new();
 
         internal List<int> Acknowledged { get; } = [];
@@ -180,10 +200,23 @@ public sealed class CompositedFramePumpTests
                 {
                     Resumes++;
                     if (HoldResumes)
+                    {
                         _held.Enqueue(action);
-                    else
+                        return;
+                    }
+
+                    InsideResume = true;
+                    try
+                    {
                         action();
+                    }
+                    finally
+                    {
+                        InsideResume = false;
+                    }
                 });
+
+            Source.InsideResume = () => InsideResume;
         }
 
         internal void Observe(int generation, nint handle = ProducerHandle) =>
@@ -621,5 +654,45 @@ public sealed class CompositedFramePumpTests
         rig.Resumes.ShouldBe(1);
         image.CompleteUpdate();
         rig.Resumes.ShouldBe(2);
+    }
+
+    /// <summary>
+    /// Every hand-over after the first is issued from INSIDE the UI-thread
+    /// post, never after it has returned.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is the test the four ordering tests beside it did not amount
+    /// to, and the defect it catches shipped.</b> The pump used to await a
+    /// TaskCompletionSource that the posted action completed, on the reasoning
+    /// that completing it inline would resume the loop inline on the UI thread.
+    /// That holds only when the awaiter has already attached: a resume posted
+    /// at the highest dispatcher priority usually runs FIRST, so the await saw
+    /// an already-completed task and continued synchronously on the thread it
+    /// was trying to leave. The next <c>UpdateAsync</c> then called
+    /// <c>Dispatcher.VerifyAccess</c> from the compositor's render thread and
+    /// the pump reported a fault on a viewport that was working perfectly.
+    /// <para>
+    /// The four tests beside this one all pass against that code, because they
+    /// assert that a resume HAPPENS and in what order, never where the work
+    /// after it runs. This asserts the latter, which is the actual invariant.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Every_hand_over_after_the_first_is_issued_from_inside_the_UI_thread_post()
+    {
+        var rig = new Rig();
+        FakeImage image = rig.Adopt(generation: 1);
+
+        for (int i = 0; i < 4; i++)
+            image.CompleteUpdate();
+
+        image.Updates.ShouldBeGreaterThan(1, "the loop must have re-issued");
+
+        // The first is issued by StartLoop, which the shell only ever calls on
+        // the UI thread; every later one is the loop re-issuing itself.
+        image.UpdateSites.Count.ShouldBe(image.Updates);
+        image.UpdateSites.Skip(1).ShouldAllBe(inside => inside,
+            "a hand-over issued after the post returned is issued off the UI thread, " +
+            "where UpdateAsync verifies access and throws");
     }
 }
