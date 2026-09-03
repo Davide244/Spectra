@@ -15,6 +15,22 @@
 # `MyGame/Maps/Lobby.smap/map.json`, which is the only place maps actually live.
 **/*.smap/** text eol=lf
 
+# Cooked artifacts are hashed by content, so a text asset that checks out as
+# CRLF on Windows and LF on Linux gives the two CI hosts different input bytes
+# for the same commit: different cook cache keys, and a .spack that can never
+# be byte-identical between them. The determinism oracles all run on one
+# machine and would never see it. Same argument as the .smap block above, one
+# layer further out.
+#
+# Listed by extension rather than as Assets/** because that directory also
+# holds PNGs, and forcing text treatment on a binary file corrupts it.
+Assets/**/*.obj text eol=lf
+Assets/**/*.mtl text eol=lf
+Assets/**/*.gltf text eol=lf
+Assets/**/*.spectramat text eol=lf
+*.spectrashade text eol=lf
+Assets/**/*.png binary
+
 # Verify snapshot files are byte-exact golden outputs — pin them to LF so
 # CRLF normalization on Windows doesn't cause phantom diffs.
 *.verified.* text eol=lf
