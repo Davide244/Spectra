@@ -131,6 +131,29 @@ public static class AudioResampler
         return output;
     }
 
+    // KNOWN DETERMINISM EXPOSURE, and the one place in the cook that has one.
+    //
+    // Math.Sin and Math.Cos are not guaranteed bit-identical across platforms or
+    // runtime versions: .NET defers to the platform's own libm, so the CRT on
+    // Windows and glibc on Linux may disagree in the last ulp. Everything else
+    // the cook does is integer work, IEEE basic operations, or a hash, all of
+    // which are exactly reproducible; this kernel is not.
+    //
+    // The three determinism oracles cannot see it. They compare two cooks in two
+    // processes on ONE machine, where libm agrees with itself, and that is also
+    // true of the cache-versus-clean and the -j1-versus-jN pair. So the property
+    // that actually holds today is per-host reproducibility, and cross-host byte
+    // identity of cooked AUDIO is unproven rather than established. Every other
+    // cooked artifact keeps the stronger claim.
+    //
+    // Left as is deliberately: the audible difference is nil (a fraction of one
+    // LSB of a 16-bit sample), InstructionSetBaseline cannot help because the
+    // divergence is in the library rather than in the instruction set, and the
+    // fix is a deterministic sine of our own, which is real work to write and to
+    // prove. Written down here because the alternative is somebody discovering a
+    // one-byte pack difference between two CI hosts and looking everywhere else
+    // first.
+    //
     // Blackman over the whole kernel span. It is not the sharpest window
     // available, and that is the point: a sharper one rings, and ringing on a
     // transient is a pre-echo that a listener hears as the sound arriving twice.
