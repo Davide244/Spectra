@@ -189,6 +189,33 @@ public sealed class FrameSnapshot
     public bool DebugLayerActive { get; init; }
 
     /// <summary>
+    /// Mean time the render thread spent waiting for the shared target's key
+    /// since the last snapshot, in milliseconds. Zero on a windowed surface.
+    /// </summary>
+    /// <remarks>
+    /// <b>Frame time alone cannot tell a slow producer from a stalled one</b>,
+    /// because the wait is inside the frame. For a composited viewport the
+    /// mutex is the clock and the consumer releases the key from a continuation
+    /// on the shell's UI dispatcher, so this is the one number that says
+    /// whether a frame rate fell because the engine had more to draw or
+    /// because the UI thread was busy. Read it beside
+    /// <see cref="SharedAcquirePeakMs"/>, never alone.
+    /// </remarks>
+    public float SharedAcquireWaitMs { get; init; }
+
+    /// <summary>
+    /// The longest single wait for the shared target's key since the last
+    /// snapshot, in milliseconds.
+    /// </summary>
+    /// <remarks>
+    /// <b>The peak is the number a person actually feels.</b> A viewport
+    /// missing one vsync in three averages a third of the stall it suffers,
+    /// which reads as a small steady cost rather than as the intermittent
+    /// hitch it is.
+    /// </remarks>
+    public float SharedAcquirePeakMs { get; init; }
+
+    /// <summary>
     /// The selection's editable properties, merged across every selected node.
     /// </summary>
     /// <remarks>

@@ -4,6 +4,7 @@ using Silk.NET.Windowing;
 using SpectraEngine.Core.Assets.Sources;
 using SpectraEngine.Core.Graphics.Shaders;
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
@@ -768,6 +769,64 @@ public abstract class Renderer
     /// </remarks>
     /// <param name="timeoutMs">How long to wait for the key before giving up on this frame.</param>
     public virtual bool BeginSharedWrite(int timeoutMs = 100) => false;
+
+    // ---- How long the producer spent WAITING for its turn ------------------
+    //
+    // The mutex is the clock for a composited viewport, which means the engine
+    // cannot start a frame until the consumer has released key 0, and the
+    // consumer releases it from a continuation on the shell's UI dispatcher.
+    // So engine frame rate is coupled to UI-thread latency by construction,
+    // and the "58 to 60 fps" this design was signed off with was measured AT
+    // REST, with nothing else asking the dispatcher for anything.
+    //
+    // That coupling is invisible from every instrument the engine already has:
+    // frame time includes the wait, so a stalled producer and a slow producer
+    // report the same number, and there is no debug-layer message for either.
+    // This separates them. A frame rate that falls while this stays near zero
+    // is the engine's own cost; a frame rate that falls while this rises is the
+    // consumer not taking its turn, and no amount of render optimisation will
+    // touch it.
+    private long _sharedAcquireTicks;
+    private long _sharedAcquirePeakTicks;
+    private int _sharedAcquireSamples;
+
+    /// <summary>
+    /// Records one producer-side wait for the shared target's key. Called by a
+    /// backend from inside <see cref="BeginSharedWrite"/>, around the acquire
+    /// and nothing else.
+    /// </summary>
+    protected void RecordSharedAcquireWait(long ticks)
+    {
+        _sharedAcquireTicks += ticks;
+        _sharedAcquireSamples++;
+        if (ticks > _sharedAcquirePeakTicks) _sharedAcquirePeakTicks = ticks;
+    }
+
+    /// <summary>
+    /// Takes the producer's acquire-wait statistics since the last drain, in
+    /// milliseconds, and resets them.
+    /// </summary>
+    /// <remarks>
+    /// <b>The PEAK is the number that matters and the average is the one that
+    /// hides it.</b> A viewport missing one vsync in three averages a third of
+    /// the stall it actually suffers, which reads as a small cost rather than
+    /// as an intermittent freeze; both are reported so the shape is visible.
+    /// Draining rather than sampling, because the reader publishes on an
+    /// interval and a peak that survived into the next window would be
+    /// attributed to the wrong moment.
+    /// </remarks>
+    public void DrainSharedAcquireWait(out float averageMs, out float peakMs)
+    {
+        double toMs = 1000.0 / Stopwatch.Frequency;
+        averageMs = _sharedAcquireSamples > 0
+            ? (float)(_sharedAcquireTicks * toMs / _sharedAcquireSamples)
+            : 0f;
+        peakMs = (float)(_sharedAcquirePeakTicks * toMs);
+
+        _sharedAcquireTicks = 0;
+        _sharedAcquirePeakTicks = 0;
+        _sharedAcquireSamples = 0;
+    }
 
     /// <summary>
     /// Releases the shared target's key with the consumer's value, handing the

@@ -182,6 +182,13 @@ public sealed class Engine
             // which is the counter's only writer, so nothing moved it between.
             _publishedDebugLayerErrors = _renderer.DebugLayerErrorCount;
 
+            // Drained rather than sampled, and drained HERE rather than beside
+            // the dirty checks above, because the builder runs only when a
+            // snapshot is going out: draining on a frame that publishes nothing
+            // would throw the window's peak away and report the next window's
+            // stall as smaller than it was.
+            _renderer.DrainSharedAcquireWait(out float acquireWaitMs, out float acquirePeakMs);
+
             return new FrameSnapshot
             {
                 FrameNumber = builder.FrameNumber,
@@ -207,6 +214,8 @@ public sealed class Engine
                 StaticWorldDefect = _sceneManager.ActiveScene?.StaticWorldDefect,
                 DebugLayerErrorCount = _publishedDebugLayerErrors,
                 DebugLayerActive = _renderer.DebugLayerActive,
+                SharedAcquireWaitMs = acquireWaitMs,
+                SharedAcquirePeakMs = acquirePeakMs,
                 SharedTarget = _publishedSharedTarget,
                 IsPlaying = _character is { Active: true },
                 CanPlay = _character is not null,

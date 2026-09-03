@@ -7,6 +7,7 @@ using Silk.NET.Maths;
 using Silk.NET.Windowing;
 using SpectraEngine.Core.Graphics.Shaders;
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -1615,8 +1616,18 @@ public sealed unsafe class D3D12Renderer : Renderer
         // as a working frame and then deadlocks the consumer forever.
         if (_sharedWriteHeld)
             throw new InvalidOperationException("BeginSharedWrite was called while the shared key was already held.");
-
+
+        // Timed, because a frame that WAITED here and a frame that WORKED
+
+        // report the same frame time and there is no other way to tell them
+
+        // apart. See Renderer.RecordSharedAcquireWait.
+
+        long acquireStartedAt = Stopwatch.GetTimestamp();
+
         int hr = bridge.KeyedMutex->AcquireSync(SharedProducerKey, (uint)Math.Max(0, timeoutMs));
+
+        RecordSharedAcquireWait(Stopwatch.GetTimestamp() - acquireStartedAt);
 
         // WAIT_TIMEOUT is 0x00000102: a SUCCESS-coded HRESULT, so `hr < 0` reads
         // it as an acquisition, and SilkMarshal.ThrowHResult would let it

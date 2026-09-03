@@ -747,6 +747,51 @@ public sealed class ShellModel : ObservableObject
     /// <summary>Frame rate, formatted.</summary>
     public string FpsLabel => $"{_fps,5:0} fps";
 
+    private float _sharedAcquirePeakMs;
+
+    /// <summary>
+    /// The longest wait the render thread spent on the shared target's key in
+    /// the last publish window, in milliseconds.
+    /// </summary>
+    /// <remarks>
+    /// <b>A composited viewport's frame rate is coupled to this window's own
+    /// responsiveness, and no other instrument can see it.</b> The keyed mutex
+    /// is the clock: the engine cannot begin a frame until the consumer
+    /// releases key 0, and the consumer releases it from a continuation on this
+    /// dispatcher. So a frame rate that falls while this stays near zero is the
+    /// engine's own drawing cost, and a frame rate that falls while this rises
+    /// is the UI thread holding the engine up, which no amount of render work
+    /// will fix. The distinction is invisible in frame time, because the wait
+    /// happens inside the frame.
+    /// </remarks>
+    public float SharedAcquirePeakMs
+    {
+        get => _sharedAcquirePeakMs;
+        private set
+        {
+            if (Set(ref _sharedAcquirePeakMs, value))
+            {
+                Raise(nameof(SharedAcquireLabel));
+                Raise(nameof(SharedAcquireVisible));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether the producer waited long enough to be worth showing.
+    /// </summary>
+    /// <remarks>
+    /// A windowed session never waits at all and would otherwise carry a
+    /// permanent "0.0 ms" beside its frame rate, which is a reading nobody
+    /// needs and a slot that then teaches people to ignore it. The floor is a
+    /// fifth of a 60 Hz frame: below that the wait cannot be what anyone is
+    /// feeling.
+    /// </remarks>
+    public bool SharedAcquireVisible => _sharedAcquirePeakMs >= 3.3f;
+
+    /// <summary>The wait, as the status bar shows it.</summary>
+    public string SharedAcquireLabel => $"UI stall {_sharedAcquirePeakMs,4:0.0} ms";
+
     /// <summary>Frame time, formatted.</summary>
     public string FrameTimeLabel => $"{_frameTimeMs,6:0.00} ms";
 
@@ -1207,6 +1252,7 @@ public sealed class ShellModel : ObservableObject
         try
         {
             Fps = snapshot.Fps;
+            SharedAcquirePeakMs = snapshot.SharedAcquirePeakMs;
             FrameTimeMs = snapshot.FrameTimeMs;
             SelectionCount = snapshot.SelectedIds.Count;
             UpdateSelectionName(snapshot);

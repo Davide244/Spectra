@@ -1147,6 +1147,18 @@
           <TextBlock Classes="value frametime" Classes.overbudget="{Binding FrameTimeOverBudget}"
                      Text="{Binding FpsLabel}" MinWidth="58"
                      ToolTip.Tip="{Binding FrameTimeLabel}" />
+
+          <!-- How long the render thread spent waiting for this window to hand
+               the shared texture back. Hidden until it is worth reading, and it
+               sits beside the frame rate deliberately: a rate that fell with
+               this at zero is the engine's own cost, and a rate that fell with
+               this raised is the UI thread holding the engine up. Frame time
+               cannot separate those, because the wait is inside the frame. -->
+          <TextBlock Classes="value" Text="{Binding SharedAcquireLabel}"
+                     IsVisible="{Binding SharedAcquireVisible}"
+                     Foreground="{StaticResource SpectraWarning}"
+                     Margin="8,0,0,0" MinWidth="96"
+                     ToolTip.Tip="Longest wait for the composited viewport's shared texture in the last publish window. The keyed mutex is the clock, so this is UI-thread latency charged to the engine's frame rate." />
         </StackPanel>
       </Grid>
     </Border>
