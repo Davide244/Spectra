@@ -69,6 +69,38 @@ try
     // reads the catalogue, because the first read freezes it.
     BuiltinEntities.EnsureRegistered();
 
+    // THE AOT GATE'S EVIDENCE LINE, printed on every run rather than under a
+    // switch, because the failure it catches exists ONLY in the published build.
+    // A registration is a [ModuleInitializer] in an assembly nothing statically
+    // calls into, which is precisely the shape a trimmer removes - and a build
+    // that dropped them still starts, still loads every map, still renders every
+    // frame, and silently turns every entity in every level into a placeholder
+    // that behaves as nothing. So the count is stated in the log where an
+    // unattended run can read it back: anything but the full roster is broken,
+    // and zero is the whole design gone.
+    //
+    // Reading Schemas freezes the shared catalogue, which is correct here for the
+    // reason the export below states: every class registers from a module
+    // initializer that has already run by now, and one registering later would be
+    // missing from a file somebody ships.
+    IReadOnlyList<EntitySchema> catalogue = EntityCatalog.Shared.Schemas;
+    string[] catalogueNames = new string[catalogue.Count];
+    for (int i = 0; i < catalogueNames.Length; i++)
+        catalogueNames[i] = catalogue[i].ClassName;
+    string catalogueRoster = catalogueNames.Length == 0 ? "(none)" : string.Join(", ", catalogueNames);
+
+    if (catalogue.Count == 0)
+    {
+        Log.Error(
+            "Entity catalogue: 0 classes registered ({Classes}). The generated module initializers were " +
+            "trimmed away, so every entity in every map will load as a placeholder that behaves as nothing.",
+            catalogueRoster);
+    }
+    else
+    {
+        Log.Information("Entity catalogue: {Count} classes registered ({Classes})", catalogue.Count, catalogueRoster);
+    }
+
     // Writes what this build knows and EXITS, before a renderer, a window or a
     // thread exists. That is the whole shape of the switch: it is a measurement
     // of the process, not a session, so it must not compete with an engine run
