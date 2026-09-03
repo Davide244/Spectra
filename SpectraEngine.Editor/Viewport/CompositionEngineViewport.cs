@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Hosting;
 using SpectraEngine.Core.Input;
+using SpectraEngine.Editor.Shell;
 using SpectraEngine.Editor.Viewport.Windows;
 using System;
 using System.Collections.Generic;
@@ -119,6 +120,14 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
         AddHandler(KeyDownEvent, OnTunnelKeyDown, RoutingStrategies.Tunnel);
         AddHandler(KeyUpEvent, OnTunnelKeyUp, RoutingStrategies.Tunnel);
 
+        // The end of airspace, spent. A native child is a window the OS routes
+        // input to and Avalonia never sees a drag over it at all; this pane is
+        // an ordinary control, so it can be a drop target exactly like the
+        // scene tree already is.
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DragOverEvent, OnAssetDragOver);
+        AddHandler(DragDrop.DropEvent, OnAssetDrop);
+
         LostFocus += OnViewportLostFocus;
     }
 
@@ -133,6 +142,12 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
 
     /// <inheritdoc/>
     public event Action<int, int>? ContextMenuRequested;
+
+    /// <inheritdoc/>
+    public event Action<ContentDragPayload, int, int>? AssetDropped;
+
+    /// <inheritdoc/>
+    public bool AcceptsAssetDrops => true;
 
     /// <inheritdoc/>
     public Control Control => this;
@@ -679,6 +694,44 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
             _router.OnPointerCaptureLost();
 
         base.OnPointerCaptureLost(e);
+    }
+
+    // --- Asset drop ----------------------------------------------------------
+
+    /// <remarks>
+    /// <b>Claimed for any asset payload, model or not, and the refusal is a
+    /// sentence rather than a cursor.</b> Setting <c>None</c> for a texture
+    /// would stop the drop, which stops the <see cref="AssetDropped"/> event,
+    /// which leaves the user with a "no entry" pointer and nothing anywhere
+    /// saying why - and "only models can be dropped yet" is exactly the thing
+    /// worth saying. The shell decides and reports through
+    /// <see cref="Shell.AssetDropPolicy"/>; this side only decides that the
+    /// gesture belongs to the viewport, which is why the event is claimed
+    /// (<c>Handled</c>) and the window's own file-drop handler never sees it.
+    /// </remarks>
+    private void OnAssetDragOver(object? sender, DragEventArgs e)
+    {
+        if (!e.DataTransfer.Contains(ContentDrag.Format))
+            return;
+
+        // Copy, not Move: the file stays where it is and the scene gains a
+        // reference to it.
+        e.DragEffects = DragDropEffects.Copy;
+        e.Handled = true;
+    }
+
+    private void OnAssetDrop(object? sender, DragEventArgs e)
+    {
+        if (e.DataTransfer.TryGetValue(ContentDrag.Format) is not { } payload)
+            return;
+
+        e.Handled = true;
+
+        // The SAME conversion a press goes through, so a drop and a click on one
+        // pixel aim at one pixel. A high-DPI pane's dips are not its framebuffer
+        // pixels, and the insert ray is cast in the latter.
+        (int x, int y) = ToPixels(e.GetPosition(this));
+        AssetDropped?.Invoke(payload, x, y);
     }
 
     // --- Keyboard and focus --------------------------------------------------

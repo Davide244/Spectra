@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -176,6 +177,23 @@ public sealed class ContentBrowserModel : ObservableObject
     /// <summary>Whether the browser can go up a level.</summary>
     public bool CanGoUp => _root is not null &&
         !string.Equals(_currentPath, _root, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Turns one browsed entry into a drag payload, or refuses it.
+    /// </summary>
+    /// <remarks>
+    /// <b>Here rather than in the panel, because the ROOT lives here.</b> The
+    /// conversion from an absolute path to the engine's own content-relative
+    /// identity needs the root the browser was pointed at, and a panel that
+    /// reached for it would be the second place that knows where a project's
+    /// assets are.
+    /// </remarks>
+    public bool TryDescribe(
+        ContentEntry entry, [NotNullWhen(true)] out ContentDragPayload? payload)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        return ContentDragPayload.TryCreate(_root, entry.FullPath, entry.Kind, out payload);
+    }
 
     /// <summary>Points the browser at a project's assets folder, or at nothing.</summary>
     public void SetRoot(string? assetsPath)

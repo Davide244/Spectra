@@ -824,6 +824,7 @@ public partial class MainWindow : Window
         // sees the menu accelerators at all.
         viewport.ShellChord += OnShellChord;
         viewport.ContextMenuRequested += OnViewportContextMenu;
+        viewport.AssetDropped += OnViewportAssetDropped;
         _viewport = viewport;
 
         // A one-millisecond timer for as long as a session is open. Without it
@@ -1003,6 +1004,7 @@ public partial class MainWindow : Window
         viewport.SurfaceDestroying -= OnSurfaceDestroying;
         viewport.ShellChord -= OnShellChord;
         viewport.ContextMenuRequested -= OnViewportContextMenu;
+        viewport.AssetDropped -= OnViewportAssetDropped;
         _viewport = null;
         _pendingLaunch = null;
 
@@ -1726,8 +1728,27 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void OnDragOver(object? sender, DragEventArgs e)
+    /// <remarks>
+    /// <b>Two drags reach this handler and they mean opposite things.</b> A
+    /// FILE drag comes from outside the application and opens a project or a
+    /// level. An ASSET drag is one of this shell's own, and reaching the WINDOW
+    /// means no viewport claimed it: either it is over a panel, which is an
+    /// ordinary miss, or it is over a viewport that cannot take drops at all,
+    /// which is the case that has to be said out loud rather than answered with
+    /// a cursor.
+    /// </remarks>
+    private void OnDragOver(object? sender, DragEventArgs e)
     {
+        if (e.DataTransfer.Contains(ContentDrag.Format))
+        {
+            // Claimed only over the viewport's own rectangle, so a drop can land
+            // and be REFUSED IN WORDS. Everywhere else in the window an asset
+            // drag really is a miss, and the "no entry" pointer is the right
+            // answer there.
+            e.DragEffects = IsOverViewport(e) ? DragDropEffects.Copy : DragDropEffects.None;
+            return;
+        }
+
         // Copy rather than Move: nothing on disk is touched by opening, and a
         // Move cursor over a file manager's own window promises otherwise.
         e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
@@ -1737,8 +1758,79 @@ public partial class MainWindow : Window
 
     private void OnDrop(object? sender, DragEventArgs e)
     {
+        if (e.DataTransfer.TryGetValue(ContentDrag.Format) is { } payload)
+        {
+            // A composited viewport handled this itself and marked it handled,
+            // so anything arriving here is the refusal path. AssetDropPolicy
+            // knows which of the reasons it is.
+            _shell.SetWarning(
+                AssetDropPolicy.Refuse(payload, _session is not null, _viewport?.AcceptsAssetDrops ?? false)
+                ?? $"{payload.Name} was not dropped into the scene.");
+            return;
+        }
+
         if (e.DataTransfer.TryGetFiles() is { } files)
             _ = DropAsync(files);
+    }
+
+    // Bounds rather than hit testing, because the answer must be the same over a
+    // native child: Avalonia hit-tests the NativeControlHost as an opaque
+    // rectangle and never learns anything about the HWND inside it, so asking
+    // where the pointer is relative to the control is the only question with a
+    // reliable answer on both paths.
+    private bool IsOverViewport(DragEventArgs e)
+    {
+        if (_viewport?.Control is not { } control || control.Bounds.Width <= 0 || control.Bounds.Height <= 0)
+            return false;
+
+        Point point = e.GetPosition(control);
+        return point.X >= 0 && point.Y >= 0 &&
+            point.X < control.Bounds.Width && point.Y < control.Bounds.Height;
+    }
+
+    /// <summary>
+    /// A model dropped into the viewport becomes a node, through the same
+    /// insert the Object menu uses.
+    /// </summary>
+    /// <remarks>
+    /// <b>The placement is not decided here and must never be.</b> The ray, the
+    /// pick that sees parts and meshes, the snap along the hit surface, the
+    /// single history entry and the selection afterwards all live in
+    /// <c>SceneEditorHost</c>, on the render thread, because they are decisions
+    /// about a scene graph this thread is a frame or two behind on. This handler
+    /// says which file and which pixel; the editor answers with what it did.
+    /// </remarks>
+    private void OnViewportAssetDropped(ContentDragPayload payload, int x, int y)
+    {
+        if (AssetDropPolicy.Refuse(payload, _session is not null, viewportAcceptsDrops: true) is { } refusal)
+        {
+            _shell.SetWarning(refusal);
+            return;
+        }
+
+        if (_session is not { } session)
+            return;
+
+        session.InsertModel(
+            payload.ContentPath,
+            new System.Numerics.Vector2(x, y),
+            report => Dispatcher.UIThread.Post(() => ReportModelInsert(report)));
+    }
+
+    // Marshalled back deliberately: EditorSession runs its completion on the
+    // RENDER thread, which is the whole point of that contract.
+    private void ReportModelInsert(ModelInsertReport report)
+    {
+        // Three outcomes and three voices. A refusal is a warning because
+        // nothing happened and the gesture is worth repeating; an unresolved
+        // model is an ERROR because a node IS in the scene and in the history
+        // and somebody has to know it is empty; a clean insert is a message.
+        if (report.Refused is not null)
+            _shell.SetWarning(report.Describe());
+        else if (report.Unresolved is not null)
+            _shell.SetError(report.Describe());
+        else
+            _shell.SetMessage(report.Describe());
     }
 
     private void OnInsertWorldBrushClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.WorldBrush);

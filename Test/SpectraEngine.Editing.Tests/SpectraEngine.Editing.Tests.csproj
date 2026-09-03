@@ -16,6 +16,18 @@
       same direction the solution already does (host -> editing).
     -->
     <ProjectReference Include="..\..\SpectraEngine.Executable\SpectraEngine.Executable.csproj" />
+
+    <!--
+      The GPU-free renderer the Bsp suite already owns, linked rather than
+      copied - the same arrangement the Kitchen and Physics suites use. The
+      editing suite's own StubRenderer and CompilingRenderer deliberately throw
+      on textures, which is right for a gizmo test and makes an AssetManager
+      impossible to attach: AttachRenderer creates the magenta placeholder.
+      Dropping a MODEL into the viewport needs one, so this suite needs a
+      renderer that answers both halves rather than a third partial fake.
+    -->
+    <Compile Include="..\SpectraEngine.Bsp.Tests\FakeRenderer.cs" Link="FakeRenderer.cs" />
+    <Compile Include="..\SpectraEngine.Bsp.Tests\SpatialTestHelpers.cs" Link="SpatialTestHelpers.cs" />
   </ItemGroup>
 
 </Project>

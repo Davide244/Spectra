@@ -114,7 +114,7 @@ Everything else is off the path. In particular: **the Uno shell, offscreen rende
 - **Shader authoring** — `F4 → S2 → S3 → S4 → S5 → S6 → S8 → S9`. `S3` needs `F1` and `F3` landed first.
 - **Entities & no-code logic** — `P4 → P5 → P6 → P7 → P8 → P9 → P10`, with **`P7a` (`BrushKind`) landing before `P7`** on its own — it needs only `F1`, not `P4`, so it may run any time the tree is quiet of `E4`/`E6` (ruling R‑9). Needs `F2`; `P9` needs `P2`; `P8` also needs `physics.md` `Y0` for the BVH overlap queries.
 - **Negative brushes** — **`P7a → P7b`**, and nothing else in the `P` arc is on that path. `P7b` needs `P7a` (it edits `Scene.UpdatePartBrushMembership` and depends on `BrushKind.Part` for its inert-projectile case) and `F1` (cavity walls carry `FaceSurface` payloads), but it needs **no** entity system, no physics and no `P7`. It is off the critical path.
-- **Hosting**: `H1 -> H2 -> H3 -> H10`. Needs `E1`; `H3` needs `R3`.
+- **Hosting**: `H1 -> H2 -> H3 -> H10 -> H11`. Needs `E1`; `H3` needs `R3`; `H11` needs `H3` for a pane that can be a drop target at all.
 
 ---
 
@@ -722,6 +722,14 @@ Unpins the shell's dock layout and admits the viewport as a real dock `Tool`, do
 - **The two hazards were both invisible from inside a control.** A detach is a re-parent until the shell says otherwise: answered as a teardown it stops the engine and the re-attach builds a SECOND session, with a new scene and an empty undo history, and nothing reports an error - so `IEngineViewport.Shutdown()` is the one thing that ends a session and the native child answers it with nothing at all. And the frame pump now OWNS the drawing surface, released only after the last import has settled: disposing it at the moment of detach put it under a live keyed-mutex bracket, and the fault that produced would have been reported as the composited viewport failing on every re-dock.
 - **`Window.PositionChanged` is the geometry signal layout cannot see**: a window that moves re-lays out nothing while the pane's screen origin changes, which is exactly what a live cursor lock differences against. A dock drag cannot start while the pointer is locked, structurally: the lock hides the pointer, fences it to the client rect and holds the capture.
 - **Depends on**: `H3`, `H4`'s docking. **Size**: **M.**
+
+### H11 - Drag an asset out of the browser and into the scene ✅ **landed**
+The content browser becomes a drag source and a composited viewport becomes a drop target, so a model in `Assets/` reaches the level by being dragged onto the surface it should stand on. **Composited sessions only**, stated rather than degraded: a native child is a window the OS routes input to, its messages never bubble into Avalonia, and OLE would reach it only through an `IDropTarget` registered on that HWND - which is not built, so `IEngineViewport.AcceptsAssetDrops` is asked and the refusal is a sentence naming `--viewport=composition`.
+- **The payload is the engine's own identity, not a filesystem path.** `ContentDragPayload` carries the normalized content-relative path - the string the asset caches key on, a `.spectramat` writes down, a map's `mesh` member records and the pack's asset-id hash is taken over. A fifth spelling produces the quiet failure: the drop resolves nothing, the node arrives empty, and every log line reads healthy because the path it named really does exist.
+- **The placement is the EXISTING insert with a payload**, never a second path: the same cursor ray, the same scene-wide pick that sees parts and meshes, the same snap along the hit surface, one history entry, selected afterwards, `RefuseEdit` in front. What it adds is a clearance measured from the subtree's own bounds through `GizmoSelectionBounds`, and the discarding of the model file's own root translation - a drop says where the thing goes.
+- **A model that cannot be resolved places a node with no renderer and a line in the report**, which is the map loader's rule and matters more here because a drag has no keyboard equivalent to fall back on. `ModelInsertReport` keeps a refusal and an unresolved model apart, because flattened they read as one message and mean opposite things.
+- **Deliberately out of scope:** dropping a material onto a face (a different gesture - it needs the face under the cursor, not the point), and native-child drop support.
+- **Depends on**: `H3`, `H10`. **Size**: **S.**
 
 ---
 

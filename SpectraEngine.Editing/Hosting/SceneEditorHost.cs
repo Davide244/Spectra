@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Graphics;
@@ -13,6 +14,7 @@ using SpectraEngine.Editing.Commands;
 using SpectraEngine.Editing.Viewport;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Numerics;
 
 namespace SpectraEngine.Editing.Hosting;
@@ -1525,6 +1527,203 @@ public sealed class SceneEditorHost : ISceneEditor
         _logger.LogInformation(
             "Insert entity '{Class}' at ({X:0.##}, {Y:0.##}, {Z:0.##}) (undo {UndoDepth})",
             className, position.X, position.Y, position.Z, _undo.UndoCount);
+    }
+
+    /// <summary>
+    /// Places one model file where the pointer was, as one history entry, and
+    /// selects it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The payload-carrying sibling of <see cref="Insert"/>, and it rides the
+    /// same placement machinery on purpose.</b> The centre-or-cursor ray, the
+    /// scene-wide pick that sees parts and meshes as well as the compiled world,
+    /// the snap along the surface followed by the clearance, the single undo
+    /// entry and the selection afterwards are all one implementation - so a
+    /// model dropped from the content browser lands exactly where a block
+    /// inserted from the menu would, and neither can drift from the other.
+    /// </para>
+    /// <para>
+    /// <b>A model that cannot be resolved still places a node</b>, with no
+    /// renderer and a line in the returned <see cref="ModelInsertReport"/>. That
+    /// is <c>MapSceneBinder.AttachMesh</c>'s rule, and it is the right one here
+    /// for a second reason: a drop that ended in silence is indistinguishable
+    /// from a drag the shell never received, so the one gesture with no
+    /// keyboard equivalent would be the one with no failure report.
+    /// </para>
+    /// <para>
+    /// <b>The import is SYNCHRONOUS, and that is a deliberate frame hitch.</b>
+    /// <c>AssetManager.RequestModel</c> would return a handle with no meshes on
+    /// it, and the node would then have to be attached empty and mutated a few
+    /// frames later - which is either a second history entry or a silent write
+    /// behind the user's undo. One entry that costs one long frame is the
+    /// trade; the same one the map loader already takes.
+    /// </para>
+    /// <para>
+    /// <b>The model file's own root TRANSLATION is discarded</b>, because a drop
+    /// says where the thing goes. Its rotation and scale survive. A glTF whose
+    /// scene root sits a hundred units off the origin would otherwise land a
+    /// hundred units from the cursor, which reads as the drop having missed.
+    /// </para>
+    /// </remarks>
+    /// <param name="contentPath">
+    /// The model, as a path relative to the content root - the same identity
+    /// every other layer uses. A path that escapes the root is refused by
+    /// <c>ContentRoot.NormalizeRelativePath</c> and reported, never resolved.
+    /// </param>
+    /// <param name="viewportPoint">
+    /// Where to aim, in viewport pixels; null means the centre of the view.
+    /// </param>
+    /// <returns>What was placed, and why it has no geometry if it has none.</returns>
+    public ModelInsertReport InsertModel(string contentPath, Vector2? viewportPoint = null)
+    {
+        if (string.IsNullOrWhiteSpace(contentPath))
+        {
+            _logger.LogWarning("Insert model: refused, no asset path");
+            return ModelInsertReport.RefusedBecause(contentPath ?? string.Empty, "no asset path was given");
+        }
+
+        if (RefuseEdit("Insert model"))
+        {
+            return ModelInsertReport.RefusedBecause(
+                contentPath,
+                IsSuspended ? "play mode owns the scene" : "a manipulation is in progress");
+        }
+
+        _viewport.Reset();
+
+        // The FILE's name, not the model's own root name. A dropped asset is
+        // recognised in the tree by what was dragged, and an importer's root
+        // node is routinely called "RootNode" or nothing at all.
+        string name = Path.GetFileNameWithoutExtension(contentPath);
+        if (string.IsNullOrEmpty(name))
+            name = contentPath;
+
+        string? unresolved = TryBuildModelNode(contentPath, name, out SceneNode node);
+
+        // Zeroed BEFORE the measurement, because the clearance below is
+        // measured from wherever the subtree currently sits and the position is
+        // assigned to the same field afterwards. Leaving the file's own root
+        // translation in would measure one placement and apply another.
+        node.LocalPosition = Vector3.Zero;
+
+        Vector3 normal = TryFindSurface(viewportPoint, out SceneRaycastHit surface)
+            ? surface.Normal
+            : Vector3.UnitY;
+
+        Vector3 position = FindInsertPosition(RestClearance(node, normal), viewportPoint);
+        node.LocalPosition = position;
+
+        _undo.Execute(new AddNodesCommand(
+            [new NodePlacement(node, _scene.Root.Id, _scene.Root.Children.Count)])
+        {
+            Name = $"Insert {name}",
+        });
+
+        _scene.Selection.Select(node);
+
+        if (unresolved is null)
+        {
+            _logger.LogInformation(
+                "Insert model '{Path}' at ({X:0.##}, {Y:0.##}, {Z:0.##}) (undo {UndoDepth})",
+                contentPath, position.X, position.Y, position.Z, _undo.UndoCount);
+        }
+        else
+        {
+            // Warning rather than Error: the level is intact and the node is
+            // exactly where it was asked for. It is a content problem, and the
+            // report carries it to whoever made the gesture.
+            _logger.LogWarning(
+                "Insert model '{Path}': placed without geometry ({Reason})", contentPath, unresolved);
+        }
+
+        return new ModelInsertReport(contentPath, node.Id, name, unresolved, null);
+    }
+
+    /// <summary>
+    /// Builds the subtree for a model, or an empty node plus the reason it is
+    /// empty. Never throws and never returns null.
+    /// </summary>
+    /// <remarks>
+    /// The catch list is <c>MapSceneBinder.AttachMesh</c>'s, with one addition
+    /// that matters here and cannot arise there: an
+    /// <see cref="ArgumentException"/> is what
+    /// <c>ContentRoot.NormalizeRelativePath</c> throws for a rooted path or one
+    /// carrying <c>..</c>, which is exactly what a drag payload built from an
+    /// absolute filesystem path would produce. Refusing it here means a
+    /// mis-built payload reports itself rather than reaching outside the
+    /// project.
+    /// </remarks>
+    private string? TryBuildModelNode(string contentPath, string name, out SceneNode node)
+    {
+        if (_scene.Assets is not { } assets)
+        {
+            node = new SceneNode(name);
+            return "the scene has no asset manager attached";
+        }
+
+        try
+        {
+            ModelAsset model = assets.LoadModel(contentPath);
+            if (model.Data is null)
+            {
+                node = new SceneNode(name);
+                return model.Error ?? "the model is not loaded";
+            }
+
+            node = ModelInstantiator.Instantiate(model, name);
+            return null;
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidDataException
+                or InvalidOperationException or ArgumentException)
+        {
+            node = new SceneNode(name);
+            return ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// How far along <paramref name="normal"/> a detached subtree has to be
+    /// pushed for its lowest point to sit on the surface it was aimed at.
+    /// </summary>
+    /// <remarks>
+    /// <b>Measured through <see cref="GizmoSelectionBounds"/>, which is the one
+    /// definition of "this node has a measurable shape" in the whole editor.</b>
+    /// A second measurement here would let a model be big enough to rest flush
+    /// and too small to put a handle on, which is the exact drift that method's
+    /// remarks already refuse for the resize tool.
+    /// <para>
+    /// The result is signed, and it has to be: a model whose pivot is above its
+    /// own geometry rests flush by sinking, and clamping at zero would leave it
+    /// floating by however far the author put the pivot up. A pivot already at
+    /// the base measures zero and costs nothing, which is the common case.
+    /// </para>
+    /// </remarks>
+    private static float RestClearance(SceneNode root, Vector3 normal)
+    {
+        var nodes = new List<SceneNode>();
+        Collect(root, nodes);
+
+        // Any tangent will do - only the normal's own component is read - but
+        // the frame has to be orthonormal for TryMeasure's projection to mean
+        // what it says, so the tangent is taken from whichever world axis the
+        // normal is least aligned with.
+        Vector3 seed = MathF.Abs(normal.Y) > 0.9f ? Vector3.UnitX : Vector3.UnitY;
+        Vector3 tangent = Vector3.Normalize(Vector3.Cross(seed, normal));
+        Vector3 bitangent = Vector3.Cross(normal, tangent);
+
+        return GizmoSelectionBounds.TryMeasure(nodes, tangent, normal, bitangent, out Vector3 min, out _)
+            ? -min.Y
+            : 0f;
+
+        static void Collect(SceneNode node, List<SceneNode> into)
+        {
+            into.Add(node);
+            IReadOnlyList<SceneNode> children = node.Children;
+            for (int i = 0; i < children.Count; i++)
+                Collect(children[i], into);
+        }
     }
 
     private Vector3 FindInsertPosition(float clearance, Vector2? viewportPoint)

@@ -230,6 +230,37 @@ public sealed class EditorSession : IDisposable
         Host.EnqueueCommand(_ => Editor?.InsertEntity(className, viewportPoint));
 
     /// <summary>
+    /// Places a model file in the scene - the content browser's drag, dropped
+    /// into the viewport.
+    /// </summary>
+    /// <remarks>
+    /// <b>The one insert verb that reports back, because it is the one that can
+    /// half-succeed.</b> Every other insert builds its node out of constants and
+    /// cannot fail; this one names a file, and a file the project no longer has
+    /// still places a node with no geometry. <paramref name="done"/> runs on the
+    /// RENDER thread, like <c>OpenMap</c>'s and <c>SaveMap</c>'s, so a caller
+    /// that wants to touch the UI marshals back deliberately rather than by
+    /// accident.
+    /// </remarks>
+    /// <param name="contentPath">The model, relative to the content root.</param>
+    /// <param name="viewportPoint">Where the drop landed, in viewport pixels.</param>
+    /// <param name="done">Called on the render thread with what happened.</param>
+    public void InsertModel(string contentPath, Vector2? viewportPoint, Action<ModelInsertReport> done)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentPath);
+        ArgumentNullException.ThrowIfNull(done);
+
+        Host.EnqueueCommand(_ => done(
+            Editor is { } editor
+                ? editor.InsertModel(contentPath, viewportPoint)
+                // Not an error and not silence: the render thread has a scene
+                // but no editing layer only while a session is still coming up,
+                // and a drop that lands in that window has to say so rather
+                // than look like a drag the shell dropped on the floor.
+                : ModelInsertReport.RefusedBecause(contentPath, "the session has no editor yet")));
+    }
+
+    /// <summary>
     /// Selects the node with this id. An id the scene no longer has is
     /// ordinary: a UI's view of the graph is a frame or two behind.
     /// </summary>

@@ -2,6 +2,7 @@
 using Avalonia.Platform;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Hosting;
+using SpectraEngine.Editor.Shell;
 using SpectraEngine.Editor.Viewport.Windows;
 using System;
 
@@ -68,6 +69,33 @@ public sealed class Win32EngineViewport : NativeControlHost, IEngineViewport
     /// engine has already seen the balanced button events.
     /// </summary>
     public event Action<int, int>? ContextMenuRequested;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Declared and never raised, which is what <see cref="AcceptsAssetDrops"/>
+    /// exists to say out loud. The compiler warning for an event nothing invokes
+    /// is suppressed rather than answered with a fake raise: the absence IS the
+    /// behaviour, and a viewport that quietly raised it from somewhere would be
+    /// worse than one that cannot.
+    /// </remarks>
+#pragma warning disable CS0067
+    public event Action<ContentDragPayload, int, int>? AssetDropped;
+#pragma warning restore CS0067
+
+    /// <summary>
+    /// Always false: the OS delivers input to the child HWND, and that window
+    /// is not a registered OLE drop target.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not an oversight and not a stub.</b> Making a native child take a drop
+    /// means implementing <c>IDropTarget</c> and calling <c>RegisterDragDrop</c>
+    /// on the HWND, then translating OLE's own data objects back into the
+    /// managed payload a composited drop already carries - a second, unshared
+    /// drop path in a viewport the shell is moving away from. It is refused with
+    /// a sentence in <see cref="Shell.AssetDropPolicy"/> instead, so the
+    /// difference between the two panes is visible where the gesture happens.
+    /// </remarks>
+    public bool AcceptsAssetDrops => false;
 
     /// <summary>Whether this platform can host the engine at all.</summary>
     /// <remarks>

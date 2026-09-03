@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Microsoft.Extensions.Logging;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Hosting;
+using SpectraEngine.Editor.Shell;
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -80,6 +81,35 @@ public interface IEngineViewport
     /// context menu; the engine has already seen the balanced button events.
     /// </summary>
     event Action<int, int>? ContextMenuRequested;
+
+    /// <summary>
+    /// Raised on the UI thread when an asset is dropped into the viewport, in
+    /// the viewport's own FRAMEBUFFER pixels - the same space
+    /// <see cref="ContextMenuRequested"/> reports, and the space
+    /// <c>SceneEditorHost.Insert</c> aims in.
+    /// </summary>
+    /// <remarks>
+    /// An intent, like every other member here: the viewport knows what landed
+    /// and where, and the shell is the only thing that knows whether there is a
+    /// session to place it in. Never raised by a viewport whose
+    /// <see cref="AcceptsAssetDrops"/> is false.
+    /// </remarks>
+    event Action<ContentDragPayload, int, int>? AssetDropped;
+
+    /// <summary>
+    /// Whether this viewport is a drop target at all.
+    /// </summary>
+    /// <remarks>
+    /// <b>Asked rather than assumed, because the two viewports render an
+    /// identical picture and differ here completely.</b> A composited pane is an
+    /// ordinary Avalonia control and takes a drop like any other; a native child
+    /// is a window the OS delivers input to directly, whose messages never bubble
+    /// into Avalonia and which OLE would only reach through an
+    /// <c>IDropTarget</c> registered on that HWND - which is not built. Without
+    /// this the shell has no way to tell a drop that missed from a drop the
+    /// viewport could never have taken, and the second one would be silence.
+    /// </remarks>
+    bool AcceptsAssetDrops { get; }
 
     /// <summary>
     /// The running engine's host, once there is one. Setting it is what turns
