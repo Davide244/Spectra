@@ -1,4 +1,5 @@
-﻿using SpectraEngine.Core.Inspection;
+﻿using SpectraEngine.Core.Graphics;
+using SpectraEngine.Core.Inspection;
 using SpectraEngine.Core.Scene;
 using System;
 using System.Collections.Generic;
@@ -227,6 +228,37 @@ public sealed class FrameSnapshot
     /// </para>
     /// </remarks>
     public EntityPanelInfo? SelectionEntity { get; init; }
+
+    /// <summary>
+    /// The shared colour target a composited host is expected to import and
+    /// present, or null when the engine is presenting for itself.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A VALUE, like everything else here: four numbers, no live object.</b>
+    /// The handle names a GPU resource the render thread owns, and what crosses
+    /// is the name rather than the thing - the same rule that keeps a
+    /// <c>SceneNode</c> off this class. That is also why the vocabulary is a
+    /// native handle and three integers and stays that way: a renderer that
+    /// named the shell's UI framework could be embedded in exactly one shell.
+    /// </para>
+    /// <para>
+    /// <b>The GENERATION is the identity, never the handle.</b> A shared target
+    /// is never resized in place - it is destroyed and recreated under a fresh
+    /// generation - so a consumer re-imports when the number changes and not
+    /// before, and the previous generation's resource is held for it until it
+    /// says it has let go (<c>Renderer.NotifySharedTargetReleased</c>). A
+    /// consumer that compared handles instead would re-import on nothing and
+    /// miss the one case that matters, because handle values are recycled.
+    /// </para>
+    /// <para>
+    /// <b>A new generation forces a publish</b>, exactly as a command the user
+    /// just issued does: the consumer is sampling a resource that is about to
+    /// be retired, and hearing about the replacement a whole snapshot interval
+    /// later is a third of a second of a viewport showing the wrong size.
+    /// </para>
+    /// </remarks>
+    public Renderer.SharedTargetHandle? SharedTarget { get; init; }
 
     /// <summary>
     /// The structural changes since the previous snapshot, in the order they

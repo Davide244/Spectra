@@ -261,6 +261,12 @@ public sealed class EngineHost
     private int _debugFlagsToClear;
     private string? _pipelineRequest;
 
+    // Deliberately NOT marked dirty: a consumer letting go of a retired shared
+    // target is bookkeeping between the renderer and its host, not something a
+    // user asked for and not something any panel displays, so forcing a publish
+    // for it would be a snapshot per resize step for nobody to read.
+    private int _sharedTargetReleased;
+
     /// <summary>
     /// Asks the engine to enter (<c>true</c>) or leave (<c>false</c>) play
     /// mode. Idempotent — requesting the state it is already in does nothing —
@@ -318,6 +324,53 @@ public sealed class EngineHost
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         Interlocked.Exchange(ref _pipelineRequest, name);
         MarkDirty();
+    }
+
+    /// <summary>
+    /// Reports that a composited host has finished with every shared-target
+    /// generation up to and including <paramref name="generation"/>, so the
+    /// renderer may free them. Safe from any thread.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The return half of the shared-target handshake, and a LATCH like
+    /// every other piece of engine state a UI drives.</b> A shared target is
+    /// never resized in place - the old resource is held rather than freed,
+    /// because the consumer may be sampling it this instant - so without this
+    /// every retired generation is pinned until a hard cap forces it out, which
+    /// is a full-screen surface per step of a resize drag. It is engine state
+    /// rather than scene state, so <see cref="EnqueueCommand"/>'s
+    /// <c>Action&lt;Scene&gt;</c> could not reach it.
+    /// </para>
+    /// <para>
+    /// <b>Last-write-wins is exactly right here, which is why a queue would be
+    /// wrong.</b> The renderer frees every generation at or below the number it
+    /// is given, so a later acknowledgement subsumes an earlier one and
+    /// replaying the intermediates would only free things twice. The maximum is
+    /// kept rather than the newest, because two hosts (or a retry) must not be
+    /// able to walk the number backwards.
+    /// </para>
+    /// </remarks>
+    public void NotifySharedTargetReleased(int generation)
+    {
+        int seen = Volatile.Read(ref _sharedTargetReleased);
+        while (generation > seen)
+        {
+            int previous = Interlocked.CompareExchange(ref _sharedTargetReleased, generation, seen);
+            if (previous == seen)
+                break;
+            seen = previous;
+        }
+    }
+
+    /// <summary>
+    /// Takes the highest acknowledged shared-target generation, or false when
+    /// nothing new was acknowledged. Render thread only.
+    /// </summary>
+    internal bool TryTakeSharedTargetRelease(out int generation)
+    {
+        generation = Interlocked.Exchange(ref _sharedTargetReleased, 0);
+        return generation > 0;
     }
 
     /// <summary>

@@ -108,10 +108,11 @@ public partial class MainWindow : Window
     private readonly EditorSettings _settings;
 
     // The live viewport control, created when a session launches and removed
-    // when it closes: a NativeControlHost's child window lives exactly as long
-    // as the control is in the visual tree, so "no session" and "no viewport
-    // control" are the same state on purpose.
-    private EngineViewport? _viewport;
+    // when it closes: a native child's window and a composited viewport's
+    // imported texture both live exactly as long as the control is in the
+    // visual tree, so "no session" and "no viewport control" are the same state
+    // on purpose.
+    private IEngineViewport? _viewport;
 
     // What the next OnSurfaceCreated should build: the project (if any), the
     // asset content root, and the map to open once the engine is up. Set by
@@ -395,7 +396,7 @@ public partial class MainWindow : Window
             OpenFromStartupArgs();
         };
 
-        if (!EngineViewport.IsSupported)
+        if (!EngineViewports.IsSupported)
         {
             _shell.SetError(
                 "This platform cannot host the viewport yet: the embedded surface is Windows-only in v1.");
@@ -648,7 +649,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!EngineViewport.IsSupported)
+        if (!EngineViewports.IsSupported)
         {
             _shell.SetError(
                 "This platform cannot host the viewport yet: the embedded surface is Windows-only in v1.");
@@ -657,7 +658,14 @@ public partial class MainWindow : Window
 
         _pendingLaunch = launch;
 
-        var viewport = new EngineViewport();
+        // The native child is still the default. The composited viewport is
+        // opt-in until sessions on real machines say it should not be, and the
+        // switch is read here rather than cached so a relaunch inside one run
+        // of the shell picks up the same answer the first launch did.
+        IEngineViewport viewport = EngineViewports.Create(
+            EngineViewports.CompositedRequested(Program.StartupArgs),
+            _loggerFactory,
+            _shell.SetError);
         viewport.SurfaceCreated += OnSurfaceCreated;
         viewport.SurfaceDestroying += OnSurfaceDestroying;
 
@@ -683,7 +691,7 @@ public partial class MainWindow : Window
         // SurfaceCreated, and everything above must be in place by then. The
         // engine focus makes the tool keys live from the first frame instead
         // of after a first click into the scene.
-        ViewportHost.Child = viewport;
+        ViewportHost.Child = viewport.Control;
         viewport.FocusEngine();
     }
 
@@ -1606,7 +1614,7 @@ public partial class MainWindow : Window
         _viewportMenu.PlacementAnchor = Avalonia.Controls.Primitives.PopupPositioning.PopupAnchor.TopLeft;
         _viewportMenu.PlacementGravity = Avalonia.Controls.Primitives.PopupPositioning.PopupGravity.BottomRight;
         _viewportMenu.PlacementRect = new Rect(x / scaling, y / scaling, 1, 1);
-        _viewportMenu.Open(viewport);
+        _viewportMenu.Open(viewport.Control);
     }
 
     private ContextMenu BuildViewportMenu()

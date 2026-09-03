@@ -268,6 +268,61 @@ public sealed class ViewportInputRouterTests
     }
 
     [Fact]
+    public void A_lost_capture_ends_the_gesture_without_dropping_the_keyboard()
+    {
+        // A capture can be taken away with focus staying exactly where it is: a
+        // system-cancelled touch, another control grabbing the pointer, a drag
+        // that left for a different window. The releases are never coming, so
+        // each held button gets one, and the gesture ends the way letting go
+        // would have ended it.
+        _router.OnPointerMove(40, 40);
+        _router.OnPointerDown(PointerButtons.Left);
+        _router.OnPointerDown(PointerButtons.Middle);
+
+        _router.OnPointerCaptureLost();
+
+        _router.ButtonsDown.ShouldBe(PointerButtons.None);
+        _sink.ReplayHeldButtons().ShouldBe(PointerButtons.None);
+
+        // Balanced ups, NOT the release-everything event: the keyboard is still
+        // here, and FocusLost would drop the movement keys out from under a
+        // freelook that is otherwise perfectly valid.
+        _sink.Events.ShouldNotContain(input => input.Kind == InputEventKind.FocusLost);
+    }
+
+    [Fact]
+    public void A_lost_capture_opens_no_context_menu()
+    {
+        // A right press whose release was taken away is not a click. Opening
+        // the menu here would put one on screen from a button nobody let go of,
+        // in the middle of whatever took the pointer away.
+        _router.OnPointerMove(30, 30);
+        _router.OnPointerDown(PointerButtons.Right);
+
+        _router.OnPointerCaptureLost();
+
+        _menus.ShouldBeEmpty();
+        _router.ButtonsDown.ShouldBe(PointerButtons.None);
+    }
+
+    [Fact]
+    public void A_lost_capture_with_nothing_held_is_nothing()
+    {
+        // The ordinary case, because releasing a capture RAISES the loss: every
+        // gesture that ends normally arrives here one line later, and a router
+        // that synthesised anything would double every button release in the
+        // shell.
+        _router.OnPointerMove(30, 30);
+        _router.OnPointerDown(PointerButtons.Left);
+        _router.OnPointerUp(PointerButtons.Left);
+
+        int before = _sink.Events.Count;
+        _router.OnPointerCaptureLost();
+
+        _sink.Events.Count.ShouldBe(before);
+    }
+
+    [Fact]
     public void No_button_is_left_down_across_a_lock_transition()
     {
         // A whole freelook gesture: press, lock, look, unlock, release. The

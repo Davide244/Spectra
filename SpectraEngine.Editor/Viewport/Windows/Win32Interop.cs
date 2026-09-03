@@ -209,6 +209,58 @@ internal static partial class Win32Interop
     [LibraryImport("kernel32.dll", EntryPoint = "GetModuleHandleW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
     internal static partial nint GetModuleHandle(string? moduleName);
 
+    // --- Shared-handle ownership ---------------------------------------------
+    //
+    // The composited viewport imports a shared texture the renderer created, and
+    // the two sides of that handle have separate lifetimes even though they are
+    // in one process: the renderer retires its generation when the viewport
+    // resizes, and Avalonia's importer does NOT take ownership of what it is
+    // handed (measured: it opens the resource and releases only COM references).
+    // So the consumer duplicates, owns and closes its own handle.
+
+    internal const uint DUPLICATE_SAME_ACCESS = 0x00000002;
+
+    [LibraryImport("kernel32.dll", EntryPoint = "GetCurrentProcess")]
+    internal static partial nint GetCurrentProcess();
+
+    [LibraryImport("kernel32.dll", EntryPoint = "DuplicateHandle", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DuplicateHandle(
+        nint sourceProcess,
+        nint sourceHandle,
+        nint targetProcess,
+        out nint targetHandle,
+        uint desiredAccess,
+        [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+        uint options);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "CloseHandle", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool CloseHandle(nint handle);
+
+    /// <summary>
+    /// A copy of <paramref name="handle"/> this process owns independently of
+    /// whoever made it, or zero if it could not be duplicated.
+    /// </summary>
+    /// <remarks>
+    /// <b>Same process on both sides, which is what makes this cheap and what
+    /// makes it necessary.</b> The producer may retire and close its handle at
+    /// any resize, and handle values are recycled, so a consumer holding the
+    /// producer's own value could end up naming a different kernel object
+    /// entirely. Duplicating at the moment the value is known to be live removes
+    /// that whole class of question.
+    /// </remarks>
+    internal static nint DuplicateForCaller(nint handle)
+    {
+        if (handle == 0)
+            return 0;
+
+        nint self = GetCurrentProcess();
+        return DuplicateHandle(self, handle, self, out nint duplicate, 0, false, DUPLICATE_SAME_ACCESS)
+            ? duplicate
+            : 0;
+    }
+
     /// <summary>Signed low word of an lParam: a coordinate that may be negative.</summary>
     internal static int LowInt16(nint value) => (short)((long)value & 0xFFFF);
 

@@ -4,7 +4,6 @@ using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Hosting;
 using SpectraEngine.Editor.Viewport.Windows;
 using System;
-using System.Runtime.InteropServices;
 
 namespace SpectraEngine.Editor.Viewport;
 
@@ -34,7 +33,7 @@ namespace SpectraEngine.Editor.Viewport;
 /// remaining work and not something to fake.
 /// </para>
 /// </remarks>
-public sealed class EngineViewport : NativeControlHost
+public sealed class Win32EngineViewport : NativeControlHost, IEngineViewport
 {
     private Win32ViewportWindow? _window;
     private EngineHost? _host;
@@ -71,7 +70,15 @@ public sealed class EngineViewport : NativeControlHost
     public event Action<int, int>? ContextMenuRequested;
 
     /// <summary>Whether this platform can host the engine at all.</summary>
-    public static bool IsSupported => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+    /// <remarks>
+    /// The answer now lives with the choice between the two viewports rather
+    /// than on one of them, because a shell asking "can this machine host a
+    /// viewport" is not asking about a particular kind.
+    /// </remarks>
+    public static bool IsSupported => EngineViewports.IsSupported;
+
+    /// <inheritdoc/>
+    public Control Control => this;
 
     /// <summary>
     /// The running engine's host, once there is one. Setting it is what turns

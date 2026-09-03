@@ -336,6 +336,51 @@ internal sealed class ViewportInputRouter
     }
 
     /// <summary>
+    /// The pointer capture was taken away without focus moving.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A different event from a focus loss, and it must not be answered with
+    /// one.</b> The keyboard is still here - a system-cancelled touch, another
+    /// control grabbing the pointer, a drag that left for a different window -
+    /// so the release-everything event would drop the movement keys out from
+    /// under a freelook that is otherwise perfectly valid. What is genuinely
+    /// gone is the button releases, which are never coming, so each held button
+    /// gets exactly one up and the gesture ends the way letting go would have
+    /// ended it.
+    /// </para>
+    /// <para>
+    /// <b>The right-press arbitration is cancelled rather than resolved</b>: a
+    /// press whose release was taken away is not a click, and opening a context
+    /// menu from a cancelled gesture would put one on screen from a button
+    /// nobody let go of.
+    /// </para>
+    /// <para>
+    /// Nothing calls this on the native-child path: an HWND that owns the OS
+    /// capture loses it only when it is destroyed or loses focus, both of which
+    /// are already covered. A viewport inside somebody else's window can lose
+    /// it at any time.
+    /// </para>
+    /// </remarks>
+    internal void OnPointerCaptureLost()
+    {
+        _rightPressActive = false;
+
+        PointerButtons held = _buttonsDown;
+        if (held is PointerButtons.None)
+            return;
+
+        _buttonsDown = PointerButtons.None;
+
+        if ((held & PointerButtons.Left) != 0)
+            Submit(InputEvent.PointerUp(PointerButtons.Left));
+        if ((held & PointerButtons.Right) != 0)
+            Submit(InputEvent.PointerUp(PointerButtons.Right));
+        if ((held & PointerButtons.Middle) != 0)
+            Submit(InputEvent.PointerUp(PointerButtons.Middle));
+    }
+
+    /// <summary>
     /// Applies the cursor mode the engine is asking for.
     /// </summary>
     /// <remarks>

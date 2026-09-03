@@ -123,6 +123,11 @@ public sealed class Engine
     // publishes forces the next one out rather than waiting for the clock.
     private int _publishedDebugLayerErrors;
 
+    // The shared colour target as of the last publish, and the generation that
+    // decided it. A composited host imports on the generation and nothing else.
+    private Renderer.SharedTargetHandle? _publishedSharedTarget;
+    private int _publishedSharedGeneration;
+
     /// <summary>
     /// Builds and publishes this frame's snapshot, if one is due. Render thread
     /// only, and the only place engine state is read for a UI.
@@ -147,6 +152,27 @@ public sealed class Engine
         // thread.
         if (_renderer.DebugLayerErrorCount != _publishedDebugLayerErrors)
             Host.MarkDirty();
+
+        // A composited host is sampling a resource that is about to be retired,
+        // so a fresh generation is news in exactly the sense a command the user
+        // just issued is: hearing about it a whole interval later is a third of
+        // a second of viewport at the wrong size, and the retired generation is
+        // pinned in the meantime because the acknowledgement cannot come until
+        // the replacement has been imported.
+        //
+        // Through a FIELD rather than a local for the same reason the counter
+        // above is: a local read here and used inside the builder is a captured
+        // variable, which turns the closure into a display class as well, per
+        // frame, on the render thread.
+        _publishedSharedTarget = _renderer.TryGetSharedHandle(out Renderer.SharedTargetHandle shared)
+            ? shared
+            : null;
+
+        if (_publishedSharedTarget?.Generation != _publishedSharedGeneration)
+        {
+            _publishedSharedGeneration = _publishedSharedTarget?.Generation ?? 0;
+            Host.MarkDirty();
+        }
 
         Host.PublishFrame(elapsed, builder =>
         {
@@ -181,6 +207,7 @@ public sealed class Engine
                 StaticWorldDefect = _sceneManager.ActiveScene?.StaticWorldDefect,
                 DebugLayerErrorCount = _publishedDebugLayerErrors,
                 DebugLayerActive = _renderer.DebugLayerActive,
+                SharedTarget = _publishedSharedTarget,
                 IsPlaying = _character is { Active: true },
                 CanPlay = _character is not null,
                 DebugFlags = _debugFlags,
@@ -1083,6 +1110,13 @@ public sealed class Engine
                         "No rendering pipeline named '{Requested}'; staying on {Pipeline}",
                         requestedPipeline, _renderer.CurrentPipelineName);
                 }
+
+                // A composited host letting go of a retired shared target. Here
+                // rather than anywhere else because this is the render thread's
+                // once-a-frame slot for everything a UI asked for, and freeing a
+                // GPU resource belongs to it exclusively.
+                if (Host.TryTakeSharedTargetRelease(out int releasedGeneration))
+                    _renderer.NotifySharedTargetReleased(releasedGeneration);
 
                 // F11 toggles borderless fullscreen. Only the REQUEST happens
                 // here — the window itself is reshaped by the main thread in
