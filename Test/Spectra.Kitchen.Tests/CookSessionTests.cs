@@ -145,7 +145,7 @@ public class CookSessionTests
     }
 
     [Fact]
-    public void A_map_bundle_is_reported_as_not_cooked_rather_than_dropped_silently()
+    public void A_map_bundle_is_baked_into_the_pack_beside_the_content()
     {
         using var project = new TempProject();
         project.WriteAsset("Data/a.bin", TempProject.Bytes(4));
@@ -154,13 +154,14 @@ public class CookSessionTests
         CookResult result = Cook(project);
 
         result.Succeeded.ShouldBeTrue();
+        result.Diagnostics.ShouldBeEmpty();
 
-        // A pack that mounts cleanly and has no level in it looks exactly like a
-        // working cook, so the omission is said out loud.
-        CookDiagnostic said = result.Diagnostics.Single();
-        said.Severity.ShouldBe(CookDiagnosticSeverity.Info);
-        said.Id.ToString().ShouldBe("SC1005");
-        said.Message.ShouldContain("map cook rule is not built");
+        // A bundle lives beside the content root rather than inside it, so its work
+        // item carries a different root; the entry it emits is the bundle's own path
+        // with the cooked extension, which is the same redirect a texture makes.
+        CookedAsset map = result.Assets.Single(asset => asset.SourcePath == "Maps/Lobby.smap");
+        map.Rule.ShouldBe(RuleKind.Map);
+        map.Outputs.Single().Path.ShouldBe("Maps/Lobby.scmap");
     }
 
     [Fact]

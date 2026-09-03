@@ -42,7 +42,8 @@ public static class ScmapReader
     private const int ChunkSlot = 4;
     private const int ChunkMeshSlot = 5;
     private const int ChunkBspSlot = 6;
-    private const int KnownSectionCount = 7;
+    private const int BrushSourceSlot = 7;
+    private const int KnownSectionCount = 8;
 
     /// <summary>
     /// Validates <paramref name="file"/> and returns its tables as spans into it.
@@ -58,6 +59,11 @@ public static class ScmapReader
     public static ScmapDocument Read(ReadOnlySpan<byte> file, string source)
     {
         ScmapFormat.RequireLittleEndian();
+
+        // Before a byte is read, because every chunk BSP blob in the file is about
+        // to be cast at this stride and a runtime that laid either struct out
+        // differently would misread all of them rather than fail.
+        ScmapChunkBsp.RequireNodeLayout();
 
         if (file.Length < ScmapFormat.MinimumFileSize)
         {
@@ -183,6 +189,20 @@ public static class ScmapReader
         RequireSection(source, sectionPresent, NodeSlot, ScmapFormat.NodeSection);
         RequireSection(source, sectionPresent, ChunkSlot, ScmapFormat.ChunkDirectorySection);
 
+        // Two statements about one fact, checked against each other. The header
+        // flag says the section is there and the table says where it is, and a file
+        // where they disagree is one whose brush planes are either missing from a
+        // loader that was told to expect them or present for one that was not - and
+        // the second is the double-geometry hazard arriving through the back door.
+        if (((header.FileFlags & ScmapFlags.HasBrushSource) != 0) != sectionPresent[BrushSourceSlot])
+        {
+            throw new ScmapFormatException(
+                $"'{source}' has its HasBrushSource header flag " +
+                $"{((header.FileFlags & ScmapFlags.HasBrushSource) != 0 ? "set" : "clear")} and a BRSH section " +
+                $"{(sectionPresent[BrushSourceSlot] ? "present" : "absent")}. The flag says the section is " +
+                "there and nothing else, so the two can only disagree in a file nothing this engine wrote.");
+        }
+
         var strings = new ScmapStringTable(
             file.Slice(sectionOffset[StringSlot], sectionLength[StringSlot]),
             source);
@@ -218,6 +238,10 @@ public static class ScmapReader
             meshBlob.Length,
             bspBlob.Length);
 
+        ReadOnlySpan<byte> brushSource = sectionPresent[BrushSourceSlot]
+            ? file.Slice(sectionOffset[BrushSourceSlot], sectionLength[BrushSourceSlot])
+            : default;
+
         return new ScmapDocument(
             source,
             header,
@@ -229,6 +253,8 @@ public static class ScmapReader
             chunks,
             meshBlob,
             bspBlob,
+            brushSource,
+            sectionPresent[BrushSourceSlot],
             skipped,
             invalidDeclaredStates);
     }
@@ -242,11 +268,12 @@ public static class ScmapReader
         ScmapFormat.ChunkDirectorySection => ChunkSlot,
         ScmapFormat.ChunkMeshSection => ChunkMeshSlot,
         ScmapFormat.ChunkBspSection => ChunkBspSlot,
+        ScmapFormat.BrushSourceSection => BrushSourceSlot,
 
-        // ENTT, ECON, SCPT, LUAB, LUAS, BRSH and NBND land here on purpose: they
-        // are claimed and empty until the milestones that fill them, and stepping
-        // over a section this build has no consumer for is exactly what the skip
-        // rule is for. RGNI and BMDL land here forever.
+        // ENTT, ECON, SCPT, LUAB, LUAS and NBND land here on purpose: they are
+        // claimed and empty until the milestones that fill them, and stepping over
+        // a section this build has no consumer for is exactly what the skip rule is
+        // for. RGNI and BMDL land here forever.
         _ => -1,
     };
 

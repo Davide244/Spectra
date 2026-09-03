@@ -229,10 +229,11 @@ public class ScookCliTests
         using var project = new TempProject();
         project.WriteAsset("Data/strings.bin", TempProject.Bytes(40));
 
-        // --keep-brush-source, because the map rule is genuinely unbuilt.
-        // This case used to be spelled with -t, which stopped being an example
-        // of anything the moment the shader rule landed and started acting on it.
-        var run = Invoke("cook", project.Root, "--keep-brush-source", "--strict");
+        // --script-source strip, because the script rule is genuinely unbuilt.
+        // This case has now been spelled three ways: -t stopped being an example
+        // of anything the moment the shader rule acted on it, and
+        // --keep-brush-source stopped the moment the map rule did.
+        var run = Invoke("cook", project.Root, "--script-source", "strip", "--strict");
 
         // A warning rather than an error even under --strict: the request is
         // legitimate and the cook it asked for still happened. It is reported by

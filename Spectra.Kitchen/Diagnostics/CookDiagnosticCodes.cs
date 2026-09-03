@@ -429,6 +429,15 @@ public static class CookDiagnosticCodes
     /// </remarks>
     public static readonly CookDiagnosticId MapEntityClassUnknown = CookDiagnosticId.Cook(7006);
 
+    /// <summary>A map bundle's document is not a readable <c>.smap</c>.</summary>
+    /// <remarks>
+    /// Fatal, and deliberately NOT the same code as a file the filesystem refused:
+    /// a bundle whose <c>map.json</c> is malformed is a level somebody edited by
+    /// hand into a state the reader will not take, and the message a person needs
+    /// is the reader's own complaint about a member rather than an I/O error.
+    /// </remarks>
+    public static readonly CookDiagnosticId MapDocumentMalformed = CookDiagnosticId.Cook(7007);
+
     /// <summary>A script the Luau front end refuses.</summary>
     public static readonly CookDiagnosticId ScriptSyntaxError = CookDiagnosticId.Cook(8001);
 

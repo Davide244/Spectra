@@ -1453,6 +1453,32 @@ public sealed partial class Scene
     }
 
     /// <summary>
+    /// Captures the admitted brush placements exactly as a compile would, with no
+    /// renderer and no compile.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>For the map BAKE, which has no GPU and must produce the engine's
+    /// own placements.</b> The whole claim a compiled map rests on is that the
+    /// cook's <c>CsgWorld.Build</c> is fed the same list this scene would feed it -
+    /// same nodes, same order, same rigidity refusal - so the baked chunks are
+    /// element-identical to a fresh compile of the same source. A cook that walked
+    /// the graph itself would be a second expression of that list, and the two
+    /// would drift exactly where nothing fails: traversal order is placement order
+    /// is the order the carve breaks its overlap ties in.</para>
+    /// <para><b>The walk commits this scene's retained snapshot, as a rebuild
+    /// does</b>, because it IS the rebuild's own capture rather than a copy of it.
+    /// That is free for a bake, whose scene is built to be thrown away, and correct
+    /// for any other caller: the next compile then sees the same baseline a
+    /// synchronous rebuild would have left.</para>
+    /// <para>Returns null and fills <paramref name="defectMessage"/> when a brush
+    /// node's world transform is non-rigid, which is the same refusal
+    /// <see cref="RebuildStaticWorld"/> makes and the reason a cook reports
+    /// <c>SC7001</c> rather than compiling a level that cannot be rendered.</para>
+    /// </remarks>
+    public IReadOnlyList<BrushPlacement>? CaptureStaticWorldPlacements(out string? defectMessage) =>
+        SnapshotFullWalk(out defectMessage);
+
+    /// <summary>
     /// Synchronously recompiles the static world from the graph's brush nodes:
     /// each brush is placed by its node's world transform, then carve → snap →
     /// weld → BSP, then the per-chunk render meshes are rebuilt. Must run on

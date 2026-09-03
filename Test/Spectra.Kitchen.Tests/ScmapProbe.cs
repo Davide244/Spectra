@@ -30,9 +30,42 @@ internal sealed class ScmapProbe
     public required List<ScmapSpawn> Spawns { get; init; }
     public required int SkippedSections { get; init; }
     public required int InvalidDeclaredStates { get; init; }
+    public required List<CellGeometry> Geometry { get; init; }
+    public required bool HasBrushSource { get; init; }
+    public required List<BrushCopy> Brushes { get; init; }
+
+    /// <summary>
+    /// Triangles across every cell that owns render geometry, copied from the
+    /// document's own count rather than recomputed from the arrays above.
+    /// </summary>
+    /// <remarks>
+    /// The double-geometry guard is graded on this number, so a second expression
+    /// of it here would be a test measuring its own arithmetic rather than the
+    /// reader's.
+    /// </remarks>
+    public required int TriangleCount { get; init; }
 
     /// <summary>One asset-table row, resolved through the string table.</summary>
     public readonly record struct AssetRow(PackEntryKind Kind, string Path, ulong ContentHash);
+
+    /// <summary>One cell's baked geometry, copied out of the mapping.</summary>
+    public sealed record CellGeometry(
+        int X,
+        int Y,
+        int Z,
+        List<SubmeshCopy> Submeshes,
+        int BspNodeCount,
+        int BspRootIndex,
+        bool HasBsp);
+
+    /// <summary>One submesh's arrays, copied.</summary>
+    public sealed record SubmeshCopy(uint AssetIndex, float[] Vertices, uint[] Indices);
+
+    /// <summary>One kept brush's planes and faces, copied.</summary>
+    public sealed record BrushCopy(
+        uint NodeIndex,
+        System.Numerics.Plane[] Planes,
+        ScmapFaceRecord[] Faces);
 
     public static ScmapProbe Read(ReadOnlySpan<byte> file, string source = "fixture.scmap")
     {
@@ -59,7 +92,51 @@ internal sealed class ScmapProbe
         }
 
         var chunks = new List<ScmapChunkRecord>(document.Chunks.Length);
-        for (int i = 0; i < document.Chunks.Length; i++) chunks.Add(document.Chunks[i]);
+        var geometry = new List<CellGeometry>(document.Chunks.Length);
+        for (int i = 0; i < document.Chunks.Length; i++)
+        {
+            ScmapChunkRecord cell = document.Chunks[i];
+            chunks.Add(cell);
+
+            var submeshes = new List<SubmeshCopy>();
+            if (cell.MeshSize != 0)
+            {
+                ScmapChunkMesh mesh = document.ChunkMesh(i);
+                for (int s = 0; s < mesh.Submeshes.Length; s++)
+                {
+                    submeshes.Add(new SubmeshCopy(
+                        mesh.Submeshes[s].AssetIndex,
+                        mesh.Vertices(s).ToArray(),
+                        mesh.Indices(s).ToArray()));
+                }
+            }
+
+            int bspNodes = 0;
+            int bspRoot = 0;
+            if (cell.BspSize != 0)
+            {
+                ScmapChunkBsp bsp = document.ChunkBsp(i);
+                bspNodes = bsp.Nodes.Length;
+                bspRoot = bsp.RootIndex;
+            }
+
+            geometry.Add(new CellGeometry(
+                cell.X, cell.Y, cell.Z, submeshes, bspNodes, bspRoot, cell.BspSize != 0));
+        }
+
+        var brushes = new List<BrushCopy>();
+        if (document.HasBrushSource)
+        {
+            ScmapBrushSource kept = document.BrushSource();
+            for (int i = 0; i < kept.Brushes.Length; i++)
+            {
+                ScmapBrushRecord record = kept.Brushes[i];
+                brushes.Add(new BrushCopy(
+                    record.NodeIndex,
+                    kept.Planes.Slice((int)record.PlaneStart, (int)record.PlaneCount).ToArray(),
+                    kept.Faces.Slice((int)record.PlaneStart, (int)record.PlaneCount).ToArray()));
+            }
+        }
 
         var spawns = new List<ScmapSpawn>(document.Spawns.Length);
         for (int i = 0; i < document.Spawns.Length; i++) spawns.Add(document.Spawns[i]);
@@ -77,6 +154,10 @@ internal sealed class ScmapProbe
             Spawns = spawns,
             SkippedSections = document.SkippedSectionCount,
             InvalidDeclaredStates = document.InvalidDeclaredStateCount,
+            Geometry = geometry,
+            HasBrushSource = document.HasBrushSource,
+            Brushes = brushes,
+            TriangleCount = document.TriangleCount,
         };
     }
 }

@@ -28,6 +28,22 @@ public sealed class CookRuleSet
     private readonly AudioRule _audio = new();
     private readonly ModelRule _model = new();
 
+    private readonly MapRule _map = new();
+
+    /// <summary>
+    /// The rule that bakes a map bundle.
+    /// </summary>
+    /// <remarks>
+    /// <b>Asked for by name rather than resolved from a path, because a bundle is
+    /// a FOLDER.</b> <see cref="Resolve"/> answers for files the content walk
+    /// found, and its floor is the raw copy; a directory that fell through to that
+    /// floor would be copied into the pack as nothing at all, silently, which is
+    /// the one failure a floor must not have. The session already knows which
+    /// entries are maps, because it got them from <c>ProjectLayout.DiscoverMaps</c>
+    /// rather than from the walk.
+    /// </remarks>
+    public IRule ResolveMap() => _map;
+
     /// <summary>The rule that cooks <paramref name="contentPath"/>.</summary>
     public IRule Resolve(string contentPath)
     {

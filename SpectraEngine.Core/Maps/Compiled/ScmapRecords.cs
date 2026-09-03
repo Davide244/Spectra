@@ -182,6 +182,33 @@ public readonly struct ScmapNodeRecord
     public ScmapNodeState DeclaredState => (ScmapNodeState)((PayloadFlagsRaw >> StateShift) & TwoBitMask);
 
     /// <summary>
+    /// Whether this node's geometry is ALREADY IN the compiled chunks, so a load
+    /// must never carve it again.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This is the cooked-record name, and <c>SceneNode.IsStaticWorldBrush</c>
+    /// is the engine name, and neither may take the other's spelling.</b> The
+    /// engine's predicate is an ADMISSION test - "is this brush admitted to the
+    /// carve" - and this one is almost its opposite: "this brush's geometry has
+    /// already been baked; do not re-carve it". Two identifiers with one spelling,
+    /// on two types, in two layers, whose meanings differ by exactly the mistake
+    /// below.</para>
+    /// <para><b>The mistake is the format's one silent-corruption hazard.</b> When
+    /// baked chunks and a <c>BRSH</c> section are both present, a loader that reads
+    /// "static world brush" as "belongs in the carve" rebuilds the static world on
+    /// top of the chunks it already uploaded, and every wall is drawn twice. There
+    /// is no exception, no log line and nothing on a debug layer; there is
+    /// z-fighting, which every graphics programmer's instinct attributes to depth
+    /// precision or a pipeline state bug rather than to a map loader.</para>
+    /// <para><b>It is not a new bit.</b> It is exactly
+    /// <see cref="ScmapPayloadKind.StaticWorldBrush"/>, which is the same statement
+    /// the cook made when it put the brush in the placement list. The rename is to
+    /// the CONTRACT, and <c>ScmapBrushSource.IsReCarvable</c> is the only place a
+    /// loader is meant to ask.</para>
+    /// </remarks>
+    public bool BakedIntoChunks => PayloadKind == ScmapPayloadKind.StaticWorldBrush;
+
+    /// <summary>
     /// Whether the brush subtracts. False for any payload kind that is not a
     /// brush, because the bit is meaningless there and a future kind is free to
     /// leave it zero.

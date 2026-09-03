@@ -59,12 +59,18 @@ public sealed class RuleContext : IRuleContext
     /// <see cref="CookSettings"/> defaults to, for the reason the target list
     /// does: one answer to one question, named once.
     /// </param>
+    /// <param name="keepBrushSource">
+    /// Whether the cook keeps every brush's authored planes. Defaults to what
+    /// <see cref="CookSettings"/> defaults to, for the reason the target list does:
+    /// one answer to one question, named once.
+    /// </param>
     public RuleContext(
         string contentRoot,
         string sourcePath,
         CookProfile profile,
         IReadOnlyList<GraphicsBackend>? targets = null,
-        int audioSampleRate = CookSettings.DefaultAudioSampleRate)
+        int audioSampleRate = CookSettings.DefaultAudioSampleRate,
+        bool keepBrushSource = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
@@ -74,6 +80,7 @@ public sealed class RuleContext : IRuleContext
         Profile = profile;
         Targets = targets ?? CookSettings.DefaultTargets;
         AudioSampleRate = audioSampleRate;
+        KeepBrushSource = keepBrushSource;
     }
 
     /// <inheritdoc/>
@@ -87,6 +94,9 @@ public sealed class RuleContext : IRuleContext
 
     /// <inheritdoc/>
     public int AudioSampleRate { get; }
+
+    /// <inheritdoc/>
+    public bool KeepBrushSource { get; }
 
     /// <summary>Every path this rule touched, in first-access order.</summary>
     public IReadOnlyList<RuleDependency> Dependencies => _dependencies;
@@ -130,6 +140,37 @@ public sealed class RuleContext : IRuleContext
         string normalized = Normalize(contentPath);
         bool found = File.Exists(ToFullPath(normalized));
         Record(normalized, found ? RuleDependencyKind.ProbeFound : RuleDependencyKind.ProbeMissing, UInt128.Zero);
+        return found;
+    }
+
+    /// <inheritdoc/>
+    public IReadOnlyList<string> ListFiles(string contentPath)
+    {
+        string normalized = Normalize(contentPath);
+        string full = ToFullPath(normalized);
+
+        if (!Directory.Exists(full)) return [];
+
+        var found = new List<string>();
+        foreach (string file in Directory.EnumerateFiles(full, "*", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(_contentRoot, file);
+
+            try
+            {
+                found.Add(ContentRoot.NormalizeRelativePath(relative));
+            }
+            catch (ArgumentException)
+            {
+                // Skipped rather than thrown, exactly as ContentWalker skips one:
+                // an odd name under a bundle is a file this rule will not see, and
+                // stopping the whole cook over it helps nobody.
+            }
+        }
+
+        // Sorted here and nowhere else, so what a rule reads is a function of the
+        // bundle rather than of the filesystem that listed it.
+        found.Sort(StringComparer.Ordinal);
         return found;
     }
 

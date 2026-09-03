@@ -5,6 +5,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Assets.Packs;
+using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Maps.Compiled;
 
 namespace Spectra.Kitchen.Maps;
@@ -49,6 +50,7 @@ public sealed class ScmapBuilder
     private readonly List<ScmapNodeSource> _nodes = [];
     private readonly List<ScmapChunkSource> _chunks = [];
     private readonly List<ScmapSpawnSource> _spawns = [];
+    private readonly List<ScmapBrushSourceEntry> _brushes = [];
 
     /// <summary>Creates a builder for a scene.</summary>
     /// <param name="sceneName">The scene's name, interned into <c>STRT</c>.</param>
@@ -69,6 +71,9 @@ public sealed class ScmapBuilder
 
     /// <summary>How many cells the directory will carry.</summary>
     public int ChunkCount => _chunks.Count;
+
+    /// <summary>How many authored brushes <c>BRSH</c> will carry.</summary>
+    public int BrushSourceCount => _brushes.Count;
 
     /// <summary>Adds a spawn point.</summary>
     public void AddSpawn(ScmapSpawnSource spawn) => _spawns.Add(spawn);
@@ -197,8 +202,9 @@ public sealed class ScmapBuilder
     /// cooks of one map must produce one file.
     /// </remarks>
     /// <exception cref="InvalidOperationException">
-    /// The cell is already in the directory, or it points at a chunk blob this
-    /// stage does not write.
+    /// The cell is already in the directory, its submeshes are not in ascending
+    /// asset order, or a submesh's arrays do not describe whole vertices and whole
+    /// triangles.
     /// </exception>
     public void AddChunk(ScmapChunkSource chunk)
     {
@@ -211,18 +217,80 @@ public sealed class ScmapBuilder
                 "One cell owns one entry, and a duplicate makes a binary search answer whichever it lands on.");
         }
 
-        if (chunk.MeshSize != 0 || chunk.BspSize != 0)
+        ValidateSubmeshes(chunk);
+
+        if (chunk.BspNodes is { Length: > 0 } &&
+            (chunk.BspRootIndex < FlatBspNode.SolidLeaf || chunk.BspRootIndex >= chunk.BspNodes.Length))
         {
-            // Loud rather than tolerated. A directory pointing into an empty CMSH
-            // is a cell whose geometry silently does not exist, which renders as
-            // a hole in the world rather than as an error.
             throw new InvalidOperationException(
-                $"Cell ({chunk.Coord.X}, {chunk.Coord.Y}, {chunk.Coord.Z}) declares a {chunk.MeshSize}-byte " +
-                $"mesh blob and a {chunk.BspSize}-byte BSP blob, and this builder writes the directory with " +
-                "the CMSH and CBSP sections empty. The blobs arrive with the map bake.");
+                $"Cell ({chunk.Coord.X}, {chunk.Coord.Y}, {chunk.Coord.Z}) names BSP root " +
+                $"{chunk.BspRootIndex} over {chunk.BspNodes.Length} nodes, which is neither an index into them " +
+                "nor a leaf code. A root out of range is a query that walks off the end of the block.");
         }
 
         _chunks.Add(chunk);
+    }
+
+    /// <summary>Adds one authored brush's planes and faces to <c>BRSH</c>.</summary>
+    /// <remarks>
+    /// Call in node pre-order, which is what makes the section a pure function of
+    /// the map. The node index is not validated against the node list here because
+    /// a bake adds nodes and brushes in one pass; <see cref="Write"/> checks every
+    /// one before a byte is emitted.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The face count does not match the plane count.</exception>
+    public void AddBrushSource(ScmapBrushSourceEntry brush)
+    {
+        ArgumentNullException.ThrowIfNull(brush.Planes);
+        ArgumentNullException.ThrowIfNull(brush.Faces);
+
+        if (brush.Planes.Length != brush.Faces.Length)
+        {
+            throw new InvalidOperationException(
+                $"Brush on node {brush.NodeIndex} has {brush.Planes.Length} planes and {brush.Faces.Length} " +
+                "faces. One face per plane is the invariant the whole per-face material path rests on, so a " +
+                "mismatch is an indexing bug rather than a surface that renders wrongly.");
+        }
+
+        _brushes.Add(brush);
+    }
+
+    private static void ValidateSubmeshes(ScmapChunkSource chunk)
+    {
+        if (chunk.Submeshes is not { Length: > 0 }) return;
+
+        for (int i = 0; i < chunk.Submeshes.Length; i++)
+        {
+            ScmapSubmeshSource submesh = chunk.Submeshes[i];
+            ArgumentNullException.ThrowIfNull(submesh.Vertices);
+            ArgumentNullException.ThrowIfNull(submesh.Indices);
+
+            if (i > 0 && chunk.Submeshes[i - 1].AssetIndex >= submesh.AssetIndex)
+            {
+                // Ascending asset index is a total order over a VALUE key, which is
+                // the whole reason two compiles of one cell emit one file. Ascending
+                // material id would not be: an id is per-process interning order.
+                throw new InvalidOperationException(
+                    $"Cell ({chunk.Coord.X}, {chunk.Coord.Y}, {chunk.Coord.Z}) has submeshes out of ascending " +
+                    $"asset order at {i}: asset {chunk.Submeshes[i - 1].AssetIndex} is followed by asset " +
+                    $"{submesh.AssetIndex}.");
+            }
+
+            if (submesh.Vertices.Length % ScmapFormat.StandardVertexStrideFloats != 0)
+            {
+                throw new InvalidOperationException(
+                    $"Cell ({chunk.Coord.X}, {chunk.Coord.Y}, {chunk.Coord.Z}) submesh {i} carries " +
+                    $"{submesh.Vertices.Length} floats, which is not a whole number of " +
+                    $"{ScmapFormat.StandardVertexStrideFloats}-float vertices.");
+            }
+
+            if (submesh.Indices.Length % 3 != 0)
+            {
+                throw new InvalidOperationException(
+                    $"Cell ({chunk.Coord.X}, {chunk.Coord.Y}, {chunk.Coord.Z}) submesh {i} carries " +
+                    $"{submesh.Indices.Length} indices, which is not a whole number of triangles.");
+            }
+        }
     }
 
     /// <summary>Builds the whole file.</summary>
@@ -259,25 +327,42 @@ public sealed class ScmapBuilder
         byte[] assetBody = BuildAssets(assetPathStrings);
         byte[] metaBody = BuildMeta(sceneNameString);
         byte[] nodeBody = BuildNodes(nodeNameStrings);
-        byte[] chunkBody = BuildChunks();
+        byte[] chunkBody = BuildChunks(out byte[] meshBody, out byte[] bspBody);
+        byte[]? brushBody = BuildBrushSource();
 
-        var writer = new ScmapWriter(flags, sourceMapDigest, mapFormatVersion);
+        // Derived rather than taken. The flag says a BRSH section is present and
+        // nothing else, and the reader cross-checks the two, so a caller allowed to
+        // set it independently could produce a file whose header and table disagree
+        // about whether a level's brush planes exist.
+        ScmapFlags fileFlags = brushBody is null
+            ? flags & ~ScmapFlags.HasBrushSource
+            : flags | ScmapFlags.HasBrushSource;
+
+        var writer = new ScmapWriter(fileFlags, sourceMapDigest, mapFormatVersion);
 
         writer.AddSection(ScmapFormat.StringSection, stringBody);
         writer.AddSection(ScmapFormat.AssetSection, assetBody);
         writer.AddSection(ScmapFormat.MetaSection, metaBody);
         writer.AddSection(ScmapFormat.NodeSection, nodeBody);
         writer.AddSection(ScmapFormat.ChunkDirectorySection, chunkBody);
+        writer.AddSection(ScmapFormat.ChunkMeshSection, meshBody);
+        writer.AddSection(ScmapFormat.ChunkBspSection, bspBody);
 
-        // Claimed and empty. CMSH and CBSP are filled by the map bake; the four
-        // entity and script codes by the milestones that own them.
-        writer.AddSection(ScmapFormat.ChunkMeshSection, ReadOnlySpan<byte>.Empty);
-        writer.AddSection(ScmapFormat.ChunkBspSection, ReadOnlySpan<byte>.Empty);
+        // Claimed and empty: the four entity and script codes are filled by the
+        // milestones that own them, and a reader steps over a code it does not
+        // know, so writing them now costs 32 bytes each and buys the guarantee that
+        // nothing else takes the code.
         writer.AddSection(ScmapFormat.EntitySection, ReadOnlySpan<byte>.Empty);
         writer.AddSection(ScmapFormat.EntityConnectionSection, ReadOnlySpan<byte>.Empty);
         writer.AddSection(ScmapFormat.ScriptSection, ReadOnlySpan<byte>.Empty);
         writer.AddSection(ScmapFormat.ScriptBytecodeSection, ReadOnlySpan<byte>.Empty);
         writer.AddSection(ScmapFormat.ScriptSourceSection, ReadOnlySpan<byte>.Empty);
+
+        // Last, so the sections a load always reads sit at the front of the file.
+        // An absent BRSH is an ABSENT section rather than an empty one, because the
+        // header flag beside it is a claim about presence and an empty section is
+        // still present.
+        if (brushBody is not null) writer.AddSection(ScmapFormat.BrushSourceSection, brushBody);
 
         writer.Write(stream);
     }
@@ -344,10 +429,29 @@ public sealed class ScmapBuilder
         return body;
     }
 
-    private byte[] BuildChunks()
+    /// <summary>
+    /// Sorts the directory and lays the two blob sections out in that same order.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>One pass, so the directory and the blobs cannot disagree about
+    /// order.</b> A second pass over a second ordering is exactly how a cell ends
+    /// up pointing at its neighbour's geometry, and nothing downstream can tell:
+    /// the file parses, every offset is in range, and the level renders somebody
+    /// else's walls.</para>
+    /// <para><b>Every blob's own length is a multiple of the payload alignment</b>,
+    /// because each array inside it is padded up after itself, so the blobs tile
+    /// with no gap and a cell's declared size is the same number whether you count
+    /// its content or its footprint. The padding goes through
+    /// <see cref="ScmapLayout.PaddedSectionSize"/> and nothing else - one function
+    /// decides what a padded run costs, at every scale in this format.</para>
+    /// </remarks>
+    private byte[] BuildChunks(out byte[] meshBody, out byte[] bspBody)
     {
         ScmapChunkSource[] sorted = [.. _chunks];
         Array.Sort(sorted, static (a, b) => a.Coord.CompareTo(b.Coord));
+
+        using var meshes = new MemoryStream();
+        using var bsps = new MemoryStream();
 
         var body = new byte[ScmapFormat.ChunkPreambleSize + (sorted.Length * ScmapFormat.ChunkRecordSize)];
         Span<byte> span = body;
@@ -357,20 +461,197 @@ public sealed class ScmapBuilder
         for (int i = 0; i < sorted.Length; i++)
         {
             ScmapChunkSource source = sorted[i];
+
+            var meshOffset = (uint)meshes.Length;
+            uint meshSize = WriteChunkMesh(meshes, source);
+
+            var bspOffset = (uint)bsps.Length;
+            uint bspSize = WriteChunkBsp(bsps, source);
+
             var record = new ScmapChunkRecord(
                 source.Coord.X,
                 source.Coord.Y,
                 source.Coord.Z,
                 source.RenderBounds.Min,
                 source.RenderBounds.Max,
-                source.MeshOffset,
-                source.MeshSize,
-                source.BspOffset,
-                source.BspSize);
+                meshSize == 0 ? 0 : meshOffset,
+                meshSize,
+                bspSize == 0 ? 0 : bspOffset,
+                bspSize);
 
             MemoryMarshal.Write(span[(ScmapFormat.ChunkPreambleSize + (i * ScmapFormat.ChunkRecordSize))..], in record);
         }
 
+        meshBody = meshes.ToArray();
+        bspBody = bsps.ToArray();
         return body;
+    }
+
+    // One cell's CMSH blob, or nothing at all for a cell that owns no render
+    // geometry - which is legal and common, and is what the compile itself does
+    // for a resident-only cell.
+    private static uint WriteChunkMesh(MemoryStream blobs, in ScmapChunkSource cell)
+    {
+        if (cell.Submeshes is not { Length: > 0 }) return 0;
+
+        ScmapSubmeshSource[] submeshes = cell.Submeshes;
+        long start = blobs.Length;
+
+        long directory = ScmapLayout.PaddedSectionSize(
+            ScmapFormat.ChunkMeshHeaderSize + ((long)submeshes.Length * ScmapFormat.ChunkSubmeshEntrySize));
+
+        // The arrays are placed BEFORE any of them is written, because a directory
+        // record has to carry an offset the writer has not reached yet. Both passes
+        // walk the same list in the same order and both take their padding from the
+        // one function, which is what keeps them in step.
+        var entries = new ScmapSubmeshEntry[submeshes.Length];
+        long cursor = directory;
+        for (int i = 0; i < submeshes.Length; i++)
+        {
+            ScmapSubmeshSource submesh = submeshes[i];
+
+            long vertexOffset = cursor;
+            cursor += ScmapLayout.PaddedSectionSize((long)submesh.Vertices.Length * sizeof(float));
+
+            long indexOffset = cursor;
+            cursor += ScmapLayout.PaddedSectionSize((long)submesh.Indices.Length * sizeof(uint));
+
+            entries[i] = new ScmapSubmeshEntry(
+                submesh.AssetIndex,
+                (uint)(submesh.Vertices.Length / ScmapFormat.StandardVertexStrideFloats),
+                (uint)submesh.Indices.Length,
+                (uint)vertexOffset,
+                (uint)indexOffset);
+        }
+
+        Span<byte> header = stackalloc byte[ScmapFormat.ChunkMeshHeaderSize];
+        header.Clear();
+        BinaryPrimitives.WriteUInt32LittleEndian(header, (uint)submeshes.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[4..], ScmapFormat.StandardVertexStrideFloats);
+        blobs.Write(header);
+
+        Span<byte> entry = stackalloc byte[ScmapFormat.ChunkSubmeshEntrySize];
+        for (int i = 0; i < entries.Length; i++)
+        {
+            MemoryMarshal.Write(entry, in entries[i]);
+            blobs.Write(entry);
+        }
+
+        WriteZeros(blobs, start + directory - blobs.Length);
+
+        for (int i = 0; i < submeshes.Length; i++)
+        {
+            ScmapSubmeshSource submesh = submeshes[i];
+
+            blobs.Write(MemoryMarshal.AsBytes<float>(submesh.Vertices));
+            WriteZeros(blobs, start + entries[i].IndexOffset - blobs.Length);
+
+            blobs.Write(MemoryMarshal.AsBytes<uint>(submesh.Indices));
+            WriteZeros(blobs, ScmapLayout.PaddedSectionSize(blobs.Length - start) - (blobs.Length - start));
+        }
+
+        return (uint)(blobs.Length - start);
+    }
+
+    // One cell's CBSP blob. A null node array means the cell has no tree at all;
+    // an EMPTY one is a tree that is a single bare leaf, and it still gets a blob
+    // so that the root's leaf code survives - solid and empty are different
+    // answers, and a missing blob could not tell them apart.
+    private static uint WriteChunkBsp(MemoryStream blobs, in ScmapChunkSource cell)
+    {
+        if (cell.BspNodes is null) return 0;
+
+        long start = blobs.Length;
+
+        Span<byte> header = stackalloc byte[ScmapFormat.ChunkBspHeaderSize];
+        header.Clear();
+        BinaryPrimitives.WriteUInt32LittleEndian(header, (uint)cell.BspNodes.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(header[4..], cell.BspRootIndex);
+        blobs.Write(header);
+
+        blobs.Write(MemoryMarshal.AsBytes<FlatBspNode>(cell.BspNodes));
+        WriteZeros(blobs, ScmapLayout.PaddedSectionSize(blobs.Length - start) - (blobs.Length - start));
+
+        return (uint)(blobs.Length - start);
+    }
+
+    // The BRSH section, or null when this cook kept no brush source at all. Null
+    // rather than an empty body, because the header flag beside it claims the
+    // section is PRESENT and an empty section is present.
+    private byte[]? BuildBrushSource()
+    {
+        if (_brushes.Count == 0) return null;
+
+        int planes = 0;
+        foreach (ScmapBrushSourceEntry brush in _brushes)
+        {
+            if (brush.NodeIndex < 0 || brush.NodeIndex >= _nodes.Count)
+            {
+                throw new InvalidOperationException(
+                    $"A kept brush names node {brush.NodeIndex} of a {_nodes.Count}-node map. A brush that " +
+                    "cannot name its node has no transform, so a load would carve it at the origin.");
+            }
+
+            planes += brush.Planes.Length;
+        }
+
+        long records = (long)_brushes.Count * ScmapFormat.BrushSourceRecordSize;
+        long planeStart = ScmapLayout.PaddedSectionSize(ScmapFormat.BrushSourceHeaderSize + records);
+        long faceStart = ScmapLayout.PaddedSectionSize(planeStart + ((long)planes * ScmapFormat.PlaneSize));
+        long total = faceStart + ((long)planes * ScmapFormat.BrushFaceRecordSize);
+
+        var body = new byte[total];
+        Span<byte> span = body;
+
+        BinaryPrimitives.WriteUInt32LittleEndian(span, (uint)_brushes.Count);
+        BinaryPrimitives.WriteUInt32LittleEndian(span[4..], (uint)planes);
+
+        int plane = 0;
+        for (int i = 0; i < _brushes.Count; i++)
+        {
+            ScmapBrushSourceEntry brush = _brushes[i];
+            var record = new ScmapBrushRecord((uint)brush.NodeIndex, (uint)brush.Planes.Length, (uint)plane);
+            MemoryMarshal.Write(
+                span[(ScmapFormat.BrushSourceHeaderSize + (i * ScmapFormat.BrushSourceRecordSize))..], in record);
+
+            for (int f = 0; f < brush.Planes.Length; f++, plane++)
+            {
+                MemoryMarshal.Write(
+                    span[(int)(planeStart + ((long)plane * ScmapFormat.PlaneSize))..], in brush.Planes[f]);
+
+                ScmapFaceSource face = brush.Faces[f];
+                var faceRecord = new ScmapFaceRecord(
+                    face.AssetIndex,
+                    face.UAxis,
+                    face.VAxis,
+                    face.UOffset,
+                    face.VOffset,
+                    face.UScale,
+                    face.VScale);
+
+                MemoryMarshal.Write(
+                    span[(int)(faceStart + ((long)plane * ScmapFormat.BrushFaceRecordSize))..], in faceRecord);
+            }
+        }
+
+        return body;
+    }
+
+    // Padding is written, never seeked over: a seek past the end of a stream leaves
+    // the gap holding whatever the filesystem gives back, which on most filesystems
+    // is zeros and on none of them is a promise.
+    private static void WriteZeros(MemoryStream blobs, long count)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+        Span<byte> zeros = stackalloc byte[ScmapFormat.PayloadAlignment];
+        zeros.Clear();
+
+        while (count > 0)
+        {
+            int chunk = (int)Math.Min(count, zeros.Length);
+            blobs.Write(zeros[..chunk]);
+            count -= chunk;
+        }
     }
 }

@@ -299,16 +299,23 @@ public class ScmapBuilderTests
     }
 
     [Fact]
-    public void A_directory_entry_pointing_at_a_chunk_blob_this_stage_does_not_write_is_refused()
+    public void A_cell_whose_submeshes_are_out_of_ascending_asset_order_is_refused()
     {
+        // The builder places every blob itself, so a caller can no longer point a
+        // directory entry anywhere - what it CAN still get wrong is the order the
+        // submeshes arrive in, and ascending asset index is what makes two compiles
+        // of one cell emit one file. Ascending material id would not be: an id is
+        // per-process interning order.
         var builder = new ScmapBuilder("Blobs");
 
         Should.Throw<InvalidOperationException>(() => builder.AddChunk(new ScmapChunkSource(
             new ChunkCoord(0, 0, 0),
             new Aabb(Vector3.Zero, Vector3.One),
-            MeshOffset: 0,
-            MeshSize: 512)))
-            .Message.ShouldContain("CMSH");
+            [
+                new ScmapSubmeshSource(3, new float[8], [0, 0, 0]),
+                new ScmapSubmeshSource(1, new float[8], [0, 0, 0]),
+            ])))
+            .Message.ShouldContain("ascending asset order");
     }
 
     [Fact]

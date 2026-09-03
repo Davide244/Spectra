@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using SpectraEngine.Core.Assets.Packs;
+using SpectraEngine.Core.Maps;
 
 namespace Spectra.Kitchen.Maps;
 
@@ -49,22 +50,71 @@ public static class MapBundleDigest
         }
 
         string root = Path.GetFullPath(bundlePath);
-        List<string> relative = [];
+        List<(string Path, byte[] Bytes)> files = [];
 
         foreach (string absolute in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
-            relative.Add(Path.GetRelativePath(root, absolute).Replace('\\', '/'));
+            files.Add((Path.GetRelativePath(root, absolute).Replace('\\', '/'), File.ReadAllBytes(absolute)));
         }
 
-        relative.Sort(StringComparer.Ordinal);
+        return Compute(files);
+    }
+
+    /// <summary>
+    /// Hashes a bundle already read into memory, by bundle-relative path.
+    /// </summary>
+    /// <remarks>
+    /// <b>The definition, and the folder form above is a way of gathering the same
+    /// list.</b> A cook rule reads its inputs through its context so that every one
+    /// is a recorded dependency, which means it holds the bytes rather than a
+    /// directory to re-read, and a second hashing expression here is exactly the
+    /// kind that gets corrected in one place and not in the other. Sorting is done
+    /// here rather than trusted from the caller, since the whole point is that the
+    /// answer does not depend on how the list was gathered.
+    /// </remarks>
+    /// <param name="files">
+    /// Bundle-relative, forward-slash paths and their bytes, in any order.
+    /// </param>
+    public static UInt128 Compute(IReadOnlyList<(string Path, byte[] Bytes)> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+
+        var kept = new List<(string Path, byte[] Bytes)>(files.Count);
+        foreach ((string path, byte[] bytes) in files)
+        {
+            if (IsSourceFile(path)) kept.Add((path, bytes));
+        }
+
+        (string Path, byte[] Bytes)[] sorted = [.. kept];
+        Array.Sort(sorted, static (a, b) => string.CompareOrdinal(a.Path, b.Path));
 
         var digest = new PackDigest.Accumulator();
-        foreach (string path in relative)
+        foreach ((string path, byte[] bytes) in sorted)
         {
             digest.Append(Encoding.UTF8.GetBytes(path));
-            digest.Append(File.ReadAllBytes(Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar))));
+            digest.Append(bytes);
         }
 
         return digest.Finish();
+    }
+
+    /// <summary>
+    /// Whether a bundle-relative file is part of what the bake reads at all.
+    /// </summary>
+    /// <remarks>
+    /// <b>One predicate, because the alternative is a per-developer cook.</b>
+    /// <c>editor.user.json</c> is per-user state, gitignored and never
+    /// load-bearing, and it changes every time somebody moves the viewport camera.
+    /// Hashed into the digest it would put a different number in every developer's
+    /// compiled map for the same level; read as a dependency it would miss the cook
+    /// cache on every launch. Both gatherings and the rule that feeds them ask
+    /// here, so the answer cannot differ between them.
+    /// </remarks>
+    public static bool IsSourceFile(string bundleRelativePath)
+    {
+        ArgumentNullException.ThrowIfNull(bundleRelativePath);
+
+        return !Path.GetFileName(bundleRelativePath.AsSpan())
+            .Equals(MapFormat.UserStateFileName, StringComparison.OrdinalIgnoreCase);
     }
 }

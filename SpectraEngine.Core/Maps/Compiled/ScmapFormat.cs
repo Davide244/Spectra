@@ -133,6 +133,69 @@ public static class ScmapFormat
     /// </summary>
     public const int ChunkPreambleSize = 16;
 
+    /// <summary>
+    /// Bytes of fixed preamble in one <c>CMSH</c> blob: the submesh count, the
+    /// vertex stride and a reserved word, sized so the submesh directory after it
+    /// starts 16-byte aligned.
+    /// </summary>
+    public const int ChunkMeshHeaderSize = 16;
+
+    /// <summary>Bytes in one <see cref="ScmapSubmeshEntry"/> directory record.</summary>
+    public const int ChunkSubmeshEntrySize = 24;
+
+    /// <summary>
+    /// Bytes of fixed preamble in one <c>CBSP</c> blob: the node count, the root
+    /// child code and a reserved word, sized so the node array is 16-byte aligned.
+    /// </summary>
+    public const int ChunkBspHeaderSize = 16;
+
+    /// <summary>
+    /// Bytes in one <see cref="Bsp.FlatBspNode"/>, which raw file bytes are cast
+    /// into.
+    /// </summary>
+    /// <remarks>
+    /// Pinned here as well as by a test, for the reason the struct's own remarks
+    /// give: neither <c>System.Numerics.Plane</c>'s 16 bytes nor this struct's 24
+    /// is a documented contract of the runtime, and this format casts mapped bytes
+    /// into both.
+    /// </remarks>
+    public const int FlatBspNodeSize = 24;
+
+    /// <summary>
+    /// Bytes in one <c>System.Numerics.Plane</c>, which both <c>CBSP</c> and
+    /// <c>BRSH</c> cast file bytes into. Pinned with
+    /// <see cref="FlatBspNodeSize"/>, for the same reason.
+    /// </summary>
+    public const int PlaneSize = 16;
+
+    /// <summary>
+    /// Bytes of fixed preamble in <c>BRSH</c>: the brush count and the total plane
+    /// count, padded so the brush records after it are 16-byte aligned.
+    /// </summary>
+    public const int BrushSourceHeaderSize = 16;
+
+    /// <summary>Bytes in one <see cref="ScmapBrushRecord"/>.</summary>
+    public const int BrushSourceRecordSize = 16;
+
+    /// <summary>Bytes in one <see cref="ScmapFaceRecord"/>.</summary>
+    public const int BrushFaceRecordSize = 48;
+
+    /// <summary>
+    /// The <c>assetIndex</c> a submesh or a face carries when it names no asset at
+    /// all.
+    /// </summary>
+    /// <remarks>
+    /// <b>A sentinel rather than index 0, because index 0 is a real asset.</b> The
+    /// asset table has no reserved first row - unlike <c>STRT</c>, whose index 0 is
+    /// the empty string precisely so that "no name" needs no sentinel - so a
+    /// surface wearing <c>MaterialRef.Default</c> has nothing to point at. The
+    /// engine's answer to such a face is already
+    /// <c>Scene.StaticWorldMaterial</c>, and this value is how the file says so;
+    /// writing 0 instead would silently paint every unnamed surface in whichever
+    /// material the bake happened to reference first.
+    /// </remarks>
+    public const uint NoAssetIndex = uint.MaxValue;
+
     /// <summary>Section <c>STRT</c>: the string blob every string index addresses.</summary>
     public const uint StringSection = 'S' | ('T' << 8) | ('R' << 16) | ((uint)'T' << 24);
 

@@ -29,9 +29,13 @@ public readonly ref struct ScmapDocument
         ReadOnlySpan<ScmapChunkRecord> chunks,
         ReadOnlySpan<byte> chunkMeshBlob,
         ReadOnlySpan<byte> chunkBspBlob,
+        ReadOnlySpan<byte> brushSourceSection,
+        bool hasBrushSource,
         int skippedSectionCount,
         int invalidDeclaredStateCount)
     {
+        BrushSourceSection = brushSourceSection;
+        HasBrushSource = hasBrushSource;
         Source = source;
         Header = header;
         Strings = strings;
@@ -104,6 +108,69 @@ public readonly ref struct ScmapDocument
     /// is wrong.
     /// </remarks>
     public int InvalidDeclaredStateCount { get; }
+
+    /// <summary>
+    /// The whole <c>BRSH</c> section, or empty when the cook kept no brush source.
+    /// </summary>
+    public ReadOnlySpan<byte> BrushSourceSection { get; }
+
+    /// <summary>Whether this map carries authored brush planes at all.</summary>
+    /// <remarks>
+    /// <b>Presence, never permission.</b> A map with parts in it carries this
+    /// section whatever the cook was asked for, because a part brush's planes live
+    /// nowhere else; whether any particular brush may be carved is
+    /// <c>ScmapBrushSource.IsReCarvable</c>, and reading this flag as licence to
+    /// rebuild the static world is the double-geometry hazard.
+    /// </remarks>
+    public bool HasBrushSource { get; }
+
+    /// <summary>Chunk <paramref name="index"/>'s mesh blob, parsed in place.</summary>
+    /// <remarks>
+    /// Call only when the record's <c>MeshSize</c> is non-zero: a cell with no
+    /// owned render geometry has no blob at all, which is legal and common rather
+    /// than an error.
+    /// </remarks>
+    /// <exception cref="ScmapFormatException">The blob is not a well-formed chunk mesh.</exception>
+    public ScmapChunkMesh ChunkMesh(int index)
+    {
+        ScmapChunkRecord cell = Chunks[index];
+        return new ScmapChunkMesh(
+            ChunkMeshBlob.Slice((int)cell.MeshOffset, (int)cell.MeshSize), Source, in cell);
+    }
+
+    /// <summary>Chunk <paramref name="index"/>'s flat BSP blob, parsed in place.</summary>
+    /// <exception cref="ScmapFormatException">The blob is not a well-formed flat tree.</exception>
+    public ScmapChunkBsp ChunkBsp(int index)
+    {
+        ScmapChunkRecord cell = Chunks[index];
+        return new ScmapChunkBsp(
+            ChunkBspBlob.Slice((int)cell.BspOffset, (int)cell.BspSize), Source, in cell);
+    }
+
+    /// <summary>The <c>BRSH</c> section, parsed in place.</summary>
+    /// <exception cref="ScmapFormatException">The section is not a well-formed brush table.</exception>
+    public ScmapBrushSource BrushSource() => new(BrushSourceSection, Source, Nodes.Length);
+
+    /// <summary>Triangles across every cell that owns render geometry.</summary>
+    /// <remarks>
+    /// <b>The measurement the double-geometry guard is graded on.</b> A
+    /// <c>--keep-brush-source</c> cook must draw exactly what the same map cooked
+    /// without it draws, and a loader that re-carved would double this number.
+    /// </remarks>
+    public int TriangleCount
+    {
+        get
+        {
+            int triangles = 0;
+            for (int i = 0; i < Chunks.Length; i++)
+            {
+                if (Chunks[i].MeshSize == 0) continue;
+                triangles += ChunkMesh(i).TriangleCount;
+            }
+
+            return triangles;
+        }
+    }
 
     /// <summary>The name of node <paramref name="index"/>, decoded.</summary>
     public string NodeName(int index) => Strings.GetStringOrEmpty((int)Nodes[index].NameString);

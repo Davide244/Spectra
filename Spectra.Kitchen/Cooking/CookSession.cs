@@ -117,8 +117,6 @@ public sealed class CookSession
             return Finish(assets, diagnostics, null, null, 0, 0, 0);
         }
 
-        ReportUncookedMaps(diagnostics);
-
         CookCache? cache = OpenCache(diagnostics);
 
         // The work list is built whole, in walk order, before anything runs: every
@@ -128,13 +126,28 @@ public sealed class CookSession
         // keeps a rule set that grows state out of the shared-state question
         // entirely.
         IReadOnlyList<ContentFile> content = ContentWalker.Walk(contentRoot);
-        var work = new WorkItem[content.Count];
-        var cookedPaths = new List<string>(content.Count);
+        IReadOnlyList<string> maps = _layout.DiscoverMaps();
+
+        var work = new WorkItem[content.Count + maps.Count];
+        var cookedPaths = new List<string>(work.Length);
 
         for (int i = 0; i < content.Count; i++)
         {
-            work[i] = new WorkItem(content[i], _rules.Resolve(content[i].ContentPath));
+            work[i] = new WorkItem(contentRoot, content[i], _rules.Resolve(content[i].ContentPath));
             cookedPaths.Add(content[i].ContentPath);
+        }
+
+        // Maps are appended after the content, in DiscoverMaps' own sorted order,
+        // which keeps the work list a pure function of the project exactly as the
+        // content walk is. They carry a different content root, the PROJECT root,
+        // because a bundle lives beside Assets/ rather than inside it: a rule's
+        // paths are relative to its root, so the two lists cannot be given one.
+        string projectRoot = Path.GetFullPath(_layout.Root);
+        for (int i = 0; i < maps.Count; i++)
+        {
+            var bundle = new ContentFile(maps[i], _layout.Resolve(maps[i]));
+            work[content.Count + i] = new WorkItem(projectRoot, bundle, _rules.ResolveMap());
+            cookedPaths.Add(maps[i]);
         }
 
         // Clamped to the work, so what a summary line reports is the parallelism
@@ -151,7 +164,7 @@ public sealed class CookSession
         // rule does declare one, the list is sorted into level order and this
         // becomes a loop over ranges, and none of the ordering rules below, which
         // are what the byte-identity oracles rest on, has to move.
-        RunLevel(contentRoot, cache, work, outcomes, 0, work.Length, workers);
+        RunLevel(cache, work, outcomes, 0, work.Length, workers);
 
         for (int i = 0; i < work.Length; i++)
         {
@@ -229,9 +242,13 @@ public sealed class CookSession
         return Finish(assets, diagnostics, cache, output, entryCount, payloadBytes, workers);
     }
 
-    // One asset and the rule that will cook it: the unit a worker is handed, and
-    // the index every ordering promise above is stated against.
-    private readonly record struct WorkItem(ContentFile File, IRule Rule);
+    // One asset, the root its paths are relative to, and the rule that will cook
+    // it: the unit a worker is handed, and the index every ordering promise above
+    // is stated against. The root is per ITEM rather than per session because a map
+    // bundle lives beside the content root rather than inside it, and every path a
+    // rule records is resolved against the root it recorded them under - by the
+    // rule now and by the cache's restatement later.
+    private readonly record struct WorkItem(string ContentRoot, ContentFile File, IRule Rule);
 
     // What one rule run answered, and the only thing that crosses back from a
     // worker. The failure is kept apart from the reports rather than placed first
@@ -250,7 +267,6 @@ public sealed class CookSession
     // not the pack writer, not the diagnostic list, not a counter that decides a
     // byte.
     private void RunLevel(
-        string contentRoot,
         CookCache? cache,
         WorkItem[] work,
         RuleOutcome[] outcomes,
@@ -268,8 +284,7 @@ public sealed class CookSession
 
         try
         {
-            Parallel.For(
-                start, start + count, options, i => outcomes[i] = RunOne(contentRoot, cache, work[i]));
+            Parallel.For(start, start + count, options, i => outcomes[i] = RunOne(cache, work[i]));
         }
         catch (AggregateException ex) when (ex.InnerExceptions.Count == 1)
         {
@@ -286,10 +301,10 @@ public sealed class CookSession
     // touches is either immutable (the settings, the rule) or its own (the
     // context); the cache is the one shared thing, and it is safe for the workers
     // by construction rather than by this method's care.
-    private RuleOutcome RunOne(string contentRoot, CookCache? cache, WorkItem item)
+    private RuleOutcome RunOne(CookCache? cache, WorkItem item)
     {
         if (cache is not null &&
-            cache.TryReplay(contentRoot, item.File.ContentPath, item.Rule, _settings, out CachedRun? replay))
+            cache.TryReplay(item.ContentRoot, item.File.ContentPath, item.Rule, _settings, out CachedRun? replay))
         {
             // A replayed run reported nothing, because a rule that reported anything
             // was never recorded in the first place.
@@ -297,11 +312,12 @@ public sealed class CookSession
         }
 
         var context = new RuleContext(
-            contentRoot,
+            item.ContentRoot,
             item.File.ContentPath,
             _settings.Profile,
             _settings.Targets,
-            _settings.AudioSampleRate);
+            _settings.AudioSampleRate,
+            _settings.KeepBrushSource);
         CookDiagnostic? failure = null;
 
         try
@@ -383,21 +399,6 @@ public sealed class CookSession
                 $"The cook cache at '{CacheDirectory}' could not be written, so the next cook will not be " +
                 $"incremental: {ex.Message}"));
         }
-    }
-
-    // A project's maps are not under the content root and have no rule yet, so a
-    // cook silently leaves them out. Said out loud, because a pack that mounts and
-    // has no level in it looks like a working cook.
-    private void ReportUncookedMaps(CookDiagnosticLog diagnostics)
-    {
-        IReadOnlyList<string> maps = _layout.DiscoverMaps();
-        if (maps.Count == 0) return;
-
-        diagnostics.Add(CookDiagnostic.Info(
-            CookDiagnosticCodes.ContentNotCooked,
-            $"{maps.Count} map bundle(s) under '{ProjectFormat.MapsFolder}/' are not in this pack: the map cook " +
-            "rule is not built yet.",
-            _layout.ManifestPath));
     }
 
     private string? WritePack(PackWriter writer, CookDiagnosticLog diagnostics)

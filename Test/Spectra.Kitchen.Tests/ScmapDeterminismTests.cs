@@ -1,10 +1,9 @@
-using System;
 using System.IO;
 
 namespace Spectra.Kitchen.Tests;
 
 /// <summary>
-/// The compiled map is a function of the map, never of the process that wrote it.
+/// The compiled map is a function of the map, never of the process that baked it.
 /// </summary>
 /// <remarks>
 /// <para><b>Two PROCESSES, for the one reason that matters.</b> .NET randomises the
@@ -12,96 +11,114 @@ namespace Spectra.Kitchen.Tests;
 /// dictionary or a hash set is perfectly stable inside one test host and different
 /// between two runs of the same tool. That is the failure somebody reports as "CI
 /// says the map changed and nothing changed", and an in-process comparison
-/// structurally cannot detect it: both builds would share the seed. The cook's own
-/// determinism oracles already run the real binary through <c>Process.Start</c> for
-/// exactly this reason, and this file copies that mechanism rather than inventing a
-/// second one.</para>
-/// <para><b>The seed probe is what stops the oracle passing vacuously.</b> Byte
-/// identity across two processes says nothing unless the two really did hash
-/// differently, and if randomised string hashing were ever disabled for this
-/// process this test would go on reporting a pass while proving nothing at all. So
-/// each child writes its own hash codes beside its map and the two are required to
-/// disagree.</para>
+/// structurally cannot detect it: both bakes would share the seed.</para>
+/// <para><b>Through the real <c>scook</c> binary, which is what the map bake made
+/// possible.</b> Until the cook had a map to bake, the compiled-map writer had no
+/// CLI route at all, and these oracles re-entered the TEST binary through an
+/// environment variable and a module initializer to get a second process. That
+/// harness is retired: <c>scook cook --loose</c> writes the map as a real file, so
+/// these tests use the same mechanism <c>CookDeterminismTests</c> already uses for
+/// packs and there is one way to get a second process rather than two.</para>
+/// <para><b>A hash-order leak is a MAP problem before it is a pack one.</b> A pack
+/// sorts its entries by asset id, so a scheduling or iteration leak inside one
+/// entry's payload is invisible in the pack's own ordering and shows up only as the
+/// payload's bytes; a compiled map carries a string table in first-reference order,
+/// an asset table in walk order and a chunk directory sorted by cell, and every one
+/// of those is a place a dictionary could leak into the file.</para>
 /// </remarks>
 public class ScmapDeterminismTests
 {
+    // Header, a thirteen-section table, five tables and two geometry sections over
+    // a five-brush room is far past this; the floor exists so an empty or truncated
+    // file cannot pass the identity tests.
+    private const int CompiledMapFloor = 2048;
+
     [Fact]
-    public void Two_processes_write_the_same_compiled_map_byte_for_byte()
+    public void Two_clean_bakes_in_two_processes_are_byte_identical()
     {
-        ScmapChildProcess.Require();
+        ScookProcess.Require();
 
-        using var workspace = new TempDirectory();
+        using var project = new TempProject();
+        WriteFixture(project);
 
-        ScmapChildProcess.Result first = ScmapChildProcess.Run(Path.Combine(workspace.Path, "a"));
-        ScmapChildProcess.Result second = ScmapChildProcess.Run(Path.Combine(workspace.Path, "b"));
+        byte[] first = Bake(project, "clean-a", "--no-cache");
+        byte[] second = Bake(project, "clean-b", "--no-cache");
 
-        first.ExitCode.ShouldBe(0, first.Stderr);
-        second.ExitCode.ShouldBe(0, second.Stderr);
-
-        first.Map.Length.ShouldBeGreaterThan(ScmapFixtureFloor);
-        second.Map.ShouldBe(first.Map);
+        first.Length.ShouldBeGreaterThan(CompiledMapFloor);
+        second.ShouldBe(first);
     }
 
     [Fact]
-    public void The_two_processes_really_did_hash_strings_differently()
+    public void One_worker_and_many_workers_bake_the_same_map()
     {
-        // The non-vacuity check. Without it, a build where randomised string
-        // hashing was somehow off would report the strongest possible pass while
-        // measuring nothing.
-        ScmapChildProcess.Require();
+        ScookProcess.Require();
 
-        using var workspace = new TempDirectory();
+        using var project = new TempProject();
+        WriteFixture(project);
 
-        ScmapChildProcess.Result first = ScmapChildProcess.Run(Path.Combine(workspace.Path, "a"));
-        ScmapChildProcess.Result second = ScmapChildProcess.Run(Path.Combine(workspace.Path, "b"));
+        byte[] serial = Bake(project, "j1", "--no-cache", "-j", "1");
+        byte[] parallel = Bake(project, "j8", "--no-cache", "-j", "8");
 
-        first.SeedProbe.ShouldNotBeNullOrEmpty();
-        second.SeedProbe.ShouldNotBeNullOrEmpty();
-        second.SeedProbe.ShouldNotBe(first.SeedProbe);
+        parallel.ShouldBe(serial);
     }
 
     [Fact]
-    public void A_child_process_writes_what_this_process_writes()
+    public void A_cached_bake_and_a_clean_bake_are_byte_identical()
     {
-        // The bridge between the two-process oracle and every in-process assertion
-        // in this suite: they are the same bytes, so what the other tests prove
-        // about the fixture is proven about what the children compared.
-        ScmapChildProcess.Require();
+        ScookProcess.Require();
 
-        using var workspace = new TempDirectory();
-        ScmapChildProcess.Result child = ScmapChildProcess.Run(Path.Combine(workspace.Path, "a"));
+        using var project = new TempProject();
+        WriteFixture(project);
 
-        child.ExitCode.ShouldBe(0, child.Stderr);
-        child.Map.ShouldBe(ScmapFixture.Build());
+        // The first run fills .spectra-cook/ as a side effect; the second is the
+        // one under test.
+        byte[] clean = Bake(project, "cold");
+        byte[] cached = Bake(project, "warm");
+
+        cached.ShouldBe(clean);
     }
 
-    // Header plus a twelve-section table plus five non-empty bodies is well past
-    // this; the floor exists so an empty file cannot pass the identity test.
-    private const int ScmapFixtureFloor = 512;
-
-    private sealed class TempDirectory : IDisposable
+    [Fact]
+    public void Keeping_the_brush_source_re_bakes_rather_than_serving_the_cached_map()
     {
-        public TempDirectory()
-        {
-            Path = System.IO.Path.Combine(
-                System.IO.Path.GetTempPath(),
-                "spectra-scmap-" + Guid.NewGuid().ToString("N"));
+        ScookProcess.Require();
 
-            Directory.CreateDirectory(Path);
-        }
+        using var project = new TempProject();
+        WriteFixture(project);
 
-        public string Path { get; }
+        byte[] without = Bake(project, "plain");
+        byte[] with = Bake(project, "kept", "--keep-brush-source");
 
-        public void Dispose()
-        {
-            try
-            {
-                if (Directory.Exists(Path)) Directory.Delete(Path, recursive: true);
-            }
-            catch (IOException)
-            {
-                // A leftover temp directory is not a test failure.
-            }
-        }
+        // The map rule declares KeepBrushSource and nothing else, so the switch has
+        // to reach the cache key: served from cache the second file would be the
+        // first one, which is the stale artifact a per-rule declaration exists to
+        // prevent. Declaring one too few is exactly this, silently.
+        with.ShouldNotBe(without);
+        with.Length.ShouldBeGreaterThan(without.Length);
+    }
+
+    // A room rather than a box: two materials so a cell's submesh directory has
+    // something to order, a doorway cut flush through its wall's base so the
+    // coincident-plane case is in the bytes, and a part brush so the brush-source
+    // section is present whatever the cook was asked for.
+    private static void WriteFixture(TempProject project)
+    {
+        MapFixture fixture = MapFixture.Fresh();
+        fixture.WriteMaterials(project);
+        fixture.WriteBundle(project, "Room.smap");
+    }
+
+    // --loose rather than a pack, so a failure names the MAP rather than handing
+    // back two containers to bisect. The cook is otherwise identical: the same
+    // rules run over the same work list and the same bytes are emitted.
+    private static byte[] Bake(TempProject project, string label, params string[] extra)
+    {
+        string output = Path.Combine(project.Root, label);
+
+        ScookProcess.Result run = ScookProcess.Run(
+            ["cook", project.Root, "--loose", "-o", output, .. extra]);
+
+        run.ExitCode.ShouldBe(0, $"scook failed: {run.Stderr}");
+        return File.ReadAllBytes(Path.Combine(output, "Maps", "Room.scmap"));
     }
 }

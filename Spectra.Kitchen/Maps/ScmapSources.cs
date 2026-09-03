@@ -50,28 +50,107 @@ public readonly record struct ScmapNodeSource(
     uint PayloadIndex = 0);
 
 /// <summary>
-/// One cell on its way into a <c>CHDR</c> record.
+/// One cell on its way into a <c>CHDR</c> record, carrying its own geometry.
 /// </summary>
+/// <remarks>
+/// <b>The offsets are NOT here, deliberately.</b> A cell's blob offsets are a
+/// function of where the sorted directory put it, so letting a caller pass them
+/// would let a caller pass a lie: a directory entry pointing into the wrong part of
+/// <c>CMSH</c> is a cell rendering somebody else's geometry, and no reader can tell
+/// the difference. <see cref="ScmapBuilder"/> sorts the cells, lays the two blob
+/// sections out in that same order, and fills the offsets in itself, so the
+/// directory and the blobs cannot disagree about order at all.
+/// </remarks>
 /// <param name="Coord">The cell.</param>
 /// <param name="RenderBounds">
 /// The cell's TRUE render bounds, never the cell cube: a border-spanning brush is
 /// owned by exactly one cell and its surfaces routinely overhang, so culling
 /// against the cube makes the overhang vanish while it is plainly visible.
 /// </param>
-/// <param name="MeshOffset">Offset of this cell's mesh blob within <c>CMSH</c>.</param>
-/// <param name="MeshSize">
-/// Bytes of mesh blob. Zero is legal and common: a resident-only cell owns no
-/// render geometry, so the compile produces no artifact for it.
+/// <param name="Submeshes">
+/// The cell's owned render geometry, one entry per distinct material. Null or
+/// empty is legal and common: a resident-only cell owns no render geometry, so the
+/// compile produces no artifact for it and the directory says <c>MeshSize</c> zero.
 /// </param>
-/// <param name="BspOffset">Offset of this cell's BSP blob within <c>CBSP</c>.</param>
-/// <param name="BspSize">Bytes of BSP blob; zero when the cell has no tree.</param>
+/// <param name="BspNodes">
+/// The cell's flat solid-leaf tree. Null means the cell has no tree at all and
+/// <c>BspSize</c> is zero; an EMPTY array is a different thing, a tree that is one
+/// bare leaf, and it still gets a blob so that <paramref name="BspRootIndex"/>
+/// survives.
+/// </param>
+/// <param name="BspRootIndex">
+/// The root's child code: an index into <paramref name="BspNodes"/>, or one of
+/// <c>FlatBspNode</c>'s two leaf codes.
+/// </param>
 public readonly record struct ScmapChunkSource(
     ChunkCoord Coord,
     Aabb RenderBounds,
-    uint MeshOffset = 0,
-    uint MeshSize = 0,
-    uint BspOffset = 0,
-    uint BspSize = 0);
+    ScmapSubmeshSource[]? Submeshes = null,
+    FlatBspNode[]? BspNodes = null,
+    int BspRootIndex = FlatBspNode.EmptyLeaf);
+
+/// <summary>
+/// One cell's geometry for one material, on its way into a <c>CMSH</c> submesh.
+/// </summary>
+/// <param name="AssetIndex">
+/// The <c>ASTB</c> row this submesh's material sits at, or
+/// <c>ScmapFormat.NoAssetIndex</c> when the surfaces name none. NEVER a
+/// <c>MaterialRef.Id</c>: an id is per-process interning order and means nothing
+/// in a file.
+/// </param>
+/// <param name="Vertices">Interleaved vertex data, in the engine's standard 8-float layout.</param>
+/// <param name="Indices">
+/// Index data, zero-based at this submesh's own first vertex rather than at the
+/// cell's, which is what lets the loader hand it straight to
+/// <c>Renderer.CreateMesh</c> with no slicing.
+/// </param>
+public readonly record struct ScmapSubmeshSource(uint AssetIndex, float[] Vertices, uint[] Indices);
+
+/// <summary>
+/// One authored brush plane's surface, on its way into a 48-byte <c>BRSH</c> face
+/// record.
+/// </summary>
+/// <param name="AssetIndex">
+/// The <c>ASTB</c> row this face's material sits at, or
+/// <c>ScmapFormat.NoAssetIndex</c> when it names none.
+/// </param>
+/// <param name="UAxis">Brush-local U axis, or zero for world-aligned.</param>
+/// <param name="VAxis">Brush-local V axis, or zero for world-aligned.</param>
+/// <param name="UOffset">U offset, in repeats.</param>
+/// <param name="VOffset">V offset, in repeats.</param>
+/// <param name="UScale">World units per U repeat.</param>
+/// <param name="VScale">World units per V repeat.</param>
+public readonly record struct ScmapFaceSource(
+    uint AssetIndex,
+    Vector3 UAxis,
+    Vector3 VAxis,
+    float UOffset,
+    float VOffset,
+    float UScale,
+    float VScale);
+
+/// <summary>
+/// One authored brush kept in <c>BRSH</c>, by the node it hangs on.
+/// </summary>
+/// <remarks>
+/// <b>A part brush is here whatever the cook was asked for; a world brush only
+/// under <c>--keep-brush-source</c>.</b> A part's planes live nowhere else, so
+/// dropping them ships a level whose parts are invisible; a world brush's geometry
+/// is already in the chunks, which is exactly why re-carving it draws every wall
+/// twice. <c>ScmapBrushSource.IsReCarvable</c> is the predicate that tells the two
+/// apart at load, and it reads the node's payload kind rather than this table.
+/// </remarks>
+/// <param name="NodeIndex">The <c>NODE</c> record this brush hangs on.</param>
+/// <param name="Planes">The brush-local planes, exactly as authored.</param>
+/// <param name="Faces">
+/// One face per plane, index-aligned. A different count is refused: one
+/// <c>FaceSurface</c> per plane is the invariant the whole per-face material path
+/// rests on, and a mismatch is an indexing bug rather than a rendering one.
+/// </param>
+public readonly record struct ScmapBrushSourceEntry(
+    int NodeIndex,
+    Plane[] Planes,
+    ScmapFaceSource[] Faces);
 
 /// <summary>
 /// One asset on its way into an <c>ASTB</c> record.

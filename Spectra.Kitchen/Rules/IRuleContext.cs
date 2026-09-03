@@ -67,6 +67,21 @@ public interface IRuleContext
     int AudioSampleRate { get; }
 
     /// <summary>
+    /// Whether this cook was asked to keep every brush's authored planes in the
+    /// compiled map.
+    /// </summary>
+    /// <remarks>
+    /// Here for the same reason <see cref="Profile"/>, <see cref="Targets"/> and
+    /// <see cref="AudioSampleRate"/> are: a setting reaches a rule through this
+    /// interface or not at all, and only settings a rule may declare in
+    /// <see cref="IRule.SettingsRead"/> live here. It says what to KEEP and never
+    /// what a loader should do with it: a compiled map's brush planes are data, and
+    /// whether any one of them may be carved again is the node record's
+    /// <c>BakedIntoChunks</c> contract.
+    /// </remarks>
+    bool KeepBrushSource { get; }
+
+    /// <summary>
     /// The bytes at <paramref name="contentPath"/>, recording the read.
     /// </summary>
     /// <remarks>
@@ -83,6 +98,31 @@ public interface IRuleContext
     /// answer either way.
     /// </summary>
     bool Probe(string contentPath);
+
+    /// <summary>
+    /// Every file under <paramref name="contentPath"/>, recursively, as
+    /// content-relative paths in ordinal order. An absent directory lists nothing.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>For an asset that is a FOLDER.</b> A <c>.smap</c> bundle is a
+    /// directory holding a document and, later, its scripts as real files, so a
+    /// rule over one cannot name its inputs without asking what is in it. Sorted
+    /// ordinal here rather than by the caller, for the reason
+    /// <c>ContentWalker</c> already records: <c>Directory.EnumerateFiles</c> has no
+    /// documented order, so a walk is a different list on a different filesystem.
+    /// </para>
+    /// <para><b>This is NOT a recorded dependency, and the cost is stated rather
+    /// than hidden.</b> The cache decides a hit by restating each recorded
+    /// observation against today's filesystem, and every observation it can restate
+    /// is about one PATH: a listing is a question about a directory, and there is
+    /// no form of it the cache could re-ask. So the files this returns become
+    /// dependencies when the rule reads them - which covers an edited file and a
+    /// deleted one - while a file newly ADDED to a bundle does not invalidate the
+    /// rule that would have read it. That window closes the day a directory
+    /// observation joins <c>RuleDependencyKind</c>, and until then a rule over a
+    /// folder is one <c>scook clean</c> away from being right.</para>
+    /// </remarks>
+    IReadOnlyList<string> ListFiles(string contentPath);
 
     /// <summary>
     /// Emits one cooked output at <paramref name="outputPath"/>, which becomes a
