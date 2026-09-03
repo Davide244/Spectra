@@ -256,7 +256,7 @@ try
     // process gets its answer and its shell prompt back.
     if (options.ViewportCompare)
     {
-        if (!ViewportCompareRun.Run(engine, loggerFactory.CreateLogger("ViewportCompare")))
+        if (!ViewportCompareRun.Run(engine, renderer, loggerFactory.CreateLogger("ViewportCompare")))
             Environment.ExitCode = 1;
         return;
     }

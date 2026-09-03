@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using SpectraEngine.Editor.Shell;
+using SpectraEngine.Editor.Viewport;
 using System;
 using System.IO;
 
@@ -173,5 +174,95 @@ public sealed class EditorSettingsTests
 
         EditorSettings loaded = EditorSettings.Load(path, NullLogger.Instance);
         loaded.RecentProjects.ShouldBeEmpty();
+    }
+
+    // --- The viewport block --------------------------------------------------
+
+    [Fact]
+    public void A_file_with_no_viewport_block_reads_as_the_default()
+    {
+        // Every settings file written before this stage. Auto is the
+        // conservative answer: it resolves to the native child until a history
+        // says otherwise, and there is no history to read.
+        var settings = new EditorSettings();
+
+        settings.ViewportPreference.ShouldBe(ViewportPreference.Default);
+        settings.ViewportPreference.Mode.ShouldBe(ViewportMode.Auto);
+    }
+
+    [Fact]
+    public void The_viewport_history_survives_a_round_trip()
+    {
+        string path = TempPath();
+
+        var settings = new EditorSettings();
+        settings.SetViewportMode(ViewportMode.Composition);
+        settings.RebaseViewport("9a91010000000000", "31.0.101.5085");
+        settings.RecordCompositedSession(sessionGreen: true);
+        settings.RecordCompositedSession(sessionGreen: true);
+        settings.Save(path, NullLogger.Instance);
+
+        ViewportPreference loaded = EditorSettings.Load(path, NullLogger.Instance).ViewportPreference;
+
+        loaded.Mode.ShouldBe(ViewportMode.Composition);
+        loaded.GreenSessions.ShouldBe(2);
+        loaded.AdapterLuid.ShouldBe("9a91010000000000");
+        loaded.DriverVersion.ShouldBe("31.0.101.5085");
+    }
+
+    [Fact]
+    public void The_viewport_block_merges_by_recency_rather_than_element_by_element()
+    {
+        // It is ONE state, not a set of entries. Two shells that both ran a
+        // composited session would otherwise interleave their counts into a
+        // number neither of them measured.
+        string path = TempPath();
+
+        var first = EditorSettings.Load(path, NullLogger.Instance);
+        var second = EditorSettings.Load(path, NullLogger.Instance);
+
+        first.RebaseViewport("aaaa", "1.0");
+        first.RecordCompositedSession(sessionGreen: true);
+        first.Save(path, NullLogger.Instance);
+
+        second.RebaseViewport("bbbb", "2.0");
+        second.RecordCompositedSession(sessionGreen: true);
+        second.RecordCompositedSession(sessionGreen: true);
+        second.Save(path, NullLogger.Instance);
+
+        ViewportPreference merged =
+            EditorSettings.Load(path, NullLogger.Instance).ViewportPreference;
+
+        merged.AdapterLuid.ShouldBe("bbbb");
+        merged.GreenSessions.ShouldBe(2);
+    }
+
+    [Fact]
+    public void A_corrupt_file_loses_the_viewport_history_with_the_rest()
+    {
+        // A half-read block would be a count with no adapter behind it, which
+        // reads afterwards as a machine that has proved something it never did.
+        string path = TempPath();
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "{ \"viewport\": { \"greenSessions\": 5, \"adapterLuid\": ");
+
+        EditorSettings loaded = EditorSettings.Load(path, NullLogger.Instance);
+
+        loaded.ViewportPreference.ShouldBe(ViewportPreference.Default);
+    }
+
+    [Fact]
+    public void A_mode_word_this_build_does_not_know_reads_as_auto()
+    {
+        // The one thing that must not happen is a file written by a newer shell
+        // stopping this one from starting.
+        string path = TempPath();
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "{ \"viewport\": { \"mode\": \"holographic\", \"greenSessions\": 3 } }");
+
+        ViewportPreference loaded = EditorSettings.Load(path, NullLogger.Instance).ViewportPreference;
+
+        loaded.Mode.ShouldBe(ViewportMode.Auto);
+        loaded.GreenSessions.ShouldBe(3);
     }
 }

@@ -62,6 +62,7 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
 {
     private readonly ILogger _logger;
     private readonly Action<string>? _onUnavailable;
+    private readonly Action<ViewportChoiceReason>? _onFailure;
     private readonly ViewportInputRouter _router;
     private readonly CompositedRenderSurface _surface = new();
     private readonly Dictionary<StandardCursorType, Cursor> _cursors = [];
@@ -88,12 +89,14 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
     private StandardCursorType? _shownCursor;
     private bool _cursorHidden;
 
-    internal CompositionEngineViewport(ILogger logger, Action<string>? onUnavailable)
+    internal CompositionEngineViewport(
+        ILogger logger, Action<string>? onUnavailable, Action<ViewportChoiceReason>? onFailure = null)
     {
         ArgumentNullException.ThrowIfNull(logger);
 
         _logger = logger;
         _onUnavailable = onUnavailable;
+        _onFailure = onFailure;
 
         // Unlike a NativeControlHost, this really is focusable, which is what
         // makes FocusEngine a plain Focus() here and a Win32 SetFocus there.
@@ -308,7 +311,8 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
             _pump = new CompositedFramePump(
                 new CompositorImageSource(interop, _drawingSurface),
                 AcknowledgeRelease,
-                _logger);
+                _logger,
+                onFault: OnPumpFaulted);
 
             _logger.LogInformation(
                 "Composited viewport ready on the compositor's own adapter; the native child is not in use.");
@@ -329,8 +333,21 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
     {
         _logger.LogError("Composited viewport unavailable: {Reason}", reason);
         _onUnavailable?.Invoke(
-            $"The composited viewport is not available here: {reason} Start without {EngineViewports.CompositedSwitch}.");
+            $"The composited viewport is not available here: {reason} Relaunch with --viewport=native.");
     }
+
+    /// <summary>
+    /// The hand-over stopped while the session was running.
+    /// </summary>
+    /// <remarks>
+    /// <b>Reported and nothing else, deliberately.</b> Swapping to the native
+    /// child here would tear down a live engine, destroy every GPU resource it
+    /// owns and rebuild the pane under whatever the user was in the middle of -
+    /// and would leave two hosting models in one session's log, which is a bug
+    /// report nobody can write. The session stays where it is, says what
+    /// happened, and names the switch that avoids it next time.
+    /// </remarks>
+    private void OnPumpFaulted() => _onFailure?.Invoke(ViewportChoiceReason.FirstUpdateFaulted);
 
     /// <summary>
     /// Tells the engine a retired shared-target generation may be freed.

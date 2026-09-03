@@ -142,6 +142,20 @@ public partial class MainWindow : Window
         _logger = _loggerFactory.CreateLogger<MainWindow>();
 
         _settings = EditorSettings.Load(_logger);
+
+        // --viewport= is a preference rather than a one-run override: there is
+        // no UI for this yet, so the switch is the only way to say it, and a
+        // switch whose effect vanished on the next launch would mean typing it
+        // forever. --viewport=auto is how it is put back.
+        if (ViewportModePolicy.RequestedMode(Program.StartupArgs) is { } requestedViewport)
+        {
+            _settings.SetViewportMode(requestedViewport);
+            _settings.Save(_logger);
+            _logger.LogInformation(
+                "Viewport mode set to {Mode} by the command line ({Usage}).",
+                ViewportModePolicy.NameOf(requestedViewport), ViewportModePolicy.Usage);
+        }
+
         VersionLabel.Text = SpectraEngine.Core.EngineInfo.VersionString;
 
         // The start page raises intents; the window owns every consequence,
@@ -641,10 +655,13 @@ public partial class MainWindow : Window
     /// </remarks>
     private void LaunchSession(SessionLaunch launch)
     {
-        if (_viewport is not null)
+        if (_viewport is not null || _launchInFlight)
         {
             // Callers close the running session first; stacking two engines
-            // over one window is never what anyone meant.
+            // over one window is never what anyone meant. The in-flight flag
+            // covers the gap the machine measurement opens: for as long as the
+            // compositor is being asked, there is no viewport yet and the field
+            // above would let a second launch through.
             _logger.LogWarning("A session is already running; ignoring the launch request");
             return;
         }
@@ -656,16 +673,109 @@ public partial class MainWindow : Window
             return;
         }
 
-        _pendingLaunch = launch;
+        _launchInFlight = true;
+        _ = LaunchSessionAsync(launch);
+    }
 
-        // The native child is still the default. The composited viewport is
-        // opt-in until sessions on real machines say it should not be, and the
-        // switch is read here rather than cached so a relaunch inside one run
-        // of the shell picks up the same answer the first launch did.
+    // True from the moment a launch is asked for until its viewport is in the
+    // tree. See LaunchSession.
+    private bool _launchInFlight;
+
+    // What the machine turned out to be, for the session that is running now.
+    // Read again when it closes, because the colour verdict and the machine's
+    // identity are both part of whether the session counted as green.
+    private ViewportCapabilities _sessionCapabilities = ViewportCapabilities.NotMeasured;
+    private bool _sessionIsComposited;
+    private bool _sessionFaulted;
+    private int _sessionDebugLayerErrors;
+
+    /// <summary>
+    /// Chooses the viewport, measuring the machine first when the choice
+    /// depends on it, and then launches.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The rehearsal import happens BEFORE the session is constructed, and
+    /// that ordering is the whole reason this is asynchronous.</b> A compositor
+    /// that is going to refuse the engine's texture must be discovered while
+    /// nothing is running against it: found afterwards, it is an engine with a
+    /// render thread, a device and a scene behind a pane that will never show a
+    /// frame, torn down out of the order the keyed-mutex hand-over requires.
+    /// </para>
+    /// <para>
+    /// <b>Nothing here may throw into the caller.</b> Every failure has the same
+    /// answer - the native child, with the reason said out loud - because a
+    /// launch that reported a driver problem by not opening an editor would be
+    /// the silent fallback this stage exists to remove.
+    /// </para>
+    /// </remarks>
+    private async Task LaunchSessionAsync(SessionLaunch launch)
+    {
+        ViewportDecision decision = new(
+            UseComposition: false,
+            ViewportChoiceReason.ExplicitNative,
+            ViewportModePolicy.Describe(ViewportChoiceReason.ExplicitNative));
+
+        try
+        {
+            GraphicsBackend backend = ResolveRequestedBackend();
+            ViewportPreference preference = _settings.ViewportPreference;
+            var capabilities = ViewportCapabilities.NotMeasured;
+
+            if (ViewportModePolicy.RequiresMeasurement(preference, backend))
+            {
+                capabilities = await ViewportProbe.MeasureAsync(
+                    this, backend, _loggerFactory.CreateLogger(nameof(ViewportProbe)));
+            }
+
+            decision = ViewportModePolicy.Decide(preference, capabilities, backend);
+            _sessionCapabilities = capabilities;
+
+            // AFTER the decision and whichever way it went, but only with a
+            // machine that was actually measured. After, because a count earned
+            // on another adapter or driver is exactly what produces the
+            // AdapterChanged and DriverChanged reasons and must still be there
+            // to produce them; whichever way it went, because leaving a stale
+            // count on disk would report the same change forever instead of
+            // starting the run again. An unmeasured launch is skipped, or it
+            // would overwrite a real history with empty strings, which reads
+            // afterwards as an adapter that changed.
+            if (capabilities.AdapterLuid.Length > 0)
+            {
+                _settings.RebaseViewport(capabilities.AdapterLuid, capabilities.DriverVersion);
+                _settings.Save(_logger);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Choosing the viewport failed; falling back to the native child");
+        }
+        finally
+        {
+            _launchInFlight = false;
+        }
+
+        // Named in the log whichever way it went. A composited pane and a native
+        // child render the same picture, so a fallback nobody announced only
+        // shows up weeks later as an overlay that mysteriously does not draw.
+        _logger.LogInformation(
+            "Viewport: {Choice} ({Reason}) - {Explanation}",
+            decision.UseComposition ? "composition" : "native child",
+            decision.Reason,
+            decision.Explanation);
+
+        StartViewport(launch, decision.UseComposition);
+    }
+
+    private void StartViewport(SessionLaunch launch, bool composited)
+    {
+        _pendingLaunch = launch;
+        _sessionIsComposited = composited;
+        _sessionFaulted = false;
+        _sessionDebugLayerErrors = 0;
+
         IEngineViewport viewport = EngineViewports.Create(
-            EngineViewports.CompositedRequested(Program.StartupArgs),
-            _loggerFactory,
-            _shell.SetError);
+            composited, _loggerFactory, _shell.SetError, OnViewportFailed);
         viewport.SurfaceCreated += OnSurfaceCreated;
         viewport.SurfaceDestroying += OnSurfaceDestroying;
 
@@ -696,6 +806,58 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// A composited viewport that was already running has stopped working.
+    /// </summary>
+    /// <remarks>
+    /// <b>An error and a way out, never a hot swap.</b> Rebuilding the pane as a
+    /// native child would tear down a live engine, destroy every GPU resource it
+    /// owns and reshape the window under whatever the user was in the middle of,
+    /// and it would leave one session's log describing two viewports - a bug
+    /// report nobody can write. So the session says what happened and names the
+    /// switch that avoids it, and the history remembers that this one was not
+    /// green.
+    /// </remarks>
+    private void OnViewportFailed(ViewportChoiceReason reason)
+    {
+        _sessionFaulted = true;
+        _shell.SetError($"The composited viewport failed: {ViewportModePolicy.Describe(reason)}.");
+    }
+
+    /// <summary>
+    /// Folds the session that is ending into the composited history.
+    /// </summary>
+    /// <remarks>
+    /// <b>Only a session that actually composited is recorded</b>, because a
+    /// native one says nothing either way about the composited path. Green is
+    /// three conditions and the third is the one that would be forgotten:
+    /// see <see cref="ViewportModePolicy.IsSessionGreen"/>.
+    /// </remarks>
+    private void RecordSessionOutcome()
+    {
+        if (!_sessionIsComposited)
+            return;
+
+        bool green = ViewportModePolicy.IsSessionGreen(
+            _sessionDebugLayerErrors, _sessionFaulted, _sessionCapabilities.CompareGreen);
+
+        _settings.RecordCompositedSession(green);
+        _settings.Save(_logger);
+
+        _logger.LogInformation(
+            "Composited session recorded as {Verdict}: {Errors} counted debug-layer error(s), " +
+            "{Faults}, colour comparison {Compare}. {Count} of {Required} consecutive green session(s) " +
+            "on this adapter and driver.",
+            green ? "green" : "not green",
+            _sessionDebugLayerErrors,
+            _sessionFaulted ? "the hand-over faulted" : "no hand-over fault",
+            _sessionCapabilities.CompareGreen ? "green" : "missing or red for this adapter and backend",
+            _settings.ViewportPreference.GreenSessions,
+            ViewportModePolicy.RequiredGreenSessions);
+
+        _sessionIsComposited = false;
+    }
+
+    /// <summary>
     /// Tears the session and its viewport down and returns to the start page.
     /// Callers have already confirmed any unsaved work.
     /// </summary>
@@ -703,6 +865,10 @@ public partial class MainWindow : Window
     {
         if (_viewport is not { } viewport)
             return;
+
+        // Before the teardown, while the counters still describe the session
+        // that ran.
+        RecordSessionOutcome();
 
         // The child leaves the tree FIRST: destroying the native window raises
         // SurfaceDestroying, which stops the engine before the HWND dies. The
@@ -865,6 +1031,11 @@ public partial class MainWindow : Window
         }
         else
         {
+            // Before the stop, while the counters still describe the session
+            // that ran. Closing the window is how most sessions actually end,
+            // so recording only in CloseSessionView would mean the history
+            // almost never moved.
+            RecordSessionOutcome();
             StopSession();
         }
 
@@ -1003,6 +1174,14 @@ public partial class MainWindow : Window
         if (ReferenceEquals(snapshot, _lastApplied))
             return;
         _lastApplied = snapshot;
+
+        // The high-water mark rather than the latest value, because the count is
+        // cumulative for the session and a composited session's greenness is a
+        // claim about the whole of it. These are the COUNTED errors, which on a
+        // composited D3D12 surface already exclude the one forgiven
+        // ReflectSharedProperties message per bridge wrap.
+        if (snapshot.DebugLayerErrorCount > _sessionDebugLayerErrors)
+            _sessionDebugLayerErrors = snapshot.DebugLayerErrorCount;
 
         // Selection is a state rather than a history, so it is applied once
         // from the newest snapshot instead of once per drained one; the panel
@@ -2464,18 +2643,41 @@ public partial class MainWindow : Window
 
     private GraphicsBackend ResolveBackend()
     {
+        GraphicsBackend backend = ResolveRequestedBackend();
+
+        // Named explicitly and refused explicitly: an embedded GL surface needs
+        // its own context, and letting the renderer discover that would report
+        // it as a driver failure.
+        if (backend is GraphicsBackend.OpenGL)
+        {
+            throw new NotSupportedException(
+                "The editor viewport cannot host OpenGL yet; use d3d11 or d3d12.");
+        }
+
+        return backend;
+    }
+
+    /// <summary>
+    /// What the command line asked for, INCLUDING the backend the shell is going
+    /// to refuse.
+    /// </summary>
+    /// <remarks>
+    /// <b>Separate from <see cref="ResolveBackend"/> because the viewport
+    /// decision has to be able to name OpenGL.</b> Refusing it inside the
+    /// resolver means the only way to learn it was asked for is to catch the
+    /// exception, and a policy that reported "no compositor" for a request it
+    /// refuses by name would be exactly the silent fallback this whole stage
+    /// exists to prevent.
+    /// </remarks>
+    private static GraphicsBackend ResolveRequestedBackend()
+    {
         foreach (string arg in Program.StartupArgs)
         {
             switch (arg.ToLowerInvariant())
             {
                 case "d3d11": return GraphicsBackend.D3D11;
                 case "d3d12": return GraphicsBackend.D3D12;
-                case "opengl":
-                    // Named explicitly and refused explicitly: an embedded GL
-                    // surface needs its own context, and letting the renderer
-                    // discover that would report it as a driver failure.
-                    throw new NotSupportedException(
-                        "The editor viewport cannot host OpenGL yet; use d3d11 or d3d12.");
+                case "opengl": return GraphicsBackend.OpenGL;
             }
         }
 

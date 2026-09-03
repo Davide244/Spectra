@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using SpectraEngine.Core.Serialization;
+using SpectraEngine.Editor.Viewport;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -15,8 +16,9 @@ namespace SpectraEngine.Editor.Shell;
 public sealed record RecentProject(string Path, string Name, DateTime OpenedUtc);
 
 /// <summary>
-/// The shell's per-user state: today, the recent-projects list the start page
-/// is built from. Stored under the user profile, never inside a project.
+/// The shell's per-user state: the recent-projects list the start page is built
+/// from, and which viewport this machine has earned. Stored under the user
+/// profile, never inside a project.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -96,6 +98,76 @@ public sealed class EditorSettings
     // Paths this session explicitly forgot, exempt from the save-time merge.
     private readonly HashSet<string> _forgotten = new(StringComparer.OrdinalIgnoreCase);
 
+    // --- The viewport's persisted half ---------------------------------------
+
+    private ViewportPreference _viewport = ViewportPreference.Default;
+    private DateTime _viewportRecordedUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// What was asked for and what this machine has earned. See
+    /// <see cref="ViewportModePolicy"/>, which owns every rule about it.
+    /// </summary>
+    /// <remarks>
+    /// <b>Stored per user rather than per project</b>, because it is a fact
+    /// about the machine and its driver: opening a different project does not
+    /// change whether this GPU can composite an engine frame.
+    /// </remarks>
+    public ViewportPreference ViewportPreference => _viewport;
+
+    /// <summary>
+    /// Records which viewport to ask for from now on.
+    /// </summary>
+    /// <remarks>
+    /// <b><c>--viewport=</c> is a preference rather than a one-run override, and
+    /// that is deliberate.</b> There is no UI for this yet, so the switch is the
+    /// only way to express it, and a switch whose effect vanished on the next
+    /// launch would mean typing it forever. <c>--viewport=auto</c> is how it is
+    /// put back, which is why auto is a value somebody can name rather than
+    /// merely the default.
+    /// </remarks>
+    public void SetViewportMode(ViewportMode mode)
+    {
+        if (_viewport.Mode == mode)
+            return;
+
+        _viewport = _viewport with { Mode = mode };
+        _viewportRecordedUtc = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Re-anchors the composited history on the machine that is actually here,
+    /// through <see cref="ViewportModePolicy.Rebase"/>.
+    /// </summary>
+    /// <remarks>
+    /// Called only when the machine was measured. An unmeasured launch knows
+    /// nothing about the adapter and would overwrite a real history with empty
+    /// strings, which reads afterwards as an adapter that changed.
+    /// </remarks>
+    public void RebaseViewport(string adapterLuid, string driverVersion)
+    {
+        ViewportPreference rebased = ViewportModePolicy.Rebase(_viewport, adapterLuid, driverVersion);
+        if (rebased == _viewport)
+            return;
+
+        _viewport = rebased;
+        _viewportRecordedUtc = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Folds one finished COMPOSITED session into the history: one longer if it
+    /// was green, back to zero if it was not.
+    /// </summary>
+    /// <remarks>
+    /// A native session is never recorded here. It says nothing either way about
+    /// the composited path, and counting one would let a machine earn the flip
+    /// without ever having composited a frame.
+    /// </remarks>
+    public void RecordCompositedSession(bool sessionGreen)
+    {
+        _viewport = ViewportModePolicy.Record(_viewport, sessionGreen);
+        _viewportRecordedUtc = DateTime.UtcNow;
+    }
+
     /// <summary>Loads the settings, or returns empty ones when there is nothing to load.</summary>
     public static EditorSettings Load(ILogger logger) => Load(DefaultPath, logger);
 
@@ -118,6 +190,12 @@ public sealed class EditorSettings
             // identical to a bug in the list.
             logger.LogWarning(ex, "Could not read editor settings at {Path}; starting fresh", path);
             settings._recentProjects.Clear();
+
+            // The viewport history goes with it. A half-read block would be a
+            // count with no adapter behind it, which reads as "proven on this
+            // machine" the next time the adapter happens to match nothing.
+            settings._viewport = ViewportPreference.Default;
+            settings._viewportRecordedUtc = DateTime.MinValue;
         }
 
         return settings;
@@ -199,11 +277,30 @@ public sealed class EditorSettings
         _recentProjects.Sort((a, b) => b.OpenedUtc.CompareTo(a.OpenedUtc));
         if (_recentProjects.Count > MaxRecentProjects)
             _recentProjects.RemoveRange(MaxRecentProjects, _recentProjects.Count - MaxRecentProjects);
+
+        // The viewport block is one state, not a set of entries, so it merges by
+        // RECENCY rather than element by element. Two shells that both ran a
+        // composited session would otherwise interleave their counts into a
+        // number neither of them measured.
+        if (onDisk._viewportRecordedUtc > _viewportRecordedUtc)
+        {
+            _viewport = onDisk._viewport;
+            _viewportRecordedUtc = onDisk._viewportRecordedUtc;
+        }
     }
 
     private void Write(Utf8JsonWriter writer)
     {
         writer.WriteStartObject();
+
+        writer.WriteStartObject("viewport");
+        writer.WriteString("mode", ViewportModePolicy.NameOf(_viewport.Mode));
+        writer.WriteNumber("greenSessions", _viewport.GreenSessions);
+        writer.WriteString("adapterLuid", _viewport.AdapterLuid);
+        writer.WriteString("driverVersion", _viewport.DriverVersion);
+        writer.WriteString("recordedUtc", _viewportRecordedUtc.ToString("O"));
+        writer.WriteEndObject();
+
         writer.WriteStartArray("recentProjects");
         foreach (RecentProject project in _recentProjects)
         {
@@ -230,6 +327,10 @@ public sealed class EditorSettings
             {
                 ReadRecentProjects(ref reader);
             }
+            else if (reader.ValueTextEquals("viewport"))
+            {
+                ReadViewport(ref reader);
+            }
             else
             {
                 // A member a newer shell wrote. Skipped, not preserved: the
@@ -239,6 +340,68 @@ public sealed class EditorSettings
                 reader.Skip();
             }
         }
+    }
+
+    /// <summary>
+    /// Reads the viewport block, leaving anything it cannot make sense of at its
+    /// default.
+    /// </summary>
+    /// <remarks>
+    /// <b>A mode word this build does not know falls back to auto rather than
+    /// failing the file.</b> The one thing that must not happen is a settings
+    /// file written by a newer shell stopping this one from starting, and auto
+    /// is the conservative answer by construction: it resolves to the native
+    /// child until a history says otherwise, and the history is read separately.
+    /// </remarks>
+    private void ReadViewport(ref Utf8JsonReader reader)
+    {
+        if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+            throw new JsonException("'viewport' must be an object.");
+
+        ViewportMode mode = ViewportPreference.Default.Mode;
+        int green = 0;
+        string luid = string.Empty;
+        string driver = string.Empty;
+        DateTime recorded = DateTime.MinValue;
+
+        while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+        {
+            if (reader.ValueTextEquals("mode"))
+            {
+                reader.Read();
+                ViewportModePolicy.TryParseMode(reader.GetString(), out mode);
+            }
+            else if (reader.ValueTextEquals("greenSessions"))
+            {
+                reader.Read();
+                green = Math.Max(0, reader.GetInt32());
+            }
+            else if (reader.ValueTextEquals("adapterLuid"))
+            {
+                reader.Read();
+                luid = reader.GetString() ?? string.Empty;
+            }
+            else if (reader.ValueTextEquals("driverVersion"))
+            {
+                reader.Read();
+                driver = reader.GetString() ?? string.Empty;
+            }
+            else if (reader.ValueTextEquals("recordedUtc"))
+            {
+                reader.Read();
+                DateTime.TryParse(
+                    reader.GetString(), null,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out recorded);
+            }
+            else
+            {
+                reader.Read();
+                reader.Skip();
+            }
+        }
+
+        _viewport = new ViewportPreference(mode, green, luid, driver);
+        _viewportRecordedUtc = recorded;
     }
 
     private void ReadRecentProjects(ref Utf8JsonReader reader)

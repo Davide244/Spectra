@@ -5,6 +5,7 @@ using Silk.NET.Direct3D11;
 using Silk.NET.DXGI;
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Threading;
 using D12 = Silk.NET.Direct3D12;
@@ -194,23 +195,81 @@ internal sealed unsafe partial class InteropProbeTextures : IDisposable
         _logger = logger;
         _adapter = FindAdapter(compositorLuid, out string name);
         AdapterName = name;
+        DriverVersion = ReadDriverVersion(_adapter);
+    }
+
+    /// <summary>
+    /// Reads the adapter's user-mode driver version, or an empty string.
+    /// </summary>
+    /// <remarks>
+    /// Never throws: this is an identifier for a cache key, and a machine whose
+    /// driver version cannot be read is a machine whose composited history
+    /// simply never matches - which costs a fallback to the native child and
+    /// nothing else.
+    /// </remarks>
+    private static string ReadDriverVersion(ComPtr<IDXGIAdapter> adapter)
+    {
+        if (adapter.Handle is null)
+            return string.Empty;
+
+        try
+        {
+            Guid device = IDXGIDevice.Guid;
+            long umd = 0;
+            if (((IDXGIAdapter*)adapter.Handle)->CheckInterfaceSupport(&device, &umd) < 0)
+                return string.Empty;
+
+            // The four 16-bit parts a driver version is written as everywhere
+            // else, so a value in a settings file can be compared by eye with
+            // what Device Manager reports.
+            ulong bits = (ulong)umd;
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"{(bits >> 48) & 0xFFFF}.{(bits >> 32) & 0xFFFF}.{(bits >> 16) & 0xFFFF}.{bits & 0xFFFF}");
+        }
+        catch (Exception)
+        {
+            return string.Empty;
+        }
     }
 
     /// <summary>What the textures are created on, and how that was decided.</summary>
     internal string AdapterName { get; }
 
+    /// <summary>
+    /// The user-mode driver build behind that adapter, or an empty string when
+    /// it could not be read.
+    /// </summary>
+    /// <remarks>
+    /// <b>The other half of a machine's identity, and the half that moves.</b>
+    /// A composited viewport that works today and not after a driver update is
+    /// exactly the failure the flip policy's green run is guarding against, so
+    /// the recorded history has to be anchored to the driver as well as to the
+    /// GPU. <c>CheckInterfaceSupport</c> is what reports it; it is documented as
+    /// answering for D3D10-era interfaces only, which is why a failure here is
+    /// an empty string rather than an error - an unknown driver simply never
+    /// matches a recorded one, so the count restarts, which is the safe answer.
+    /// </remarks>
+    internal string DriverVersion { get; private set; } = string.Empty;
+
     /// <summary>Route 1: a keyed-mutex D3D11 texture shared through an NT handle.</summary>
-    internal SharedProbeTexture CreateD3D11NtHandleTexture()
+    /// <param name="size">
+    /// The square's edge. <see cref="TextureSize"/> for a measurement of the
+    /// route; one texel for a launch-time rehearsal, where the question is only
+    /// whether the compositor will accept the import at all and the cheapest
+    /// texture that can be offered is the right one.
+    /// </param>
+    internal SharedProbeTexture CreateD3D11NtHandleTexture(int size = TextureSize)
     {
         EnsureDevice11();
-        return CreateSharedD3D11Texture(_device11, _context11, ntHandle: true);
+        return CreateSharedD3D11Texture(_device11, _context11, ntHandle: true, size);
     }
 
     /// <summary>Route 2: the same texture shared through the legacy global handle.</summary>
     internal SharedProbeTexture CreateD3D11GlobalHandleTexture()
     {
         EnsureDevice11();
-        return CreateSharedD3D11Texture(_device11, _context11, ntHandle: false);
+        return CreateSharedD3D11Texture(_device11, _context11, ntHandle: false, TextureSize);
     }
 
     /// <summary>
@@ -287,7 +346,7 @@ internal sealed unsafe partial class InteropProbeTextures : IDisposable
     internal SharedProbeTexture CreateD3D11On12Texture()
     {
         EnsureDevice11On12();
-        return CreateSharedD3D11Texture(_device11On12, _context11On12, ntHandle: true);
+        return CreateSharedD3D11Texture(_device11On12, _context11On12, ntHandle: true, TextureSize);
     }
 
     public void Dispose()
@@ -400,7 +459,7 @@ internal sealed unsafe partial class InteropProbeTextures : IDisposable
     // --- textures ------------------------------------------------------------
 
     private static SharedProbeTexture CreateSharedD3D11Texture(
-        ComPtr<ID3D11Device> device, ComPtr<ID3D11DeviceContext> context, bool ntHandle)
+        ComPtr<ID3D11Device> device, ComPtr<ID3D11DeviceContext> context, bool ntHandle, int size)
     {
         // SHARED_NTHANDLE is only legal alongside SHARED or SHARED_KEYEDMUTEX,
         // and the keyed mutex is what the compositor's hand-over wants, so both
@@ -411,8 +470,8 @@ internal sealed unsafe partial class InteropProbeTextures : IDisposable
 
         var desc = new Texture2DDesc
         {
-            Width = TextureSize,
-            Height = TextureSize,
+            Width = (uint)size,
+            Height = (uint)size,
             MipLevels = 1,
             ArraySize = 1,
             Format = Format.FormatR8G8B8A8Unorm,
@@ -467,7 +526,7 @@ internal sealed unsafe partial class InteropProbeTextures : IDisposable
                 : (GetGlobalSharedHandle(texture), KnownPlatformGraphicsExternalImageHandleTypes.D3D11TextureGlobalSharedHandle);
 
             return new SharedProbeTexture(
-                kind, TextureSize, TextureSize, handle, ntHandle, keyedMutex: true, texture, default);
+                kind, size, size, handle, ntHandle, keyedMutex: true, texture, default);
         }
         catch
         {

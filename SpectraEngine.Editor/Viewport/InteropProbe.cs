@@ -238,7 +238,8 @@ internal static class InteropProbe
         var results = new List<RouteResult>(4);
         try
         {
-            results.Add(await RunRouteAsync(compositor, interop, Route1, textures.CreateD3D11NtHandleTexture));
+            results.Add(await RunRouteAsync(
+                compositor, interop, Route1, () => textures.CreateD3D11NtHandleTexture()));
             results.Add(await RunRouteAsync(compositor, interop, Route2, textures.CreateD3D11GlobalHandleTexture));
             results.Add(await RunRouteAsync(compositor, interop, Route3, textures.CreateD3D12Texture));
             results.Add(await RunRouteAsync(compositor, interop, Route4, textures.CreateD3D11On12Texture));

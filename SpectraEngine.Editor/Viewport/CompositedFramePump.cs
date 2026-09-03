@@ -117,6 +117,7 @@ internal sealed class CompositedFramePump
 
     private readonly ICompositedImageSource _source;
     private readonly Action<int> _acknowledgeRelease;
+    private readonly Action? _onFault;
     private readonly Func<nint, nint> _duplicateHandle;
     private readonly Action<nint> _closeHandle;
     private readonly ILogger _logger;
@@ -133,12 +134,20 @@ internal sealed class CompositedFramePump
     // CheckForStall.
     private long? _updateStartedAt;
 
+    /// <param name="onFault">
+    /// Raised once, on the UI thread, when the picture stops arriving and is not
+    /// going to start again - a hand-over that threw, or one the watchdog gave
+    /// up on. <b>What the caller may do with it is say so</b>: a viewport that
+    /// answered by swapping its hosting model mid-session would tear down a live
+    /// engine under the user's hands and leave two viewports in one log.
+    /// </param>
     internal CompositedFramePump(
         ICompositedImageSource source,
         Action<int> acknowledgeRelease,
         ILogger logger,
         Func<nint, nint>? duplicateHandle = null,
-        Action<nint>? closeHandle = null)
+        Action<nint>? closeHandle = null,
+        Action? onFault = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(acknowledgeRelease);
@@ -146,6 +155,7 @@ internal sealed class CompositedFramePump
 
         _source = source;
         _acknowledgeRelease = acknowledgeRelease;
+        _onFault = onFault;
         _logger = logger;
 
         // The handle this side holds is its own duplicate, because Avalonia's
@@ -327,6 +337,7 @@ internal sealed class CompositedFramePump
         {
             _stalled = true;
             _logger.LogError(ex, "The composited viewport's frame pump stopped.");
+            _onFault?.Invoke();
         }
         finally
         {
@@ -369,6 +380,8 @@ internal sealed class CompositedFramePump
             "scheduling. This is the one ordering the composited path cannot recover from: the consumer's " +
             "acquire has no usable deadline, so the engine must outlive the pump.",
             UpdateWatchdog.TotalSeconds);
+
+        _onFault?.Invoke();
     }
 
     // --- Retirement ----------------------------------------------------------

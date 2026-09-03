@@ -122,13 +122,14 @@ public interface IEngineViewport
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>One place decides, because the decision is about to become a policy.</b>
-/// The native child is still the default: it is the path with a year of use
-/// behind it, and the composited one is opt-in until there is evidence from
-/// real sessions to flip it on. That evidence is what this stage produces, and
-/// the flip is the next one - so the choice is a function here rather than a
-/// <c>new</c> at the call site, where a second one would appear the first time
-/// somebody needed a viewport somewhere else.
+/// <b>One place builds it, and a separate pure one decides.</b> The native child
+/// is still the effective default: it is the path with a year of use behind it,
+/// and the composited one measures pixel-identical on the machine it was written
+/// on, which is evidence about one driver. <see cref="ViewportModePolicy"/> owns
+/// the choice - including the <c>--viewport=</c> switch, the recorded history
+/// and every reason a fallback can have - so that this factory stays a
+/// <c>new</c> nobody has to reason about, and so the decision can be tested with
+/// no window anywhere.
 /// </para>
 /// <para>
 /// <b>Both paths are Windows-only today and for different reasons.</b> The
@@ -140,48 +141,41 @@ public interface IEngineViewport
 /// </remarks>
 public static class EngineViewports
 {
-    /// <summary>The command line's opt-in for the composited viewport.</summary>
-    public const string CompositedSwitch = "--composited";
-
     /// <summary>Whether this platform can host the engine in a viewport at all.</summary>
     public static bool IsSupported => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-
-    /// <summary>Whether the command line asked for the composited viewport.</summary>
-    public static bool CompositedRequested(IReadOnlyList<string> args)
-    {
-        ArgumentNullException.ThrowIfNull(args);
-
-        foreach (string arg in args)
-        {
-            if (string.Equals(arg, CompositedSwitch, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-
-        return false;
-    }
 
     /// <summary>Builds the viewport a session should run in.</summary>
     /// <param name="composited">
     /// Whether to composite the engine's output instead of hosting a native
-    /// child window. See <see cref="CompositedRequested"/>.
+    /// child window. Comes from <see cref="ViewportModePolicy.Decide"/> and from
+    /// nowhere else.
     /// </param>
     /// <param name="loggerFactory">Owned by the caller.</param>
     /// <param name="onUnavailable">
     /// Called on the UI thread if a composited viewport turns out to be
-    /// impossible on this machine. <b>It is asynchronous by construction</b> -
-    /// the compositor's GPU interop is negotiated with the render backend after
-    /// the control attaches - so there is nothing to return, and a viewport
-    /// that failed silently would be an editor with a blank pane and a healthy
-    /// status bar.
+    /// impossible on this machine after all. <b>The rehearsal import in
+    /// <see cref="ViewportProbe"/> is what makes this rare rather than
+    /// routine</b>, and it stays because the compositor's own set-up is
+    /// asynchronous by construction: a viewport that failed silently would be an
+    /// editor with a blank pane and a healthy status bar.
+    /// </param>
+    /// <param name="onFailure">
+    /// Called on the UI thread when a composited viewport that was already
+    /// running stops working. <b>The answer is a message, never a hot swap</b> -
+    /// a viewport that quietly changed its hosting model mid-session is a bug
+    /// report nobody can write.
     /// </param>
     public static IEngineViewport Create(
-        bool composited, ILoggerFactory loggerFactory, Action<string>? onUnavailable = null)
+        bool composited,
+        ILoggerFactory loggerFactory,
+        Action<string>? onUnavailable = null,
+        Action<ViewportChoiceReason>? onFailure = null)
     {
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
         return composited
             ? new CompositionEngineViewport(
-                loggerFactory.CreateLogger<CompositionEngineViewport>(), onUnavailable)
+                loggerFactory.CreateLogger<CompositionEngineViewport>(), onUnavailable, onFailure)
             : new Win32EngineViewport();
     }
 }

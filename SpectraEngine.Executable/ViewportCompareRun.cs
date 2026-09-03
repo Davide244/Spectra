@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Silk.NET.Core.Contexts;
 using Silk.NET.Maths;
 using SpectraEngine.Core;
+using SpectraEngine.Core.Diagnostics;
 using SpectraEngine.Core.Graphics;
 using System;
 using System.Diagnostics;
@@ -60,8 +61,20 @@ internal static class ViewportCompareRun
     /// Starts the engine, waits for the probe, stops it, and returns whether
     /// the two pictures agreed.
     /// </summary>
-    internal static bool Run(Engine engine, ILogger logger)
+    /// <remarks>
+    /// <b>The verdict is left on disk as well as in the log,</b> because the one
+    /// thing that has to act on it is the editor shell, which is a different
+    /// process and cannot watch this run happen. See
+    /// <see cref="ViewportCompareStamp"/>: without it the shell's
+    /// composited-viewport flip policy would have a colour condition nothing
+    /// could ever satisfy, and a gate that cannot open is worse than no gate.
+    /// </remarks>
+    internal static bool Run(Engine engine, Renderer renderer, ILogger logger)
     {
+        ArgumentNullException.ThrowIfNull(engine);
+        ArgumentNullException.ThrowIfNull(renderer);
+        ArgumentNullException.ThrowIfNull(logger);
+
         engine.RunViewportCompare = true;
 
         var surface = new CompositedProbeSurface(Width, Height);
@@ -90,7 +103,35 @@ internal static class ViewportCompareRun
 
         // Faulted covers the case the probe never got to run at all, which
         // would otherwise read as a pass through a null verdict.
-        return engine.ViewportComparePassed == true && !engine.Faulted;
+        bool passed = engine.ViewportComparePassed == true && !engine.Faulted;
+
+        // Recorded either way. A red verdict is exactly as much information as a
+        // green one, and a stamp that only ever appeared on success would let a
+        // machine keep the previous run's green answer after breaking.
+        // AdapterName is only real once the render thread has initialised the
+        // renderer, which the wait above has already happened after.
+        RecordVerdict(renderer, passed, logger);
+        return passed;
+    }
+
+    private static void RecordVerdict(Renderer renderer, bool passed, ILogger logger)
+    {
+        var stamp = new ViewportCompareStamp(
+            renderer.AdapterName, renderer.Backend, passed, DateTime.UtcNow);
+
+        if (stamp.Save())
+        {
+            logger.LogInformation(
+                "Viewport compare: verdict recorded for {Adapter} on {Backend} at {Path}.",
+                stamp.Adapter, stamp.Backend, ViewportCompareStamp.DefaultPath);
+        }
+        else
+        {
+            logger.LogWarning(
+                "Viewport compare: the verdict could not be written to {Path}; the editor shell will see " +
+                "no colour measurement for this machine.",
+                ViewportCompareStamp.DefaultPath);
+        }
     }
 
     /// <summary>
