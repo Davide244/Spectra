@@ -204,6 +204,20 @@ try
     if (options.FullscreenCycleInterval is { } describedInterval)
         Log.Information("{Message}", FullscreenCycleHarness.DescribeStartup(describedInterval));
 
+    // One frame, then out. The scene is written during the load, which finishes
+    // before the first frame is presented, so the earliest snapshot already
+    // describes a session whose export is on disk.
+    //
+    // Through the host's own shutdown latch rather than by closing the window,
+    // because a window belongs to the main thread and this handler is raised on
+    // the render one. It is the same latch a shell's Exit uses, which is why
+    // there is nothing new to get wrong here.
+    if (options.ExitAfterSave)
+    {
+        Log.Information("Exiting after the first frame: --exit-after-save was asked for.");
+        engine.Host.FrameCompleted += _ => engine.Host.RequestShutdown();
+    }
+
     // No renderer disposal here: GPU teardown is thread-affine and happens in
     // Renderer.Shutdown on the render thread (Engine handles the crash path too).
     // A render-thread crash is caught and logged inside Engine, so Run returns

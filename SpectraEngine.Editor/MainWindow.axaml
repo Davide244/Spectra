@@ -233,6 +233,14 @@
             <MenuItem Header="_Save" InputGesture="Ctrl+S" Click="OnSaveClicked" IsEnabled="{Binding HasSession}" />
             <MenuItem Header="Save _as..." InputGesture="Ctrl+Shift+S" Click="OnSaveAsClicked" IsEnabled="{Binding HasSession}" />
             <Separator />
+            <!-- Cooks the project and mounts the pack ALONE and strict, which is
+                 the only way to see what a shipped build sees: the editor
+                 resolves loose files above the pack, so a texture the cook never
+                 produced looks perfectly fine in this window. -->
+            <MenuItem Header="_Validate cooked content" Click="OnValidateCookedClicked"
+                      IsEnabled="{Binding CanValidateCooked}"
+                      ToolTip.Tip="Cook this project and check the pack resolves with nothing else mounted." />
+            <Separator />
             <MenuItem Header="E_xit" Click="OnExitClicked" />
           </MenuItem>
 

@@ -207,6 +207,8 @@ jobs:
           dotnet build SpectraShade.Compiler
           dotnet build SpectraShade.Compiler.CLI
           dotnet build SpectraShade.LSP
+          dotnet build Spectra.Kitchen
+          dotnet build Spectra.Kitchen.CLI
           dotnet build Benchmarks/CsgBench
 
       # The five headless suites. Determined by reading the projects, not by
@@ -248,8 +250,142 @@ jobs:
       - name: SpectraEngine.Physics.Tests
         run: dotnet run --project Test/SpectraEngine.Physics.Tests
 
+      # Here as well as in the cooked-pack job below, and the second host is the
+      # point: a pack is hashed by content, so a text asset checking out as CRLF
+      # on one runner and LF on the other gives the two hosts different bytes for
+      # one commit. The .gitattributes rules exist to stop that, and this suite -
+      # which cooks the engine's own Assets and verifies the result - is what
+      # would notice if one of them was ever dropped.
+      - name: Spectra.Kitchen.Tests
+        run: dotnet run --project Test/Spectra.Kitchen.Tests
+
   # ---------------------------------------------------------------------------
-  # 3. Windows AOT publish. The engine ships NativeAOT, so this is the gate that
+  # 3. The cooked-content gate: export a project from the demo, cook it, verify
+  #    the pack, then run the asset-facing suite against cooked packs.
+  #
+  #    WHY THIS IS A JOB OF ITS OWN. Every other suite here resolves content out
+  #    of the loose tree, which is the editor's workflow and is precisely why a
+  #    material naming a texture nobody cooked looks perfectly fine in all of
+  #    them: the loose file is mounted above the pack and answers. Only a run
+  #    with the pack mounted ALONE, and strict, can see what a shipped build
+  #    sees. That is what `scook verify` does and what the Kitchen suite pins.
+  #
+  #    WINDOWS ONLY, because the export half needs a graphics device: the scene
+  #    it writes out does not exist until the render thread has built its meshes
+  #    and textures, so unlike `--export-entity-schema` there is no headless form
+  #    of the question. The cook and the verify halves are platform-free and run
+  #    inside the Kitchen suite on both hosts already.
+  # ---------------------------------------------------------------------------
+  cooked-windows:
+    name: Cooked pack gate (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build
+
+      # ----------------------------------------------------------------------
+      # --exit-after-save is what makes this runnable unattended at all: the
+      # demo is an interactive session and would otherwise sit at its window
+      # forever, which in CI is not a slow step, it is a job that never ends.
+      # The switch shuts the session down on the first published frame, by which
+      # point the export is already on disk (it is written during the scene
+      # load).
+      #
+      # continue-on-error, and the reason is specific rather than defensive: the
+      # demo host installs Box3D physics unconditionally and box3d.dll is build
+      # output of the pinned submodule, which no job here builds - so the render
+      # thread throws DllNotFoundException AFTER the export lands and the process
+      # exits non-zero having done its job. The next step decides on the artifact
+      # rather than on the exit code, which is the honest test either way.
+      #
+      # The timeout is the real guard. A hosted runner with no usable device can
+      # hang inside device creation, and a step that hangs burns the whole job's
+      # budget with nothing to show.
+      # ----------------------------------------------------------------------
+      - name: Export a project from the demo
+        id: export
+        continue-on-error: true
+        timeout-minutes: 6
+        shell: pwsh
+        run: dotnet run --project SpectraEngine.Executable -- d3d11 --save-project=${{ runner.temp }}/CookGate --exit-after-save
+
+      - name: Decide whether the demo half ran
+        id: exported
+        shell: pwsh
+        run: |
+          $manifest = Get-ChildItem -Path '${{ runner.temp }}/CookGate' -Filter '*.spectraproj' -ErrorAction SilentlyContinue
+          if ($manifest) {
+            'available=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "Exported $($manifest[0].FullName)."
+          } else {
+            'available=false' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host 'The demo produced no project on this runner.'
+          }
+
+      # Both of these are allowed to go red, and that is the point of the job:
+      # from here on nothing needs a GPU, so a failure is about the content or
+      # the cooker rather than about the runner.
+      - name: Cook the exported project
+        if: steps.exported.outputs.available == 'true'
+        run: dotnet run --project Spectra.Kitchen.CLI -- cook ${{ runner.temp }}/CookGate --no-color
+
+      - name: Verify the cooked pack
+        if: steps.exported.outputs.available == 'true'
+        run: dotnet run --project Spectra.Kitchen.CLI -- verify ${{ runner.temp }}/CookGate/cooked/Demo.spack --no-color
+
+      # The pack's own row list, into the run summary. It costs one command and
+      # it is what a bug report about a missing asset gets pasted from.
+      - name: Record what is in the pack
+        if: steps.exported.outputs.available == 'true'
+        shell: pwsh
+        run: |
+          '### Cooked pack', '', '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          dotnet run --project Spectra.Kitchen.CLI -- inspect ${{ runner.temp }}/CookGate/cooked/Demo.spack --no-color |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      # A silently skipped half is worse than a failing one, so the skip is an
+      # annotation AND a summary block naming exactly what stopped being checked
+      # and what still is.
+      - name: Say loudly that the export half was skipped
+        if: steps.exported.outputs.available != 'true'
+        shell: pwsh
+        run: |
+          Write-Host '::warning title=Demo export SKIPPED::The demo produced no project on this runner, so the executable-driven half of the cook chain did not run.'
+          @(
+            '## :warning: The demo export did not run',
+            '',
+            'The `demo --save-project` -> `scook cook` -> `scook verify` chain stopped at its first',
+            'step, so nothing on this run cooked the scene the demo actually authors.',
+            '',
+            'The likely cause is `box3d.dll`: the demo host installs Box3D physics unconditionally,',
+            'the library is build output of the pinned `external/box3d` submodule, and no job in this',
+            'workflow builds it. A second possibility is that this runner has no usable D3D11 device.',
+            '',
+            'What still ran and is genuinely covered: `Test/Spectra.Kitchen.Tests` below, which cooks',
+            "the engine's own `Assets/` in process and verifies the pack with only that pack mounted,",
+            'strict - the same claim `scook verify` makes, over the same content, through the same',
+            'library. What did not: the demo scene, its exported project layout, and the CLI itself.'
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      # Always, export or no export. This is the asset-facing suite run against
+      # cooked packs rather than against the loose tree: it cooks real content,
+      # mounts the result alone and strict, and holds both halves of the
+      # loud-cooker / soft-runtime asymmetry in one test so that neither can be
+      # "fixed" to match the other.
+      - name: Spectra.Kitchen.Tests
+        run: dotnet run --project Test/Spectra.Kitchen.Tests
+
+  # ---------------------------------------------------------------------------
+  # 4. Windows AOT publish. The engine ships NativeAOT, so this is the gate that
   #    catches a reflection pattern the ordinary build tolerates.
   # ---------------------------------------------------------------------------
   aot-windows:
@@ -293,7 +429,7 @@ jobs:
         run: dotnet publish SpectraShade.Compiler.CLI -c Release -r win-x64 -p:PublishAot=true
 
   # ---------------------------------------------------------------------------
-  # 4. Linux AOT publish. Same two binaries, the other toolchain.
+  # 5. Linux AOT publish. Same two binaries, the other toolchain.
   # ---------------------------------------------------------------------------
   aot-linux:
     name: AOT publish (Linux)

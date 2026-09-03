@@ -110,8 +110,35 @@ public static class CookDiagnosticCodes
     /// </remarks>
     public static readonly CookDiagnosticId CacheDiscarded = CookDiagnosticId.Cook(1007);
 
-    // --- 2xxx image, 3xxx model, 4xxx audio, 5xxx material -------------------
+    // --- 2xxx image, 3xxx model, 4xxx audio ----------------------------------
     // Reserved. The rules that issue them are unbuilt; see the band table above.
+
+    // --- 5xxx: material ------------------------------------------------------
+    //
+    // Issued by the VERIFIER rather than by a material rule, which does not
+    // exist yet, and that is the band's rule working rather than an exception to
+    // it: a code names the subsystem that failed, and a texture nobody cooked is
+    // a material problem however it was found. When the material rule lands it
+    // reports the same failure under the same code.
+
+    /// <summary>A cooked material names a texture the pack does not hold.</summary>
+    /// <remarks>
+    /// The single failure cooked-only validation exists to catch. In the running
+    /// engine it is a magenta placeholder and a warning; here it is fatal,
+    /// because a build step whose job is to stop broken data shipping must not
+    /// share the runtime's soft landing. See <c>docs/formats-and-pipeline.md</c>
+    /// 4.2 for the asymmetry, written down so nobody "fixes" one to match the
+    /// other.
+    /// </remarks>
+    public static readonly CookDiagnosticId MaterialTextureMissing = CookDiagnosticId.Cook(5001);
+
+    /// <summary>A cooked material has a line the parser could not use.</summary>
+    /// <remarks>
+    /// A warning, matching the parser: an unknown key is deliberately tolerated
+    /// so material files stay forward-compatible, and turning that into an error
+    /// here would refuse every file written ahead of the engine.
+    /// </remarks>
+    public static readonly CookDiagnosticId MaterialFileMalformed = CookDiagnosticId.Cook(5002);
 
     // --- 6xxx: shader --------------------------------------------------------
     // Reserved, and mostly not ours to spend: a diagnostic the shader compiler
@@ -129,6 +156,43 @@ public static class CookDiagnosticCodes
 
     /// <summary>Two assets claim one pack entry.</summary>
     public static readonly CookDiagnosticId PackEntryCollision = CookDiagnosticId.Cook(9002);
+
+    /// <summary>The pack was refused: its header, its regions or its digest.</summary>
+    /// <remarks>
+    /// One code for all of them because they share an answer, which is to recook.
+    /// The message is the reader's own and names which check failed; splitting it
+    /// into three codes would ask a build script to distinguish cases that differ
+    /// only in how the file got corrupted.
+    /// </remarks>
+    public static readonly CookDiagnosticId PackNotMountable = CookDiagnosticId.Cook(9003);
+
+    /// <summary>An entry is present and its payload does not decode.</summary>
+    /// <remarks>
+    /// <b>This is what the digest cannot catch.</b> A payload rewritten together
+    /// with the digest over it hashes correctly and is still not a deflate
+    /// stream, so the decode pass is a claim of its own rather than a slower
+    /// restatement of the digest check.
+    /// </remarks>
+    public static readonly CookDiagnosticId PackEntryUnreadable = CookDiagnosticId.Cook(9004);
+
+    /// <summary>The entry table on disk is not strictly ascending by asset id.</summary>
+    /// <remarks>
+    /// The writer sorts, so this can only be a file that was edited after it was
+    /// written or a writer that regressed. Either way a binary search over it
+    /// misses entries SILENTLY, which presents as content that is intermittently
+    /// absent rather than as a corrupt file.
+    /// </remarks>
+    public static readonly CookDiagnosticId PackEntryTableUnsorted = CookDiagnosticId.Cook(9005);
+
+    /// <summary>An entry could not be verified, and this says which and why.</summary>
+    /// <remarks>
+    /// Today the one case is an entry with no name-table record in a pack written
+    /// without one: identity is a path, so with no name there is nothing to ask
+    /// the reader for. Reported rather than skipped, because a verify that
+    /// quietly checked fewer entries than the pack holds is a gate that weakens
+    /// without failing.
+    /// </remarks>
+    public static readonly CookDiagnosticId PackEntryNotVerifiable = CookDiagnosticId.Cook(9006);
 
     /// <summary>
     /// Whether <paramref name="number"/> was retired. A retired code is never

@@ -1,8 +1,11 @@
 using Spectra.Kitchen.Cache;
 using Spectra.Kitchen.Cooking;
 using Spectra.Kitchen.Diagnostics;
+using Spectra.Kitchen.Packs;
 using SpectraEngine.Core;
+using SpectraEngine.Core.Assets.Packs;
 using SpectraEngine.Core.Projects;
+using System.Text;
 
 namespace Spectra.Kitchen.CLI;
 
@@ -70,6 +73,8 @@ internal static class Program
             {
                 CliVerb.Cook => RunCook(opts, stdout, writer, outStyle),
                 CliVerb.Clean => RunClean(opts, stdout, writer, outStyle),
+                CliVerb.Verify => RunVerify(opts, stdout, writer, outStyle),
+                CliVerb.Inspect => RunInspect(opts, stdout, writer, outStyle),
                 _ => RunUnbuilt(opts, writer),
             };
         }
@@ -178,24 +183,107 @@ internal static class Program
         return ExitSuccess;
     }
 
+    /// <summary>
+    /// Proves a cooked pack is one a shipped game can run on.
+    /// </summary>
+    /// <remarks>
+    /// <b>The exit code is the whole contract here</b>, because the caller is a
+    /// CI step rather than a person: 0 for a pack that passed, 1 for one that is
+    /// present and broken, 3 for a path the filesystem refused. The distinction
+    /// between the last two matters to whoever reads the failure - a typo in a
+    /// path and a material missing its texture want different people looking at
+    /// them.
+    /// </remarks>
+    private static int RunVerify(CliOptions opts, TextWriter stdout, DiagnosticWriter writer, AnsiStyle style)
+    {
+        PackVerifyResult result;
+        try
+        {
+            result = PackVerifier.Verify(opts.Target);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            writer.Write(CookDiagnostic.Error(
+                CookDiagnosticCodes.PackNotMountable, $"Could not read '{opts.Target}': {ex.Message}"));
+            return ExitIoError;
+        }
+
+        writer.WriteAll(result.Diagnostics);
+
+        if (!result.Succeeded) return ExitCookError;
+
+        if (!opts.Quiet)
+        {
+            // The reference count is the number worth printing, because it is the
+            // one a reader cannot get from the cook's own summary line: "12
+            // entries" says the pack was written, "9 references resolved" says
+            // the things inside it point at each other.
+            stdout.WriteLine(
+                $"{style.Success}{ToolName}{style.Reset}: verified " +
+                $"{style.Path}{result.PackPath}{style.Reset} " +
+                $"{style.Dim}({result.EntriesChecked} entries decoded, {result.PayloadBytes} bytes, " +
+                $"{result.ReferencesChecked} reference(s) resolved, " +
+                $"{result.WarningCount} warning(s)){style.Reset}");
+        }
+
+        return ExitSuccess;
+    }
+
+    /// <summary>
+    /// Prints what is in a pack: the tool that makes the format debuggable.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>It states rather than checks.</b> Everything printed is read
+    /// straight off the file, digest included, and none of it is verified - which
+    /// is the point: the first question about a pack that will not mount is what
+    /// the bytes actually say, and a tool that refused to print them would answer
+    /// it by refusing.</para>
+    /// <para><b><c>--json</c> exists because the second reader of this is a
+    /// script.</b> The human table pads columns to whatever the longest name in
+    /// this particular pack is, so parsing it means parsing a layout that changes
+    /// per file. The JSON form goes through the same canonical writer every other
+    /// document does, so it does not differ by the OS that produced it.</para>
+    /// </remarks>
+    private static int RunInspect(CliOptions opts, TextWriter stdout, DiagnosticWriter writer, AnsiStyle style)
+    {
+        PackContents contents;
+        try
+        {
+            contents = PackContents.Read(opts.Target);
+        }
+        catch (PackMountException ex)
+        {
+            writer.Write(CookDiagnostic.Error(CookDiagnosticCodes.PackNotMountable, ex.Message, opts.Target));
+            return ExitCookError;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            writer.Write(CookDiagnostic.Error(
+                CookDiagnosticCodes.PackNotMountable, $"Could not read '{opts.Target}': {ex.Message}"));
+            return ExitIoError;
+        }
+
+        if (opts.Json)
+        {
+            stdout.Write(Encoding.UTF8.GetString(PackReport.WriteJson(contents)));
+            return ExitSuccess;
+        }
+
+        PackReport.WriteText(contents, stdout, style);
+        return ExitSuccess;
+    }
+
     // A verb that silently does nothing teaches within one session that this
-    // tool's verbs are decorative. Both of these therefore say what they will do,
-    // and exit non-zero so no script mistakes one for a pass.
+    // tool's verbs are decorative, so anything left unbuilt says what it will do
+    // and exits non-zero rather than being mistaken for a pass. Empty of verbs
+    // today and kept, because the next one added is added here.
     private static int RunUnbuilt(CliOptions opts, DiagnosticWriter writer)
     {
-        string message = opts.Verb switch
-        {
-            CliVerb.Verify =>
-                "'verify' is not built yet. It will check that every entry decodes, every reference resolves " +
-                "inside the pack, the digest matches, and (with --keep-brush-source) that the baked geometry " +
-                "recompiles bit-identically from the retained brushes.",
-            CliVerb.Inspect =>
-                "'inspect' is not built yet. It will list a pack's entries with their ids, names, sizes, " +
-                "kinds and codecs.",
-            _ => $"'{CliOptions.ToWire(opts.Verb)}' is not built yet.",
-        };
+        writer.Write(CookDiagnostic.Error(
+            CookDiagnosticCodes.VerbNotImplemented,
+            $"'{CliOptions.ToWire(opts.Verb)}' is not built yet.",
+            opts.Target));
 
-        writer.Write(CookDiagnostic.Error(CookDiagnosticCodes.VerbNotImplemented, message, opts.Target));
         return ExitCookError;
     }
 

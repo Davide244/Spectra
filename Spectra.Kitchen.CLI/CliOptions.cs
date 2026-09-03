@@ -54,6 +54,16 @@ internal sealed class CliOptions
     public bool Quiet { get; init; }
     public bool UseColor { get; init; }
 
+    /// <summary>
+    /// Whether <c>inspect</c> prints machine-readable JSON instead of a table.
+    /// </summary>
+    /// <remarks>
+    /// The table's columns are widened to whatever the longest name in that
+    /// particular pack is, so parsing it means parsing a layout that changes per
+    /// file. This is the form for anything that is not a person.
+    /// </remarks>
+    public bool Json { get; init; }
+
     // Which switches were TYPED, kept separately from their values so the tool can
     // say "this build does not act on your --target" without saying it to everybody
     // who never passed one.
@@ -101,7 +111,7 @@ internal sealed class CliOptions
         int jobs = 1;
         bool useCache = true;
         bool loose = false, watch = false, keepBrush = false, strict = false, quiet = false, noColor = false;
-        bool profileGiven = false, jobsGiven = false, cacheGiven = false;
+        bool profileGiven = false, jobsGiven = false, cacheGiven = false, json = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -185,6 +195,9 @@ internal sealed class CliOptions
                         return ParseResult.Usage($"'{a}' requires a path");
                     manifest = m;
                     break;
+                case "--json":
+                    json = true;
+                    break;
                 case "-q":
                 case "--quiet":
                     quiet = true;
@@ -221,6 +234,14 @@ internal sealed class CliOptions
 
         CliVerb effective = verb ?? CliVerb.Cook;
 
+        // Refused rather than ignored, the same rule every dead control in this
+        // project follows: a switch that silently does nothing teaches within one
+        // session that the flags here are decorative, and a person who typed it
+        // on the wrong verb would go on believing they had machine-readable
+        // output.
+        if (json && effective != CliVerb.Inspect)
+            return ParseResult.Usage($"'--json' is only meaningful for 'inspect', not '{ToWire(effective)}'");
+
         if (target is null)
         {
             // A pack has no sensible default and a project does: running the tool
@@ -250,6 +271,7 @@ internal sealed class CliOptions
             ManifestPath = manifest,
             Quiet = quiet,
             UseColor = !noColor && ShouldUseColor(),
+            Json = json,
             ProfileGiven = profileGiven,
             TargetsGiven = targets.Count > 0,
             JobsGiven = jobsGiven,
@@ -377,18 +399,19 @@ internal sealed class CliOptions
         w.WriteLine($"{s.Header}Usage:{s.Reset}");
         w.WriteLine($"  {s.Command}scook{s.Reset} {s.Dim}[cook]{s.Reset} {s.Dim}[options]{s.Reset} {s.Placeholder}<projectDir>{s.Reset}");
         w.WriteLine($"  {s.Command}scook verify{s.Reset} {s.Placeholder}<pack>{s.Reset}");
-        w.WriteLine($"  {s.Command}scook inspect{s.Reset} {s.Placeholder}<pack>{s.Reset}");
+        w.WriteLine($"  {s.Command}scook inspect{s.Reset} {s.Dim}[--json]{s.Reset} {s.Placeholder}<pack>{s.Reset}");
         w.WriteLine($"  {s.Command}scook clean{s.Reset} {s.Dim}[options]{s.Reset} {s.Placeholder}<projectDir>{s.Reset}");
         w.WriteLine();
         w.WriteLine($"{s.Header}Verbs:{s.Reset}");
         WriteOption(w, s, "cook", null,
             "Cook a project into a pack. The default verb.");
         WriteOption(w, s, "verify", null,
-            $"{s.Warning}Not built yet.{s.Reset} Will check every entry, reference",
-            "and digest in a cooked pack.");
+            "Check a cooked pack: every payload decodes, every",
+            "in-pack reference resolves, the table is searchable,",
+            "the digest agrees.");
         WriteOption(w, s, "inspect", null,
-            $"{s.Warning}Not built yet.{s.Reset} Will list a pack's entries, sizes,",
-            "codecs and names.");
+            "List a pack's header and entries: ids, names, sizes,",
+            "kinds and codecs.");
         WriteOption(w, s, "clean", null,
             "Delete a project's cook output and its cook cache.");
         w.WriteLine();
@@ -426,6 +449,9 @@ internal sealed class CliOptions
         WriteOption(w, s, "    --manifest", "<path>",
             "Write a JSON manifest of every asset, its id, its",
             "inputs and its output hash. This is what CI diffs.");
+        WriteOption(w, s, "    --json", null,
+            $"{s.Command}inspect{s.Reset} only: print the pack as JSON rather than",
+            "as a table whose columns move with the content.");
         WriteOption(w, s, "-q, --quiet", null,
             "Suppress non-error output.");
         WriteOption(w, s, "    --no-color", null,

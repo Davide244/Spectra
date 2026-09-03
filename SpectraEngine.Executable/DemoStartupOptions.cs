@@ -68,7 +68,8 @@ internal sealed record DemoStartupOptions(
     string? SaveMapPath = null,
     string? ProjectPath = null,
     string? SaveProjectPath = null,
-    string? ExportEntitySchemaPath = null)
+    string? ExportEntitySchemaPath = null,
+    bool ExitAfterSave = false)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -84,7 +85,7 @@ internal sealed record DemoStartupOptions(
         "[--vsync[=true|false]] " +
         "[--debug-layer[=true|false]] [--adapter=<name>] [--size=WxH] [--parts=<grid>] " +
         "[--props=<count>] [--map=<bundle.smap>] [--save-map=<bundle.smap>] " +
-        "[--project=<folder>] [--save-project=<folder>] " +
+        "[--project=<folder>] [--save-project=<folder>] [--exit-after-save[=true|false]] " +
         "[--export-entity-schema=<file.sentdef>].";
 
     /// <summary>
@@ -125,6 +126,7 @@ internal sealed record DemoStartupOptions(
         string? projectPath = null;
         string? saveProjectPath = null;
         string? exportEntitySchemaPath = null;
+        bool exitAfterSave = false;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -264,6 +266,19 @@ internal sealed record DemoStartupOptions(
                     saveProjectPath = ParseName(value, token);
                     continue;
 
+                // Shut the session down once the export has been written, so an
+                // unattended caller gets its bundle and its process back.
+                //
+                // It cannot be an exit-before-a-window like
+                // --export-entity-schema is: a schema is a fact about the build
+                // and a saved scene is the scene, which does not exist until the
+                // render thread has created its meshes and textures. So the run
+                // is real and it is exactly one frame long, which is the shortest
+                // honest form of the switch.
+                case "exit-after-save" or "exitaftersave":
+                    exitAfterSave = ParseBoolean(value, token);
+                    continue;
+
                 // Write this build's entity schemas out as a .sentdef and exit
                 // without opening a window. A measurement of the process rather
                 // than a session, like --interop-probe: an editor that has never
@@ -283,11 +298,21 @@ internal sealed record DemoStartupOptions(
             backend = ParseBackend(body, token);
         }
 
+        // Refused rather than ignored. On its own the switch would end the run
+        // one frame in with nothing written, which reads as the engine crashing
+        // at startup; and a caller who meant to name a path and mistyped it would
+        // get exactly that with no message.
+        if (exitAfterSave && saveMapPath is null && saveProjectPath is null)
+        {
+            throw new ArgumentException(
+                $"'--exit-after-save' needs something to save: name --save-map or --save-project. {Usage}");
+        }
+
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
                 fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath, exitAfterSave);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -296,13 +321,13 @@ internal sealed record DemoStartupOptions(
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
                 fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath, exitAfterSave);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
             fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath, exitAfterSave);
     }
 
     // A switch that takes a name needs one: a bare --pipeline says nothing

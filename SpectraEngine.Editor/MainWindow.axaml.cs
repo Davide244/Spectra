@@ -8,6 +8,7 @@ using Avalonia.VisualTree;
 using Microsoft.Extensions.Logging;
 using Serilog.Extensions.Logging;
 using Silk.NET.Maths;
+using Spectra.Kitchen.Diagnostics;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Hosting;
 using SpectraEngine.Core.Maps;
@@ -1325,6 +1326,66 @@ public partial class MainWindow : Window
 
     private void OnKeyboardReferenceClicked(object? sender, RoutedEventArgs e) =>
         _ = new KeyboardReferenceWindow().ShowDialog(this);
+
+    /// <summary>
+    /// Cooks the open project and checks the pack resolves with nothing else
+    /// mounted.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This is the only view of the game the editor cannot otherwise
+    /// give.</b> A session resolves loose files above the pack, which is the
+    /// whole editor workflow and is exactly why a texture the cook never produced
+    /// looks perfectly correct in this window right up until somebody plays a
+    /// shipped build.</para>
+    /// <para><b>Off the UI thread, and it names no scene.</b> The cook reads the
+    /// project folder and writes <c>cooked/</c>; nothing in it may touch the
+    /// graph, so there is no <c>EnqueueCommand</c> here and there should never
+    /// be one.</para>
+    /// <para><b>Every diagnostic goes to the output log, one line each.</b> The
+    /// status line is last-writer-wins and a validation run legitimately produces
+    /// dozens of findings, so putting them there would show whichever happened to
+    /// be last and destroy the rest.</para>
+    /// </remarks>
+    private async void OnValidateCookedClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_document.Project is not { } project || _shell.IsValidatingCooked)
+            return;
+
+        _shell.IsValidatingCooked = true;
+        _shell.SetMessage($"Cooking {project.Project.Name} and validating the pack...");
+
+        try
+        {
+            CookedValidationReport report = await Task.Run(() => CookedValidation.Run(project));
+
+            foreach (CookDiagnostic diagnostic in report.Diagnostics)
+            {
+                _shell.Output.Append(
+                    diagnostic.Severity switch
+                    {
+                        CookDiagnosticSeverity.Error => OutputSeverity.Error,
+                        CookDiagnosticSeverity.Warning => OutputSeverity.Warning,
+                        _ => OutputSeverity.Info,
+                    },
+                    diagnostic.ToBuildLine("scook"));
+            }
+
+            if (report.Succeeded) _shell.SetMessage(report.Summary);
+            else _shell.SetError(report.Summary);
+        }
+        catch (Exception ex)
+        {
+            // Caught here rather than left to the dispatcher: an async void
+            // handler that throws takes the application down, and a validation
+            // run that failed for its own reasons is a message rather than a
+            // crash.
+            _shell.SetError($"The cooked-content validation did not finish: {ex.Message}");
+        }
+        finally
+        {
+            _shell.IsValidatingCooked = false;
+        }
+    }
 
     private static void OnDragOver(object? sender, DragEventArgs e)
     {

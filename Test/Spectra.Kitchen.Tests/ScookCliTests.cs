@@ -29,6 +29,7 @@ public class ScookCliTests
     private const int ExitSuccess = 0;
     private const int ExitCookError = 1;
     private const int ExitUsageError = 2;
+    private const int ExitIoError = 3;
 
     // MSBuild's canonical diagnostic form, in its two shapes: an origin that is a
     // file (with or without a position) or the tool's own name.
@@ -55,6 +56,10 @@ public class ScookCliTests
         Invoke("cook", ".", "-j", "0").ExitCode.ShouldBe(ExitUsageError);
         Invoke("cook", ".", "-t", "metal").ExitCode.ShouldBe(ExitUsageError);
         Invoke("verify").ExitCode.ShouldBe(ExitUsageError);
+
+        // Refused rather than ignored: a switch that silently does nothing on
+        // the wrong verb leaves the caller believing they got JSON.
+        Invoke("cook", ".", "--json").ExitCode.ShouldBe(ExitUsageError);
     }
 
     [Fact]
@@ -74,18 +79,69 @@ public class ScookCliTests
     }
 
     [Fact]
-    public void An_unbuilt_verb_says_so_and_does_not_report_success()
+    public void A_pack_that_is_not_there_is_an_IO_error_rather_than_a_broken_pack()
     {
         var run = Invoke("verify", "some.spack", "--no-color");
 
-        // A verb that silently did nothing and exited 0 would teach within one
-        // session that this tool's verbs are decorative.
-        run.ExitCode.ShouldBe(ExitCookError);
+        // Exit 3, not 1, and the line between them is who is at fault: a typo in
+        // a path and a material missing its texture want different people looking
+        // at them, and the exit code is how a CI step says which happened.
+        run.ExitCode.ShouldBe(ExitIoError);
+        MatchSingleDiagnostic(run.Stderr).Groups["code"].Value.ShouldBe("SC9003");
+    }
 
-        Match match = MatchSingleDiagnostic(run.Stderr);
-        match.Groups["code"].Value.ShouldBe("SC0002");
-        match.Groups["text"].Value.ShouldContain("not built yet");
-        match.Groups["text"].Value.ShouldContain("digest");
+    [Fact]
+    public void Verify_passes_a_cooked_pack_and_fails_one_missing_a_texture()
+    {
+        using var project = new TempProject();
+        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(64));
+        project.WriteAsset(
+            "Materials/wall.spectramat",
+            "shader = lit\ntexture uDiffuse = Textures/wall_brick.png\n");
+
+        Invoke("cook", project.Root, "-q").ExitCode.ShouldBe(ExitSuccess);
+        string pack = Directory.GetFiles(project.CookedPath, "*.spack").Single();
+
+        var passed = Invoke("verify", pack);
+        passed.ExitCode.ShouldBe(ExitSuccess);
+        passed.Stderr.ShouldBeEmpty();
+        passed.Stdout.ShouldContain("1 reference(s) resolved");
+
+        // Remove the texture and recook: the cook is still happy, because there
+        // is no material rule and nothing in a cook ever reads what is inside a
+        // raw-copied file. Verify is the step that notices.
+        File.Delete(Path.Combine(project.Layout.AssetsPath, "Textures", "wall_brick.png"));
+        Invoke("cook", project.Root, "-q").ExitCode.ShouldBe(ExitSuccess);
+
+        var failed = Invoke("verify", pack);
+        failed.ExitCode.ShouldBe(ExitCookError);
+        MatchSingleDiagnostic(failed.Stderr).Groups["code"].Value.ShouldBe("SC5001");
+    }
+
+    [Fact]
+    public void Inspect_prints_the_header_and_every_entry_in_both_forms()
+    {
+        using var project = new TempProject();
+        project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(64));
+
+        Invoke("cook", project.Root, "-q").ExitCode.ShouldBe(ExitSuccess);
+        string pack = Directory.GetFiles(project.CookedPath, "*.spack").Single();
+
+        var text = Invoke("inspect", pack);
+        text.ExitCode.ShouldBe(ExitSuccess);
+        text.Stdout.ShouldContain("Textures/wall_brick.png");
+        text.Stdout.ShouldContain("sorted, names");
+        text.Stdout.ShouldContain("1 entries");
+
+        // The form for anything that is not a person: the table's columns widen
+        // to whatever the longest name in that particular pack is, so parsing it
+        // means parsing a layout that changes per file.
+        var json = Invoke("inspect", pack, "--json");
+        json.ExitCode.ShouldBe(ExitSuccess);
+        json.Stdout.ShouldContain("\"scookInspect\": 1");
+        json.Stdout.ShouldContain("\"name\":\"Textures/wall_brick.png\"");
+        json.Stdout.ShouldContain("\"codec\":\"none\"");
+        json.Stdout.ShouldNotContain("\r\n");
     }
 
     [Fact]

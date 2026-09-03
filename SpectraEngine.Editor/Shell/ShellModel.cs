@@ -131,8 +131,39 @@ public sealed class ShellModel : ObservableObject
     public bool HasProject
     {
         get => _hasProject;
-        set => Set(ref _hasProject, value);
+        set
+        {
+            if (Set(ref _hasProject, value)) Raise(nameof(CanValidateCooked));
+        }
     }
+
+    private bool _isValidatingCooked;
+
+    /// <summary>Whether a cooked-content validation is running right now.</summary>
+    /// <remarks>
+    /// <b>It gates its own menu item.</b> A cook is seconds of real work on a
+    /// background thread, and a second run started on top of the first would have
+    /// two cooks writing one <c>cooked/</c> folder - which the cache and the
+    /// writer are both safe against per file and neither promises for a whole
+    /// artifact. The item greys out instead, which is also the only thing on
+    /// screen saying the first run is still going.
+    /// </remarks>
+    public bool IsValidatingCooked
+    {
+        get => _isValidatingCooked;
+        set
+        {
+            if (Set(ref _isValidatingCooked, value)) Raise(nameof(CanValidateCooked));
+        }
+    }
+
+    /// <summary>Whether the Validate Cooked verb can be asked for.</summary>
+    /// <remarks>
+    /// A project rather than a session, deliberately: the cook reads the folder
+    /// on disk and never touches the scene, so it is answerable with the engine
+    /// stopped and while play mode owns the graph.
+    /// </remarks>
+    public bool CanValidateCooked => _hasProject && !_isValidatingCooked;
 
     /// <summary>
     /// The open project's maps: the manifest's list in the author's order,

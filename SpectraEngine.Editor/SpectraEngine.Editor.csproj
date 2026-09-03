@@ -29,6 +29,13 @@
     <ProjectReference Include="..\SpectraEngine.Entities\SpectraEngine.Entities.csproj" />
     <ProjectReference Include="..\SpectraEngine.Physics.Box3D\SpectraEngine.Physics.Box3D.csproj" />
     <ProjectReference Include="..\SpectraShade.Compiler\SpectraShade.Compiler.csproj" />
+    <!--
+      The cook, hosted IN PROCESS. That is what the library split was for and
+      why the Kitchen is bound by AOT-safe dependencies regardless of its own
+      CLI: a cook that only runs out of process cannot back a Validate Cooked
+      action, and it could not back cooked-accurate preview either.
+    -->
+    <ProjectReference Include="..\Spectra.Kitchen\Spectra.Kitchen.csproj" />
   </ItemGroup>
 
   <ItemGroup>
