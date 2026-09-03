@@ -422,11 +422,20 @@ jobs:
           }
           Add-Content -Path $env:GITHUB_PATH -Value $installer
 
+      # NO -p:PublishAot=true. It is redundant (the three projects that want it
+      # set it themselves) and it is worse than redundant: a command-line -p: is a
+      # GLOBAL property that reaches every project in the graph, including
+      # SpectraEngine.Entities.Generator, which targets netstandard2.0 because a
+      # Roslyn analyzer must. The SDK then refuses the whole publish with
+      # NETSDK1207 naming the generator, which is not where anything is wrong, and
+      # UndefineProperties cannot save it because the failure happens during
+      # restore. These four steps were written before the generator existed and
+      # would every one of them have failed on the first run of this workflow.
       - name: Publish SpectraEngine.Executable (win-x64)
-        run: dotnet publish SpectraEngine.Executable -c Release -r win-x64 -p:PublishAot=true
+        run: dotnet publish SpectraEngine.Executable -c Release -r win-x64
 
       - name: Publish SpectraShade.Compiler.CLI (win-x64)
-        run: dotnet publish SpectraShade.Compiler.CLI -c Release -r win-x64 -p:PublishAot=true
+        run: dotnet publish SpectraShade.Compiler.CLI -c Release -r win-x64
 
   # ---------------------------------------------------------------------------
   # 5. Linux AOT publish. Same two binaries, the other toolchain.
@@ -453,8 +462,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang zlib1g-dev
 
+      # NO -p:PublishAot=true. It is redundant (the three projects that want it
+      # set it themselves) and it is worse than redundant: a command-line -p: is a
+      # GLOBAL property that reaches every project in the graph, including
+      # SpectraEngine.Entities.Generator, which targets netstandard2.0 because a
+      # Roslyn analyzer must. The SDK then refuses the whole publish with
+      # NETSDK1207 naming the generator, which is not where anything is wrong, and
+      # UndefineProperties cannot save it because the failure happens during
+      # restore. These four steps were written before the generator existed and
+      # would every one of them have failed on the first run of this workflow.
       - name: Publish SpectraEngine.Executable (linux-x64)
-        run: dotnet publish SpectraEngine.Executable -c Release -r linux-x64 -p:PublishAot=true
+        run: dotnet publish SpectraEngine.Executable -c Release -r linux-x64
 
       - name: Publish SpectraShade.Compiler.CLI (linux-x64)
-        run: dotnet publish SpectraShade.Compiler.CLI -c Release -r linux-x64 -p:PublishAot=true
+        run: dotnet publish SpectraShade.Compiler.CLI -c Release -r linux-x64
