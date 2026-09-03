@@ -187,6 +187,7 @@ public sealed class Engine
                 PipelineName = _renderer.CurrentPipelineName,
                 PipelineNames = _renderer.PipelineNames,
                 SelectionProperties = CaptureProperties(),
+                SelectionEntity = CaptureSelectionEntity(),
             };
         }, interacting);
     }
@@ -244,6 +245,35 @@ public sealed class Engine
 
         _snapshotProperties.CopyTo(_publishedProperties);
         return _publishedProperties;
+    }
+
+    // The target-name scan's buffer, reused across publishes. It is filled only
+    // when the selection is one entity that actually carries wiring, which is a
+    // rare interactive state; giving it a home here keeps that case off the
+    // render thread's allocation budget entirely.
+    private readonly List<string> _snapshotTargetNames = [];
+
+    /// <summary>
+    /// The selected entity's wiring, or null when the selection is not exactly
+    /// one node carrying an entity.
+    /// </summary>
+    /// <remarks>
+    /// <b>One node, deliberately.</b> Merging several entities' connection
+    /// lists has no honest answer - see <see cref="EntityPanelInfo"/> - and the
+    /// resolve check below reads the graph, which is the render thread's to
+    /// read and nobody else's.
+    /// </remarks>
+    private EntityPanelInfo? CaptureSelectionEntity()
+    {
+        if (_sceneManager.ActiveScene is not { } scene)
+            return null;
+
+        IReadOnlyList<SceneNode> items = scene.Selection.Items;
+        if (items.Count != 1)
+            return null;
+
+        return EntityPanelInfo.Capture(
+            items[0], scene.EntitySchemas, scene, _snapshotTargetNames);
     }
 
     /// <summary>

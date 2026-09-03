@@ -815,6 +815,65 @@ public sealed class SceneEditorHost : ISceneEditor
         return PropertyEditor.Apply(_undo, _scene.Selection.Items, edit, _propertyGestureOpen);
     }
 
+    /// <summary>
+    /// Replaces the wiring on one entity node, as one undoable entry.
+    /// </summary>
+    /// <returns>True when something was written.</returns>
+    /// <remarks>
+    /// <para>
+    /// <b>Addressed by ID, not by "the selection", and that is the one place
+    /// this differs from <see cref="ApplyProperty"/>.</b> A property edit
+    /// writes one named value, so resolving the selection here - a frame or two
+    /// ahead of the panel - is harmless. A connection edit replaces a whole
+    /// list, so landing on a node the user has since also selected would
+    /// overwrite that node's entire wiring with another node's. The panel was
+    /// built from a published <c>EntityPanelInfo</c> carrying the node's id, so
+    /// the id is what travels back.
+    /// </para>
+    /// <para>
+    /// <b>A list equal to the one already stored records nothing</b>, exactly
+    /// as an unchanged rename does: the panel commits on Enter and on losing
+    /// focus, so tabbing through a wire's fields is ordinary and must not fill
+    /// the history with entries that undo to themselves.
+    /// </para>
+    /// </remarks>
+    /// <param name="nodeId">The node whose entity is being wired.</param>
+    /// <param name="connections">The wires it should carry, in authored order.</param>
+    public bool ApplyEntityConnections(Guid nodeId, IReadOnlyList<EntityConnection> connections)
+    {
+        ArgumentNullException.ThrowIfNull(connections);
+
+        // The gesture exemption is the same one property edits get: a wiring
+        // edit made while a property gesture is open joins that transaction
+        // rather than being refused for it.
+        if (RefuseEdit("Entity wiring", allowPropertyGesture: true))
+            return false;
+
+        if (!_scene.TryFindById(nodeId, out SceneNode? node) || node.Entity is not { } entity)
+        {
+            _logger.LogDebug("Entity wiring: no entity for node {NodeId}", nodeId);
+            return false;
+        }
+
+        if (SetEntityConnectionsCommand.SameWiring(entity.Connections, connections))
+            return false;
+
+        var command = SetEntityConnectionsCommand.Capture(node, connections);
+
+        // Inside a gesture the caller owns the transaction, and opening a
+        // second one here would throw rather than nest.
+        bool ownTransaction = !_propertyGestureOpen;
+        if (ownTransaction)
+            _undo.BeginTransaction("Entity Wiring");
+
+        _undo.Execute(command);
+
+        if (ownTransaction)
+            _undo.CommitTransaction();
+
+        return true;
+    }
+
     // Whether a continuous property gesture owns the transaction right now.
     private bool _propertyGestureOpen;
 

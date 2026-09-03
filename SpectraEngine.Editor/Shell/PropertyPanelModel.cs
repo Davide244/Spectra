@@ -544,12 +544,26 @@ public sealed class PropertyPanelModel : ObservableObject
     private string _unknownClass = string.Empty;
     private bool _isMultiple;
 
+    /// <param name="apply">Posts one property edit to the editor.</param>
+    /// <param name="beginGesture">Opens one history entry around a drag.</param>
+    /// <param name="endGesture">Closes it, keeping the result or rolling it back.</param>
+    /// <param name="applyConnections">
+    /// Posts a whole replacement wiring list for one node, or null in a host
+    /// that offers no wiring at all. Separate from <paramref name="apply"/>
+    /// because it addresses a NODE ID rather than the selection: a connection
+    /// edit replaces a list, and a stale selection would overwrite the wrong
+    /// entity's wiring entirely.
+    /// </param>
     public PropertyPanelModel(
-        Action<PropertyEdit> apply, Action<string> beginGesture, Action<bool> endGesture)
+        Action<PropertyEdit> apply,
+        Action<string> beginGesture,
+        Action<bool> endGesture,
+        Action<Guid, IReadOnlyList<EntityConnection>>? applyConnections = null)
     {
         _apply = apply;
         _beginGesture = beginGesture;
         _endGesture = endGesture;
+        Wiring = new EntityWiringModel(applyConnections ?? ((_, _) => { }));
 
         NameField = new PropertyFieldModel(
             PropertyId.NodeName, PropertyAxes.All, string.Empty,
@@ -572,6 +586,20 @@ public sealed class PropertyPanelModel : ObservableObject
 
     /// <summary>The rows, in display order, with group headers folded in.</summary>
     public ObservableCollection<PropertyGroupModel> Groups { get; } = [];
+
+    /// <summary>
+    /// The Outputs section: the selected entity's wires.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not a <see cref="PropertyGroupModel"/>, deliberately.</b> A property
+    /// group is a list of labelled values whose identity is
+    /// (<see cref="PropertyId"/>, key) and whose edits are per-value; a wire is
+    /// six values with no key at all, edited as a whole list and added and
+    /// removed by buttons. Forcing it into a row shape would mean minting a
+    /// property id per field per index - which is the hash with unreported
+    /// collisions <see cref="PropertyId.EntityKeyvalue"/> exists to avoid.
+    /// </remarks>
+    public EntityWiringModel Wiring { get; }
 
     /// <summary>Whether anything is selected at all.</summary>
     public bool HasSelection => _selectionCount > 0;
@@ -679,9 +707,18 @@ public sealed class PropertyPanelModel : ObservableObject
     internal void EndGesture(bool commit) => _endGesture(commit);
 
     /// <summary>Takes one published snapshot's rows.</summary>
-    public void Apply(IReadOnlyList<PropertyRow> rows, int selectionCount)
+    /// <param name="rows">The selection's merged property rows.</param>
+    /// <param name="selectionCount">How many nodes are selected.</param>
+    /// <param name="entity">
+    /// The selected entity's class and wiring, or null when the selection is
+    /// not exactly one node carrying an entity.
+    /// </param>
+    public void Apply(
+        IReadOnlyList<PropertyRow> rows, int selectionCount, EntityPanelInfo? entity = null)
     {
         ArgumentNullException.ThrowIfNull(rows);
+
+        Wiring.Apply(entity);
 
         if (_selectionCount != selectionCount)
         {

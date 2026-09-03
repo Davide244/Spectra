@@ -284,6 +284,20 @@ public sealed class EditorSession : IDisposable
     public void EndPropertyGesture(bool commit) =>
         Host.EnqueueCommand(_ => Editor?.EndPropertyGesture(commit));
 
+    /// <summary>
+    /// Replaces the wiring on one entity node - what the Outputs section posts
+    /// for an add, a remove and every field edit alike.
+    /// </summary>
+    /// <remarks>
+    /// <b>The node is named by ID rather than left to the selection.</b> A
+    /// property edit resolves the selection on the render thread because it
+    /// writes one named value; this writes a whole list, and a stale selection
+    /// would overwrite the wrong entity's wiring entirely. The panel already
+    /// knows the id, because the snapshot it was built from carried it.
+    /// </remarks>
+    public void ApplyEntityConnections(Guid nodeId, IReadOnlyList<EntityConnection> connections) =>
+        Host.EnqueueCommand(_ => Editor?.ApplyEntityConnections(nodeId, connections));
+
     // Render thread only. Null before the scene has loaded, and null for a host
     // that installed no editing layer at all.
     private SceneEditorHost? Editor => SceneManager.Editor as SceneEditorHost;

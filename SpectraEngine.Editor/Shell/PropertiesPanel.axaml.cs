@@ -153,6 +153,28 @@ public partial class PropertiesPanel : UserControl
         return true;
     }
 
+    // ─── Outputs ─────────────────────────────────────────
+    //
+    // Add and remove post the WHOLE list, like every other wiring edit: the
+    // command carries absolute arrays because a connection has no per-item
+    // identity a delta could name. Both are ordinary clicks rather than
+    // gestures, so each is one history entry on its own.
+
+    private void OnAddConnection(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is ShellModel { Properties: { } panel })
+            panel.Wiring.Add();
+    }
+
+    private void OnRemoveConnection(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { DataContext: ConnectionRowModel row }
+            && DataContext is ShellModel { Properties: { } panel })
+        {
+            panel.Wiring.Remove(row);
+        }
+    }
+
     // ─── Drag to change a number ─────────────────────────
 
     private void OnAxisPressed(object? sender, PointerPressedEventArgs e)

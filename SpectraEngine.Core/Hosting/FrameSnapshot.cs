@@ -209,6 +209,26 @@ public sealed class FrameSnapshot
     public IReadOnlyList<PropertyRow> SelectionProperties { get; init; } = Array.Empty<PropertyRow>();
 
     /// <summary>
+    /// The selected entity's class, declared outputs and wiring, or null when
+    /// the selection is not exactly one node carrying an entity.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Copies, like everything else here.</b> The connection list a node
+    /// carries is a mutable <c>List</c> the render thread rewrites on the next
+    /// undo; what rides out is a snapshot of it, so a panel holding this frame
+    /// still describes this frame.
+    /// </para>
+    /// <para>
+    /// <b>Null for a multi-selection, and that is a named deferral.</b> A
+    /// keyvalue merges per key; wires have no key to merge on, so a union could
+    /// not be written back and an intersection would hide wiring. See
+    /// <see cref="EntityPanelInfo"/>.
+    /// </para>
+    /// </remarks>
+    public EntityPanelInfo? SelectionEntity { get; init; }
+
+    /// <summary>
     /// The structural changes since the previous snapshot, in the order they
     /// happened. Empty on a frame where nothing moved in the graph, which is
     /// most of them.

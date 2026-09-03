@@ -260,7 +260,8 @@ public partial class MainWindow : Window
         _shell.Properties = new PropertyPanelModel(
             OnPropertyEdit,
             name => _session?.BeginPropertyGesture(name),
-            commit => _session?.EndPropertyGesture(commit));
+            commit => _session?.EndPropertyGesture(commit),
+            OnEntityConnectionsEdit);
 
         // The pipeline dropdown's user choice, forwarded as a request. Wired
         // once: the session is resolved when the event fires, so it follows
@@ -1734,6 +1735,12 @@ public partial class MainWindow : Window
     /// list would occasionally write to nodes the user had already deselected.
     /// </remarks>
     private void OnPropertyEdit(PropertyEdit edit) => _session?.ApplyProperty(edit);
+
+    // Addressed by node id rather than by the selection, because a wiring edit
+    // replaces a whole list: see EditorSession.ApplyEntityConnections.
+    private void OnEntityConnectionsEdit(
+        Guid nodeId, IReadOnlyList<SpectraEngine.Core.Entities.EntityConnection> connections) =>
+        _session?.ApplyEntityConnections(nodeId, connections);
 
     // --- File ----------------------------------------------------------------
     //

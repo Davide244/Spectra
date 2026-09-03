@@ -86,6 +86,21 @@ public sealed class PropertyFieldModel : ObservableObject
     /// <summary>Whether there is a unit to print.</summary>
     public bool HasUnit => Unit.Length > 0;
 
+    /// <summary>
+    /// Whether clearing this cell means "make it empty" rather than "leave it
+    /// alone".
+    /// </summary>
+    /// <remarks>
+    /// <b>Off by default, because for every property row an empty box means
+    /// nothing was typed.</b> A mixed selection shows a blank field, and
+    /// committing that blank has to leave every node as it was - which is why
+    /// <see cref="Commit"/> reverts instead of writing. A wire's PARAMETER is
+    /// the case that breaks the rule: empty is a legal, common value ("send no
+    /// argument"), so a field that reverted it could never be cleared once
+    /// something had been typed into it.
+    /// </remarks>
+    internal bool AllowsEmpty { get; init; }
+
     /// <summary>What the box shows.</summary>
     public string Text
     {
@@ -178,8 +193,9 @@ public sealed class PropertyFieldModel : ObservableObject
         string typed = Text.Trim();
 
         // Nothing typed into a mixed field means "leave them all alone", which
-        // is what an empty box already showed.
-        if (typed.Length == 0)
+        // is what an empty box already showed. See AllowsEmpty for the one
+        // cell where an empty value is the value.
+        if (typed.Length == 0 && !AllowsEmpty)
         {
             Revert();
             return;

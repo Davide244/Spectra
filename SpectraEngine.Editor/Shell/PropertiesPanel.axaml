@@ -174,6 +174,39 @@
       <Setter Property="BorderThickness" Value="1" />
       <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
     </Style>
+
+    <!-- ___ Outputs ______________________________________
+         ONE WIRE IS A BLOCK OF LABELLED FIELDS, NOT A ROW OF SIX CELLS. The
+         panel is 308px wide and a vector's three cells already needed two
+         lines to be readable in it; six columns would leave about fifteen
+         pixels each. So a wire reads down rather than across, and the wires are
+         separated by a hairline - flat, dense rows, never bordered tiles: a
+         list is a list. -->
+    <Style Selector="Border.wire">
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderSoft}" />
+      <Setter Property="BorderThickness" Value="0,0,0,1" />
+      <Setter Property="Padding" Value="0,5,0,7" />
+    </Style>
+
+    <Style Selector="TextBlock.wirelabel">
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontMicro}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+
+    <!-- AMBER, WHICH IS THE STATE COLOUR. Not the accent, which means "you
+         selected this", and not the danger colour, which means an error: the
+         map loader keeps a wire whose target is missing rather than dropping
+         it - the target may be spawned at run time, or belong to a level that
+         is not open - so this says "look at this", not "this is broken", and
+         the wire is kept exactly as authored. -->
+    <Style Selector="TextBlock.wirewarn">
+      <Setter Property="FontSize" Value="{StaticResource SpectraFontMicro}" />
+      <Setter Property="Foreground" Value="{StaticResource SpectraWarning}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
   </UserControl.Styles>
 
   <DockPanel>
@@ -253,7 +286,13 @@
 
     <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                   IsVisible="{Binding Properties.HasSelection}">
-      <ItemsControl ItemsSource="{Binding Properties.Groups}" Margin="0,2,0,14">
+      <!-- The scroller holds TWO things now: the derived property groups, and
+           the Outputs section, which is not one of them. A wire has no
+           (PropertyId, key) identity to be a row under, so it sits beside the
+           groups rather than inside them, and one wrapper is what lets both
+           scroll together. -->
+      <StackPanel>
+      <ItemsControl ItemsSource="{Binding Properties.Groups}" Margin="0,2,0,0">
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="shell:PropertyGroupModel">
             <StackPanel Margin="0,10,0,0">
@@ -418,6 +457,151 @@
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>
+
+      <!-- ___ Outputs ____________________________________
+           The wires leaving this entity. Present only for a single-node entity
+           selection, which is all the engine publishes: merging several
+           entities' wiring has no honest answer, because a connection has no
+           key to merge on the way a keyvalue does. -->
+      <StackPanel Margin="12,12,12,14" Spacing="4"
+                  IsVisible="{Binding Properties.Wiring.HasEntity}">
+
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Classes="sectionhead" Text="Outputs" />
+          <Button Grid.Column="1" Classes="seg" Content="Add"
+                  Click="OnAddConnection"
+                  ToolTip.Tip="Wire one of this entity's outputs to another entity's input." />
+        </Grid>
+
+        <!-- The dropdowns below are text boxes when this fires, and the reader
+             is entitled to know why: without a schema there is no list of
+             outputs to offer, and an empty dropdown would leave the wiring
+             visible and permanently uneditable. -->
+        <TextBlock Classes="wirewarn" TextWrapping="Wrap"
+                   IsVisible="{Binding Properties.Wiring.ShowsUnknownOutputs}"
+                   Text="No schema for this class, so its outputs are typed rather than picked." />
+
+        <TextBlock Classes="prose" Foreground="{StaticResource SpectraTextMuted}"
+                   IsVisible="{Binding Properties.Wiring.IsEmpty}"
+                   Text="Nothing wired yet." />
+
+        <ItemsControl ItemsSource="{Binding Properties.Wiring.Rows}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="shell:ConnectionRowModel">
+              <Border Classes="wire">
+                <StackPanel Spacing="3">
+
+                  <!-- The output, and the button that takes the wire away. -->
+                  <Grid ColumnDefinitions="*,Auto">
+                    <ComboBox Grid.Column="0" ItemsSource="{Binding OutputChoices}"
+                              SelectedItem="{Binding Output, Mode=TwoWay}"
+                              IsVisible="{Binding HasOutputChoices}"
+                              HorizontalAlignment="Stretch" />
+                    <!-- The output typed rather than picked, for a class no
+                         schema declares. A field model, not a two-way string:
+                         a two-way Text binding writes per keystroke, so typing
+                         one output name would post five wiring edits. -->
+                    <Border Grid.Column="0" Classes="cell"
+                            IsVisible="{Binding !HasOutputChoices}">
+                      <!-- The DataContext moves on the TEXTBOX rather than on
+                           the Border, because the Border carries a binding of
+                           its own: an element's other bindings resolve against
+                           the context it was just given, so IsVisible would
+                           have been asked of the field model. -->
+                      <TextBox DataContext="{Binding OutputField}"
+                               Classes="cellfield" TextAlignment="Left" Padding="6,0"
+                               Text="{Binding Text, Mode=TwoWay}"
+                               PlaceholderText="output"
+                               GotFocus="OnPropertyFieldFocused"
+                               LostFocus="OnPropertyFieldBlurred"
+                               KeyDown="OnPropertyFieldKeyDown" />
+                    </Border>
+                    <Button Grid.Column="1" Classes="seg" Content="Remove" Margin="4,0,0,0"
+                            Click="OnRemoveConnection"
+                            ToolTip.Tip="Delete this wire." />
+                  </Grid>
+
+                  <!-- Each cell's DataContext is its own PropertyFieldModel, so
+                       the panel's existing focus, blur and key handlers reach it
+                       unchanged - which is the whole reason these are field
+                       models and not bound strings: one commit contract, one
+                       implementation of "a focused box stops taking
+                       refreshes". -->
+                  <Grid ColumnDefinitions="52,*">
+                    <TextBlock Grid.Column="0" Classes="wirelabel" Text="Target" />
+                    <Border Grid.Column="1" Classes="cell" DataContext="{Binding TargetField}">
+                      <TextBox x:DataType="shell:PropertyFieldModel"
+                               Classes="cellfield" TextAlignment="Left" Padding="6,0"
+                               Text="{Binding Text, Mode=TwoWay}"
+                               PlaceholderText="entity to send to"
+                               GotFocus="OnPropertyFieldFocused"
+                               LostFocus="OnPropertyFieldBlurred"
+                               KeyDown="OnPropertyFieldKeyDown" />
+                    </Border>
+                  </Grid>
+
+                  <Grid ColumnDefinitions="52,*">
+                    <TextBlock Grid.Column="0" Classes="wirelabel" Text="Input" />
+                    <Border Grid.Column="1" Classes="cell" DataContext="{Binding InputField}">
+                      <TextBox x:DataType="shell:PropertyFieldModel"
+                               Classes="cellfield" TextAlignment="Left" Padding="6,0"
+                               Text="{Binding Text, Mode=TwoWay}"
+                               PlaceholderText="input to send"
+                               GotFocus="OnPropertyFieldFocused"
+                               LostFocus="OnPropertyFieldBlurred"
+                               KeyDown="OnPropertyFieldKeyDown" />
+                    </Border>
+                  </Grid>
+
+                  <Grid ColumnDefinitions="52,*">
+                    <TextBlock Grid.Column="0" Classes="wirelabel" Text="Param" />
+                    <Border Grid.Column="1" Classes="cell" DataContext="{Binding ParameterField}">
+                      <TextBox x:DataType="shell:PropertyFieldModel"
+                               Classes="cellfield" TextAlignment="Left" Padding="6,0"
+                               Text="{Binding Text, Mode=TwoWay}"
+                               PlaceholderText="none"
+                               GotFocus="OnPropertyFieldFocused"
+                               LostFocus="OnPropertyFieldBlurred"
+                               KeyDown="OnPropertyFieldKeyDown" />
+                    </Border>
+                  </Grid>
+
+                  <Grid ColumnDefinitions="52,*,44,*">
+                    <TextBlock Grid.Column="0" Classes="wirelabel" Text="Delay" />
+                    <Border Grid.Column="1" Classes="cell" Margin="0,0,6,0"
+                            DataContext="{Binding DelayField}">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBox x:DataType="shell:PropertyFieldModel"
+                                 Grid.Column="0" Classes="cellfield"
+                                 Text="{Binding Text, Mode=TwoWay}"
+                                 GotFocus="OnPropertyFieldFocused"
+                                 LostFocus="OnPropertyFieldBlurred"
+                                 KeyDown="OnPropertyFieldKeyDown" />
+                        <TextBlock Grid.Column="1" Classes="rowunit" Margin="0,0,6,0" Text="s" />
+                      </Grid>
+                    </Border>
+                    <TextBlock Grid.Column="2" Classes="wirelabel" Text="Times" />
+                    <Border Grid.Column="3" Classes="cell" DataContext="{Binding TimesField}">
+                      <TextBox x:DataType="shell:PropertyFieldModel"
+                               Classes="cellfield"
+                               Text="{Binding Text, Mode=TwoWay}"
+                               GotFocus="OnPropertyFieldFocused"
+                               LostFocus="OnPropertyFieldBlurred"
+                               KeyDown="OnPropertyFieldKeyDown"
+                               ToolTip.Tip="How many times this wire may fire. -1 fires forever." />
+                    </Border>
+                  </Grid>
+
+                  <TextBlock Classes="wirewarn" TextWrapping="Wrap"
+                             IsVisible="{Binding HasTargetWarning}"
+                             Text="{Binding TargetWarning}" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+      </StackPanel>
     </ScrollViewer>
   </DockPanel>
 </UserControl>

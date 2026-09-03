@@ -1211,7 +1211,8 @@ public sealed class ShellModel : ObservableObject
             _debugOpt.Apply(snapshot.DebugFlags);
             SetDebugFlags(_debugOpt.Value);
 
-            _properties?.Apply(snapshot.SelectionProperties, snapshot.SelectedIds.Count);
+            _properties?.Apply(
+                snapshot.SelectionProperties, snapshot.SelectedIds.Count, snapshot.SelectionEntity);
 
             if (_tree is { } tree)
             {
