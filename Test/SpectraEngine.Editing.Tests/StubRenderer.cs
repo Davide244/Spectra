@@ -41,14 +41,7 @@ internal sealed class StubRenderer : Renderer
         int capacityInstances, ReadOnlySpan<VertexAttribute> attributes, ShaderProgram program)
         => throw new NotSupportedException("StubRenderer creates no GPU resources.");
 
-    public override Texture CreateTexture(
-        ReadOnlySpan<byte> pixels,
-        int width,
-        int height,
-        TextureFormat format,
-        TextureColorSpace colorSpace,
-        TextureFilter filter = TextureFilter.Linear,
-        TextureWrap wrap = TextureWrap.Repeat)
+    protected override Texture CreateTextureCore(in TextureUploadDesc desc)
         => throw new NotSupportedException("StubRenderer creates no GPU resources.");
 
     // No target of any kind, so a pass is a no-op rather than a throw: these

@@ -53,14 +53,7 @@ internal sealed class CompilingRenderer : Renderer
         int capacityInstances, ReadOnlySpan<VertexAttribute> attributes, ShaderProgram program)
         => throw new NotSupportedException("This renderer creates no GPU resources.");
 
-    public override Texture CreateTexture(
-        ReadOnlySpan<byte> pixels,
-        int width,
-        int height,
-        TextureFormat format,
-        TextureColorSpace colorSpace,
-        TextureFilter filter = TextureFilter.Linear,
-        TextureWrap wrap = TextureWrap.Repeat)
+    protected override Texture CreateTextureCore(in TextureUploadDesc desc)
         => throw new NotSupportedException("CompilingRenderer creates no textures.");
 
     // No target of any kind, so a pass is a no-op rather than a throw: these

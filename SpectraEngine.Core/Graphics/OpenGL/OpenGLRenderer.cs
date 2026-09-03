@@ -654,11 +654,9 @@ public class OpenGLRenderer : Renderer
         return new OpenGLInstanceBuffer(_gl!, capacityInstances, attributes, floats);
     }
 
-    public override Texture CreateTexture(
-        ReadOnlySpan<byte> pixels, int width, int height,
-        TextureFormat format, TextureColorSpace colorSpace, TextureFilter filter, TextureWrap wrap)
+    protected override Texture CreateTextureCore(in TextureUploadDesc desc)
     {
-        var texture = OpenGLTexture.Create(_gl!, pixels, width, height, format, colorSpace, filter, wrap);
+        var texture = OpenGLTexture.Create(_gl!, in desc);
         texture.Unregister = () => _textures.Remove(texture);
         _textures.Add(texture);
         return texture;

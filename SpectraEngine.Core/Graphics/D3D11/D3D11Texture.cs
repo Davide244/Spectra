@@ -66,60 +66,42 @@ internal sealed unsafe partial class D3D11Texture : Texture
         RtvFormat = rtvFormat ?? dxgiFormat;
     }
 
-    internal static D3D11Texture Create(
-        ComPtr<ID3D11Device> device,
-        ReadOnlySpan<byte> pixels,
-        int width,
-        int height,
-        TextureFormat format,
-        TextureColorSpace colorSpace,
-        TextureFilter filter,
-        TextureWrap wrap)
+    internal static D3D11Texture Create(ComPtr<ID3D11Device> device, in TextureUploadDesc desc)
     {
-        TextureColorSpace resolved = TextureFormatInfo.Resolve(format, colorSpace);
-        bool srgb = resolved == TextureColorSpace.Srgb;
+        TextureFormat format = desc.Format;
+        TextureColorSpace resolved = TextureFormatInfo.Resolve(format, desc.ColorSpace);
+        TextureFilter filter = desc.Filter;
+        int width = desc.Width;
+        int height = desc.Height;
 
-        if (TextureFormatInfo.IsFloat(format))
-            throw new ArgumentOutOfRangeException(
-                nameof(format), $"{format} cannot be uploaded from byte pixels; it is a render-target format.");
+        Silk.NET.DXGI.Format dxgiFormat = UploadDxgiFormat(format, resolved);
 
-        // D3D11 has no native 24-bit RGB texture format, so for Rgb8 input we
-        // expand to RGBA8 on the CPU side. R8 and Rgba8 map directly.
-        Silk.NET.DXGI.Format dxgiFormat;
+        // D3D11 has no native 24-bit RGB texture format, so an Rgb8 payload is
+        // rewritten as RGBA8 first. Every other format's blocks or texels go up
+        // exactly as the file laid them out, at the pitch the file declared.
+        ReadOnlySpan<byte> payload = desc.Payload;
+        ReadOnlySpan<TextureMipDesc> mips = desc.Mips;
         byte[]? expanded = null;
-        ReadOnlySpan<byte> uploadPixels = pixels;
-        uint rowPitch;
-        switch (format)
+        if (format == TextureFormat.Rgb8)
         {
-            case TextureFormat.Rgba8:
-                dxgiFormat = srgb
-                    ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
-                    : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm;
-                rowPitch = (uint)(width * 4);
-                break;
-            case TextureFormat.Rgb8:
-                dxgiFormat = srgb
-                    ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
-                    : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm;
-                expanded = ExpandRgbToRgba(pixels, width, height);
-                uploadPixels = expanded;
-                rowPitch = (uint)(width * 4);
-                break;
-            case TextureFormat.R8:
-                // No R8_UNORM_SRGB exists; TextureFormatInfo.Resolve already
-                // forced `resolved` to linear for this case.
-                dxgiFormat = Silk.NET.DXGI.Format.FormatR8Unorm;
-                rowPitch = (uint)width;
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(format));
+            expanded = TextureUploadLayout.ExpandRgbToRgba(payload, mips, out TextureMipDesc[] expandedMips);
+            payload = expanded;
+            mips = expandedMips;
         }
 
+        // GenerateMips is only reachable for an uncompressed single level: it
+        // needs the RenderTarget bind flag, which no BC format may carry, and it
+        // would in any case have nothing to re-encode blocks with. A supplied
+        // chain is never regenerated - it is what the cooker produced.
         bool wantsMipmaps = filter == TextureFilter.LinearMipmap;
-        uint mipLevels = wantsMipmaps ? 0u : 1u; // 0 = full chain
+        bool generateMips = wantsMipmaps
+            && !desc.HasSuppliedMipChain
+            && !TextureFormatInfo.IsBlockCompressed(format);
+
+        uint mipLevels = generateMips ? 0u : (uint)mips.Length; // 0 = full chain
         uint bindFlags = (uint)BindFlag.ShaderResource;
         uint miscFlags = 0u;
-        if (wantsMipmaps)
+        if (generateMips)
         {
             // For runtime GenerateMips we need RenderTarget bind + GenerateMips misc flag.
             // An sRGB format is fine here and is in fact the point: GenerateMips
@@ -129,7 +111,7 @@ internal sealed unsafe partial class D3D11Texture : Texture
             miscFlags |= (uint)ResourceMiscFlag.GenerateMips;
         }
 
-        var desc = new Texture2DDesc
+        var textureDesc = new Texture2DDesc
         {
             Width = (uint)width,
             Height = (uint)height,
@@ -145,23 +127,37 @@ internal sealed unsafe partial class D3D11Texture : Texture
 
         var dev = (ID3D11Device*)device.Handle;
         ID3D11Texture2D* texPtr = null;
-        if (wantsMipmaps)
+        if (generateMips)
         {
             // Have to create without initial data (mipmap chain isn't ready)
             // then UpdateSubresource into mip 0 + GenerateMips.
-            SilkMarshal.ThrowHResult(dev->CreateTexture2D(&desc, null, &texPtr));
+            SilkMarshal.ThrowHResult(dev->CreateTexture2D(&textureDesc, null, &texPtr));
         }
         else
         {
-            fixed (byte* p = uploadPixels)
+            // One SubresourceData per level, each pointing straight into the
+            // payload at the declared pitch: D3D11 is the one backend that takes
+            // a source stride, so nothing needs repacking here.
+            Span<SubresourceData> initial = mips.Length <= 16
+                ? stackalloc SubresourceData[mips.Length]
+                : new SubresourceData[mips.Length];
+
+            fixed (byte* p = payload)
             {
-                var init = new SubresourceData
+                for (int level = 0; level < mips.Length; level++)
                 {
-                    PSysMem = p,
-                    SysMemPitch = rowPitch,
-                    SysMemSlicePitch = 0,
-                };
-                SilkMarshal.ThrowHResult(dev->CreateTexture2D(&desc, &init, &texPtr));
+                    initial[level] = new SubresourceData
+                    {
+                        PSysMem = p + mips[level].Offset,
+                        SysMemPitch = (uint)mips[level].RowPitch,
+                        SysMemSlicePitch = 0,
+                    };
+                }
+
+                fixed (SubresourceData* init = initial)
+                {
+                    SilkMarshal.ThrowHResult(dev->CreateTexture2D(&textureDesc, init, &texPtr));
+                }
             }
         }
 
@@ -180,25 +176,67 @@ internal sealed unsafe partial class D3D11Texture : Texture
         ID3D11ShaderResourceView* srvPtr = null;
         SilkMarshal.ThrowHResult(dev->CreateShaderResourceView((ID3D11Resource*)texPtr, &srvDesc, &srvPtr));
 
-        if (wantsMipmaps)
+        if (generateMips)
         {
             ID3D11DeviceContext* ctxPtr = null;
             dev->GetImmediateContext(&ctxPtr);
-            fixed (byte* p = uploadPixels)
+            fixed (byte* p = payload)
             {
-                ctxPtr->UpdateSubresource((ID3D11Resource*)texPtr, 0, null, p, rowPitch, 0u);
+                ctxPtr->UpdateSubresource(
+                    (ID3D11Resource*)texPtr, 0, null, p + mips[0].Offset, (uint)mips[0].RowPitch, 0u);
             }
             ctxPtr->GenerateMips(srvPtr);
             ctxPtr->Release();
         }
 
-        ID3D11SamplerState* samplerPtr = CreateSampler(dev, filter, wrap);
+        ID3D11SamplerState* samplerPtr = CreateSampler(dev, filter, desc.Wrap);
+
+        GC.KeepAlive(expanded);
 
         return new D3D11Texture(
             ComOwnership.Own(texPtr),
             ComOwnership.Own(srvPtr),
             ComOwnership.Own(samplerPtr),
             width, height, format, resolved, dxgiFormat);
+    }
+
+    /// <summary>
+    /// The DXGI format one CPU upload of <paramref name="format"/> creates its
+    /// resource with.
+    /// </summary>
+    /// <remarks>
+    /// <b>Rgb8 answers with an RGBA format on purpose</b>, because no DXGI
+    /// 24-bit texture format exists and the payload is expanded to match. The
+    /// linear branch of BC4, BC5 and BC6H is not a fallback either: those three
+    /// have no sRGB form in DXGI at all, which
+    /// <see cref="TextureFormatInfo.Resolve"/> has already accounted for by the
+    /// time the caller gets here.
+    /// </remarks>
+    private static Silk.NET.DXGI.Format UploadDxgiFormat(
+        TextureFormat format, TextureColorSpace resolved)
+    {
+        bool srgb = resolved == TextureColorSpace.Srgb;
+        return format switch
+        {
+            TextureFormat.Rgba8 or TextureFormat.Rgb8 => srgb
+                ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
+                : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm,
+            // No R8_UNORM_SRGB exists; Resolve already forced linear.
+            TextureFormat.R8 => Silk.NET.DXGI.Format.FormatR8Unorm,
+            TextureFormat.Bc1 => srgb
+                ? Silk.NET.DXGI.Format.FormatBC1UnormSrgb
+                : Silk.NET.DXGI.Format.FormatBC1Unorm,
+            TextureFormat.Bc3 => srgb
+                ? Silk.NET.DXGI.Format.FormatBC3UnormSrgb
+                : Silk.NET.DXGI.Format.FormatBC3Unorm,
+            TextureFormat.Bc4 => Silk.NET.DXGI.Format.FormatBC4Unorm,
+            TextureFormat.Bc5 => Silk.NET.DXGI.Format.FormatBC5Unorm,
+            TextureFormat.Bc6H => Silk.NET.DXGI.Format.FormatBC6HUF16,
+            TextureFormat.Bc7 => srgb
+                ? Silk.NET.DXGI.Format.FormatBC7UnormSrgb
+                : Silk.NET.DXGI.Format.FormatBC7Unorm,
+            _ => throw new ArgumentOutOfRangeException(nameof(format)),
+        };
     }
 
     /// <summary>
@@ -498,20 +536,6 @@ internal sealed unsafe partial class D3D11Texture : Texture
         ID3D11SamplerState* samplerPtr = null;
         SilkMarshal.ThrowHResult(dev->CreateSamplerState(&samplerDesc, &samplerPtr));
         return samplerPtr;
-    }
-
-    private static byte[] ExpandRgbToRgba(ReadOnlySpan<byte> rgb, int width, int height)
-    {
-        int pixelCount = width * height;
-        var rgba = new byte[pixelCount * 4];
-        for (int i = 0; i < pixelCount; i++)
-        {
-            rgba[i * 4 + 0] = rgb[i * 3 + 0];
-            rgba[i * 4 + 1] = rgb[i * 3 + 1];
-            rgba[i * 4 + 2] = rgb[i * 3 + 2];
-            rgba[i * 4 + 3] = 255;
-        }
-        return rgba;
     }
 
     public override void Dispose()

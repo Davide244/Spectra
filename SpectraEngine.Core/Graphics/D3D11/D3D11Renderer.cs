@@ -1065,11 +1065,9 @@ public sealed unsafe class D3D11Renderer : Renderer
             VertexAttribute.StandardLayout, attributes, floats, d3dProgram.VertexBytecode);
     }
 
-    public override Texture CreateTexture(
-        ReadOnlySpan<byte> pixels, int width, int height,
-        TextureFormat format, TextureColorSpace colorSpace, TextureFilter filter, TextureWrap wrap)
+    protected override Texture CreateTextureCore(in TextureUploadDesc desc)
     {
-        var texture = D3D11Texture.Create(_device, pixels, width, height, format, colorSpace, filter, wrap);
+        var texture = D3D11Texture.Create(_device, in desc);
         texture.Unregister = () => _textures.Remove(texture);
         _textures.Add(texture);
         return texture;

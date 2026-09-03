@@ -55,6 +55,67 @@ public enum TextureFormat
     /// the API.
     /// </remarks>
     Depth32Float,
+
+    /// <summary>
+    /// BC1 (DXT1): 4x4 blocks, 8 bytes each, RGB plus one bit of alpha. Four
+    /// times smaller than <see cref="Rgba8"/>, and the cheapest thing a cook can
+    /// do to an opaque albedo.
+    /// </summary>
+    /// <remarks>
+    /// <b>Every block-compressed format here is a COOKED format and nothing
+    /// else.</b> No decoder in the engine produces one, no editor path writes
+    /// one, and the runtime never compresses: the blocks arrive already
+    /// assembled, with their per-mip row pitches stated by the file that carries
+    /// them. See <see cref="TextureUploadDesc"/> for why those pitches are
+    /// carried rather than recomputed.
+    /// </remarks>
+    Bc1,
+
+    /// <summary>
+    /// BC3 (DXT5): 4x4 blocks, 16 bytes each, RGB plus a separately
+    /// interpolated 8-bit alpha. What an albedo with real transparency cooks to.
+    /// </summary>
+    Bc3,
+
+    /// <summary>
+    /// BC4 (RGTC1): 4x4 blocks, 8 bytes each, one interpolated channel. A mask,
+    /// a height field, an AO or a roughness map on its own.
+    /// </summary>
+    /// <remarks>
+    /// <b>A data format: no API here defines an sRGB BC4</b>, for exactly the
+    /// reason <see cref="R8"/> has none, and
+    /// <see cref="TextureFormatInfo.SupportsSrgb"/> is the one place that is
+    /// written down.
+    /// </remarks>
+    Bc4,
+
+    /// <summary>
+    /// BC5 (RGTC2): 4x4 blocks, 16 bytes each, two interpolated channels. The
+    /// normal-map format - x and y stored, z reconstructed - and a data format
+    /// with no sRGB variant.
+    /// </summary>
+    Bc5,
+
+    /// <summary>
+    /// BC6H: 4x4 blocks, 16 bytes each, three HALF-FLOAT channels. What an HDR
+    /// source - a sky, a reflection probe, a light cookie - cooks to.
+    /// </summary>
+    /// <remarks>
+    /// <b>No sRGB variant, for the same reason <see cref="Rgba16Float"/> has
+    /// none</b>: the transfer curve exists to ration a small number of integer
+    /// codes, and a float format has none to ration. But BC6H is deliberately
+    /// NOT one of <see cref="TextureFormatInfo.IsFloat"/>'s answers: that
+    /// predicate asks whether a byte array can fill the texture, and what fills
+    /// this one is compressed BLOCKS, which are bytes however they decode.
+    /// </remarks>
+    Bc6H,
+
+    /// <summary>
+    /// BC7: 4x4 blocks, 16 bytes each, RGBA at the highest quality the BC family
+    /// reaches. The default for a cooked colour texture that can afford 8 bits
+    /// per pixel.
+    /// </summary>
+    Bc7,
 }
 
 /// <summary>
@@ -106,14 +167,95 @@ public static class TextureFormatInfo
     /// codes, and there are none to ration).
     /// </summary>
     public static bool SupportsSrgb(TextureFormat format) =>
-        format is TextureFormat.Rgba8 or TextureFormat.Rgb8;
+        format is TextureFormat.Rgba8 or TextureFormat.Rgb8
+            or TextureFormat.Bc1 or TextureFormat.Bc3 or TextureFormat.Bc7;
 
     /// <summary>
     /// Whether <paramref name="format"/> stores floating-point channels, and so
     /// cannot be filled from a byte array.
     /// </summary>
+    /// <remarks>
+    /// <b><see cref="TextureFormat.Bc6H"/> is deliberately not here.</b> Its
+    /// channels really are half-floats, and this predicate is not about the
+    /// channels: it is the guard the CPU-upload paths use to refuse a format a
+    /// byte array cannot fill, and what fills a BC6H texture is compressed
+    /// blocks, which are bytes. Answering "float" here would refuse the one
+    /// HDR format the cooker can actually produce.
+    /// </remarks>
     public static bool IsFloat(TextureFormat format) =>
         format is TextureFormat.Rgba16Float or TextureFormat.Depth32Float;
+
+    /// <summary>
+    /// Whether <paramref name="format"/> stores 4x4 blocks rather than
+    /// individual texels.
+    /// </summary>
+    public static bool IsBlockCompressed(TextureFormat format) => format
+        is TextureFormat.Bc1 or TextureFormat.Bc3 or TextureFormat.Bc4
+        or TextureFormat.Bc5 or TextureFormat.Bc6H or TextureFormat.Bc7;
+
+    /// <summary>
+    /// The width in texels of one addressable unit: 4 for a block-compressed
+    /// format, 1 otherwise.
+    /// </summary>
+    public static int BlockWidth(TextureFormat format) => IsBlockCompressed(format) ? 4 : 1;
+
+    /// <summary>The height in texels of one addressable unit. See <see cref="BlockWidth"/>.</summary>
+    public static int BlockHeight(TextureFormat format) => IsBlockCompressed(format) ? 4 : 1;
+
+    /// <summary>
+    /// Bytes in one addressable unit: one block for a compressed format, one
+    /// texel otherwise.
+    /// </summary>
+    /// <remarks>
+    /// Throws for the two render-target-only formats rather than returning a
+    /// size for them. Nothing uploads either from the CPU, so a number here
+    /// would only ever be used to size an upload that
+    /// <see cref="TextureUploadDesc.Validate"/> is about to refuse anyway, and a
+    /// plausible-looking answer is how such a call slips through.
+    /// </remarks>
+    public static int BytesPerBlock(TextureFormat format) => format switch
+    {
+        TextureFormat.Rgba8 => 4,
+        TextureFormat.Rgb8 => 3,
+        TextureFormat.R8 => 1,
+        TextureFormat.Bc1 or TextureFormat.Bc4 => 8,
+        TextureFormat.Bc3 or TextureFormat.Bc5 or TextureFormat.Bc6H or TextureFormat.Bc7 => 16,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(format), $"{format} has no CPU-side block size; it is a render-target format."),
+    };
+
+    /// <summary>
+    /// How many rows a mip of <paramref name="height"/> texels occupies: texel
+    /// rows for an uncompressed format, BLOCK rows for a compressed one.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is derived and the row PITCH is not, and the difference is not an
+    /// inconsistency.</b> A pitch depends on whatever alignment the tool that
+    /// wrote the file chose, which is why <see cref="TextureUploadDesc"/> carries
+    /// it; a row count is exactly the number of block rows the height covers,
+    /// which no writer is free to disagree about. D3D's own
+    /// <c>GetCopyableFootprints</c> reports the same value.
+    /// </remarks>
+    public static int RowCount(TextureFormat format, int height)
+    {
+        int blockHeight = BlockHeight(format);
+        return (height + blockHeight - 1) / blockHeight;
+    }
+
+    /// <summary>
+    /// The smallest row pitch that can describe a mip of <paramref name="width"/>
+    /// texels: the tight, unpadded one.
+    /// </summary>
+    /// <remarks>
+    /// A validation FLOOR, never a substitute for the declared pitch. Padding is
+    /// always upward, so a declared pitch below this cannot describe the row at
+    /// all and is a malformed file rather than an unusual alignment.
+    /// </remarks>
+    public static int TightRowPitch(TextureFormat format, int width)
+    {
+        int blockWidth = BlockWidth(format);
+        return (width + blockWidth - 1) / blockWidth * BytesPerBlock(format);
+    }
 
     /// <summary>Whether <paramref name="format"/> is a depth format rather than a colour one.</summary>
     public static bool IsDepth(TextureFormat format) => format is TextureFormat.Depth32Float;

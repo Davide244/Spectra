@@ -193,65 +193,56 @@ internal sealed unsafe class D3D12Texture : Texture
         renderer.DevicePtr->CreateSampler(&samplerDesc, SamplerCpu);
     }
 
-    internal D3D12Texture(
-        D3D12Renderer renderer,
-        ReadOnlySpan<byte> pixels,
-        int width,
-        int height,
-        TextureFormat format,
-        TextureColorSpace colorSpace,
-        TextureFilter filter,
-        TextureWrap wrap)
+    internal D3D12Texture(D3D12Renderer renderer, in TextureUploadDesc desc)
     {
-        TextureColorSpace resolved = TextureFormatInfo.Resolve(format, colorSpace);
+        TextureFormat format = desc.Format;
+        TextureColorSpace resolved = TextureFormatInfo.Resolve(format, desc.ColorSpace);
         bool srgb = resolved == TextureColorSpace.Srgb;
+        TextureFilter filter = desc.Filter;
 
-        if (TextureFormatInfo.IsFloat(format))
-            throw new ArgumentOutOfRangeException(
-                nameof(format), $"{format} cannot be uploaded from byte pixels; it is a render-target format.");
-
-        Width = width;
-        Height = height;
+        Width = desc.Width;
+        Height = desc.Height;
         Format = format;
         ColorSpace = resolved;
 
-        // Expand RGB→RGBA (no 24-bit DXGI format) and normalize to a canonical
-        // (bytesPerPixel, dxgiFormat) pair.
-        Silk.NET.DXGI.Format dxgiFormat;
-        int bpp;
-        byte[] level0;
-        switch (format)
+        Silk.NET.DXGI.Format dxgiFormat = UploadDxgiFormat(format, resolved);
+
+        // No 24-bit DXGI format exists, so an Rgb8 payload is rewritten as RGBA8
+        // before anything else looks at it. Everything downstream then measures
+        // itself against uploadFormat rather than the requested one: a pitch
+        // computed from Rgb8 over an expanded payload is three quarters of the
+        // real stride, which shears the picture and raises nothing.
+        TextureFormat uploadFormat = format == TextureFormat.Rgb8 ? TextureFormat.Rgba8 : format;
+        ReadOnlySpan<byte> payload = desc.Payload;
+        ReadOnlySpan<TextureMipDesc> mips = desc.Mips;
+        byte[]? owned = null;
+        if (format == TextureFormat.Rgb8)
         {
-            case TextureFormat.Rgba8:
-                dxgiFormat = srgb
-                    ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
-                    : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm;
-                bpp = 4;
-                level0 = pixels.ToArray();
-                break;
-            case TextureFormat.Rgb8:
-                dxgiFormat = srgb
-                    ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
-                    : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm;
-                bpp = 4;
-                level0 = ExpandRgbToRgba(pixels, width, height);
-                break;
-            case TextureFormat.R8:
-                // No R8_UNORM_SRGB exists; Resolve already forced linear.
-                dxgiFormat = Silk.NET.DXGI.Format.FormatR8Unorm;
-                bpp = 1;
-                level0 = pixels.ToArray();
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(format));
+            owned = TextureUploadLayout.ExpandRgbToRgba(payload, mips, out TextureMipDesc[] expandedMips);
+            payload = owned;
+            mips = expandedMips;
         }
 
+        // D3D12 has no GenerateMips, so a requested chain is built on the CPU -
+        // but only for an uncompressed format with no chain of its own. A cooked
+        // chain is what the cooker produced, and a BC chain cannot be built here
+        // at all: there is no block encoder in the engine.
         bool wantsMips = filter == TextureFilter.LinearMipmap;
-        var mips = BuildMipChain(level0, width, height, bpp, wantsMips, srgb);
+        if (wantsMips && !desc.HasSuppliedMipChain && !TextureFormatInfo.IsBlockCompressed(uploadFormat))
+        {
+            var levels = BuildMipChain(
+                TextureUploadLayout.TightLevel(payload, uploadFormat, mips[0], out _).ToArray(),
+                mips[0].Width, mips[0].Height, TextureFormatInfo.BytesPerBlock(uploadFormat), srgb);
+            owned = TextureUploadLayout.Flatten(uploadFormat, levels, out TextureMipDesc[] generatedMips);
+            payload = owned;
+            mips = generatedMips;
+        }
 
         DxgiFormat = dxgiFormat;
-        _texture = renderer.CreateTexture2D((uint)width, (uint)height, (ushort)mips.Count, dxgiFormat);
-        renderer.UploadTexture(_texture, mips, (uint)width, (uint)height, bpp, dxgiFormat);
+        _texture = renderer.CreateTexture2D((uint)Width, (uint)Height, (ushort)mips.Length, dxgiFormat);
+        renderer.UploadTexture(_texture, payload, mips);
+
+        GC.KeepAlive(owned);
 
         // SRV + sampler descriptors in tiny staging heaps owned by the texture.
         _srvHeap = renderer.CreateDescriptorHeap(DescriptorHeapType.CbvSrvUav, 1, shaderVisible: false);
@@ -268,7 +259,7 @@ internal sealed unsafe class D3D12Texture : Texture
         srvDesc.Anonymous.Texture2D = new Tex2DSrv
         {
             MostDetailedMip = 0,
-            MipLevels = (uint)mips.Count,
+            MipLevels = (uint)mips.Length,
             PlaneSlice = 0,
             ResourceMinLODClamp = 0f,
         };
@@ -281,7 +272,7 @@ internal sealed unsafe class D3D12Texture : Texture
             TextureFilter.LinearMipmap => Filter.MinMagMipLinear,
             _ => Filter.MinMagMipLinear,
         };
-        var addr = wrap == TextureWrap.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp;
+        var addr = desc.Wrap == TextureWrap.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp;
         var samplerDesc = new SamplerDesc
         {
             Filter = samplerFilter,
@@ -297,6 +288,39 @@ internal sealed unsafe class D3D12Texture : Texture
             MaxLOD = float.MaxValue,
         };
         renderer.DevicePtr->CreateSampler(&samplerDesc, SamplerCpu);
+    }
+
+    /// <summary>
+    /// The DXGI format one CPU upload of <paramref name="format"/> creates its
+    /// resource with. The twin of D3D11's table, and the two must agree: a
+    /// texture that is sRGB on one backend and linear on the other is a picture
+    /// that is merely wrong, with no error anywhere.
+    /// </summary>
+    private static Silk.NET.DXGI.Format UploadDxgiFormat(
+        TextureFormat format, TextureColorSpace resolved)
+    {
+        bool srgb = resolved == TextureColorSpace.Srgb;
+        return format switch
+        {
+            TextureFormat.Rgba8 or TextureFormat.Rgb8 => srgb
+                ? Silk.NET.DXGI.Format.FormatR8G8B8A8UnormSrgb
+                : Silk.NET.DXGI.Format.FormatR8G8B8A8Unorm,
+            // No R8_UNORM_SRGB exists; Resolve already forced linear.
+            TextureFormat.R8 => Silk.NET.DXGI.Format.FormatR8Unorm,
+            TextureFormat.Bc1 => srgb
+                ? Silk.NET.DXGI.Format.FormatBC1UnormSrgb
+                : Silk.NET.DXGI.Format.FormatBC1Unorm,
+            TextureFormat.Bc3 => srgb
+                ? Silk.NET.DXGI.Format.FormatBC3UnormSrgb
+                : Silk.NET.DXGI.Format.FormatBC3Unorm,
+            TextureFormat.Bc4 => Silk.NET.DXGI.Format.FormatBC4Unorm,
+            TextureFormat.Bc5 => Silk.NET.DXGI.Format.FormatBC5Unorm,
+            TextureFormat.Bc6H => Silk.NET.DXGI.Format.FormatBC6HUF16,
+            TextureFormat.Bc7 => srgb
+                ? Silk.NET.DXGI.Format.FormatBC7UnormSrgb
+                : Silk.NET.DXGI.Format.FormatBC7Unorm,
+            _ => throw new ArgumentOutOfRangeException(nameof(format)),
+        };
     }
 
     /// <summary>Level-0 plus successively box-filtered halvings down to 1×1 (when enabled).</summary>
@@ -317,11 +341,10 @@ internal sealed unsafe class D3D12Texture : Texture
     /// the loop simply leaves index 3 alone.
     /// </para>
     /// </remarks>
-    private static List<(byte[] Pixels, uint Width, uint Height)> BuildMipChain(
-        byte[] level0, int width, int height, int bpp, bool wantsMips, bool srgb)
+    private static List<(byte[] Pixels, int Width, int Height)> BuildMipChain(
+        byte[] level0, int width, int height, int bpp, bool srgb)
     {
-        var mips = new List<(byte[], uint, uint)> { (level0, (uint)width, (uint)height) };
-        if (!wantsMips) return mips;
+        var mips = new List<(byte[], int, int)> { (level0, width, height) };
 
         // 256-entry decode table: the alternative is four MathF.Pow calls per
         // channel per texel, which is seconds rather than milliseconds on a
@@ -361,7 +384,7 @@ internal sealed unsafe class D3D12Texture : Texture
                 }
             }
 
-            mips.Add((next, nw, nh));
+            mips.Add((next, (int)nw, (int)nh));
             prev = next;
             w = nw;
             h = nh;
@@ -385,20 +408,6 @@ internal sealed unsafe class D3D12Texture : Texture
         // The +0.5 rounds to nearest instead of truncating; over a full chain,
         // truncation is a systematic darkening of about half a code per level.
         return (byte)Math.Clamp((int)(encoded * 255f + 0.5f), 0, 255);
-    }
-
-    private static byte[] ExpandRgbToRgba(ReadOnlySpan<byte> rgb, int width, int height)
-    {
-        int pixelCount = width * height;
-        var rgba = new byte[pixelCount * 4];
-        for (int i = 0; i < pixelCount; i++)
-        {
-            rgba[i * 4 + 0] = rgb[i * 3 + 0];
-            rgba[i * 4 + 1] = rgb[i * 3 + 1];
-            rgba[i * 4 + 2] = rgb[i * 3 + 2];
-            rgba[i * 4 + 3] = 255;
-        }
-        return rgba;
     }
 
     public override void Dispose()

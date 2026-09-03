@@ -374,9 +374,9 @@ public sealed unsafe class D3D12Renderer : Renderer
         // the choice does not change this one texel, but a slot whose colour
         // space differed from the texture it stands in for would be a trap the
         // first time the fallback is anything but white.
-        _fallbackTexture = new D3D12Texture(
-            this, white, 1, 1, TextureFormat.Rgba8, TextureColorSpace.Srgb,
-            TextureFilter.Nearest, TextureWrap.Repeat);
+        _fallbackTexture = new D3D12Texture(this, TextureUploadDesc.SingleLevel(
+            white, 1, 1, TextureFormat.Rgba8, TextureColorSpace.Srgb,
+            TextureFilter.Nearest, TextureWrap.Repeat));
 
         // Deferred first: see OpenGLRenderer for why it is the default.
         RegisterPipeline(new D3D12DeferredPipeline());
@@ -2225,15 +2225,33 @@ public sealed unsafe class D3D12Renderer : Renderer
     /// the final transition to pixel-shader-resource on the frame command list,
     /// and executes immediately (blocking). Only used at load time.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The copy is PER ROW and "one memcpy per mip" is not available.</b>
+    /// <c>GetCopyableFootprints</c> reports a destination row pitch aligned to
+    /// <c>D3D12_TEXTURE_DATA_PITCH_ALIGNMENT</c> (256 bytes), while the source's
+    /// pitch is whatever the file declared, so the two agree only by accident -
+    /// a 64x64 BC7 mip is 256 bytes a row and lines up, and the 32x32 level
+    /// below it is 128 and does not. Copying a level in one block would place
+    /// every row after the first at the wrong offset and produce a texture that
+    /// is sheared rather than one that errors.
+    /// </para>
+    /// <para>
+    /// Each row copies <c>rowSizes[mip]</c> bytes, which is the TIGHT row size
+    /// D3D reports rather than either pitch: the source may be padded and the
+    /// destination certainly is, and copying either pitch's worth would read or
+    /// write somebody else's padding.
+    /// </para>
+    /// </remarks>
     internal void UploadTexture(
         ComPtr<ID3D12Resource> texture,
-        List<(byte[] Pixels, uint Width, uint Height)> mips,
-        uint width, uint height, int bytesPerPixel, Format format)
+        ReadOnlySpan<byte> payload,
+        ReadOnlySpan<TextureMipDesc> mips)
     {
         if (_isRecording)
             throw new InvalidOperationException("Texture upload mid-frame is not supported; create textures at load time.");
 
-        uint mipCount = (uint)mips.Count;
+        uint mipCount = (uint)mips.Length;
         var texDesc = ((ID3D12Resource*)texture.Handle)->GetDesc();
 
         var footprints = stackalloc PlacedSubresourceFootprint[(int)mipCount];
@@ -2248,20 +2266,22 @@ public sealed unsafe class D3D12Renderer : Renderer
         var readRange = new Silk.NET.Direct3D12.Range { Begin = 0, End = 0 };
         SilkMarshal.ThrowHResult(res->Map(0, &readRange, &mapped));
 
-        for (int mip = 0; mip < mipCount; mip++)
+        fixed (byte* payloadBase = payload)
         {
-            var (pixels, w, _) = mips[mip];
-            uint srcRowBytes = w * (uint)bytesPerPixel;
-            uint dstRowPitch = footprints[mip].Footprint.RowPitch;
-            byte* dst = (byte*)mapped + footprints[mip].Offset;
-            fixed (byte* src = pixels)
+            for (int mip = 0; mip < mipCount; mip++)
             {
+                uint srcRowPitch = (uint)mips[mip].RowPitch;
+                uint dstRowPitch = footprints[mip].Footprint.RowPitch;
+                ulong rowBytes = rowSizes[mip];
+                byte* src = payloadBase + mips[mip].Offset;
+                byte* dst = (byte*)mapped + footprints[mip].Offset;
+
                 for (uint row = 0; row < numRows[mip]; row++)
                 {
                     System.Buffer.MemoryCopy(
-                        src + row * srcRowBytes,
+                        src + row * srcRowPitch,
                         dst + row * dstRowPitch,
-                        srcRowBytes, srcRowBytes);
+                        rowBytes, rowBytes);
                 }
             }
         }
@@ -2322,11 +2342,9 @@ public sealed unsafe class D3D12Renderer : Renderer
             _device, capacityInstances, VertexAttribute.StandardLayout, attributes, floats);
     }
 
-    public override Texture CreateTexture(
-        ReadOnlySpan<byte> pixels, int width, int height,
-        TextureFormat format, TextureColorSpace colorSpace, TextureFilter filter, TextureWrap wrap)
+    protected override Texture CreateTextureCore(in TextureUploadDesc desc)
     {
-        var texture = new D3D12Texture(this, pixels, width, height, format, colorSpace, filter, wrap);
+        var texture = new D3D12Texture(this, in desc);
         texture.Unregister = () => _textures.Remove(texture);
         _textures.Add(texture);
         return texture;

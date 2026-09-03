@@ -2483,14 +2483,57 @@ public abstract class Renderer
     /// backends.
     /// </para>
     /// </remarks>
-    public abstract Texture CreateTexture(
+    public Texture CreateTexture(
         ReadOnlySpan<byte> pixels,
         int width,
         int height,
         TextureFormat format,
         TextureColorSpace colorSpace,
         TextureFilter filter = TextureFilter.Linear,
-        TextureWrap wrap = TextureWrap.Repeat);
+        TextureWrap wrap = TextureWrap.Repeat)
+        => CreateTexture(TextureUploadDesc.SingleLevel(
+            pixels, width, height, format, colorSpace, filter, wrap));
+
+    /// <summary>
+    /// Uploads a texture from an explicit per-mip layout over one payload: what
+    /// a cooked, block-compressed image arrives as.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is the only upload path, and the single-span overload above is
+    /// expressed over it.</b> An uncompressed RGBA texture is a one-mip
+    /// descriptor with a tight pitch, which is not a special case of anything -
+    /// it is the same call with less in it. Two paths would mean a fix for a
+    /// padded row pitch, or for the colour space of a supplied chain, landing in
+    /// one of them; and the older path is the one every existing caller uses, so
+    /// it would be the one that kept working while the new one rotted.
+    /// </para>
+    /// <para>
+    /// <b>The descriptor is validated HERE rather than in each backend</b>, so a
+    /// malformed layout is refused with the same message on all three and no
+    /// backend can be the one that reads past the end of a mapped view instead.
+    /// See <see cref="TextureUploadDesc.Validate"/> for what is checked and why
+    /// the message names the mip.
+    /// </para>
+    /// <para>
+    /// Orientation, colour space and the "no default for the colour space"
+    /// reasoning are all unchanged from the overload above; a compressed payload
+    /// is subject to exactly the same contract, except that it cannot flip its
+    /// own rows, which is the case that documented paragraph was written for.
+    /// </para>
+    /// </remarks>
+    public Texture CreateTexture(in TextureUploadDesc desc)
+    {
+        desc.Validate();
+        return CreateTextureCore(in desc);
+    }
+
+    /// <summary>
+    /// The backend's half of <see cref="CreateTexture(in TextureUploadDesc)"/>,
+    /// reached only after validation and responsible for registering the result
+    /// with the creating renderer's tracking list.
+    /// </summary>
+    protected abstract Texture CreateTextureCore(in TextureUploadDesc desc);
 
     /// <summary>
     /// Disposes a texture created by <see cref="CreateTexture"/> and drops it

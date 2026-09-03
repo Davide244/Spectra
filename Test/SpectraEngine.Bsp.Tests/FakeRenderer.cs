@@ -161,16 +161,13 @@ internal sealed class FakeRenderer : Renderer
         int capacityInstances, ReadOnlySpan<VertexAttribute> attributes, ShaderProgram program)
         => throw new NotSupportedException("This renderer creates no GPU resources.");
 
-    public override Texture CreateTexture(
-        ReadOnlySpan<byte> pixels,
-        int width,
-        int height,
-        TextureFormat format,
-        TextureColorSpace colorSpace,
-        TextureFilter filter = TextureFilter.Linear,
-        TextureWrap wrap = TextureWrap.Repeat)
+    protected override Texture CreateTextureCore(in TextureUploadDesc desc)
     {
-        var texture = new FakeTexture(pixels.ToArray(), width, height, format, colorSpace, filter, wrap);
+        // Level 0 only: nothing here samples a mip, and copying the whole
+        // payload would make the fake's record depend on a layout it never reads.
+        var texture = new FakeTexture(
+            desc.Payload.Slice(desc.Mips[0].Offset).ToArray(),
+            desc.Width, desc.Height, desc.Format, desc.ColorSpace, desc.Filter, desc.Wrap);
         // Same wiring the real backends use, so DestroyTexture removes it from
         // the live list exactly once.
         texture.Unregister = () => LiveTextures.Remove(texture);
