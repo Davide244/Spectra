@@ -229,7 +229,11 @@ public sealed class Engine
         _snapshotNodes.Clear();
         _snapshotNodes.AddRange(scene.Selection.Items);
 
-        NodeInspector.Describe(_snapshotNodes, _snapshotProperties);
+        // The scene's schema catalogue, because an entity's rows are the ones
+        // its CLASS declares and nothing else in this call knows the class. A
+        // scene with no catalogue is the ordinary geometry case and still gets
+        // rows for whatever an entity is carrying, as text.
+        NodeInspector.Describe(_snapshotNodes, _snapshotProperties, scene.EntitySchemas);
 
         // Copied out, because the working list is reused next publish and a UI
         // reading it a frame later would see rows for a selection that has

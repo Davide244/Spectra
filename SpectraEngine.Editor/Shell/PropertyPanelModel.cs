@@ -465,7 +465,7 @@ public sealed class PropertyPanelModel : ObservableObject
     private readonly Action<PropertyEdit> _apply;
     private readonly Action<string> _beginGesture;
     private readonly Action<bool> _endGesture;
-    private readonly List<PropertyId> _shape = [];
+    private readonly PropertyRowShape _shape = new();
     private int _selectionCount;
     private string _headerKind = string.Empty;
     private bool _isMultiple;
@@ -570,7 +570,7 @@ public sealed class PropertyPanelModel : ObservableObject
             Raise(nameof(MultipleLabel));
         }
 
-        if (!SameShape(rows))
+        if (!_shape.Matches(rows))
             Rebuild(rows);
 
         foreach (PropertyGroupModel group in Groups)
@@ -654,31 +654,14 @@ public sealed class PropertyPanelModel : ObservableObject
         return string.Empty;
     }
 
-    /// <summary>
-    /// Whether the published rows are the same properties, in the same order,
-    /// as the ones already built.
-    /// </summary>
-    /// <remarks>
-    /// Compared against the PUBLISHED shape rather than against the built rows,
-    /// because the panel does not build one row per published row: comparing
-    /// the two directly would report a mismatch on every publish and rebuild
-    /// the whole panel thirty times a second, resetting scroll and dropping
-    /// focus as it went.
-    /// </remarks>
-    private bool SameShape(IReadOnlyList<PropertyRow> rows)
-    {
-        if (_shape.Count != rows.Count)
-            return false;
-
-        for (int i = 0; i < rows.Count; i++)
-        {
-            if (_shape[i] != rows[i].Id)
-                return false;
-        }
-
-        return true;
-    }
-
+    // The shape comparison moved to PropertyRowShape in Core, where it can be
+    // tested without a UI framework and where the rule it encodes - that a row's
+    // identity is (Id, Key), never Id alone - is stated once for every consumer.
+    // Compared against the PUBLISHED shape rather than against the built rows,
+    // because the panel does not build one row per published row: comparing the
+    // two directly would report a mismatch on every publish and rebuild the
+    // whole panel thirty times a second, resetting scroll and dropping focus as
+    // it went.
     private void Rebuild(IReadOnlyList<PropertyRow> rows)
     {
         Groups.Clear();
@@ -688,7 +671,7 @@ public sealed class PropertyPanelModel : ObservableObject
         for (int i = 0; i < rows.Count; i++)
         {
             PropertyRow row = rows[i];
-            _shape.Add(row.Id);
+            _shape.Add(row);
 
             // The name and the id are the panel's HEADER, not a section. See
             // NameField for why.

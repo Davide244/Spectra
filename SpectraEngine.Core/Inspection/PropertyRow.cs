@@ -48,6 +48,16 @@ public enum PropertyId
 
     MeshModel,
     MeshSubmesh,
+
+    // Appended, and appended TOGETHER with PropertyRow.Key, because an entity's
+    // properties are named by the class it declares rather than by this engine:
+    // one id cannot stand for one row. Minting a PropertyId per key string is
+    // the obvious alternative and it is a hash with unreported collisions - two
+    // keys landing on one id would edit each other, silently, in whichever map
+    // happened to name both. So EntityKeyvalue is ONE id worn by every keyvalue
+    // row, and (Id, Key) is the identity every comparison of rows has to use.
+    EntityClassname,
+    EntityKeyvalue,
 }
 
 /// <summary>How a row is edited.</summary>
@@ -140,6 +150,21 @@ public readonly record struct PropertyRow
     /// <summary>Which property this is, for applying an edit back.</summary>
     public PropertyId Id { get; init; }
 
+    /// <summary>
+    /// Which keyvalue this row is, for the ids whose <see cref="Id"/> alone
+    /// does not name one. Empty on every other row.
+    /// </summary>
+    /// <remarks>
+    /// <b>Row identity is the PAIR (<see cref="Id"/>, <see cref="Key"/>).</b>
+    /// An entity's properties are named by the class it declares, not by this
+    /// engine, so every keyvalue row wears one id
+    /// (<see cref="PropertyId.EntityKeyvalue"/>) and is told apart by this
+    /// string. Anything that matches, merges or compares rows must use both
+    /// halves - see <see cref="PropertyRowShape"/> for what happens to a panel
+    /// that uses only the id.
+    /// </remarks>
+    public string Key { get; init; }
+
     /// <summary>Which editor to render.</summary>
     public PropertyKind Kind { get; init; }
 
@@ -212,25 +237,28 @@ public readonly record struct PropertyRow
     /// </remarks>
     public string Unit { get; init; }
 
-    internal static PropertyRow ReadOnly(string group, string name, PropertyId id, string text) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.ReadOnlyText, Text = text, Unit = "", Choices = [], PresentCount = 1, SelectionCount = 1 };
+    // Every factory takes the key last and defaults it to empty, so a row whose
+    // id names it outright says nothing about a key it does not have. Only the
+    // entity rows pass one.
+    internal static PropertyRow ReadOnly(string group, string name, PropertyId id, string text, string key = "") =>
+        new() { Group = group, Name = name, Id = id, Key = key, Kind = PropertyKind.ReadOnlyText, Text = text, Unit = "", Choices = [], PresentCount = 1, SelectionCount = 1 };
 
-    internal static PropertyRow OfText(string group, string name, PropertyId id, string text) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Text, Text = text, Unit = "", Choices = [], PresentCount = 1, SelectionCount = 1 };
+    internal static PropertyRow OfText(string group, string name, PropertyId id, string text, string key = "") =>
+        new() { Group = group, Name = name, Id = id, Key = key, Kind = PropertyKind.Text, Text = text, Unit = "", Choices = [], PresentCount = 1, SelectionCount = 1 };
 
-    internal static PropertyRow OfNumber(string group, string name, PropertyId id, float value, string unit = "") =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Number, Number = value, Unit = unit, Choices = [], PresentCount = 1, SelectionCount = 1 };
+    internal static PropertyRow OfNumber(string group, string name, PropertyId id, float value, string unit = "", string key = "") =>
+        new() { Group = group, Name = name, Id = id, Key = key, Kind = PropertyKind.Number, Number = value, Unit = unit, Choices = [], PresentCount = 1, SelectionCount = 1 };
 
-    internal static PropertyRow OfVector(string group, string name, PropertyId id, Vector3 value, string unit = "") =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Vector3, Vector = value, Unit = unit, Choices = [], PresentCount = 1, SelectionCount = 1 };
+    internal static PropertyRow OfVector(string group, string name, PropertyId id, Vector3 value, string unit = "", string key = "") =>
+        new() { Group = group, Name = name, Id = id, Key = key, Kind = PropertyKind.Vector3, Vector = value, Unit = unit, Choices = [], PresentCount = 1, SelectionCount = 1 };
 
-    internal static PropertyRow OfColor(string group, string name, PropertyId id, Vector3 value) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Color, Vector = value, Unit = "", Choices = [], PresentCount = 1, SelectionCount = 1 };
+    internal static PropertyRow OfColor(string group, string name, PropertyId id, Vector3 value, string key = "") =>
+        new() { Group = group, Name = name, Id = id, Key = key, Kind = PropertyKind.Color, Vector = value, Unit = "", Choices = [], PresentCount = 1, SelectionCount = 1 };
 
-    internal static PropertyRow OfFlag(string group, string name, PropertyId id, bool value) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Boolean, Flag = value, Unit = "", Choices = [], PresentCount = 1, SelectionCount = 1 };
+    internal static PropertyRow OfFlag(string group, string name, PropertyId id, bool value, string key = "") =>
+        new() { Group = group, Name = name, Id = id, Key = key, Kind = PropertyKind.Boolean, Flag = value, Unit = "", Choices = [], PresentCount = 1, SelectionCount = 1 };
 
     internal static PropertyRow OfChoice(
-        string group, string name, PropertyId id, string value, IReadOnlyList<string> choices) =>
-        new() { Group = group, Name = name, Id = id, Kind = PropertyKind.Choice, Text = value, Unit = "", Choices = choices, PresentCount = 1, SelectionCount = 1 };
+        string group, string name, PropertyId id, string value, IReadOnlyList<string> choices, string key = "") =>
+        new() { Group = group, Name = name, Id = id, Key = key, Kind = PropertyKind.Choice, Text = value, Unit = "", Choices = choices, PresentCount = 1, SelectionCount = 1 };
 }

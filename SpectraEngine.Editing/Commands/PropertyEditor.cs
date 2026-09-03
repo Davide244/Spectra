@@ -1,10 +1,12 @@
 ﻿using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Inspection;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Editing.Undo;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Text;
 
 namespace SpectraEngine.Editing.Commands;
 
@@ -21,6 +23,17 @@ namespace SpectraEngine.Editing.Commands;
 public readonly record struct PropertyEdit
 {
     public required PropertyId Id { get; init; }
+
+    /// <summary>
+    /// Which keyvalue this edit names, for
+    /// <see cref="PropertyId.EntityKeyvalue"/>. Empty for every other property.
+    /// </summary>
+    /// <remarks>
+    /// <b>The row's identity is the pair, so an edit's is too.</b> Every
+    /// keyvalue row wears one id and is told apart by its key; an edit carrying
+    /// the id alone could not say WHICH property of the entity it meant.
+    /// </remarks>
+    public string Key { get; init; } = string.Empty;
 
     /// <summary>Which components of <see cref="Vector"/> to write.</summary>
     public PropertyAxes Axes { get; init; } = PropertyAxes.All;
@@ -96,11 +109,18 @@ public static class PropertyEditor
         if (targets.Count == 0)
             return 0;
 
+        // The scene's schema catalogue, read once. An entity keyvalue's DEFAULT
+        // is what the panel shows for a key nobody has authored, so it is also
+        // what "this edit changes nothing" has to be measured against; without
+        // it, tabbing through an untouched field would write the declared
+        // default into the map as an explicit member.
+        EntitySchemaCatalog? schemas = undo.Scene.EntitySchemas;
+
         var commands = new List<IEditorCommand>();
         foreach (SceneNode node in targets)
         {
             if (node is null) continue;
-            if (Build(node, edit) is { } command)
+            if (Build(node, edit, schemas) is { } command)
                 commands.Add(command);
         }
 
@@ -128,7 +148,8 @@ public static class PropertyEditor
     /// Builds the command for one node, or null when the node does not carry
     /// the property or already holds the value.
     /// </summary>
-    private static IEditorCommand? Build(SceneNode node, PropertyEdit edit) => edit.Id switch
+    private static IEditorCommand? Build(
+        SceneNode node, PropertyEdit edit, EntitySchemaCatalog? schemas) => edit.Id switch
     {
         PropertyId.NodeName => BuildName(node, edit),
         PropertyId.Position or PropertyId.Rotation or PropertyId.Scale => BuildTransform(node, edit),
@@ -141,10 +162,13 @@ public static class PropertyEditor
             or PropertyId.LightWidth or PropertyId.LightHeight
             or PropertyId.LightRadius => BuildLight(node, edit),
 
-        // NodeId, MeshModel and MeshSubmesh are read-only, and PropertyId.None
-        // is not a property. Silently ignored rather than thrown: the panel
-        // never offers them, so reaching here means a caller built an edit by
-        // hand and a throw would be a crash rather than a correction.
+        PropertyId.EntityKeyvalue => BuildEntityKeyvalue(node, edit, schemas),
+
+        // NodeId, MeshModel, MeshSubmesh and EntityClassname are read-only, and
+        // PropertyId.None is not a property. Silently ignored rather than
+        // thrown: the panel never offers them, so reaching here means a caller
+        // built an edit by hand and a throw would be a crash rather than a
+        // correction.
         _ => null,
     };
 
@@ -318,6 +342,158 @@ public static class PropertyEditor
     }
 
     /// <summary>
+    /// Writes one keyvalue on a node's entity payload, as text.
+    /// </summary>
+    /// <remarks>
+    /// <b>Text in, text out, and the axis mask is applied to the TOKENS.</b>
+    /// Everything else here converts a typed value; a keyvalue's wire form is
+    /// its value, so this arm's only real work is the per-axis merge that makes
+    /// a bulk edit possible over string storage.
+    /// </remarks>
+    private static IEditorCommand? BuildEntityKeyvalue(
+        SceneNode node, PropertyEdit edit, EntitySchemaCatalog? schemas)
+    {
+        if (node.Entity is not { } entity) return null;
+
+        // A keyvalue with no name cannot be written to a map or read back out of
+        // one, and the command refuses it too. Refused here as well because the
+        // two guards protect against different mistakes: one against a UI that
+        // built a row without a key, the other against any caller at all.
+        if (string.IsNullOrEmpty(edit.Key)) return null;
+
+        // The EFFECTIVE current value: what the panel is showing, which for a
+        // key nobody has authored is the schema's declared default. Both uses
+        // below want that rather than the stored text - the merge takes its
+        // untouched components from it, and the records-nothing check compares
+        // against it.
+        string effective = entity.TryGetValue(edit.Key, out string stored)
+            ? stored
+            : DefaultFor(schemas, entity.ClassName, edit.Key);
+
+        string next = edit.Axes == PropertyAxes.All
+            ? edit.Text
+            : MergeWireAxes(effective, edit.Text, edit.Axes);
+
+        // A commit that produces the value the node already effectively has
+        // records nothing, exactly as a rename does for an unchanged name. For
+        // an ABSENT key that also keeps the declared default out of the file:
+        // the map format writes a member only when it differs from its default,
+        // and tabbing through a field the user never touched must not be what
+        // makes one appear.
+        if (string.Equals(next, effective, StringComparison.Ordinal))
+            return null;
+
+        return SetEntityKeyvalueCommand.Capture(node, edit.Key, next);
+    }
+
+    /// <summary>
+    /// What the class declares for <paramref name="key"/>, or empty when
+    /// nothing declares it.
+    /// </summary>
+    /// <remarks>
+    /// A linear scan, because a class carries a handful of properties and a
+    /// per-schema index would be a cache to keep in step with a catalogue that
+    /// is already immutable.
+    /// </remarks>
+    private static string DefaultFor(EntitySchemaCatalog? schemas, string className, string key)
+    {
+        if (schemas is null || !schemas.TryGetSchema(className, out EntitySchema? schema))
+            return "";
+
+        IReadOnlyList<KeyvalueDescriptor> declared = schema.Keyvalues;
+        for (int i = 0; i < declared.Count; i++)
+        {
+            if (string.Equals(declared[i].Name, key, StringComparison.Ordinal))
+                return declared[i].Default;
+        }
+
+        return "";
+    }
+
+    /// <summary>
+    /// Splices the masked components of <paramref name="edited"/> into
+    /// <paramref name="current"/>, leaving every other component's text exactly
+    /// as it was.
+    /// </summary>
+    /// <remarks>
+    /// <b>Spliced at the token level, never parsed and reformatted.</b> Reading
+    /// "1 2 3" into a vector, merging, and writing it back through
+    /// <c>KeyvalueWire</c> produces the same three numbers and not necessarily
+    /// the same three TOKENS: an author who wrote "1.0", "+1" or "1e0" would
+    /// have it silently rewritten by an edit to a component beside it, and every
+    /// commit would then dirty a line of their map file that nobody touched.
+    /// Copying the untouched spans verbatim keeps the interior whitespace too,
+    /// for the same reason.
+    /// <para>
+    /// A value that is not three whitespace-separated components has no
+    /// per-axis structure to preserve, so the edit is written whole. That
+    /// covers both the malformed case and the absent-with-no-default one.
+    /// </para>
+    /// </remarks>
+    private static string MergeWireAxes(string current, string edited, PropertyAxes axes)
+    {
+        Span<int> currentStart = stackalloc int[3];
+        Span<int> currentEnd = stackalloc int[3];
+        Span<int> editedStart = stackalloc int[3];
+        Span<int> editedEnd = stackalloc int[3];
+
+        if (!TryFindComponents(current, currentStart, currentEnd)
+            || !TryFindComponents(edited, editedStart, editedEnd))
+        {
+            return edited;
+        }
+
+        var merged = new StringBuilder(current.Length + edited.Length);
+        int copied = 0;
+        for (int i = 0; i < 3; i++)
+        {
+            if (!axes.HasFlag(AxisAt(i)))
+                continue;
+
+            merged.Append(current, copied, currentStart[i] - copied);
+            merged.Append(edited, editedStart[i], editedEnd[i] - editedStart[i]);
+            copied = currentEnd[i];
+        }
+
+        merged.Append(current, copied, current.Length - copied);
+        return merged.ToString();
+    }
+
+    // Exactly three, in both directions: too few is a truncated value and too
+    // many is a value of some other type, and either would put the mask on the
+    // wrong component. Mirrors KeyvalueWire's own strictness.
+    private static bool TryFindComponents(string text, Span<int> starts, Span<int> ends)
+    {
+        int found = 0;
+        int i = 0;
+        while (i < text.Length)
+        {
+            while (i < text.Length && char.IsWhiteSpace(text[i]))
+                i++;
+            if (i >= text.Length)
+                break;
+
+            if (found == 3)
+                return false;
+
+            starts[found] = i;
+            while (i < text.Length && !char.IsWhiteSpace(text[i]))
+                i++;
+            ends[found] = i;
+            found++;
+        }
+
+        return found == 3;
+    }
+
+    private static PropertyAxes AxisAt(int index) => index switch
+    {
+        0 => PropertyAxes.X,
+        1 => PropertyAxes.Y,
+        _ => PropertyAxes.Z,
+    };
+
+    /// <summary>
     /// Takes each component from <paramref name="edited"/> where the mask says
     /// so, and from <paramref name="current"/> otherwise.
     /// </summary>
@@ -337,6 +513,7 @@ public static class PropertyEditor
         PropertyId.BrushKind => "Convert Brush",
         PropertyId.BrushOperation => "Brush Operation",
         PropertyId.BrushSize => "Resize",
+        PropertyId.EntityKeyvalue => "Entity Property",
         _ => "Light",
     };
 }

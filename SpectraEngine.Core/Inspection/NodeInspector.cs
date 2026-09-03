@@ -1,10 +1,12 @@
 ﻿using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Scene;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace SpectraEngine.Core.Inspection;
 
@@ -39,6 +41,24 @@ public static class NodeInspector
     public const string BrushGroup = "Brush";
     public const string LightGroup = "Light";
     public const string MeshGroup = "Mesh";
+    public const string EntityGroup = "Entity";
+
+    /// <summary>
+    /// The choice TOKENS of a descriptor's choice list, projected once per
+    /// list.
+    /// </summary>
+    /// <remarks>
+    /// <b>A weak table rather than a plain cache, because the key is somebody
+    /// else's array.</b> A descriptor declares its choices as (value, display)
+    /// pairs and a row needs the values alone, so a projection is unavoidable;
+    /// doing it per row per publish is exactly the garbage
+    /// <see cref="PropertyRow.Choices"/> already warns about, and doing it into
+    /// a static dictionary would keep every schema catalogue a session ever
+    /// loaded alive for the process's life. A schema's lists are built once and
+    /// documented as never mutated afterwards, so keying on the list's identity
+    /// is sound, and the entry dies when the schema does.
+    /// </remarks>
+    private static readonly ConditionalWeakTable<object, string[]> ChoiceTokenCache = new();
 
     private static readonly string[] BrushKindChoices = ["World", "Part"];
     private static readonly string[] BrushOperationChoices = ["Additive", "Subtractive"];
@@ -53,7 +73,16 @@ public static class NodeInspector
     /// does this once per published snapshot and a fresh list per publish is
     /// render-thread garbage for a panel that mostly shows the same rows.
     /// </remarks>
-    public static void Describe(SceneNode node, List<PropertyRow> into)
+    /// <param name="node">The node to describe.</param>
+    /// <param name="into">The list to fill; cleared first.</param>
+    /// <param name="schemas">
+    /// What the entity classes in this scene DECLARE, or null when nothing
+    /// supplied any. A null catalogue is not an error and not an empty panel:
+    /// an entity's authored keyvalues are still shown, as text, which is the
+    /// same answer an unknown classname gets.
+    /// </param>
+    public static void Describe(
+        SceneNode node, List<PropertyRow> into, EntitySchemaCatalog? schemas = null)
     {
         ArgumentNullException.ThrowIfNull(node);
         ArgumentNullException.ThrowIfNull(into);
@@ -95,6 +124,9 @@ public static class NodeInspector
             // place a person finds out why that node will not survive a save.
             into.Add(PropertyRow.ReadOnly(MeshGroup, "Model", PropertyId.MeshModel, "(built in code)"));
         }
+
+        if (node.Entity is { } entity)
+            DescribeEntity(entity, schemas, into);
     }
 
     /// <summary>
@@ -125,7 +157,11 @@ public static class NodeInspector
     /// assumption would break with it.
     /// </para>
     /// </remarks>
-    public static void Describe(IReadOnlyList<SceneNode> nodes, List<PropertyRow> into)
+    /// <param name="nodes">The selection.</param>
+    /// <param name="into">The list to fill; cleared first.</param>
+    /// <param name="schemas">What the entity classes in this scene declare, or null.</param>
+    public static void Describe(
+        IReadOnlyList<SceneNode> nodes, List<PropertyRow> into, EntitySchemaCatalog? schemas = null)
     {
         ArgumentNullException.ThrowIfNull(nodes);
         ArgumentNullException.ThrowIfNull(into);
@@ -136,27 +172,46 @@ public static class NodeInspector
 
         if (nodes.Count == 1)
         {
-            Describe(nodes[0], into);
+            Describe(nodes[0], into, schemas);
             return;
         }
 
-        var merged = new SortedDictionary<PropertyId, PropertyRow>();
+        var merged = new SortedDictionary<RowSlot, PropertyRow>();
+        var slots = new Dictionary<(PropertyId Id, string Key), RowSlot>();
         var scratch = new List<PropertyRow>();
+        int keyedSeen = 0;
 
         foreach (SceneNode node in nodes)
         {
             ArgumentNullException.ThrowIfNull(node);
-            Describe(node, scratch);
+            Describe(node, scratch, schemas);
 
             foreach (PropertyRow row in scratch)
             {
-                if (!merged.TryGetValue(row.Id, out PropertyRow existing))
+                // Keyed by the PAIR. Merging on the id alone would fold every
+                // keyvalue an entity carries into one row, since they all wear
+                // PropertyId.EntityKeyvalue - the panel would show one field
+                // holding whichever key was described first, and a bulk edit
+                // would write it over the rest.
+                (PropertyId Id, string Key) identity = (row.Id, row.Key ?? "");
+
+                if (!slots.TryGetValue(identity, out RowSlot slot))
                 {
-                    merged[row.Id] = row with { PresentCount = 1, SelectionCount = nodes.Count };
+                    // First appearance decides the slot, and the ORDER inside
+                    // one id is first-seen rather than alphabetical: for the
+                    // ordinary selection - several nodes of one class - that is
+                    // the schema's declaration order, which is authored data
+                    // and not this panel's to reshuffle. The outer sort stays
+                    // PropertyId's declaration order, so the sections still lay
+                    // out the same whichever node was clicked first.
+                    slot = new RowSlot(row.Id, identity.Key.Length == 0 ? 0 : ++keyedSeen);
+                    slots.Add(identity, slot);
+                    merged.Add(slot, row with { PresentCount = 1, SelectionCount = nodes.Count });
                     continue;
                 }
 
-                merged[row.Id] = existing with
+                PropertyRow existing = merged[slot];
+                merged[slot] = existing with
                 {
                     PresentCount = existing.PresentCount + 1,
                     MixedAxes = existing.MixedAxes | Disagreement(existing, row),
@@ -166,6 +221,23 @@ public static class NodeInspector
 
         foreach (PropertyRow row in merged.Values)
             into.Add(row);
+    }
+
+    /// <summary>Where one merged row sits: its property, then its key's turn.</summary>
+    /// <remarks>
+    /// <b>An ordinal rather than the key string, deliberately.</b> Sorting the
+    /// keys themselves would lay a schema's properties out alphabetically, and
+    /// a schema author's declaration order is the order they meant. Ordering by
+    /// first appearance keeps that order for a homogeneous selection and stays
+    /// deterministic for a mixed one, because the selection's own order is.
+    /// </remarks>
+    private readonly record struct RowSlot(PropertyId Id, int Order) : IComparable<RowSlot>
+    {
+        public int CompareTo(RowSlot other)
+        {
+            int byProperty = ((int)Id).CompareTo((int)other.Id);
+            return byProperty != 0 ? byProperty : Order.CompareTo(other.Order);
+        }
     }
 
     /// <summary>
@@ -264,6 +336,193 @@ public static class NodeInspector
                     LightGroup, "Radius", PropertyId.LightRadius, light.Radius, "su"));
                 break;
         }
+    }
+
+    /// <summary>
+    /// Turns an entity payload into rows: the class it names, the properties
+    /// its schema declares, and whatever else it is carrying.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The schema decides which rows EXIST; the payload decides what they
+    /// hold.</b> A key the schema names but the node has not authored shows the
+    /// declared default, because that is the value the entity will run with -
+    /// showing an empty field there would be a lie about what the level does.
+    /// </para>
+    /// <para>
+    /// <b>Stored keys the schema does not name are shown anyway, as text.</b>
+    /// That is the whole reason a map naming a class this build has never heard
+    /// of is worth opening: <c>EntityData</c> is strings precisely so such a map
+    /// round-trips, and a panel that showed nothing for it would make the data
+    /// invisible while it was still in the file. It is also the only view a
+    /// placeholder entity has.
+    /// </para>
+    /// </remarks>
+    private static void DescribeEntity(
+        EntityData entity, EntitySchemaCatalog? schemas, List<PropertyRow> into)
+    {
+        // Read-only: a classname is not a property, it is which set of
+        // properties there ARE. Retyping it would rewrite the whole section
+        // under the reader's cursor and orphan every keyvalue the old class
+        // named, so changing a class is a verb of its own rather than a field.
+        into.Add(PropertyRow.ReadOnly(
+            EntityGroup, "Class", PropertyId.EntityClassname, entity.ClassName));
+
+        int entityStart = into.Count;
+
+        EntitySchema? schema = null;
+        schemas?.TryGetSchema(entity.ClassName, out schema);
+
+        if (schema is not null)
+        {
+            IReadOnlyList<KeyvalueDescriptor> declared = schema.Keyvalues;
+            for (int i = 0; i < declared.Count; i++)
+            {
+                KeyvalueDescriptor descriptor = declared[i];
+
+                // "Bound and carried, never shown" is what the flag says, so it
+                // gets no row - and the loop below has to treat it as named all
+                // the same, or the key comes straight back as an unknown one
+                // and the flag means nothing.
+                if (descriptor.IsHiddenInEditor)
+                    continue;
+
+                string value = entity.TryGetValue(descriptor.Name, out string stored)
+                    ? stored
+                    : descriptor.Default;
+
+                into.Add(RowFor(descriptor, value));
+            }
+        }
+
+        foreach (KeyValuePair<string, string> keyvalue in entity.Keyvalues)
+        {
+            if (schema is not null && IsDeclared(schema, keyvalue.Key))
+                continue;
+
+            // A hand-written file may legally carry the same key twice - the
+            // reader preserves both rather than dropping one - and two rows
+            // sharing an identity would collide in the merge and in the panel's
+            // shape. The first one wins here, matching EntityData.TryGetValue,
+            // which is the value the entity will actually bind.
+            if (AlreadyListed(into, entityStart, keyvalue.Key))
+                continue;
+
+            into.Add(PropertyRow.OfText(
+                EntityGroup, keyvalue.Key, PropertyId.EntityKeyvalue, keyvalue.Value, keyvalue.Key));
+        }
+    }
+
+    private static bool IsDeclared(EntitySchema schema, string key)
+    {
+        IReadOnlyList<KeyvalueDescriptor> declared = schema.Keyvalues;
+        for (int i = 0; i < declared.Count; i++)
+        {
+            if (string.Equals(declared[i].Name, key, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool AlreadyListed(List<PropertyRow> rows, int from, string key)
+    {
+        for (int i = from; i < rows.Count; i++)
+        {
+            if (string.Equals(rows[i].Key, key, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The row one declared keyvalue gets: which editor, and the value read out
+    /// of its wire string.
+    /// </summary>
+    /// <remarks>
+    /// <b>A value the declared type cannot carry degrades to TEXT rather than
+    /// to a zero.</b> A typed row parses the wire string, and a parse that
+    /// failed would show 0 or the origin - and then write that back on the next
+    /// commit, destroying whatever the author had actually written. Showing the
+    /// text as it stands is the only answer that cannot lose it.
+    /// </remarks>
+    private static PropertyRow RowFor(in KeyvalueDescriptor descriptor, string value)
+    {
+        string label = descriptor.Display.Length > 0 ? descriptor.Display : descriptor.Name;
+        string key = descriptor.Name;
+
+        if (descriptor.IsReadOnly)
+            return PropertyRow.ReadOnly(EntityGroup, label, PropertyId.EntityKeyvalue, value, key);
+
+        if (!KeyvalueWire.IsWellFormed(descriptor.Type, value))
+            return PropertyRow.OfText(EntityGroup, label, PropertyId.EntityKeyvalue, value, key);
+
+        switch (descriptor.Type)
+        {
+            case KeyvalueType.Bool:
+                KeyvalueWire.TryParseBool(value, out bool flag);
+                return PropertyRow.OfFlag(EntityGroup, label, PropertyId.EntityKeyvalue, flag, key);
+
+            case KeyvalueType.Int:
+                KeyvalueWire.TryParseInt(value, out int whole);
+                return PropertyRow.OfNumber(
+                    EntityGroup, label, PropertyId.EntityKeyvalue, whole, "", key);
+
+            case KeyvalueType.Float:
+                KeyvalueWire.TryParseFloat(value, out float number);
+                return PropertyRow.OfNumber(
+                    EntityGroup, label, PropertyId.EntityKeyvalue, number, "", key);
+
+            case KeyvalueType.Vec3:
+                KeyvalueWire.TryParseVec3(value, out Vector3 vector);
+                return PropertyRow.OfVector(
+                    EntityGroup, label, PropertyId.EntityKeyvalue, vector, "", key);
+
+            case KeyvalueType.Angles:
+                // The one typed row that carries a unit, and it carries it for
+                // the same reason a rotation row does: three bare numbers under
+                // a label say nothing about whether they are degrees.
+                KeyvalueWire.TryParseAngles(value, out Vector3 degrees);
+                return PropertyRow.OfVector(
+                    EntityGroup, label, PropertyId.EntityKeyvalue, degrees, "deg", key);
+
+            case KeyvalueType.Color:
+                KeyvalueWire.TryParseColor(value, out Vector3 linear);
+                return PropertyRow.OfColor(
+                    EntityGroup, label, PropertyId.EntityKeyvalue, linear, key);
+
+            case KeyvalueType.Choices:
+                // The TOKENS, not the display names: the row's value is the wire
+                // string and the panel matches its dropdown by text, so handing
+                // it display names would leave every choice unselected and the
+                // first edit would write a display name into the map.
+                return PropertyRow.OfChoice(
+                    EntityGroup, label, PropertyId.EntityKeyvalue, value,
+                    ChoiceTokensOf(descriptor.Choices), key);
+
+            // Everything else is text in v1: a targetname, a node reference, an
+            // asset path and a flag word all want a widget of their own, and a
+            // wrong widget over a right string is worse than a plain field.
+            default:
+                return PropertyRow.OfText(EntityGroup, label, PropertyId.EntityKeyvalue, value, key);
+        }
+    }
+
+    private static string[] ChoiceTokensOf(IReadOnlyList<(string Value, string Display)> choices)
+    {
+        if (choices is null || choices.Count == 0)
+            return [];
+
+        return ChoiceTokenCache.GetValue(choices, static list =>
+        {
+            var declared = (IReadOnlyList<(string Value, string Display)>)list;
+            var tokens = new string[declared.Count];
+            for (int i = 0; i < tokens.Length; i++)
+                tokens[i] = declared[i].Value;
+
+            return tokens;
+        });
     }
 
     // A switch, never a ternary. The label feeds a dropdown whose selected item
