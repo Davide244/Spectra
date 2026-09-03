@@ -4,6 +4,7 @@ using Spectra.Kitchen.Cache;
 using Spectra.Kitchen.Diagnostics;
 using Spectra.Kitchen.Rules;
 using SpectraEngine.Core.Assets;
+using SpectraEngine.Core.Assets.Audio;
 using SpectraEngine.Core.Assets.Images;
 using SpectraEngine.Core.Assets.Packs;
 using SpectraEngine.Core.Assets.Sources;
@@ -238,6 +239,7 @@ public static class PackVerifier
 
                     references += CheckReferences(name, blob.Span, strictStack, diagnostics, file);
                     CheckImage(name, blob.Span, diagnostics, file);
+                    CheckAudio(name, blob.Span, diagnostics, file);
                     CollectShader(name, blob.Span, shaders, diagnostics, file);
                 }
             }
@@ -368,6 +370,32 @@ public static class PackVerifier
         catch (InvalidDataException ex)
         {
             diagnostics.Add(CookDiagnostic.Error(CookDiagnosticCodes.ImageFileUnreadable, ex.Message, packFile));
+        }
+    }
+
+    /// <summary>
+    /// Proves a cooked sound is one this engine can actually play.
+    /// </summary>
+    /// <remarks>
+    /// The mirror of <see cref="CheckImage"/> one band over, and it catches the
+    /// same class of thing the digest cannot: a <c>.saudio</c> whose format
+    /// version does not match this build, or whose loop ends past its own data,
+    /// hashes perfectly and is still a sound nothing can load - so the pack
+    /// mounts, the log reads healthy, and the shipped game is silent where it
+    /// should not be.
+    /// </remarks>
+    private static void CheckAudio(
+        string name, ReadOnlySpan<byte> payload, CookDiagnosticLog diagnostics, string packFile)
+    {
+        if (!AudioContentPath.IsCooked(name)) return;
+
+        try
+        {
+            _ = SaudioReader.Read(payload, name);
+        }
+        catch (SaudioFormatException ex)
+        {
+            diagnostics.Add(CookDiagnostic.Error(CookDiagnosticCodes.AudioFileUnreadable, ex.Message, packFile));
         }
     }
 

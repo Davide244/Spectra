@@ -297,7 +297,11 @@ public sealed class CookSession
         }
 
         var context = new RuleContext(
-            contentRoot, item.File.ContentPath, _settings.Profile, _settings.Targets);
+            contentRoot,
+            item.File.ContentPath,
+            _settings.Profile,
+            _settings.Targets,
+            _settings.AudioSampleRate);
         CookDiagnostic? failure = null;
 
         try

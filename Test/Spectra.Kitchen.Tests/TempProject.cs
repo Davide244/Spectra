@@ -124,6 +124,102 @@ internal sealed class TempProject : IDisposable
         return png.ToArray();
     }
 
+    /// <summary>
+    /// A real, decodable 16-bit PCM WAV, deterministic from
+    /// <paramref name="seed"/>, optionally carrying a <c>smpl</c> loop.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Written from the RIFF specification rather than through
+    /// <c>SaudioWriter</c> or any engine type.</b> A cooker checked against a
+    /// fixture built by its own code proves the two agree rather than that either
+    /// is right, and the failures in this area are all misread buffers rather
+    /// than exceptions.</para>
+    /// <para><b>The loop arguments are the <c>smpl</c> chunk's own, so
+    /// <paramref name="loopEnd"/> is INCLUSIVE</b> - the last frame that plays -
+    /// exactly as a DAW writes it. A fixture that quietly used a half-open end
+    /// would hide the one conversion this whole lane can get wrong.</para>
+    /// <para><b>A sine rather than noise</b>: a resampler's output over random
+    /// samples is indistinguishable from its output over anything else, while a
+    /// tone stays a tone, so a test that cares whether the audio survived can
+    /// look at it.</para>
+    /// </remarks>
+    public static byte[] Wav(
+        int frames = 64,
+        int sampleRate = 48_000,
+        int channels = 1,
+        int seed = 0,
+        long loopStart = -1,
+        long loopEnd = -1,
+        uint loopType = 0)
+    {
+        var samples = new short[frames * channels];
+        for (int frame = 0; frame < frames; frame++)
+        {
+            for (int channel = 0; channel < channels; channel++)
+            {
+                // One cycle every 32 frames, and a different phase per channel so
+                // a stereo file is not two copies of one signal - which would
+                // make a channel swap invisible.
+                double phase = (frame + seed + channel * 8) * (2 * Math.PI / 32);
+                samples[frame * channels + channel] = (short)(Math.Sin(phase) * 12000);
+            }
+        }
+
+        byte[] data = new byte[samples.Length * 2];
+        for (int i = 0; i < samples.Length; i++)
+            BinaryPrimitives.WriteInt16LittleEndian(data.AsSpan(i * 2), samples[i]);
+
+        var fmt = new byte[16];
+        BinaryPrimitives.WriteUInt16LittleEndian(fmt, 1);                       // WAVE_FORMAT_PCM
+        BinaryPrimitives.WriteUInt16LittleEndian(fmt.AsSpan(2), (ushort)channels);
+        BinaryPrimitives.WriteUInt32LittleEndian(fmt.AsSpan(4), (uint)sampleRate);
+        BinaryPrimitives.WriteUInt32LittleEndian(fmt.AsSpan(8), (uint)(sampleRate * channels * 2));
+        BinaryPrimitives.WriteUInt16LittleEndian(fmt.AsSpan(12), (ushort)(channels * 2));
+        BinaryPrimitives.WriteUInt16LittleEndian(fmt.AsSpan(14), 16);
+
+        using var body = new MemoryStream();
+        body.Write(Encoding.ASCII.GetBytes("WAVE"));
+        WriteRiffChunk(body, "fmt ", fmt);
+        WriteRiffChunk(body, "data", data);
+
+        if (loopEnd >= 0)
+        {
+            var smpl = new byte[36 + 24];
+            BinaryPrimitives.WriteUInt32LittleEndian(smpl.AsSpan(28), 1);        // one loop
+            BinaryPrimitives.WriteUInt32LittleEndian(smpl.AsSpan(36 + 4), loopType);
+            BinaryPrimitives.WriteUInt32LittleEndian(smpl.AsSpan(36 + 8), (uint)Math.Max(0, loopStart));
+            BinaryPrimitives.WriteUInt32LittleEndian(smpl.AsSpan(36 + 12), (uint)loopEnd);
+            WriteRiffChunk(body, "smpl", smpl);
+        }
+
+        byte[] payload = body.ToArray();
+
+        using var file = new MemoryStream();
+        file.Write(Encoding.ASCII.GetBytes("RIFF"));
+
+        Span<byte> size = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(size, (uint)payload.Length);
+        file.Write(size);
+        file.Write(payload);
+        return file.ToArray();
+    }
+
+    // Id, size, body, then the pad byte an odd body needs. The pad is NOT counted
+    // in the size, and a writer that forgets it produces a file whose next chunk
+    // id lands one byte late - which reads as garbage of a plausible size rather
+    // than as anything that fails.
+    private static void WriteRiffChunk(Stream wav, string id, byte[] body)
+    {
+        wav.Write(Encoding.ASCII.GetBytes(id));
+
+        Span<byte> size = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(size, (uint)body.Length);
+        wav.Write(size);
+        wav.Write(body);
+
+        if ((body.Length & 1) != 0) wav.WriteByte(0);
+    }
+
     // Length, type, data, then a CRC32 over the type AND the data - the one part
     // of the format a hand-written writer usually gets wrong, because a CRC over
     // the data alone produces a file every decoder rejects with no clue why.

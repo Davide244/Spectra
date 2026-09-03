@@ -30,6 +30,12 @@ namespace SpectraEngine.Core
         // Asset format versions
         public const int ModelFormatVersion = 1;
         public const int TextureFormatVersion = 1;
+        // A cooked sound. Versioned the strict way, like the two above: a reader
+        // that sees a number it does not implement refuses the file and says
+        // recook, because a cooked artifact is a build output that can always be
+        // regenerated. Raise it whenever the .saudio LAYOUT moves; the project
+        // sample rate is not part of it, since every file states its own rate.
+        public const int AudioFormatVersion = 1;
         // 2: light kinds beyond directional and point, with the angles and
         // extents they need. A document only DECLARES it needs version 2 when it
         // actually carries one of those (see MapSceneBinder), so every map

@@ -1,3 +1,4 @@
+using Spectra.Kitchen.Cache;
 using SpectraEngine.Core.Graphics;
 using System;
 using System.Collections.Generic;
@@ -71,6 +72,37 @@ public sealed class CookSettings
     public CookEncoder Encoder { get; init; } = CookEncoder.Managed;
 
     /// <summary>
+    /// The one rate every cooked sound is resampled to. 48 kHz.
+    /// </summary>
+    /// <remarks>
+    /// <b>What a project's audio rate is cannot be changed once a library
+    /// exists.</b> Changing this invalidates every cooked sound in the project -
+    /// which is what <see cref="CookSettingKeys.AudioSampleRate"/> makes happen
+    /// correctly rather than quietly - and, worse than the rebuild, it resamples
+    /// a library that has already been resampled once, so every asset takes a
+    /// second generation of loss and every loop point moves again. 48 kHz
+    /// because it is what every game console, every modern driver and every DAW
+    /// export defaults to, so the overwhelmingly common case is a cook that
+    /// resamples nothing at all.
+    /// </remarks>
+    /// <remarks>
+    /// <b>It belongs in the project manifest and is here instead.</b> It is a
+    /// property of the CONTENT, not of one invocation, so it should be recorded
+    /// beside the project's name and its startup map rather than being passed per
+    /// cook - and deliberately NOT on the command line, since a per-invocation
+    /// override is exactly how half a library ends up at one rate and half at
+    /// another. It sits on the settings until the manifest grows a place for it,
+    /// and the editor, which hosts the cooker in process, sets it from there.
+    /// </remarks>
+    public int AudioSampleRate { get; init; } = DefaultAudioSampleRate;
+
+    /// <summary>The project audio rate a cook uses when nobody names one.</summary>
+    public const int DefaultAudioSampleRate = 48_000;
+
+    /// <summary>The highest rate a cook will resample to; the reader's own bound.</summary>
+    public const int MaxAudioSampleRate = 768_000;
+
+    /// <summary>
     /// Promote every warning to an error.
     /// </summary>
     /// <remarks>
@@ -89,13 +121,27 @@ public sealed class CookSettings
     public string? ManifestPath { get; init; }
 
     /// <summary>Validates what can be validated without touching a project.</summary>
-    /// <exception cref="ArgumentOutOfRangeException"><see cref="Jobs"/> is below one.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="Jobs"/> is below one, or <see cref="AudioSampleRate"/> is
+    /// outside what a cooked sound can declare.
+    /// </exception>
     public void Validate()
     {
         if (Jobs < 1)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(Jobs), Jobs, "A cook runs at least one job.");
+        }
+
+        // Refused here rather than at the first sound, because a rate the format
+        // cannot record is a whole run's worth of audio the reader will refuse,
+        // and the run should stop before it writes any of it.
+        if (AudioSampleRate is < 1 or > MaxAudioSampleRate)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(AudioSampleRate),
+                AudioSampleRate,
+                $"A project audio rate is between 1 and {MaxAudioSampleRate} frames a second.");
         }
     }
 }

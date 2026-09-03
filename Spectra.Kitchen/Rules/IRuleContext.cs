@@ -54,6 +54,19 @@ public interface IRuleContext
     IReadOnlyList<GraphicsBackend> Targets { get; }
 
     /// <summary>
+    /// The one sample rate every cooked sound is resampled to.
+    /// </summary>
+    /// <remarks>
+    /// Here for the same reason <see cref="Profile"/> and <see cref="Targets"/>
+    /// are: a setting reaches a rule through this interface or not at all, and
+    /// only settings a rule may declare in <see cref="IRule.SettingsRead"/> live
+    /// here. It is a CONTENT decision rather than a per-run one - see
+    /// <c>CookSettings.AudioSampleRate</c> for why changing it after a library
+    /// exists is not merely a rebuild.
+    /// </remarks>
+    int AudioSampleRate { get; }
+
+    /// <summary>
     /// The bytes at <paramref name="contentPath"/>, recording the read.
     /// </summary>
     /// <remarks>

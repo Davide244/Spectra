@@ -191,6 +191,14 @@ public static class CookGate
         2002 => CookGateVerdict.Fatal,             // SC2002 ImageEncodeFailed
         2003 => CookGateVerdict.Fatal,             // SC2003 ImageFileUnreadable
 
+        // --- 4xxx: audio ------------------------------------------------------
+        4001 => CookGateVerdict.Fatal,             // SC4001 AudioUndecodable
+        4002 => CookGateVerdict.Fatal,             // SC4002 AudioEncodeFailed
+        4003 => CookGateVerdict.WarningUnlessStrict, // SC4003 AudioStereoPositional
+        4004 => CookGateVerdict.Note,              // SC4004 AudioResampled
+        4005 => CookGateVerdict.WarningUnlessStrict, // SC4005 AudioLoopUnusable
+        4006 => CookGateVerdict.Fatal,             // SC4006 AudioFileUnreadable
+
         // --- 5xxx: material ---------------------------------------------------
         5001 => CookGateVerdict.Fatal,             // SC5001 MaterialTextureMissing
         5002 => CookGateVerdict.WarningUnlessStrict, // SC5002 MaterialFileMalformed

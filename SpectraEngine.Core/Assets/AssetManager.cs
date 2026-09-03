@@ -890,6 +890,12 @@ public sealed partial class AssetManager : IDisposable
         // opens and closes sessions is a mount leaked per session.
         while (_uploads.TryDequeue(out UploadRequest stranded)) stranded.Image.Dispose();
 
+        // Sounds hold content references rather than GPU objects, so they are
+        // released here rather than in ReleaseGraphicsResources - and they must
+        // be released somewhere, because an open one pins its pack's mapping for
+        // the life of the process.
+        ReleaseAudioResources();
+
         if (!_graphicsReleased && _renderer is not null)
         {
             _logger.LogWarning(

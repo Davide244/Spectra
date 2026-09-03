@@ -138,8 +138,70 @@ public static class CookDiagnosticCodes
     /// </remarks>
     public static readonly CookDiagnosticId ImageFileUnreadable = CookDiagnosticId.Cook(2003);
 
-    // --- 3xxx model, 4xxx audio ----------------------------------------------
-    // Reserved. The rules that issue them are unbuilt; see the band table above.
+    // --- 3xxx: model ---------------------------------------------------------
+    // Reserved. The rule that issues them is unbuilt; see the band table above.
+
+    // --- 4xxx: audio ---------------------------------------------------------
+
+    /// <summary>An audio file the decoder could not read.</summary>
+    /// <remarks>
+    /// An error rather than a fall-through to the raw copy, for the reason
+    /// <see cref="ImageUndecodable"/> gives one file type over: copied, the
+    /// broken file would sit in the pack under a path the engine resolves, the
+    /// runtime would refuse it at load, and this build log would say a sound
+    /// cooked.
+    /// </remarks>
+    public static readonly CookDiagnosticId AudioUndecodable = CookDiagnosticId.Cook(4001);
+
+    /// <summary>An audio file decoded and could not be written into a cooked container.</summary>
+    /// <remarks>
+    /// Distinct from <see cref="AudioUndecodable"/> because the two point at
+    /// different things: that one is the author's file, this one is the resampler
+    /// or the container disagreeing about a length, which is the cooker's own
+    /// problem and not something re-exporting the WAV would fix.
+    /// </remarks>
+    public static readonly CookDiagnosticId AudioEncodeFailed = CookDiagnosticId.Cook(4002);
+
+    /// <summary>A stereo sound that nothing says is meant to be flat.</summary>
+    /// <remarks>
+    /// <b>Silent at runtime, which is the whole reason it has a code.</b> OpenAL
+    /// will not spatialise a stereo buffer: it plays at full level wherever the
+    /// listener stands, with no error and no warning, and the report that comes
+    /// back is "why is my 3D sound not 3D". Free to catch here, where the channel
+    /// count is in hand. Soft rather than fatal because music and ambience are
+    /// legitimately stereo, and the way to say so is to name the file so it ends
+    /// <c>_2d</c>, which is what silences this.
+    /// </remarks>
+    public static readonly CookDiagnosticId AudioStereoPositional = CookDiagnosticId.Cook(4003);
+
+    /// <summary>A sound was resampled to the project rate.</summary>
+    /// <remarks>
+    /// Info rather than silence. Resampling is lossy and it moves every loop
+    /// point, so a sound that measures differently after a cook than the file a
+    /// person exported is a question somebody will ask; a line saying which rate
+    /// it came from and which it went to is the whole answer, and its absence
+    /// makes the cook look like it corrupted something.
+    /// </remarks>
+    public static readonly CookDiagnosticId AudioResampled = CookDiagnosticId.Cook(4004);
+
+    /// <summary>A loop the source declared that the cooked format cannot carry, so it was dropped.</summary>
+    /// <remarks>
+    /// One code for a loop past the end of its own data, an empty region and an
+    /// alternating or backward loop, because they share an answer: the sound
+    /// plays once, and the author has to fix the loop. Said out loud rather than
+    /// repaired, since a cooker that quietly moved a loop point would leave a log
+    /// saying the sound was fine.
+    /// </remarks>
+    public static readonly CookDiagnosticId AudioLoopUnusable = CookDiagnosticId.Cook(4005);
+
+    /// <summary>A cooked sound in a pack is not a readable <c>.saudio</c>.</summary>
+    /// <remarks>
+    /// Issued by the VERIFIER, and the mirror of <see cref="ImageFileUnreadable"/>
+    /// one band over. The reader's own message travels verbatim, since it already
+    /// names which rule the file broke and every one of them has the same answer,
+    /// which is to recook.
+    /// </remarks>
+    public static readonly CookDiagnosticId AudioFileUnreadable = CookDiagnosticId.Cook(4006);
 
     // --- 5xxx: material ------------------------------------------------------
     //

@@ -43,4 +43,17 @@ public enum CookSettingKeys
 
     /// <summary>Reads <c>CookSettings.KeepBrushSource</c>.</summary>
     KeepBrushSource = 1 << 4,
+
+    /// <summary>
+    /// Reads <c>CookSettings.AudioSampleRate</c>: the one rate every cooked
+    /// sound is resampled to.
+    /// </summary>
+    /// <remarks>
+    /// It changes a PAYLOAD in the strongest possible sense - every sample in
+    /// every sound - so a rate change has to invalidate the whole audio library
+    /// and nothing else. That asymmetry is exactly what a per-rule declaration
+    /// buys: hashing the whole settings block would re-cook every texture in the
+    /// project the day somebody decided the project runs at 44.1.
+    /// </remarks>
+    AudioSampleRate = 1 << 5,
 }

@@ -25,6 +25,7 @@ public sealed class CookRuleSet
     private readonly ShaderRule _shader = new();
     private readonly ImageRule _image = new();
     private readonly MaterialRule _material = new();
+    private readonly AudioRule _audio = new();
 
     /// <summary>The rule that cooks <paramref name="contentPath"/>.</summary>
     public IRule Resolve(string contentPath)
@@ -38,6 +39,7 @@ public sealed class CookRuleSet
         if (ShaderRule.Handles(contentPath)) return _shader;
         if (ImageRule.Handles(contentPath)) return _image;
         if (MaterialRule.Handles(contentPath)) return _material;
+        if (AudioRule.Handles(contentPath)) return _audio;
 
         // Everything else falls through to the raw copy, which is the floor
         // rather than a placeholder: content with no cooked format of its own

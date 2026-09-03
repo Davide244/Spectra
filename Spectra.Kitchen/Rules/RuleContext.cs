@@ -54,11 +54,17 @@ public sealed class RuleContext : IRuleContext
     /// <see cref="CookSettings"/> defaults to, so a caller that cooks nothing
     /// backend-shaped does not have to name one.
     /// </param>
+    /// <param name="audioSampleRate">
+    /// The project audio rate. Defaults to the same number
+    /// <see cref="CookSettings"/> defaults to, for the reason the target list
+    /// does: one answer to one question, named once.
+    /// </param>
     public RuleContext(
         string contentRoot,
         string sourcePath,
         CookProfile profile,
-        IReadOnlyList<GraphicsBackend>? targets = null)
+        IReadOnlyList<GraphicsBackend>? targets = null,
+        int audioSampleRate = CookSettings.DefaultAudioSampleRate)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
@@ -67,6 +73,7 @@ public sealed class RuleContext : IRuleContext
         SourcePath = ContentRoot.NormalizeRelativePath(sourcePath);
         Profile = profile;
         Targets = targets ?? CookSettings.DefaultTargets;
+        AudioSampleRate = audioSampleRate;
     }
 
     /// <inheritdoc/>
@@ -77,6 +84,9 @@ public sealed class RuleContext : IRuleContext
 
     /// <inheritdoc/>
     public IReadOnlyList<GraphicsBackend> Targets { get; }
+
+    /// <inheritdoc/>
+    public int AudioSampleRate { get; }
 
     /// <summary>Every path this rule touched, in first-access order.</summary>
     public IReadOnlyList<RuleDependency> Dependencies => _dependencies;

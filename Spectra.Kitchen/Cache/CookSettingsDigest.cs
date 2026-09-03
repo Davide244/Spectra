@@ -2,6 +2,7 @@ using Spectra.Kitchen.Cooking;
 using SpectraEngine.Core.Graphics;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 
 namespace Spectra.Kitchen.Cache;
@@ -46,6 +47,17 @@ public static class CookSettingsDigest
 
         if ((declared & CookSettingKeys.KeepBrushSource) != 0)
             pairs.Add(new("keepBrushSource", settings.KeepBrushSource ? "true" : "false"));
+
+        if ((declared & CookSettingKeys.AudioSampleRate) != 0)
+        {
+            // Invariant, like every other number that reaches a cache key: a
+            // culture that groups thousands would spell 48000 as "48,000" on one
+            // machine and "48000" on another, which is two cache entries for one
+            // setting and a pack that can never be byte-identical between them.
+            pairs.Add(new(
+                "audioSampleRate",
+                settings.AudioSampleRate.ToString(CultureInfo.InvariantCulture)));
+        }
 
         pairs.Sort(static (a, b) => string.CompareOrdinal(a.Key, b.Key));
         return pairs;
