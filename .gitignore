@@ -382,3 +382,11 @@ FodyWeavers.xsd
 # committed binary that can drift from its source is worse than no binary.
 build/
 native/runtimes/
+
+# Agent worktrees. Claude Code creates a git worktree per background agent
+# here, and each one is a whole checkout with its own .git file, so a git
+# add -A in the repo root stages twenty embedded repositories. That is not
+# hypothetical: it happened, and the commit had to be taken apart again.
+# Only the worktrees are ignored, not .claude itself, because the rest of
+# that folder is project configuration somebody may want to commit.
+.claude/worktrees/
