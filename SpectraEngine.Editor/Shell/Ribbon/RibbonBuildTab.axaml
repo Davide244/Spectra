@@ -5,233 +5,271 @@
              x:DataType="shell:ShellModel">
 
   <!--
-    THE BUILD PAGE: everything that changes the level.
+    THE BUILD PAGE: everything that changes the level, and nothing that changes
+    only how you look at it. That is the axis the two pages divide on, and it is
+    what makes switching between them worth a click.
 
-    Every control here carries a Tag, and the Tag is its id in RibbonLayout.
-    That is not decoration. One click handler serves the whole page and looks
-    the verb up by that id, so a button cannot grow a verb that lives only in
-    its handler; and the page checks its own tree against the roster when it is
-    constructed, so a control the roster has never heard of, or a roster entry
-    with no control, refuses the window rather than sitting there doing nothing.
+    A SIZE HIERARCHY, WHICH THE FIRST VERSION OF THIS PAGE HAD NONE OF. Twenty
+    controls, all Button.seg at 26px, so "insert a block" and "step the snap
+    increment" were the same object at the same weight and nothing on the
+    surface said what it was for. Now: the things a level is MADE of get large
+    buttons with a 32px glyph, and everything that operates on what is already
+    there is a small row beside them, three to a column. That is Office's own
+    arrangement and it is the whole point of a ribbon over a toolbar.
 
-    INSERT IS THE FIRST GROUP OF THE DEFAULT PAGE, and that is the whole answer
-    to the second of the three findings that retired the previous tab strip: the
-    one thing a first session needs used to live on the tab nobody opened. The
-    active page is deliberately not persisted either, so no launch can start
-    with this group hidden.
+    NO CAPSULES. Each group used to be a raised box; a ribbon group in Office is
+    delimited by a rule and a caption, not by a frame, and the capsules were
+    exactly the grey blobs the surface was reported as. What says a large button
+    is pressable now is that it is a 32px glyph over a word, and that it lifts
+    under the cursor.
 
-    Two rows per group, because one row of twenty labelled controls does not fit
-    the window's own 1180px minimum. Labelled rather than icon-only, because the
-    four structural verbs left the old bar for being four anonymous glyphs in a
-    row, and a glyph with no word beside it is what made them anonymous.
+    Every control's Tag is its roster id and one handler resolves it, so no verb
+    lives in a click handler. The page checks its own tree against RibbonLayout
+    at construction - both that the ids match AND that each control wears the
+    class its declared kind requires, so a check row quietly drawn as a plain
+    button refuses the window rather than shipping with no lit state.
   -->
 
-  <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Top">
+  <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
 
-    <StackPanel>
-      <Border Classes="ribbongroup">
-        <StackPanel Spacing="2">
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="insert.block" Click="OnRibbonItemClick"
-                    IsEnabled="{Binding !IsPlaying}"
-                    ToolTip.Tip="Solid geometry. Merges with the rest of the level and can be cut.  Ctrl+1">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon kind-world" Data="{StaticResource IconBrushWorld}" />
-                <TextBlock Text="Block" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="insert.part" Click="OnRibbonItemClick"
-                    IsEnabled="{Binding !IsPlaying}"
-                    ToolTip.Tip="Moves and animates freely, and never merges. Use it for anything that has to move.  Ctrl+2">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon kind-part" Data="{StaticResource IconBrushPart}" />
-                <TextBlock Text="Part" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="insert.cut" Click="OnRibbonItemClick"
-                    IsEnabled="{Binding !IsPlaying}"
-                    ToolTip.Tip="Carves a hole out of the blocks it overlaps. Doorways and windows.  Ctrl+3">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon kind-cut" Data="{StaticResource IconBrushSubtractive}" />
-                <TextBlock Text="Cut" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-          </StackPanel>
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="insert.light" Click="OnRibbonItemClick"
-                    IsEnabled="{Binding !IsPlaying}"
-                    ToolTip.Tip="A point light.  Ctrl+4">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon kind-light" Data="{StaticResource IconLight}" />
-                <TextBlock Text="Light" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="insert.panel" Click="OnRibbonItemClick"
-                    IsEnabled="{Binding !IsPlaying}"
-                    ToolTip.Tip="A lit panel flat on the surface you are looking at, parented to it.">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon kind-light" Data="{StaticResource IconSurfaceLight}" />
-                <TextBlock Text="Panel" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="insert.group" Click="OnRibbonItemClick"
-                    IsEnabled="{Binding !IsPlaying}"
-                    ToolTip.Tip="An empty node, for organising what exists.">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon kind-group" Data="{StaticResource IconGroup}" />
-                <TextBlock Text="Group" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-          </StackPanel>
+    <!-- FIRST GROUP OF THE DEFAULT PAGE, and that placement is deliberate: a
+         new user's first question is how to put something in the world. The
+         four large glyphs wear the node-kind tints, which is the first time
+         that palette has been spent anywhere but a 15px tree glyph. -->
+    <StackPanel Classes="ribbongroup">
+      <StackPanel Classes="rrow" Orientation="Horizontal" Spacing="1">
+        <Button Classes="rbig" Tag="insert.block" Click="OnRibbonItemClick"
+                IsEnabled="{Binding !IsPlaying}"
+                ToolTip.Tip="Solid geometry. Merges with the rest of the level and can be cut.  Ctrl+1">
+          <Panel>
+            <Border Classes="sheen" />
+            <StackPanel Classes="rbigstack">
+              <Path Classes="icon-lg kind-world" Data="{StaticResource IconLgBrushWorld}" />
+              <TextBlock Text="Block" />
+            </StackPanel>
+          </Panel>
+        </Button>
+
+        <Button Classes="rbig" Tag="insert.part" Click="OnRibbonItemClick"
+                IsEnabled="{Binding !IsPlaying}"
+                ToolTip.Tip="Moves and animates freely, and never merges. Use it for anything that has to move.  Ctrl+2">
+          <Panel>
+            <Border Classes="sheen" />
+            <StackPanel Classes="rbigstack">
+              <Path Classes="icon-lg kind-part" Data="{StaticResource IconLgBrushPart}" />
+              <TextBlock Text="Part" />
+            </StackPanel>
+          </Panel>
+        </Button>
+
+        <Button Classes="rbig" Tag="insert.cut" Click="OnRibbonItemClick"
+                IsEnabled="{Binding !IsPlaying}"
+                ToolTip.Tip="Carves a hole out of the blocks it overlaps. Doorways and windows.  Ctrl+3">
+          <Panel>
+            <Border Classes="sheen" />
+            <StackPanel Classes="rbigstack">
+              <Path Classes="icon-lg kind-cut" Data="{StaticResource IconLgBrushSubtractive}" />
+              <TextBlock Text="Cut" />
+            </StackPanel>
+          </Panel>
+        </Button>
+
+        <Button Classes="rbig" Tag="insert.light" Click="OnRibbonItemClick"
+                IsEnabled="{Binding !IsPlaying}"
+                ToolTip.Tip="A point light.  Ctrl+4">
+          <Panel>
+            <Border Classes="sheen" />
+            <StackPanel Classes="rbigstack">
+              <Path Classes="icon-lg kind-light" Data="{StaticResource IconLgLight}" />
+              <TextBlock Text="Light" />
+            </StackPanel>
+          </Panel>
+        </Button>
+
+        <!-- The two that place something INTO one of the four beside them. -->
+        <StackPanel Classes="rcol">
+          <Button Classes="rsmall" Tag="insert.panel" Click="OnRibbonItemClick"
+                  IsEnabled="{Binding !IsPlaying}"
+                  ToolTip.Tip="A lit panel flat on the surface you are looking at, parented to it.">
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <Path Classes="icon kind-light" Data="{StaticResource IconSurfaceLight}" />
+              <TextBlock Text="Panel" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button Classes="rsmall" Tag="insert.group" Click="OnRibbonItemClick"
+                  IsEnabled="{Binding !IsPlaying}"
+                  ToolTip.Tip="An empty node, for organising what exists.">
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <Path Classes="icon kind-group" Data="{StaticResource IconGroup}" />
+              <TextBlock Text="Group" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
         </StackPanel>
-      </Border>
+      </StackPanel>
       <TextBlock Classes="ribbongroupcaption" Text="Insert" />
     </StackPanel>
 
-    <StackPanel>
-      <Border Classes="ribbongroup">
-        <StackPanel Spacing="2">
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="tool.move" Classes.active="{Binding IsMoveActive}"
-                    Click="OnRibbonItemClick" ToolTip.Tip="Move the selection.  W or 2">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon" Data="{StaticResource IconMove}" />
-                <TextBlock Text="Move" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="tool.rotate" Classes.active="{Binding IsRotateActive}"
-                    Click="OnRibbonItemClick" ToolTip.Tip="Rotate the selection.  E or 4">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon" Data="{StaticResource IconRotate}" />
-                <TextBlock Text="Rotate" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="tool.size" Classes.active="{Binding IsResizeActive}"
-                    Click="OnRibbonItemClick" ToolTip.Tip="Change the selection's size.  R or 3">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon" Data="{StaticResource IconResize}" />
-                <TextBlock Text="Size" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-          </StackPanel>
-          <!-- A two-way CHOICE carries its SUBJECT and its VALUE: "world" is
-               not the enabled state of "local". No caret on either, because
-               neither opens anything. -->
-          <StackPanel Orientation="Horizontal" Spacing="4">
-            <Button Classes="chip compact" Tag="choice.axes" Click="OnRibbonItemClick"
-                    Classes.nondefault="{Binding !IsWorldSpace}"
-                    ToolTip.Tip="Which axes a drag resolves against.  X">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <TextBlock Classes="chipsubject" Text="Axes" />
-                <TextBlock Classes="chipvalue" Text="{Binding Orientation}" />
-              </StackPanel>
-            </Button>
-            <Button Classes="chip compact" Tag="choice.handles" Click="OnRibbonItemClick"
-                    Classes.nondefault="{Binding !IsStudioStyle}"
-                    ToolTip.Tip="Studio puts a handle on every face and anchors a resize to the opposite one. Classic puts three handles on the pivot and resizes about it.  Y">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <TextBlock Classes="chipsubject" Text="Handles" />
-                <TextBlock Classes="chipvalue" Text="{Binding GizmoStyle}" />
-              </StackPanel>
-            </Button>
-          </StackPanel>
+    <Border Classes="ribbonrule" />
+
+    <!-- The live tool is the most-read state on this surface, so it takes the
+         second set of large buttons and lights amber like every other "this one
+         is running" in the shell. The two-way choices stay chips showing their
+         current word: "world" is not the enabled state of "local", so a lit
+         icon could not say which of the two is current. -->
+    <StackPanel Classes="ribbongroup">
+      <StackPanel Classes="rrow" Orientation="Horizontal" Spacing="1">
+        <Button Classes="rbig" Tag="tool.move" Classes.active="{Binding IsMoveActive}"
+                Click="OnRibbonItemClick" ToolTip.Tip="Move the selection.  W or 2">
+          <Panel>
+            <Border Classes="sheen" />
+            <StackPanel Classes="rbigstack">
+              <Path Classes="icon-lg" Data="{StaticResource IconLgMove}" />
+              <TextBlock Text="Move" />
+            </StackPanel>
+          </Panel>
+        </Button>
+
+        <Button Classes="rbig" Tag="tool.rotate" Classes.active="{Binding IsRotateActive}"
+                Click="OnRibbonItemClick" ToolTip.Tip="Rotate the selection.  E or 4">
+          <Panel>
+            <Border Classes="sheen" />
+            <StackPanel Classes="rbigstack">
+              <Path Classes="icon-lg" Data="{StaticResource IconLgRotate}" />
+              <TextBlock Text="Rotate" />
+            </StackPanel>
+          </Panel>
+        </Button>
+
+        <Button Classes="rbig" Tag="tool.size" Classes.active="{Binding IsResizeActive}"
+                Click="OnRibbonItemClick" ToolTip.Tip="Change the selection's size.  R or 3">
+          <Panel>
+            <Border Classes="sheen" />
+            <StackPanel Classes="rbigstack">
+              <Path Classes="icon-lg" Data="{StaticResource IconLgResize}" />
+              <TextBlock Text="Size" />
+            </StackPanel>
+          </Panel>
+        </Button>
+
+        <StackPanel Classes="rcol" Spacing="2" Margin="4,0,0,0">
+          <Button Classes="chip compact" Tag="choice.axes" Click="OnRibbonItemClick"
+                  Classes.nondefault="{Binding !IsWorldSpace}"
+                  ToolTip.Tip="Which axes a drag resolves against.  X">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Classes="chipsubject" Text="Axes" />
+              <TextBlock Classes="chipvalue" Text="{Binding Orientation}" />
+            </StackPanel>
+          </Button>
+          <Button Classes="chip compact" Tag="choice.handles" Click="OnRibbonItemClick"
+                  Classes.nondefault="{Binding !IsStudioStyle}"
+                  ToolTip.Tip="Studio puts a handle on every face and anchors a resize to the opposite one. Classic puts three handles on the pivot and resizes about it.  Y">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Classes="chipsubject" Text="Handles" />
+              <TextBlock Classes="chipvalue" Text="{Binding GizmoStyle}" />
+            </StackPanel>
+          </Button>
         </StackPanel>
-      </Border>
+      </StackPanel>
       <TextBlock Classes="ribbongroupcaption" Text="Transform" />
     </StackPanel>
 
-    <StackPanel>
-      <Border Classes="ribbongroup">
-        <StackPanel Spacing="2">
-          <!-- ONE field, and it holds the increment of whichever tool is live,
-               with the unit beside it saying which. Three boxes labelled mv,
-               rot and sz asked the reader to keep a mapping in their head for a
-               tool they had already chosen. -->
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="choice.snap" Classes.active="{Binding SnapEnabled}"
-                    Width="26" Padding="0" Click="OnRibbonItemClick"
-                    ToolTip.Tip="Snap drags to the grid.  G">
-              <Path Classes="icon" Data="{StaticResource IconGrid}" />
-            </Button>
-            <Border Classes="segsep" />
-            <TextBox x:Name="SnapBox" Tag="snap.increment" Classes="field num inline" Width="54"
-                     Margin="4,0,0,0" VerticalAlignment="Center"
-                     ToolTip.Tip="Grid size for the live tool. [ and ] step it." />
-            <TextBlock Classes="label" Text="{Binding SnapUnitLabel}"
-                       Margin="5,0,6,0" MinWidth="20" />
+    <Border Classes="ribbonrule" />
+
+    <!-- A check row over a field with a stepper pair, which is Office's spinner
+         and is what these two verbs have always been: [ and ] step one number,
+         and two arrows against the box holding it say so without a word. -->
+    <StackPanel Classes="ribbongroup">
+      <StackPanel Classes="rcol rrow">
+        <Button Classes="rsmall rcheck" Tag="choice.snap" Classes.active="{Binding SnapEnabled}"
+                Click="OnRibbonItemClick" ToolTip.Tip="Snap drags to the grid.  G">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Panel Width="16" Height="16">
+              <Path Classes="markbox" Data="{StaticResource IconCheckBox}" />
+              <Path Classes="mark" Data="{StaticResource IconCheckTick}" />
+            </Panel>
+            <TextBlock Text="Snap to grid" VerticalAlignment="Center" />
           </StackPanel>
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="snap.finer" Click="OnRibbonItemClick"
-                    ToolTip.Tip="Step every snap increment one rung finer.  [">
-              <TextBlock Text="Finer" VerticalAlignment="Center" />
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="snap.coarser" Click="OnRibbonItemClick"
+        </Button>
+
+        <StackPanel Orientation="Horizontal" Spacing="4" Margin="2,3,0,0">
+          <TextBox x:Name="SnapBox" Tag="snap.increment" Classes="field num" Width="58"
+                   VerticalAlignment="Center"
+                   ToolTip.Tip="Grid size for the live tool. [ and ] step it." />
+          <TextBlock Classes="label" Text="{Binding SnapUnitLabel}" MinWidth="20"
+                     VerticalAlignment="Center" />
+          <!-- Coarser is up and finer is down, which is which way the NUMBER
+               goes rather than which way the grid feels. -->
+          <StackPanel VerticalAlignment="Center">
+            <Button Classes="rspin up" Tag="snap.coarser" Click="OnRibbonItemClick"
                     ToolTip.Tip="Step every snap increment one rung coarser.  ]">
-              <TextBlock Text="Coarser" VerticalAlignment="Center" />
+              <Path Classes="spincaret" Data="{StaticResource CaretDown}" />
+            </Button>
+            <Button Classes="rspin" Tag="snap.finer" Click="OnRibbonItemClick"
+                    ToolTip.Tip="Step every snap increment one rung finer.  [">
+              <Path Classes="spincaret" Data="{StaticResource CaretDown}" />
             </Button>
           </StackPanel>
         </StackPanel>
-      </Border>
+      </StackPanel>
       <TextBlock Classes="ribbongroupcaption" Text="Snap" />
     </StackPanel>
 
-    <StackPanel>
-      <Border Classes="ribbongroup">
-        <StackPanel Spacing="2">
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="edit.duplicate" Click="OnRibbonItemClick"
-                    IsEnabled="{Binding HasSelection}" ToolTip.Tip="Copy the selection.  Ctrl+D">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon" Data="{StaticResource IconDuplicate}" />
-                <TextBlock Text="Duplicate" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="edit.delete" Click="OnRibbonItemClick"
-                    IsEnabled="{Binding HasSelection}" ToolTip.Tip="Remove the selection.  Delete">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon" Data="{StaticResource IconDelete}" />
-                <TextBlock Text="Delete" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="edit.convert" Click="OnRibbonItemClick"
-                    IsEnabled="{Binding HasSelection}"
-                    ToolTip.Tip="Flip the selected brushes between block and part.  Ctrl+T">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon" Data="{StaticResource IconConvertKind}" />
-                <TextBlock Text="Convert" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-          </StackPanel>
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="edit.group" Click="OnRibbonItemClick"
-                    IsEnabled="{Binding HasSelection}"
-                    ToolTip.Tip="Put the selection under one new parent.  Ctrl+G">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon" Data="{StaticResource IconGroupNodes}" />
-                <TextBlock Text="Group" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="edit.ungroup" Click="OnRibbonItemClick"
-                    IsEnabled="{Binding HasSelection}"
-                    ToolTip.Tip="Dissolve the selected groups, keeping their children.  Ctrl+Shift+G">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon" Data="{StaticResource IconUngroupNodes}" />
-                <TextBlock Text="Ungroup" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-          </StackPanel>
+    <Border Classes="ribbonrule" />
+
+    <!-- The four verbs that LEFT the one-row bar because they were four
+         anonymous glyphs in a row. Duplicate leads at full size because it is
+         the one of the five somebody reaches for repeatedly; the other four
+         pair up, destructive beside destructive. -->
+    <StackPanel Classes="ribbongroup">
+      <StackPanel Classes="rrow" Orientation="Horizontal" Spacing="1">
+        <Button Classes="rbig" Tag="edit.duplicate" Click="OnRibbonItemClick"
+                IsEnabled="{Binding HasSelection}" ToolTip.Tip="Copy the selection.  Ctrl+D">
+          <Panel>
+            <Border Classes="sheen" />
+            <StackPanel Classes="rbigstack">
+              <Path Classes="icon-lg" Data="{StaticResource IconLgDuplicate}" />
+              <TextBlock Text="Duplicate" />
+            </StackPanel>
+          </Panel>
+        </Button>
+
+        <StackPanel Classes="rcol">
+          <Button Classes="rsmall" Tag="edit.delete" Click="OnRibbonItemClick"
+                  IsEnabled="{Binding HasSelection}" ToolTip.Tip="Remove the selection.  Delete">
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <Path Classes="icon" Data="{StaticResource IconDelete}" />
+              <TextBlock Text="Delete" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button Classes="rsmall" Tag="edit.convert" Click="OnRibbonItemClick"
+                  IsEnabled="{Binding HasSelection}"
+                  ToolTip.Tip="Flip the selected brushes between block and part.  Ctrl+T">
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <Path Classes="icon" Data="{StaticResource IconConvertKind}" />
+              <TextBlock Text="Convert" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
         </StackPanel>
-      </Border>
+
+        <StackPanel Classes="rcol">
+          <Button Classes="rsmall" Tag="edit.group" Click="OnRibbonItemClick"
+                  IsEnabled="{Binding HasSelection}"
+                  ToolTip.Tip="Put the selection under one new parent.  Ctrl+G">
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <Path Classes="icon" Data="{StaticResource IconGroupNodes}" />
+              <TextBlock Text="Group" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button Classes="rsmall" Tag="edit.ungroup" Click="OnRibbonItemClick"
+                  IsEnabled="{Binding HasSelection}"
+                  ToolTip.Tip="Dissolve the selected groups, keeping their children.  Ctrl+Shift+G">
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <Path Classes="icon" Data="{StaticResource IconUngroupNodes}" />
+              <TextBlock Text="Ungroup" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+      </StackPanel>
       <TextBlock Classes="ribbongroupcaption" Text="Arrange" />
     </StackPanel>
 

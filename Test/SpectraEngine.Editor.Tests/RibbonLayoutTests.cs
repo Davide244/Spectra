@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging.Abstractions;
+﻿using Microsoft.Extensions.Logging.Abstractions;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Editing.Cameras;
 using SpectraEngine.Editing.Gizmos;
@@ -336,6 +336,206 @@ public sealed class RibbonLayoutTests
             window.ShouldContain($"Tag=\"{item.Id}\"", customMessage: $"{item.Id} must be on the tab strip");
             pageTags.ShouldNotContain(item.Id, $"{item.Id} must not also be drawn on a page");
         }
+    }
+
+    // ─── The size hierarchy, and the width it costs ──────
+
+    /// <summary>
+    /// The window's own <c>MinWidth</c>. A page has to fit inside it, because
+    /// nothing here scrolls or collapses a group.
+    /// </summary>
+    private const double WindowMinimum = 1180.0;
+
+    /// <summary>What each control kind measures, from the theme's own numbers.</summary>
+    private static double WidthOf(RibbonItem item) => item.Kind switch
+    {
+        // Button.chip.compact plus its two words; the widest is "Handles Studio".
+        RibbonControlKind.Chip => 106.0,
+
+        // TextBox.field.num at 58 plus a unit label and the stepper column.
+        RibbonControlKind.Field => 100.0,
+
+        // Both steppers stack inside the field's own row.
+        RibbonControlKind.Stepper => 0.0,
+
+        _ => item.Size == RibbonItemSize.Large ? 64.0 : 96.0,
+    };
+
+    [Fact]
+    public void A_page_fits_the_window_the_shell_refuses_to_go_below()
+    {
+        // THE FLOOR THE SIZE HIERARCHY NEEDED. A large button is three times a
+        // small row's share of the width, so a group that grows one is a group
+        // that can push the last one off the end - and the way that presents is
+        // a control nobody can find, on a window nobody resized, on somebody
+        // else's monitor. Arithmetic here rather than a screenshot there.
+        //
+        // Small rows stack three to a column, so a group's small items cost
+        // ceil(n / 3) columns rather than n rows. Deliberately generous per
+        // item: the point is a bound that fails before the layout does, not a
+        // measurement of it.
+        foreach (RibbonTab tab in RibbonLayout.Tabs)
+        {
+            double width = 0;
+
+            foreach (RibbonGroup group in tab.Groups)
+            {
+                double large = group.Items
+                    .Where(i => i.Size == RibbonItemSize.Large)
+                    .Sum(WidthOf);
+
+                // Everything that is not a large button lives in a column, and
+                // a column holds three rows.
+                List<RibbonItem> small = group.Items
+                    .Where(i => i.Size != RibbonItemSize.Large && WidthOf(i) > 0)
+                    .ToList();
+
+                double columns = 0;
+                for (int i = 0; i < small.Count; i += 3)
+                    columns += small.Skip(i).Take(3).Max(WidthOf);
+
+                width += large + columns + 10; // StackPanel.ribbongroup's own margin
+            }
+
+            width += (tab.Groups.Count - 1) * 5; // the rules between them
+
+            width.ShouldBeLessThan(
+                WindowMinimum,
+                $"the '{tab.Id}' page must fit the window's MinWidth of {WindowMinimum}");
+        }
+    }
+
+    [Fact]
+    public void Every_page_leads_with_a_large_control()
+    {
+        // A page whose first group is all small rows has no headline, which is
+        // the state the whole surface was in before the hierarchy existed: the
+        // eye lands somewhere arbitrary and the page reads as a list.
+        foreach (RibbonTab tab in RibbonLayout.Tabs)
+        {
+            tab.Groups[0].Items
+                .Any(i => i.Size == RibbonItemSize.Large)
+                .ShouldBeTrue($"the first group of '{tab.Id}' should lead with a large control");
+        }
+    }
+
+    [Fact]
+    public void A_large_label_cannot_wrap_to_a_third_line()
+    {
+        // Button.rbig is 64 wide and wraps to two lines of 13 inside its 66,
+        // and MaxLines is 2 - so a third line is not clipped visibly, it is
+        // silently dropped.
+        //
+        // TEN IS MEASURED, NOT CHOSEN. The cap was twelve, and twelve is what
+        // let "Everything" ship at a 58px button where it broke mid-word to
+        // "Everythin / g" - a single word longer than the line has no word
+        // boundary to wrap at, so TextWrapping cuts it wherever it runs out.
+        // The button is 64 now and holds that word with two pixels to spare,
+        // which makes ten the honest cap rather than a round number.
+        var offenders = new List<string>();
+
+        foreach (RibbonItem item in AllItems().Where(i => i.Size == RibbonItemSize.Large))
+        {
+            if (item.Label.Length > 10)
+                offenders.Add($"{item.Id}: '{item.Label}' is {item.Label.Length} characters");
+        }
+
+        offenders.ShouldBeEmpty("a large button's label must fit two lines at 64px");
+    }
+
+    [Fact]
+    public void Every_control_wears_the_class_its_declared_kind_requires()
+    {
+        // THE SECOND HALF OF THE WELD. The Tag check above refuses a control
+        // the roster has never heard of and a roster entry with no control;
+        // between those two a page could still draw ANY control it liked under
+        // a valid id. A check row rendered as a plain button looks finished,
+        // posts the right verb and has no lit state at all - which is a control
+        // that lies about what the engine is doing.
+        //
+        // The runtime half refuses the window at construction. This is the CI
+        // half, reading the same fact out of the sources.
+        var offenders = new List<string>();
+
+        foreach ((string tabId, string file) in PageFiles)
+        {
+            RibbonTab tab = RibbonLayout.FindTab(tabId)!;
+            string markup = File.ReadAllText(Path.Combine(RibbonFolder(), file));
+
+            foreach (RibbonItem item in RibbonLayout.ItemsOf(tab))
+            {
+                string required = RibbonLayout.RequiredClass(item);
+                if (!ClassesOn(markup, item.Id).Contains(required, StringComparer.Ordinal))
+                    offenders.Add($"{file}: {item.Id} is a {item.Kind} and must wear '{required}'");
+            }
+        }
+
+        offenders.ShouldBeEmpty("a declared kind must be the control that is actually drawn");
+    }
+
+    [Fact]
+    public void A_lit_control_is_bound_to_something_that_lights_it()
+    {
+        // A Toggle, a Check and a Radio all exist to SHOW a state, and every
+        // one of them in this shell is a Button wearing Classes.active rather
+        // than a real ToggleButton - the deliberate refusal recorded in
+        // Controls.axaml, because a two-way toggle bound to engine state
+        // flickers when the snapshot corrects it. The cost of that choice is
+        // that forgetting the binding is silent: the control works, posts its
+        // verb, and never lights.
+        var offenders = new List<string>();
+
+        foreach ((string tabId, string file) in PageFiles)
+        {
+            RibbonTab tab = RibbonLayout.FindTab(tabId)!;
+            string markup = File.ReadAllText(Path.Combine(RibbonFolder(), file));
+
+            foreach (RibbonItem item in RibbonLayout.ItemsOf(tab))
+            {
+                if (item.Kind is not (RibbonControlKind.Toggle or RibbonControlKind.Check
+                    or RibbonControlKind.Radio))
+                {
+                    continue;
+                }
+
+                if (!ElementFor(markup, item.Id).Contains("Classes.active=", StringComparison.Ordinal))
+                    offenders.Add($"{file}: {item.Id} is a {item.Kind} with nothing to light it");
+            }
+        }
+
+        offenders.ShouldBeEmpty("a Toggle, Check or Radio must bind Classes.active");
+    }
+
+    /// <summary>
+    /// The whole opening tag of the element carrying <paramref name="id"/>, as
+    /// text.
+    /// </summary>
+    /// <remarks>
+    /// Crude, and deliberately so: parsing XAML properly would pull in the
+    /// framework this project does not reference, and every claim these tests
+    /// make is about text a person reads. A tag is taken from the element's
+    /// <c>&lt;</c> to its first <c>&gt;</c>, which is enough because every
+    /// ribbon control opens on one element and closes later.
+    /// </remarks>
+    private static string ElementFor(string markup, string id)
+    {
+        int tag = markup.IndexOf($"Tag=\"{id}\"", StringComparison.Ordinal);
+        if (tag < 0) return string.Empty;
+
+        int open = markup.LastIndexOf('<', tag);
+        int close = markup.IndexOf('>', tag);
+        if (open < 0 || close < 0) return string.Empty;
+
+        return markup[open..close];
+    }
+
+    /// <summary>The class list on the element carrying <paramref name="id"/>.</summary>
+    private static IReadOnlyList<string> ClassesOn(string markup, string id)
+    {
+        Match m = Regex.Match(ElementFor(markup, id), "Classes=\"([^\"]*)\"");
+        return m.Success
+            ? m.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            : [];
     }
 
     private static IEnumerable<RibbonItem> AllItems() =>

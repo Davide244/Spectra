@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using System;
@@ -71,13 +71,18 @@ public abstract class RibbonTabView : UserControl
         RibbonTab tab = RibbonLayout.FindTab(TabId)
             ?? throw new InvalidOperationException($"'{TabId}' is not a ribbon tab.");
 
-        var expected = new HashSet<string>(RibbonLayout.ItemsOf(tab).Select(i => i.Id), StringComparer.Ordinal);
+        IReadOnlyList<RibbonItem> items = RibbonLayout.ItemsOf(tab);
+        var expected = new HashSet<string>(items.Select(i => i.Id), StringComparer.Ordinal);
         var found = new List<string>();
+        var drawn = new Dictionary<string, Control>(StringComparer.Ordinal);
 
         foreach (ILogical logical in this.GetLogicalDescendants())
         {
-            if (logical is Control { Tag: string id })
+            if (logical is Control { Tag: string id } control)
+            {
                 found.Add(id);
+                drawn[id] = control;
+            }
         }
 
         var duplicates = found.GroupBy(id => id, StringComparer.Ordinal)
@@ -102,6 +107,28 @@ public abstract class RibbonTabView : UserControl
             throw new InvalidOperationException(
                 $"The '{TabId}' ribbon page is missing controls the roster promises: " +
                 $"{string.Join(", ", missing)}.");
+        }
+
+        // And the control must be the SHAPE the roster declares. Without this
+        // a page could draw anything it liked under a valid Tag: a check row
+        // rendered as a plain button looks finished, posts the right verb and
+        // has no lit state at all, which is a control that lies about what the
+        // engine is doing.
+        var wrong = new List<string>();
+        foreach (RibbonItem item in items)
+        {
+            if (!drawn.TryGetValue(item.Id, out Control? control)) continue;
+
+            string required = RibbonLayout.RequiredClass(item);
+            if (!control.Classes.Contains(required))
+                wrong.Add($"{item.Id} is a {item.Kind} and must wear '{required}'");
+        }
+
+        if (wrong.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"The '{TabId}' ribbon page draws controls the roster shapes differently: " +
+                $"{string.Join("; ", wrong)}.");
         }
     }
 }

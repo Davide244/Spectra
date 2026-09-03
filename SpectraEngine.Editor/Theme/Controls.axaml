@@ -907,21 +907,47 @@
        transition off the drag path. The motion budget is spent on the tabs and
        the pin, where it costs nothing. -->
   <Style Selector="Border.ribbonbody">
-    <Setter Property="Background" Value="Transparent" />
-    <Setter Property="Padding" Value="10,6,10,4" />
+    <Setter Property="Background" Value="{StaticResource SpectraRibbonBodyFill}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="Padding" Value="8,5,8,3" />
   </Style>
 
-  <!-- A group is the command bar's cluster grown to two rows. The capsule is
-       what says the things inside it are pressable (rule 3 in Tokens.axaml);
-       a ribbon of flat buttons on the chrome ground would have no raised
-       affordance at rest at all. -->
-  <Style Selector="Border.ribbongroup">
-    <Setter Property="Background" Value="{StaticResource SpectraBgControl}" />
-    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
-    <Setter Property="Padding" Value="2" />
+  <!-- A GROUP IS NO LONGER A BOX, and dropping the box is the single change
+       that stops this surface reading as grey blobs. It used to be the command
+       bar's cluster grown to two rows: a filled, bordered capsule per group, on
+       the argument that the capsule is what says the things inside it are
+       pressable. That argument was answered rather than ignored - what says a
+       large button is pressable is that it is a 32px glyph over a word and that
+       it lifts under the cursor, which is how every ribbon since 2007 has done
+       it. Four filled rounded rectangles in a row were four grey blobs, and
+       they were the literal ones.
+
+       A ribbon group in Office is delimited by a rule and a caption. So this is
+       a plain stack now: content, then the caption under it, with a
+       Border.ribbonrule between neighbours. -->
+  <Style Selector="StackPanel.ribbongroup">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Margin" Value="5,0" />
     <Setter Property="VerticalAlignment" Value="Top" />
+  </Style>
+
+  <!-- Every group's content row, whatever is in it. The MinHeight is what puts
+       all four captions on one line: the Snap group is a check row over a field
+       and is naturally shorter than a row of large buttons, and without a floor
+       its caption would sit twenty pixels above its neighbours'. -->
+  <Style Selector="StackPanel.rrow">
+    <Setter Property="MinHeight" Value="66" />
+    <Setter Property="VerticalAlignment" Value="Top" />
+  </Style>
+
+  <!-- A column of small rows beside the large buttons: three of 22 against one
+       of 66, which is the arithmetic the whole hierarchy is built on. Top
+       aligned, so a column of two does not float in the middle of a row of
+       fours. -->
+  <Style Selector="StackPanel.rcol">
+    <Setter Property="VerticalAlignment" Value="Top" />
+    <Setter Property="Margin" Value="2,0,0,0" />
   </Style>
 
   <!-- The caption NAMES the box above it, exactly as the status bar's labels
@@ -935,7 +961,7 @@
     <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
     <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
     <Setter Property="HorizontalAlignment" Value="Center" />
-    <Setter Property="Margin" Value="0,2,0,0" />
+    <Setter Property="Margin" Value="0,3,0,0" />
   </Style>
 
   <!-- ___ The ribbon's control family _____________________
@@ -997,14 +1023,17 @@
     <Setter Property="Opacity" Value="0" />
   </Style>
 
-  <!-- THE LARGE BUTTON. 58 x 66: a 32px glyph over two lines of 13, which is
-       the shape every ribbon since 2007 has used, and the width is what a
-       two-line label needs before it wraps to three.
+  <!-- THE LARGE BUTTON. 64 x 66: a 32px glyph over two lines of 13, which is
+       the shape every ribbon since 2007 has used. The width is MEASURED
+       rather than chosen: at 58 the word "Everything" broke mid-word to
+       "Everythin / g", which is the one wrap TextWrapping cannot make look
+       deliberate, because a single word longer than the line has no word
+       boundary to break at. 64 holds ten characters with two to spare.
 
        The fill is on the ContentPresenter and the rim is on the sheen, so the
        one transitioned property here is a solid Background. -->
   <Style Selector="Button.rbig">
-    <Setter Property="Width" Value="58" />
+    <Setter Property="Width" Value="64" />
     <Setter Property="Height" Value="66" />
     <Setter Property="Padding" Value="0" />
     <Setter Property="Background" Value="Transparent" />
@@ -1233,7 +1262,7 @@
        Two real Buttons, so each half gets its own hover and its own tooltip;
        the container is a plain Border and does nothing. -->
   <Style Selector="Border.rsplit">
-    <Setter Property="Width" Value="58" />
+    <Setter Property="Width" Value="64" />
     <Setter Property="Height" Value="66" />
     <Setter Property="Background" Value="Transparent" />
   </Style>
@@ -1283,7 +1312,7 @@
   <Style Selector="Border.ribbonrule">
     <Setter Property="Width" Value="1" />
     <Setter Property="Background" Value="{StaticResource SpectraGroupRule}" />
-    <Setter Property="Margin" Value="3,1,3,0" />
+    <Setter Property="Margin" Value="2,1,2,18" />
   </Style>
 
   <!-- The flown-out page. A floating surface, so it is properly rounded and

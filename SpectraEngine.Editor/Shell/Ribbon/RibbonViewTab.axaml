@@ -19,106 +19,168 @@
     here most - a latched overlay is a viewport that looks broken to whoever
     fat-fingered F1, and until now the only switch was four levels into a menu.
 
-    Text, not glyphs. Five overlay icons would be five ambiguous outlines in one
-    row, which is a grey texture rather than five icons; the viewport's own
-    standing chips are text for the same reason.
+    THE ICONS COME BACK HERE, AS MARKS RATHER THAN AS PICTURES. This page
+    carried no glyphs at all in its first version, and the reasoning was right:
+    five ambiguous 16px outlines in one row are a grey texture rather than five
+    icons. A box with a tick in it is not an ambiguous outline - it says on or
+    off, and leaves the word beside it to say which overlay. The grid's three
+    modes are rings and a dot for the same reason and one more: a ring says one
+    of these, a box says any of these, and that difference is the only thing on
+    screen that tells a reader the grid has one answer and the overlays have
+    five independent ones.
+
+    The page is deliberately roomier than Build. Word's View tab is too - what
+    a view page has to say is genuinely smaller than what a build page does, and
+    padding it out of the File menu is how the retired tab strip got its third
+    page.
   -->
 
-  <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Top">
+  <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
 
-    <StackPanel>
-      <Border Classes="ribbongroup">
-        <StackPanel Spacing="2">
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="camera.frame" Click="OnRibbonItemClick"
-                    IsEnabled="{Binding HasSelection}"
-                    ToolTip.Tip="Fit the selection in the view.  F">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon" Data="{StaticResource IconFrame}" />
-                <TextBlock Text="Selection" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-          </StackPanel>
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="camera.frameall" Click="OnRibbonItemClick"
-                    ToolTip.Tip="Fit every spatial node in the scene in the view.">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <Path Classes="icon" Data="{StaticResource IconFrameAll}" />
-                <TextBlock Text="Everything" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-          </StackPanel>
-        </StackPanel>
-      </Border>
+    <StackPanel Classes="ribbongroup">
+      <StackPanel Classes="rrow" Orientation="Horizontal" Spacing="1">
+        <Button Classes="rbig" Tag="camera.frame" Click="OnRibbonItemClick"
+                IsEnabled="{Binding HasSelection}"
+                ToolTip.Tip="Fit the selection in the view.  F">
+          <Panel>
+            <Border Classes="sheen" />
+            <StackPanel Classes="rbigstack">
+              <Path Classes="icon-lg" Data="{StaticResource IconLgFrame}" />
+              <TextBlock Text="Selection" />
+            </StackPanel>
+          </Panel>
+        </Button>
+
+        <Button Classes="rbig" Tag="camera.frameall" Click="OnRibbonItemClick"
+                ToolTip.Tip="Fit every spatial node in the scene in the view.">
+          <Panel>
+            <Border Classes="sheen" />
+            <StackPanel Classes="rbigstack">
+              <Path Classes="icon-lg" Data="{StaticResource IconLgFrameAll}" />
+              <TextBlock Text="Everything" />
+            </StackPanel>
+          </Panel>
+        </Button>
+      </StackPanel>
       <TextBlock Classes="ribbongroupcaption" Text="Frame" />
     </StackPanel>
 
-    <StackPanel>
-      <Border Classes="ribbongroup">
-        <StackPanel Spacing="2">
-          <!-- Three SET verbs, never a cycle: a cycle sent against a snapshot
-               one publish stale lands on the wrong mode exactly when the user
-               clicks fastest. The lit one follows the engine's echo. -->
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="grid.auto" Classes.active="{Binding GridAuto}"
-                    Click="OnRibbonItemClick"
-                    ToolTip.Tip="Show the ground grid during move and resize gestures only.">
-              <TextBlock Text="Auto" VerticalAlignment="Center" />
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="grid.on" Classes.active="{Binding GridOn}"
-                    Click="OnRibbonItemClick" ToolTip.Tip="Always draw the ground grid.">
-              <TextBlock Text="Always" VerticalAlignment="Center" />
-            </Button>
+    <Border Classes="ribbonrule" />
+
+    <!-- Three SET verbs, never a cycle: a cycle sent against a snapshot one
+         publish stale lands on the wrong mode exactly when the user clicks
+         fastest. The lit one follows the engine's echo.
+
+         A radio COLUMN rather than a dropdown, and the difference is what is
+         visible at rest: three modes, one lit, all three readable without
+         opening anything. A chip reading "auto" hides the fact that there are
+         two other answers. The exclusivity is a property of the three verbs,
+         never of the controls - which is also why these are Buttons wearing
+         Classes.active and not RadioButtons, since a two-way toggle bound to
+         engine state flickers when the snapshot corrects it. -->
+    <StackPanel Classes="ribbongroup">
+      <StackPanel Classes="rcol rrow">
+        <Button Classes="rsmall rradio" Tag="grid.auto" Classes.active="{Binding GridAuto}"
+                Click="OnRibbonItemClick"
+                ToolTip.Tip="Show the ground grid during move and resize gestures only.">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Panel Width="16" Height="16">
+              <Path Classes="markbox" Data="{StaticResource IconRadio}" />
+              <Path Classes="mark dot" Data="{StaticResource IconRadioDot}" />
+            </Panel>
+            <TextBlock Text="Auto" VerticalAlignment="Center" />
           </StackPanel>
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="grid.off" Classes.active="{Binding GridOff}"
-                    Click="OnRibbonItemClick" ToolTip.Tip="Never draw the ground grid.">
-              <TextBlock Text="Off" VerticalAlignment="Center" />
-            </Button>
+        </Button>
+        <Button Classes="rsmall rradio" Tag="grid.on" Classes.active="{Binding GridOn}"
+                Click="OnRibbonItemClick" ToolTip.Tip="Always draw the ground grid.">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Panel Width="16" Height="16">
+              <Path Classes="markbox" Data="{StaticResource IconRadio}" />
+              <Path Classes="mark dot" Data="{StaticResource IconRadioDot}" />
+            </Panel>
+            <TextBlock Text="Always" VerticalAlignment="Center" />
           </StackPanel>
-        </StackPanel>
-      </Border>
+        </Button>
+        <Button Classes="rsmall rradio" Tag="grid.off" Classes.active="{Binding GridOff}"
+                Click="OnRibbonItemClick" ToolTip.Tip="Never draw the ground grid.">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Panel Width="16" Height="16">
+              <Path Classes="markbox" Data="{StaticResource IconRadio}" />
+              <Path Classes="mark dot" Data="{StaticResource IconRadioDot}" />
+            </Panel>
+            <TextBlock Text="Off" VerticalAlignment="Center" />
+          </StackPanel>
+        </Button>
+      </StackPanel>
       <TextBlock Classes="ribbongroupcaption" Text="Ground grid" />
     </StackPanel>
 
-    <StackPanel>
-      <Border Classes="ribbongroup">
-        <StackPanel Spacing="2">
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="overlay.wireframe" Classes.active="{Binding DebugWireframe}"
-                    Click="OnRibbonItemClick"
-                    ToolTip.Tip="Draw every triangle as line edges.  F1">
+    <Border Classes="ribbonrule" />
+
+    <!-- Office's Show group: independent switches, three to a column. -->
+    <StackPanel Classes="ribbongroup">
+      <StackPanel Classes="rrow" Orientation="Horizontal" Spacing="1">
+        <StackPanel Classes="rcol">
+          <Button Classes="rsmall rcheck" Tag="overlay.wireframe"
+                  Classes.active="{Binding DebugWireframe}" Click="OnRibbonItemClick"
+                  ToolTip.Tip="Draw every triangle as line edges.  F1">
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <Panel Width="16" Height="16">
+                <Path Classes="markbox" Data="{StaticResource IconCheckBox}" />
+                <Path Classes="mark" Data="{StaticResource IconCheckTick}" />
+              </Panel>
               <TextBlock Text="Wireframe" VerticalAlignment="Center" />
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="overlay.vertices" Classes.active="{Binding DebugVertices}"
-                    Click="OnRibbonItemClick"
-                    ToolTip.Tip="Mark every CSG polygon vertex, which surfaces welds and snaps.  F2">
+            </StackPanel>
+          </Button>
+          <Button Classes="rsmall rcheck" Tag="overlay.vertices"
+                  Classes.active="{Binding DebugVertices}" Click="OnRibbonItemClick"
+                  ToolTip.Tip="Mark every CSG polygon vertex, which surfaces welds and snaps.  F2">
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <Panel Width="16" Height="16">
+                <Path Classes="markbox" Data="{StaticResource IconCheckBox}" />
+                <Path Classes="mark" Data="{StaticResource IconCheckTick}" />
+              </Panel>
               <TextBlock Text="Vertices" VerticalAlignment="Center" />
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="overlay.bounds" Classes.active="{Binding DebugAabbs}"
-                    Click="OnRibbonItemClick"
-                    ToolTip.Tip="Box every brush and mesh in its world bounds.  F3">
+            </StackPanel>
+          </Button>
+          <Button Classes="rsmall rcheck" Tag="overlay.bounds"
+                  Classes.active="{Binding DebugAabbs}" Click="OnRibbonItemClick"
+                  ToolTip.Tip="Box every brush and mesh in its world bounds.  F3">
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <Panel Width="16" Height="16">
+                <Path Classes="markbox" Data="{StaticResource IconCheckBox}" />
+                <Path Classes="mark" Data="{StaticResource IconCheckTick}" />
+              </Panel>
               <TextBlock Text="Bounds" VerticalAlignment="Center" />
-            </Button>
-          </StackPanel>
-          <StackPanel Orientation="Horizontal">
-            <Button Classes="seg" Tag="overlay.normals" Classes.active="{Binding DebugNormals}"
-                    Click="OnRibbonItemClick"
-                    ToolTip.Tip="Draw an arrow along every outward face normal.  F4">
-              <TextBlock Text="Normals" VerticalAlignment="Center" />
-            </Button>
-            <Border Classes="segsep" />
-            <Button Classes="seg" Tag="overlay.axes" Classes.active="{Binding DebugSceneGraph}"
-                    Click="OnRibbonItemClick"
-                    ToolTip.Tip="Draw each node's axes and its line to its parent.  F5">
-              <TextBlock Text="Node axes" VerticalAlignment="Center" />
-            </Button>
-          </StackPanel>
+            </StackPanel>
+          </Button>
         </StackPanel>
-      </Border>
+
+        <StackPanel Classes="rcol">
+          <Button Classes="rsmall rcheck" Tag="overlay.normals"
+                  Classes.active="{Binding DebugNormals}" Click="OnRibbonItemClick"
+                  ToolTip.Tip="Draw an arrow along every outward face normal.  F4">
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <Panel Width="16" Height="16">
+                <Path Classes="markbox" Data="{StaticResource IconCheckBox}" />
+                <Path Classes="mark" Data="{StaticResource IconCheckTick}" />
+              </Panel>
+              <TextBlock Text="Normals" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button Classes="rsmall rcheck" Tag="overlay.axes"
+                  Classes.active="{Binding DebugSceneGraph}" Click="OnRibbonItemClick"
+                  ToolTip.Tip="Draw each node's axes and its line to its parent.  F5">
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <Panel Width="16" Height="16">
+                <Path Classes="markbox" Data="{StaticResource IconCheckBox}" />
+                <Path Classes="mark" Data="{StaticResource IconCheckTick}" />
+              </Panel>
+              <TextBlock Text="Node axes" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+      </StackPanel>
       <TextBlock Classes="ribbongroupcaption" Text="Overlays" />
     </StackPanel>
 
