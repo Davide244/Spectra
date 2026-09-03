@@ -137,6 +137,50 @@ public sealed class DemoStartupOptionsTests
     }
 
     [Fact]
+    public void Booting_from_packs_is_off_unless_a_project_is_named_with_it()
+    {
+        // A pack list belongs to a project, so --pack alone would silently run
+        // the authored demo scene off loose files and look exactly like a
+        // passing cooked run - which is the one thing this switch exists to
+        // tell apart.
+        DemoStartupOptions.Parse(["d3d11", "--project=Game"], null).BootFromPacks.ShouldBeFalse();
+
+        Should.Throw<ArgumentException>(() => DemoStartupOptions.Parse(["--pack"], null))
+            .Message.ShouldContain("--project");
+    }
+
+    [Fact]
+    public void The_dev_overlay_only_means_something_over_a_pack_mount()
+    {
+        DemoStartupOptions options = DemoStartupOptions.Parse(
+            ["d3d11", "--project=Game", "--pack", "--dev"], null);
+
+        options.BootFromPacks.ShouldBeTrue();
+        options.DevContentOverlay.ShouldBeTrue();
+
+        // Refused rather than ignored: on its own it asks for loose files over
+        // packs nobody mounted, which is what the demo already does.
+        Should.Throw<ArgumentException>(
+            () => DemoStartupOptions.Parse(["--project=Game", "--dev"], null))
+            .Message.ShouldContain("--pack");
+    }
+
+    [Fact]
+    public void The_pack_switches_survive_the_self_test_environment_path()
+    {
+        // The three Parse exits each construct the record separately, so a new
+        // field has to be threaded through all of them - this pins the one an
+        // environment-driven gate run takes.
+        DemoStartupOptions options = DemoStartupOptions.Parse(
+            ["d3d11", "--project=Game", "--pack"], "true");
+
+        options.SelfTestEnabled.ShouldBeTrue();
+        options.SelfTestSource.ShouldBe(SelfTestSource.Environment);
+        options.BootFromPacks.ShouldBeTrue();
+        options.ProjectPath.ShouldBe("Game");
+    }
+
+    [Fact]
     public void The_backend_defaults_to_opengl()
     {
         DemoStartupOptions.Parse([], null).Backend.ShouldBe(GraphicsBackend.OpenGL);

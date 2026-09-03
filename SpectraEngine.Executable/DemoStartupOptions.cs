@@ -68,6 +68,8 @@ internal sealed record DemoStartupOptions(
     string? SaveMapPath = null,
     string? ProjectPath = null,
     string? SaveProjectPath = null,
+    bool BootFromPacks = false,
+    bool DevContentOverlay = false,
     string? ExportEntitySchemaPath = null,
     bool ExitAfterSave = false,
     bool ViewportCompare = false)
@@ -86,7 +88,8 @@ internal sealed record DemoStartupOptions(
         "[--vsync[=true|false]] " +
         "[--debug-layer[=true|false]] [--adapter=<name>] [--size=WxH] [--parts=<grid>] " +
         "[--props=<count>] [--map=<bundle.smap>] [--save-map=<bundle.smap>] " +
-        "[--project=<folder>] [--save-project=<folder>] [--exit-after-save[=true|false]] " +
+        "[--project=<folder>] [--save-project=<folder>] [--pack[=true|false]] [--dev[=true|false]] " +
+        "[--exit-after-save[=true|false]] " +
         "[--export-entity-schema=<file.sentdef>] [--viewport-compare[=true|false]].";
 
     /// <summary>
@@ -126,6 +129,8 @@ internal sealed record DemoStartupOptions(
         string? saveMapPath = null;
         string? projectPath = null;
         string? saveProjectPath = null;
+        bool bootFromPacks = false;
+        bool devContentOverlay = false;
         string? exportEntitySchemaPath = null;
         bool exitAfterSave = false;
         bool viewportCompare = false;
@@ -268,6 +273,22 @@ internal sealed record DemoStartupOptions(
                     saveProjectPath = ParseName(value, token);
                     continue;
 
+                // Boot out of the project's cooked packs instead of its loose
+                // Assets folder. This is the only configuration in which the
+                // cook is actually being tested: a run with loose files
+                // available resolves everything the pack is missing without
+                // saying so.
+                case "pack" or "packs":
+                    bootFromPacks = ParseBoolean(value, token);
+                    continue;
+
+                // ...with loose files laid over the packs, so an edited texture
+                // shadows the cooked one with no rebuild. Only means anything
+                // beside --pack; on its own it is what the demo already does.
+                case "dev":
+                    devContentOverlay = ParseBoolean(value, token);
+                    continue;
+
                 // Shut the session down once the export has been written, so an
                 // unattended caller gets its bundle and its process back.
                 //
@@ -320,6 +341,22 @@ internal sealed record DemoStartupOptions(
                 $"'--exit-after-save' needs something to save: name --save-map or --save-project. {Usage}");
         }
 
+        // Refused rather than ignored, for the reason above. A pack list is a
+        // PROJECT's, so --pack with nothing to read one from would silently run
+        // the authored demo scene off loose files and look like a passing cooked
+        // run; and --dev alone asks for an overlay over packs nobody mounted.
+        if (bootFromPacks && projectPath is null)
+        {
+            throw new ArgumentException(
+                $"'--pack' needs a project to take its pack list from: name --project. {Usage}");
+        }
+
+        if (devContentOverlay && !bootFromPacks)
+        {
+            throw new ArgumentException(
+                $"'--dev' only means something over a pack mount: name --pack too. {Usage}");
+        }
+
         // Refused BY NAME rather than attempted, exactly as the editor shell
         // refuses an embedded GL viewport: a composited surface carries no GL
         // context and no window handle, so letting the renderer discover that
@@ -337,7 +374,8 @@ internal sealed record DemoStartupOptions(
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
                 fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath, exitAfterSave, viewportCompare);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath, bootFromPacks, devContentOverlay,
+                exportEntitySchemaPath, exitAfterSave, viewportCompare);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -346,13 +384,15 @@ internal sealed record DemoStartupOptions(
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
                 fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath, exitAfterSave, viewportCompare);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath, bootFromPacks, devContentOverlay,
+                exportEntitySchemaPath, exitAfterSave, viewportCompare);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
             fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath, exitAfterSave, viewportCompare);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath, bootFromPacks, devContentOverlay,
+                exportEntitySchemaPath, exitAfterSave, viewportCompare);
     }
 
     // A switch that takes a name needs one: a bare --pipeline says nothing

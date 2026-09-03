@@ -39,6 +39,7 @@ public static class ProjectFormat
     public const string IdMember = "id";
     public const string StartupMapMember = "startupMap";
     public const string MapsMember = "maps";
+    public const string PacksMember = "packs";
     public const string DisplayMember = "display";
     public const string DefaultBackendMember = "defaultBackend";
     public const string AllowedBackendsMember = "allowedBackends";

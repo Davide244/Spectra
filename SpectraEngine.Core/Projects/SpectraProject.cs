@@ -27,11 +27,11 @@ namespace SpectraEngine.Core.Projects;
 /// </para>
 /// <para>
 /// <b>Members this engine has not built yet are carried, not dropped</b>, the
-/// same three-tier rule the map uses. <c>packs</c>, <c>input</c>,
-/// <c>bootScript</c>, <c>entityDefinitions</c> and <c>settings</c> are all
-/// specified and none of them has anything in the tree to bind to, so they ride
-/// through in <see cref="Unknown"/> rather than being decoded into values that
-/// would silently mean nothing.
+/// same three-tier rule the map uses. <c>input</c>, <c>bootScript</c>,
+/// <c>entityDefinitions</c> and <c>settings</c> are all specified and none of
+/// them has anything in the tree to bind to, so they ride through in
+/// <see cref="Unknown"/> rather than being decoded into values that would
+/// silently mean nothing.
 /// </para>
 /// </remarks>
 public sealed class SpectraProject
@@ -39,8 +39,8 @@ public sealed class SpectraProject
     internal static readonly string[] MemberOrder =
         [ProjectFormat.FormatVersionMember, ProjectFormat.MinimumReadableMember, ProjectFormat.EngineMember,
          ProjectFormat.NameMember, ProjectFormat.IdMember, ProjectFormat.StartupMapMember,
-         ProjectFormat.MapsMember, ProjectFormat.DisplayMember, ProjectFormat.DefaultBackendMember,
-         ProjectFormat.AllowedBackendsMember];
+         ProjectFormat.MapsMember, ProjectFormat.PacksMember, ProjectFormat.DisplayMember,
+         ProjectFormat.DefaultBackendMember, ProjectFormat.AllowedBackendsMember];
 
     public int FormatVersion { get; set; } = EngineInfo.ProjectFormatVersion;
 
@@ -85,6 +85,31 @@ public sealed class SpectraProject
     /// truth.
     /// </remarks>
     public List<string> Maps { get; } = [];
+
+    /// <summary>
+    /// Project-relative paths of the packs a boot mounts, in mount order:
+    /// LATER ENTRIES WIN.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Ordered, and the order is the mod and patch story for free.</b> The
+    /// mount stack resolves a path to the highest-priority source that serves
+    /// it, so appending a pack is how a patch replaces content a base pack
+    /// shipped. Written only when a project actually names one, because an
+    /// absent member reads as "this project has not been cooked" and an empty
+    /// array reads as "somebody deliberately asked for no packs" - and a file
+    /// that omits it must come back out byte-identical.
+    /// </para>
+    /// <para>
+    /// <b>Empty is not the same as "there is no pack".</b> A project cooked by
+    /// <c>scook</c> and never hand-edited names nothing here, and its pack is
+    /// still sitting in <c>cooked/</c> under the manifest's own name;
+    /// <see cref="ProjectPacks.Resolve"/> is the one place that convention is
+    /// spelled, so the cook and the boot cannot disagree about which file the
+    /// pack IS.
+    /// </para>
+    /// </remarks>
+    public List<string> Packs { get; } = [];
 
     /// <summary>Window defaults for a shipped game.</summary>
     public ProjectDisplay Display { get; set; } = new();

@@ -60,9 +60,12 @@ public sealed class CookSession
     /// <summary>The extension a cooked pack is written with.</summary>
     /// <remarks>
     /// Four-byte magic <c>SPAK</c>, extension <c>.spack</c>. They are deliberately
-    /// different lengths and neither is a typo for the other.
+    /// different lengths and neither is a typo for the other. Taken from
+    /// <see cref="PackFormat.FileExtension"/> rather than spelled again, because
+    /// the runtime resolves an uncooked project's pack by exactly this
+    /// convention and a second spelling would make the boot miss it silently.
     /// </remarks>
-    public const string PackExtension = ".spack";
+    public const string PackExtension = PackFormat.FileExtension;
 
     /// <summary>Creates a session over an opened project.</summary>
     public CookSession(ProjectLayout layout, CookSettings settings)

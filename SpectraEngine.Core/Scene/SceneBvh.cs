@@ -20,6 +20,10 @@ using SpectraEngine.Core.Graphics;
 // does it through the same headless renderer the scene suite uses — which
 // touches the internal GPU-resource bookkeeping every Renderer subclass does.
 [assembly: InternalsVisibleTo("SpectraEngine.Physics.Tests")]
+// The cook suite boots an asset manager out of a mounted pack, and does it
+// through the same headless renderer the scene suite uses - which overrides the
+// internal readback and GPU-resource bookkeeping every Renderer subclass does.
+[assembly: InternalsVisibleTo("Spectra.Kitchen.Tests")]
 
 namespace SpectraEngine.Core.Scene;
 

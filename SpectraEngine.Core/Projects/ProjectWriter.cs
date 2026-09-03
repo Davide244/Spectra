@@ -57,13 +57,34 @@ public static class ProjectWriter
         CanonicalJson.WriteRecordArray(writer, ProjectFormat.MapsMember, maps);
         CanonicalJson.Flush(writer, project.Unknown, 6);
 
+        // Omitted when empty, and that is the byte-identity rule rather than
+        // tidiness: a manifest that never mentioned packs must come back out
+        // exactly as it went in, so an engine that now BINDS the member must
+        // not start writing an empty array into every file that lacks one.
+        // Compact like 'allowedBackends' rather than one-per-line like 'maps',
+        // because this list is a game's own base and patch packs - short names,
+        // few of them - while a user's forty-mod list is the mount stack's
+        // input and never lives in the project file.
+        if (project.Packs.Count > 0)
+        {
+            writer.WritePropertyName(ProjectFormat.PacksMember);
+            writer.WriteRawValue(CanonicalJson.Compact(w =>
+            {
+                w.WriteStartArray();
+                foreach (string pack in project.Packs)
+                    w.WriteStringValue(pack);
+                w.WriteEndArray();
+            }));
+        }
+        CanonicalJson.Flush(writer, project.Unknown, 7);
+
         writer.WritePropertyName(ProjectFormat.DisplayMember);
         writer.WriteRawValue(CompactDisplay(project.Display));
-        CanonicalJson.Flush(writer, project.Unknown, 7);
+        CanonicalJson.Flush(writer, project.Unknown, 8);
 
         if (project.DefaultBackend is { } backend)
             writer.WriteString(ProjectFormat.DefaultBackendMember, ProjectFormat.ToWire(backend));
-        CanonicalJson.Flush(writer, project.Unknown, 8);
+        CanonicalJson.Flush(writer, project.Unknown, 9);
 
         // An empty list is omitted, because "no restriction" is the absence of
         // a restriction rather than an empty one.
@@ -78,7 +99,7 @@ public static class ProjectWriter
                 w.WriteEndArray();
             }));
         }
-        CanonicalJson.Flush(writer, project.Unknown, 9);
+        CanonicalJson.Flush(writer, project.Unknown, 10);
 
         writer.WriteEndObject();
     }

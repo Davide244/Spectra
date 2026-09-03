@@ -32,6 +32,18 @@ public static class PackFormat
     /// </remarks>
     public const uint Magic = 'S' | ('P' << 8) | ('A' << 16) | ((uint)'K' << 24);
 
+    /// <summary>
+    /// The extension a pack is written and mounted under, including the dot.
+    /// </summary>
+    /// <remarks>
+    /// Here rather than in the cooker, because a shipped game that RESOLVES a
+    /// pack path by convention and a cook that WRITES one are two spellings of
+    /// one string: a disagreement between them is not an error anywhere, the
+    /// boot simply finds no pack and falls back to loose files while every log
+    /// line reads healthy.
+    /// </remarks>
+    public const string FileExtension = ".spack";
+
     /// <summary>Bytes in the header, which lives at offset 0.</summary>
     public const int HeaderSize = 64;
 

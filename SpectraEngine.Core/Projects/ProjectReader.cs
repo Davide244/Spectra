@@ -88,25 +88,30 @@ public static class ProjectReader
                     anchor = 6;
                     break;
 
+                case ProjectFormat.PacksMember:
+                    ReadStringArray(ref reader, member, project.Packs);
+                    anchor = 7;
+                    break;
+
                 case ProjectFormat.DisplayMember:
                     ReadDisplay(ref reader, utf8, project.Display);
-                    anchor = 7;
+                    anchor = 8;
                     break;
 
                 case ProjectFormat.DefaultBackendMember:
                     project.DefaultBackend = ReadBackend(ref reader, member);
-                    anchor = 8;
+                    anchor = 9;
                     break;
 
                 case ProjectFormat.AllowedBackendsMember:
                     ReadBackendArray(ref reader, member, project.AllowedBackends);
-                    anchor = 9;
+                    anchor = 10;
                     break;
 
                 default:
-                    // 'packs', 'input', 'bootScript', 'entityDefinitions' and
-                    // 'settings' all land here: specified, and with nothing in
-                    // the tree to bind to yet.
+                    // 'input', 'bootScript', 'entityDefinitions' and 'settings'
+                    // all land here: specified, and with nothing in the tree to
+                    // bind to yet.
                     project.Unknown.Add(new PreservedMember(
                         member, CanonicalJson.CaptureValue(ref reader, utf8), anchor));
                     break;

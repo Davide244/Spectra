@@ -166,9 +166,31 @@ try
     }
 
     var sceneManager = new SceneManager(loggerFactory.CreateLogger<SceneManager>());
-    var assetManager = project is null
-        ? new AssetManager(loggerFactory.CreateLogger<AssetManager>())
-        : new AssetManager(loggerFactory.CreateLogger<AssetManager>(), project.AssetsPath);
+
+    // The cooked boot path. Disposed after Run returns, never before: a mounted
+    // pack hands out spans into a memory-mapped view, and unmapping one while
+    // the render thread still holds a texture upload over it is an access
+    // violation with no managed stack. Run blocks until that thread is joined.
+    using ProjectContentMount? packMount = options.BootFromPacks && project is not null
+        ? ProjectContentMount.Open(
+            loggerFactory.CreateLogger<ProjectContentMount>(),
+            project,
+            options.DevContentOverlay ? ContentMountProfile.Dev : ContentMountProfile.Shipped)
+        : null;
+
+    // The content ROOT stays the project's Assets folder even in a pure-pack
+    // run: it is the filesystem anchor a model import and an asset's stated
+    // SourcePath resolve against, and what the mount decides is where the BYTES
+    // of a texture, a material or a shader come from.
+    var assetManager = packMount is not null && project is not null
+        ? new AssetManager(
+            loggerFactory.CreateLogger<AssetManager>(),
+            project.AssetsPath,
+            packMount.Content,
+            packMount.HotReloadEnabled)
+        : project is null
+            ? new AssetManager(loggerFactory.CreateLogger<AssetManager>())
+            : new AssetManager(loggerFactory.CreateLogger<AssetManager>(), project.AssetsPath);
     var audioManager = new AudioManager(loggerFactory.CreateLogger<AudioManager>());
     var inputManager = new InputManager(loggerFactory.CreateLogger<InputManager>());
 

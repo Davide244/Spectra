@@ -9,4 +9,16 @@
     <ProjectReference Include="..\..\Spectra.Kitchen.CLI\Spectra.Kitchen.CLI.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The GPU-free renderer, shared rather than copied: the boot test needs an
+      AssetManager with a renderer attached, and a second stand-in would be a
+      second thing to keep in step with Renderer. Linked exactly as
+      SpectraEngine.Physics.Tests links it.
+    -->
+    <Compile Include="..\SpectraEngine.Bsp.Tests\FakeRenderer.cs" Link="FakeRenderer.cs" />
+    <Compile Include="..\SpectraEngine.Bsp.Tests\SpatialTestHelpers.cs" Link="SpatialTestHelpers.cs" />
+    <Compile Include="..\SpectraEngine.Bsp.Tests\CapturingLogger.cs" Link="CapturingLogger.cs" />
+  </ItemGroup>
+
 </Project>
