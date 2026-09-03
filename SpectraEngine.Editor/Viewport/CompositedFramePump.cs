@@ -1,9 +1,10 @@
-using Avalonia.Threading;
+﻿using Avalonia.Threading;
 using Microsoft.Extensions.Logging;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Editor.Viewport.Windows;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -54,6 +55,36 @@ internal interface ICompositedImageSource : IAsyncDisposable
 {
     /// <summary>Imports the shared texture named by an NT handle this process owns.</summary>
     ICompositedImage Import(nint ntHandle, int width, int height);
+}
+
+/// <summary>
+/// One window of consumer-side pacing: how many turns this side took, and where
+/// the time between them went.
+/// </summary>
+/// <remarks>
+/// <b>The split is the whole value.</b> A hand-over rate below the display's
+/// refresh is either the compositor being late with its turn or this side being
+/// late re-issuing, and those have opposite fixes: the first is the producer
+/// holding the key across work it does not need the key for, the second is
+/// where the resume is scheduled. One number for the pair says only that the
+/// picture is slow, which is what the frame rate already said.
+/// </remarks>
+/// <param name="HandOvers">Turns completed in the window.</param>
+/// <param name="Seconds">The window's wall time.</param>
+/// <param name="CompositorAverageMs">Issue to the update completing, averaged.</param>
+/// <param name="CompositorPeakMs">The worst of those.</param>
+/// <param name="ResumeAverageMs">The update completing to the loop running again, averaged.</param>
+/// <param name="ResumePeakMs">The worst of those.</param>
+internal readonly record struct HandOverPacing(
+    int HandOvers,
+    double Seconds,
+    float CompositorAverageMs,
+    float CompositorPeakMs,
+    float ResumeAverageMs,
+    float ResumePeakMs)
+{
+    /// <summary>Turns per second, which the producer's frame rate equals.</summary>
+    internal double PerSecond => Seconds > 0.0 ? HandOvers / Seconds : 0.0;
 }
 
 /// <summary>
@@ -172,6 +203,63 @@ internal sealed class CompositedFramePump
     /// </remarks>
     internal static readonly TimeSpan UpdateWatchdog = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// How many hand-overs this side keeps outstanding at once.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Two, because one is not enough to fill the compositor's queue and the
+    /// gap is a whole refresh.</b> An update is a server job the compositor
+    /// picks up on its own tick. With a single hand-over in flight the next one
+    /// is not issued until the previous has completed and the loop is back on
+    /// the UI thread, which lands microseconds after the tick that completed it
+    /// - and about half the time that is microseconds too late for the tick
+    /// after, so that hand-over waits a whole refresh. Measured in a real
+    /// composited session, on d3d11 AND d3d12 alike: 40.5 hand-overs a second
+    /// at 24.7 ms each against a 16.7 ms refresh, with the resume hop itself
+    /// costing 0.1 ms. With a second update already queued the compositor never
+    /// idles: 60.5 a second at 16.5 ms, same machine, same scene, one constant
+    /// apart.
+    /// </para>
+    /// <para>
+    /// <b>The engine's frame rate IS this number</b>, because the producer
+    /// cannot start a frame until this side hands the key back, which
+    /// <c>--pacing-probe</c> measured as an exact equality at every cadence. So
+    /// this constant is a rendering decision wearing a scheduling costume.
+    /// </para>
+    /// <para>
+    /// <b>What the second one costs, stated rather than discovered.</b> Both
+    /// jobs snapshot the SAME shared texture, so the queued one acquires a
+    /// consumer key the producer has not released yet and the compositor's
+    /// render thread blocks for one producer frame - about 0.4 ms of render on
+    /// this machine, and however long a hitch lasts when the producer hitches.
+    /// The only thing that removes that coupling is a second shared texture, so
+    /// the queued job always targets the one the producer has already finished.
+    /// Not built: measured, the block is a fraction of a millisecond against a
+    /// refresh, and a ring costs a second full-size shared target plus per-slot
+    /// generations through the renderer, the snapshot and this pump.
+    /// </para>
+    /// <para>
+    /// <b>Never more than two, because depth is bought WITH latency.</b>
+    /// Throughput is depth over latency, so the same measurement that shows 60
+    /// hand-overs a second shows each one taking 33.2 ms rather than 24.7: the
+    /// picture is a refresh further behind the scene than it was. End to end
+    /// that is about 4 ms worse (a frame's own age plus half the gap to the
+    /// next one: 36.9 ms at one deep, 41.3 at two) and it buys an even 16.7 ms
+    /// cadence in place of one that alternated 16.7 and 33.3, which is the
+    /// judder that reads as lag. A third would buy no throughput at all - the
+    /// queue is already full at two - and would cost another whole refresh of
+    /// it.
+    /// </para>
+    /// </remarks>
+    internal const int HandOverDepth = 2;
+
+    /// <summary>How much wall time one <see cref="HandOverPacing"/> window covers.</summary>
+    internal static readonly TimeSpan PacingWindow = TimeSpan.FromSeconds(2);
+
+    private static readonly long PacingWindowTicks =
+        (long)(PacingWindow.TotalSeconds * Stopwatch.Frequency);
+
     private readonly ICompositedImageSource _source;
     private readonly Action<int> _acknowledgeRelease;
     private readonly Action? _onFault;
@@ -193,9 +281,29 @@ internal sealed class CompositedFramePump
     private int _outstanding;
     private bool _sourceReleased;
 
-    // When the outstanding hand-over started, or null when there is none. See
-    // CheckForStall.
-    private long? _updateStartedAt;
+    // When each outstanding hand-over was issued, oldest first. A QUEUE rather
+    // than one slot because HandOverDepth is greater than one: with a single
+    // field the second issue overwrites the first, so the watchdog measures the
+    // wrong hand-over and the pacing split charges one hand-over's wait to
+    // another. Server jobs run in order on the compositor's own thread, so
+    // these complete in the order they were issued.
+    private readonly Queue<long> _outstandingIssues = new();
+
+    // ---- Consumer-side pacing ----------------------------------------------
+    //
+    // The producer times its own acquire (Renderer.RecordSharedAcquireWait) and
+    // that number says only THAT it waited, never why. This is the other half:
+    // one hand-over splits into the compositor's own latency (issue to the
+    // update completing, which carries its tick, its copy and its own blocked
+    // acquire) and this side's resume hop (the completion to the loop running
+    // again on the UI thread). A hand-over rate below the display's is one or
+    // the other, and no instrument in the engine can tell them apart.
+    private long _pacingWindowStart;
+    private int _pacingSamples;
+    private long _compositorTicks;
+    private long _compositorPeakTicks;
+    private long _resumeTicks;
+    private long _resumePeakTicks;
 
     /// <param name="onFault">
     /// Raised once, on the UI thread, when the picture stops arriving and is not
@@ -252,6 +360,11 @@ internal sealed class CompositedFramePump
 
     /// <summary>Whether an update loop is running.</summary>
     internal bool IsPumping => _looping;
+
+    /// <summary>
+    /// The last completed pacing window, or default before one has closed.
+    /// </summary>
+    internal HandOverPacing LastPacing { get; private set; }
 
     /// <summary>
     /// Whether the pump gave up on a hand-over that never completed. See
@@ -401,7 +514,33 @@ internal sealed class CompositedFramePump
             return;
 
         _looping = true;
-        IssueHandOver(live);
+        TopUp(live);
+    }
+
+    /// <summary>
+    /// Issues hand-overs until <see cref="HandOverDepth"/> are outstanding, and
+    /// ends the loop when none are and none should be. <b>UI thread only.</b>
+    /// </summary>
+    /// <remarks>
+    /// <b>The stand-down check is here rather than inside the issue</b>, so one
+    /// place decides whether the loop goes on. It ends the loop only when
+    /// nothing is still in flight: a generation superseded while its second
+    /// hand-over was outstanding still owes that hand-over a completion, and
+    /// tearing the loop down around it would leave the retirement waiting for a
+    /// settle that never comes.
+    /// </remarks>
+    private void TopUp(Import import)
+    {
+        while (import.UpdatesInFlight < HandOverDepth)
+        {
+            if (_stopped || _stalled || !_visible || !ReferenceEquals(_live, import))
+            {
+                if (import.UpdatesInFlight == 0) EndLoop();
+                return;
+            }
+
+            IssueHandOver(import);
+        }
     }
 
     /// <summary>
@@ -427,14 +566,8 @@ internal sealed class CompositedFramePump
     /// </remarks>
     private void IssueHandOver(Import import)
     {
-        if (_stopped || _stalled || !_visible || !ReferenceEquals(_live, import))
-        {
-            EndLoop();
-            return;
-        }
-
         import.UpdatesInFlight++;
-        _updateStartedAt = Environment.TickCount64;
+        _outstandingIssues.Enqueue(Stopwatch.GetTimestamp());
 
         Task handOver;
         try
@@ -445,13 +578,22 @@ internal sealed class CompositedFramePump
         catch (Exception ex)
         {
             // Threw before a task existed, so there is nothing to continue from
-            // and this is already the UI thread.
-            CompleteHandOver(import, ExceptionDispatchInfo.Capture(ex));
+            // and this is already the UI thread. No completion instant either,
+            // which is what the null says.
+            CompleteHandOver(import, ExceptionDispatchInfo.Capture(ex), completedAt: null);
             return;
         }
 
+        // Stamped HERE, on whichever thread completed the update, because the
+        // whole point is to separate the wait before this instant from the hop
+        // after it. Taken inside the continuation and passed by value, so the
+        // post's own delay cannot be charged to the compositor.
         handOver.ContinueWith(
-            finished => _resumeOnUiThread(() => CompleteHandOver(import, Failure(finished))),
+            finished =>
+            {
+                long completedAt = Stopwatch.GetTimestamp();
+                _resumeOnUiThread(() => CompleteHandOver(import, Failure(finished), completedAt));
+            },
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
@@ -463,10 +605,11 @@ internal sealed class CompositedFramePump
     /// <see cref="_resumeOnUiThread"/> or from <see cref="IssueHandOver"/>
     /// itself, which is UI-thread only in turn.
     /// </summary>
-    private void CompleteHandOver(Import import, ExceptionDispatchInfo? failure)
+    private void CompleteHandOver(Import import, ExceptionDispatchInfo? failure, long? completedAt)
     {
-        _updateStartedAt = null;
+        long issuedAt = _outstandingIssues.Dequeue();
         import.UpdatesInFlight--;
+        if (completedAt is { } finishedAt) RecordPacing(issuedAt, finishedAt);
         SettleIfRetired(import);
 
         if (failure is not null)
@@ -479,13 +622,66 @@ internal sealed class CompositedFramePump
             return;
         }
 
-        IssueHandOver(import);
+        TopUp(import);
     }
 
     private static ExceptionDispatchInfo? Failure(Task finished) =>
         finished.Exception is { } aggregate
             ? ExceptionDispatchInfo.Capture(aggregate.InnerException ?? aggregate)
             : null;
+
+    /// <summary>
+    /// Accounts for one completed hand-over and reports the window when it is
+    /// full. <b>UI thread only</b>, like everything else the loop touches.
+    /// </summary>
+    /// <remarks>
+    /// At Debug rather than Information: this is one line every
+    /// <see cref="PacingWindow"/> for as long as a composited session is open,
+    /// which at Information would be a standing wall in a log people read for
+    /// one-off events. The editor's minimum level is Debug, so it is in the
+    /// file either way.
+    /// </remarks>
+    private void RecordPacing(long issuedAt, long completedAt)
+    {
+        long now = Stopwatch.GetTimestamp();
+        if (_pacingWindowStart == 0L) _pacingWindowStart = issuedAt;
+
+        long compositor = Math.Max(0L, completedAt - issuedAt);
+        long resume = Math.Max(0L, now - completedAt);
+
+        _pacingSamples++;
+        _compositorTicks += compositor;
+        _resumeTicks += resume;
+        if (compositor > _compositorPeakTicks) _compositorPeakTicks = compositor;
+        if (resume > _resumePeakTicks) _resumePeakTicks = resume;
+
+        long windowTicks = now - _pacingWindowStart;
+        if (windowTicks < PacingWindowTicks) return;
+
+        double toMs = 1000.0 / Stopwatch.Frequency;
+        var pacing = new HandOverPacing(
+            _pacingSamples,
+            windowTicks / (double)Stopwatch.Frequency,
+            (float)(_compositorTicks * toMs / _pacingSamples),
+            (float)(_compositorPeakTicks * toMs),
+            (float)(_resumeTicks * toMs / _pacingSamples),
+            (float)(_resumePeakTicks * toMs));
+
+        LastPacing = pacing;
+
+        _logger.LogDebug(
+            "Composited pacing: {Rate:0.0} hand-overs/s; compositor {CompositorAvg:0.0}/{CompositorPeak:0.0} ms, " +
+            "resume {ResumeAvg:0.0}/{ResumePeak:0.0} ms (avg/peak).",
+            pacing.PerSecond, pacing.CompositorAverageMs, pacing.CompositorPeakMs,
+            pacing.ResumeAverageMs, pacing.ResumePeakMs);
+
+        _pacingWindowStart = now;
+        _pacingSamples = 0;
+        _compositorTicks = 0L;
+        _compositorPeakTicks = 0L;
+        _resumeTicks = 0L;
+        _resumePeakTicks = 0L;
+    }
 
     private void EndLoop()
     {
@@ -522,10 +718,11 @@ internal sealed class CompositedFramePump
     /// </remarks>
     internal void CheckForStall()
     {
-        if (_stalled || _updateStartedAt is not { } started)
+        if (_stalled || !_outstandingIssues.TryPeek(out long oldest))
             return;
 
-        if (Environment.TickCount64 - started < (long)UpdateWatchdog.TotalMilliseconds)
+        double waitedSeconds = (Stopwatch.GetTimestamp() - oldest) / (double)Stopwatch.Frequency;
+        if (waitedSeconds < UpdateWatchdog.TotalSeconds)
             return;
 
         _stalled = true;

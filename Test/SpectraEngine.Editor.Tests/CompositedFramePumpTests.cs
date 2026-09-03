@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging.Abstractions;
+﻿using Microsoft.Extensions.Logging.Abstractions;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Editor.Viewport;
 using System;
@@ -43,7 +43,14 @@ public sealed class CompositedFramePumpTests
         // which here is the test's. That is what turns an async pump into
         // something a test can step through.
         private readonly TaskCompletionSource _import = new();
-        private TaskCompletionSource? _update;
+
+        // A QUEUE, because CompositedFramePump.HandOverDepth keeps more than
+        // one hand-over outstanding. One slot silently ORPHANED the earlier
+        // task - the pump then waited forever on a completion no test could
+        // give it, while every assertion about counts still read plausibly.
+        // Completed oldest-first, which is how the compositor's own server jobs
+        // run.
+        private readonly Queue<TaskCompletionSource> _updates = new();
 
         internal int Updates { get; private set; }
 
@@ -63,7 +70,10 @@ public sealed class CompositedFramePumpTests
 
         internal uint LastReleaseKey { get; private set; }
 
-        internal bool UpdateInFlight => _update is not null;
+        internal bool UpdateInFlight => _updates.Count > 0;
+
+        /// <summary>How many hand-overs this image has been given and not finished.</summary>
+        internal int UpdatesInFlight => _updates.Count;
 
         public Task ImportCompleted => _import.Task;
 
@@ -73,8 +83,9 @@ public sealed class CompositedFramePumpTests
             UpdateSites.Add(InsideResume?.Invoke() ?? true);
             LastAcquireKey = acquireKey;
             LastReleaseKey = releaseKey;
-            _update = new TaskCompletionSource();
-            return _update.Task;
+            var update = new TaskCompletionSource();
+            _updates.Enqueue(update);
+            return update.Task;
         }
 
         public ValueTask DisposeAsync()
@@ -89,16 +100,23 @@ public sealed class CompositedFramePumpTests
 
         internal void CompleteUpdate()
         {
-            TaskCompletionSource? update = _update;
-            _update = null;
-            update?.TrySetResult();
+            if (_updates.TryDequeue(out TaskCompletionSource? update))
+                update.TrySetResult();
+        }
+
+        /// <summary>Finishes every outstanding hand-over, oldest first.</summary>
+        internal void CompleteAllUpdates()
+        {
+            // Bounded rather than while-non-empty: completing one re-issues
+            // another inline, so draining to empty never terminates.
+            for (int outstanding = _updates.Count; outstanding > 0; outstanding--)
+                CompleteUpdate();
         }
 
         internal void FailUpdate()
         {
-            TaskCompletionSource? update = _update;
-            _update = null;
-            update?.TrySetException(new InvalidOperationException("hand-over refused"));
+            if (_updates.TryDequeue(out TaskCompletionSource? update))
+                update.TrySetException(new InvalidOperationException("hand-over refused"));
         }
     }
 
@@ -292,11 +310,57 @@ public sealed class CompositedFramePumpTests
         var rig = new Rig();
         FakeImage image = rig.Adopt(generation: 1);
 
-        image.Updates.ShouldBe(1);
+        // Adopting fills the queue rather than issuing one: see HandOverDepth.
+        image.Updates.ShouldBe(CompositedFramePump.HandOverDepth);
         image.CompleteUpdate();
-        image.Updates.ShouldBe(2);
+        image.Updates.ShouldBe(CompositedFramePump.HandOverDepth + 1);
         image.CompleteUpdate();
-        image.Updates.ShouldBe(3);
+        image.Updates.ShouldBe(CompositedFramePump.HandOverDepth + 2);
+    }
+
+    /// <summary>
+    /// A finished hand-over is replaced at once, so one is always already
+    /// queued at the compositor.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is the whole of the composited viewport's frame rate.</b> An
+    /// update is a server job the compositor picks up on its own tick; with
+    /// only one in flight the next is not issued until the previous has
+    /// completed and the loop is back on the UI thread, which about half the
+    /// time is too late for the tick after and waits a whole refresh. Measured
+    /// in a real session, d3d11 and d3d12 alike: 40.5 hand-overs a second at
+    /// one deep, 60.5 at two, one constant apart.
+    /// </para>
+    /// <para>
+    /// <b>The count is asserted as a NUMBER and not only against the constant
+    /// itself</b>, which is the difference between this test biting and this
+    /// test agreeing with whatever the constant currently says. Written the
+    /// symbolic way it passed at a depth of one, where the thing it is named
+    /// for is exactly what has stopped being true. Two tests beside it do
+    /// notice a depth of one, but they notice it as a retirement that settled
+    /// one hand-over early; nothing but this says the queue has to be deeper
+    /// than the loop.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void The_queue_is_kept_full_so_the_compositor_never_idles()
+    {
+        CompositedFramePump.HandOverDepth.ShouldBeGreaterThan(1,
+            "one hand-over in flight is one hand-over the compositor is waiting for, " +
+            "and it idles a whole refresh about half the time");
+
+        var rig = new Rig();
+        FakeImage image = rig.Adopt(generation: 1);
+
+        image.UpdatesInFlight.ShouldBe(CompositedFramePump.HandOverDepth);
+
+        for (int lap = 0; lap < 4; lap++)
+        {
+            image.CompleteUpdate();
+            image.UpdatesInFlight.ShouldBe(CompositedFramePump.HandOverDepth,
+                "a completed hand-over is replaced inside the same resume");
+        }
     }
 
     [Fact]
@@ -306,7 +370,7 @@ public sealed class CompositedFramePumpTests
         FakeImage first = rig.Adopt(generation: 1);
 
         rig.Adopt(generation: 2);
-        first.CompleteUpdate();
+        first.CompleteAllUpdates();
 
         first.Disposed.ShouldBeTrue();
         rig.Pump.LiveGeneration.ShouldBe(2);
@@ -335,7 +399,13 @@ public sealed class CompositedFramePumpTests
         rig.Pump.RetiredCount.ShouldBe(1);
         rig.Acknowledged.ShouldBeEmpty();
 
+        // One of the two, so the claim is tested at the boundary it is about:
+        // a retired import owes a completion for every hand-over it was given,
+        // and settling on the first would free it under the second.
         first.CompleteUpdate();
+        first.Disposed.ShouldBeFalse();
+
+        first.CompleteAllUpdates();
 
         first.Disposed.ShouldBeTrue();
         rig.Pump.RetiredCount.ShouldBe(0);
@@ -354,11 +424,11 @@ public sealed class CompositedFramePumpTests
         FakeImage second = rig.Adopt(generation: 2);
         second.Updates.ShouldBe(0);
 
-        first.CompleteUpdate();
+        first.CompleteAllUpdates();
 
-        second.Updates.ShouldBe(1);
+        second.Updates.ShouldBe(CompositedFramePump.HandOverDepth);
         second.CompleteUpdate();
-        second.Updates.ShouldBe(2);
+        second.Updates.ShouldBe(CompositedFramePump.HandOverDepth + 1);
     }
 
     [Fact]
@@ -372,7 +442,7 @@ public sealed class CompositedFramePumpTests
         // with 1" and then, on the next retirement, "done with 3" frees it -
         // which is correct, because it was never imported.
         rig.Adopt(generation: 3);
-        first.CompleteUpdate();
+        first.CompleteAllUpdates();
 
         rig.Acknowledged.ShouldBe([1]);
         rig.Source.Images.Count.ShouldBe(2);
@@ -430,15 +500,16 @@ public sealed class CompositedFramePumpTests
         int taken = image.Updates;
         rig.Pump.SetVisible(false);
 
-        // The last hand-over completes; nothing schedules another. A minimised
-        // window would otherwise copy a full-screen texture per vsync for
-        // something nobody can see.
-        image.CompleteUpdate();
+        // Every outstanding hand-over completes; nothing schedules another. A
+        // minimised window would otherwise copy a full-screen texture per
+        // vsync for something nobody can see. All of them, because the loop
+        // ends when the last one lands rather than when the first does.
+        image.CompleteAllUpdates();
         image.Updates.ShouldBe(taken);
         rig.Pump.IsPumping.ShouldBeFalse();
 
         rig.Pump.SetVisible(true);
-        image.Updates.ShouldBe(taken + 1);
+        image.Updates.ShouldBe(taken + CompositedFramePump.HandOverDepth);
     }
 
     [Fact]
@@ -448,7 +519,7 @@ public sealed class CompositedFramePumpTests
         FakeImage image = rig.Adopt(generation: 3);
 
         rig.Pump.Stop();
-        image.CompleteUpdate();
+        image.CompleteAllUpdates();
 
         image.Disposed.ShouldBeTrue();
         rig.Acknowledged.ShouldBe([3]);
@@ -473,7 +544,13 @@ public sealed class CompositedFramePumpTests
         // crash.
         image.Disposed.ShouldBeFalse();
 
+        // Every one of them: a stop that waited for the first hand-over and
+        // freed the image under the second would be the same crash, one queue
+        // slot along.
         image.CompleteUpdate();
+        image.Disposed.ShouldBeFalse();
+
+        image.CompleteAllUpdates();
         image.Disposed.ShouldBeTrue();
         rig.Acknowledged.ShouldBe([1]);
     }
@@ -504,7 +581,7 @@ public sealed class CompositedFramePumpTests
         rig.Source.Disposed.ShouldBeFalse();
         rig.Pump.SourceReleased.ShouldBeFalse();
 
-        image.CompleteUpdate();
+        image.CompleteAllUpdates();
 
         rig.Source.Disposed.ShouldBeTrue();
         rig.Pump.SourceReleased.ShouldBeTrue();
@@ -534,7 +611,7 @@ public sealed class CompositedFramePumpTests
         FakeImage first = rig.Adopt(generation: 1);
 
         rig.Observe(generation: 2);
-        first.CompleteUpdate();
+        first.CompleteAllUpdates();
 
         first.Disposed.ShouldBeTrue();
         rig.Source.Disposed.ShouldBeFalse();
@@ -570,7 +647,7 @@ public sealed class CompositedFramePumpTests
         second.Disposed.ShouldBeTrue();
         rig.Source.Disposed.ShouldBeFalse();
 
-        first.CompleteUpdate();
+        first.CompleteAllUpdates();
 
         first.Disposed.ShouldBeTrue();
         rig.Source.Disposed.ShouldBeTrue();
@@ -593,17 +670,17 @@ public sealed class CompositedFramePumpTests
     {
         var rig = new Rig { HoldResumes = true };
         FakeImage image = rig.Adopt(generation: 1);
-        image.Updates.ShouldBe(1);
+        image.Updates.ShouldBe(CompositedFramePump.HandOverDepth);
 
         // Completed on the compositor's render thread. Issuing the next one
         // from there reaches Compositor.PostServerJob, which verifies UI-thread
         // access.
         image.CompleteUpdate();
-        image.Updates.ShouldBe(1);
+        image.Updates.ShouldBe(CompositedFramePump.HandOverDepth);
         rig.PendingResumes.ShouldBe(1);
 
         rig.ReleaseResumes();
-        image.Updates.ShouldBe(2);
+        image.Updates.ShouldBe(CompositedFramePump.HandOverDepth + 1);
     }
 
     [Fact]
@@ -616,7 +693,7 @@ public sealed class CompositedFramePumpTests
         // The bracket is over, so the dispose is safe - and it is UI-thread
         // work, and so is the acknowledgement that frees the producer's
         // resource. Neither may happen from the compositor's thread.
-        first.CompleteUpdate();
+        first.CompleteAllUpdates();
         first.Disposed.ShouldBeFalse();
         rig.Acknowledged.ShouldBeEmpty();
 
@@ -688,10 +765,11 @@ public sealed class CompositedFramePumpTests
 
         image.Updates.ShouldBeGreaterThan(1, "the loop must have re-issued");
 
-        // The first is issued by StartLoop, which the shell only ever calls on
-        // the UI thread; every later one is the loop re-issuing itself.
+        // The first HandOverDepth are issued by StartLoop, which the shell only
+        // ever calls on the UI thread; every later one is the loop re-issuing
+        // itself.
         image.UpdateSites.Count.ShouldBe(image.Updates);
-        image.UpdateSites.Skip(1).ShouldAllBe(inside => inside,
+        image.UpdateSites.Skip(CompositedFramePump.HandOverDepth).ShouldAllBe(inside => inside,
             "a hand-over issued after the post returned is issued off the UI thread, " +
             "where UpdateAsync verifies access and throws");
     }
