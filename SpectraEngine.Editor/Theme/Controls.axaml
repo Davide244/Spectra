@@ -597,6 +597,28 @@
   <Style Selector="Button.chip:pressed /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{StaticResource SpectraBgControl}" />
   </Style>
+  <!-- A chip that OPENS something wears a caret; a chip that toggles does
+       not. The Grid chip is the only flyout-bearing chip in the shell and it
+       was pixel-identical to the three that toggle on click, so there was no
+       way to tell a menu from a switch without pressing it. Explicitly sized
+       and RenderTransform="none", because this is a one-off affordance rather
+       than a member of the 16x16 icon set. -->
+  <Style Selector="Button.chip Path.chipcaret">
+    <Setter Property="Width" Value="8" />
+    <Setter Property="Height" Value="6" />
+    <Setter Property="Stretch" Value="None" />
+    <Setter Property="RenderTransform" Value="none" />
+    <Setter Property="Stroke" Value="{StaticResource SpectraTextMuted}" />
+    <Setter Property="StrokeThickness" Value="1.2" />
+    <Setter Property="StrokeLineCap" Value="Round" />
+    <Setter Property="StrokeJoin" Value="Round" />
+    <Setter Property="Fill" Value="Transparent" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Margin" Value="1,1,0,0" />
+  </Style>
+  <Style Selector="Button.chip:pointerover Path.chipcaret">
+    <Setter Property="Stroke" Value="{StaticResource SpectraTextBody}" />
+  </Style>
   <Style Selector="Button.chip TextBlock.chipsubject">
     <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
     <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />

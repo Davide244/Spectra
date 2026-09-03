@@ -206,7 +206,7 @@ public partial class MainWindow : Window
         // after its layout has been built is a shape nothing here has tested,
         // and the failure mode of guessing wrong is a blank pane with a running
         // engine behind it.
-        ViewportTool.Content = _viewportDockHost;
+        SetToolContent(ViewportTool, _viewportDockHost);
         _viewportPaneIndex = EditorView.Children.IndexOf(ViewportPane);
 
         // The resting layout, written rather than assumed: XAML sets CanPin on
@@ -223,7 +223,6 @@ public partial class MainWindow : Window
         // bindings would go quietly null.
         _sceneView = new ScenePanel
         {
-            DataContext = _shell,
             Logger = _loggerFactory.CreateLogger<ScenePanel>(),
         };
         _sceneView.SelectionRequested += ids => _session?.SelectMany(ids);
@@ -231,13 +230,13 @@ public partial class MainWindow : Window
         _sceneView.CommandRequested += command => _session?.Post(command);
         _sceneView.FrameRequested += () => _session?.Post(EditorCameraCommand.FrameSelection);
         _sceneView.ReparentRequested += (ids, parentId, index) => _session?.Reparent(ids, parentId, index);
-        SceneTool.Content = _sceneView;
+        SetToolContent(SceneTool, _sceneView);
 
-        _propertiesView = new PropertiesPanel { DataContext = _shell };
+        _propertiesView = new PropertiesPanel();
         _propertiesView.EscapePressed += () => _viewport?.FocusEngine();
-        PropertiesTool.Content = _propertiesView;
+        SetToolContent(PropertiesTool, _propertiesView);
 
-        _mapsView = new MapsPanel { DataContext = _shell };
+        _mapsView = new MapsPanel();
         _mapsView.MapClicked += row => _ = OpenProjectMapAsync(row);
         _mapsView.SetStartupRequested += SetStartupMap;
         _mapsView.RevealRequested += row =>
@@ -245,7 +244,7 @@ public partial class MainWindow : Window
             if (_document.Project is { } project)
                 RevealInExplorer(project.Resolve(row.RelativePath));
         };
-        MapsTool.Content = _mapsView;
+        SetToolContent(MapsTool, _mapsView);
 
         // ─── The bottom region ────────────────────────────
         //
@@ -255,16 +254,16 @@ public partial class MainWindow : Window
 
         _shell.Content = new ContentBrowserModel(_loggerFactory.CreateLogger<ContentBrowserModel>());
 
-        _contentView = new ContentPanel { DataContext = _shell };
+        _contentView = new ContentPanel();
         _contentView.EntryActivated += OnContentActivated;
-        ContentTool.Content = _contentView;
+        SetToolContent(ContentTool, _contentView);
 
-        _outputView = new OutputPanel { DataContext = _shell };
-        OutputTool.Content = _outputView;
+        _outputView = new OutputPanel();
+        SetToolContent(OutputTool, _outputView);
 
-        _consoleView = new ConsolePanel { DataContext = _shell };
+        _consoleView = new ConsolePanel();
         _consoleView.CommandSubmitted += OnConsoleCommand;
-        ConsoleTool.Content = _consoleView;
+        SetToolContent(ConsoleTool, _consoleView);
 
         // Every entry resolves to a verb a button or a key chord also sends,
         // which is what keeps the console from being a second path into the
@@ -876,6 +875,32 @@ public partial class MainWindow : Window
     /// because the constraint was never about the viewport's own header.
     /// </para>
     /// </remarks>
+
+    /// <summary>
+    /// Hands a dock tool its live content control, and its DataContext with it.
+    /// </summary>
+    /// <remarks>
+    /// <b>One call sets both, because setting only one is not an error anywhere
+    /// and the symptom is a pane of blank controls.</b> Dock supplies a tool's
+    /// content presenter with its own DataContext (the <c>Tool</c>), and a
+    /// floated tool leaves this window's logical tree entirely, so a content
+    /// control that relies on inheritance resolves every binding against an
+    /// object carrying none of the properties it names. Avalonia reports
+    /// nothing for that: a failed binding leaves the target property at its own
+    /// default, so <c>Text</c> goes empty, an <c>ItemsSource</c> goes empty, and
+    /// <b><c>IsVisible</c> stays TRUE</b>, which is how the viewport header
+    /// strip came to show every debug overlay chip at once while every value
+    /// beside them was blank. Six panels set the DataContext inline and the
+    /// seventh host, added when the viewport became dockable, did not; the two
+    /// assignments live in one place now so a future tool cannot have one
+    /// without the other.
+    /// </remarks>
+    private void SetToolContent(Dock.Model.Avalonia.Controls.Tool tool, Control content)
+    {
+        content.DataContext = _shell;
+        tool.Content = content;
+    }
+
     private void ApplyPlacement(ViewportPlacement placement)
     {
         ViewportPlacementRules rules = ViewportLayout.RulesFor(placement);

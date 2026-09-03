@@ -893,6 +893,7 @@
                   <StackPanel Orientation="Horizontal" Spacing="6">
                     <TextBlock Classes="chipsubject" Text="Grid" />
                     <TextBlock Classes="chipvalue" Text="{Binding GridModeLabel}" />
+                    <Path Classes="chipcaret" Data="{StaticResource CaretDown}" />
                   </StackPanel>
                 </Button>
                 <Button Classes="chip" Height="22" Click="OnToggleNavigationClicked"

@@ -112,6 +112,12 @@
        so one geometry covers both states and they cannot drift in weight. -->
   <StreamGeometry x:Key="IconChevronRight">M6,3.5 L10.5,8 L6,12.5</StreamGeometry>
 
+  <!-- The one glyph deliberately NOT on the shared 16x16 grid: it is a
+       menu-affordance caret inside a 22px chip, not an icon, so it is
+       authored small and drawn with RenderTransform="none" per the one-off
+       rule rather than being renormalised and scaled with the icon set. -->
+  <StreamGeometry x:Key="CaretDown">M1,1.5 L4,4.5 L7,1.5</StreamGeometry>
+
   <!-- The content browser's pair. Up is a chevron plus a bar, not a bare arrow:
        a bare arrow in a path row reads as "back", and back and up are different
        journeys through a folder tree. Refresh is a three-quarter ring with one
