@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Editor.Viewport;
+using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace SpectraEngine.Editor.Tests;
@@ -80,6 +82,13 @@ public sealed class CompositedFramePumpTests
             _update = null;
             update?.TrySetResult();
         }
+
+        internal void FailUpdate()
+        {
+            TaskCompletionSource? update = _update;
+            _update = null;
+            update?.TrySetException(new InvalidOperationException("hand-over refused"));
+        }
     }
 
     private sealed class FakeSource : ICompositedImageSource
@@ -119,6 +128,34 @@ public sealed class CompositedFramePumpTests
 
         internal List<nint> Closed { get; } = [];
 
+        /// <summary>How many times the loop asked to be resumed on the UI thread.</summary>
+        internal int Resumes { get; private set; }
+
+        /// <summary>How many faults the pump raised.</summary>
+        internal int Faults { get; private set; }
+
+        /// <summary>
+        /// Holds every resume instead of running it, so a test can stand where
+        /// the compositor's render thread stands: the hand-over is finished and
+        /// the loop has not been let back onto the UI thread yet.
+        /// </summary>
+        internal bool HoldResumes { get; init; }
+
+        /// <summary>How many held resumes are waiting.</summary>
+        internal int PendingResumes => _held.Count;
+
+        /// <summary>Lets the loop back onto the UI thread.</summary>
+        internal void ReleaseResumes()
+        {
+            // Draining rather than a foreach: a released resume runs the rest
+            // of the loop, which issues the next hand-over and can queue
+            // another one behind it.
+            while (_held.Count > 0)
+                _held.Dequeue()();
+        }
+
+        private readonly Queue<Action> _held = new();
+
         internal CompositedFramePump Pump { get; }
 
         internal Rig()
@@ -132,7 +169,21 @@ public sealed class CompositedFramePumpTests
                 Acknowledged.Add,
                 NullLogger.Instance,
                 handle => handle + 0x10000,
-                Closed.Add);
+                Closed.Add,
+                onFault: () => Faults++,
+
+                // Inline, which is what keeps the whole self-rescheduling loop
+                // steppable: the real one posts to Avalonia's dispatcher at the
+                // top of its queue, and a test with no dispatcher running would
+                // post into a queue nothing ever drains.
+                resumeOnUiThread: action =>
+                {
+                    Resumes++;
+                    if (HoldResumes)
+                        _held.Enqueue(action);
+                    else
+                        action();
+                });
         }
 
         internal void Observe(int generation, nint handle = ProducerHandle) =>
@@ -491,5 +542,84 @@ public sealed class CompositedFramePumpTests
         first.Disposed.ShouldBeTrue();
         rig.Source.Disposed.ShouldBeTrue();
         rig.Acknowledged.ShouldBe([2, 1]);
+    }
+
+    // --- Where the loop resumes ----------------------------------------------
+    //
+    // A hand-over's task is completed by the compositor on ITS OWN render
+    // thread, so everything after the await is on the wrong thread until the
+    // loop is posted back. Three things depend on that post: the next
+    // UpdateAsync (Avalonia verifies UI-thread access and throws otherwise),
+    // the retirement bookkeeping (UI-thread state), and the fault report (a
+    // shell handler). None of the three announces the mistake - a compositor
+    // call from the wrong thread is an exception in a task nobody awaits, and
+    // the other two are a data race - so each has a test.
+
+    [Fact]
+    public void The_next_hand_over_waits_for_the_loop_to_be_resumed_on_the_ui_thread()
+    {
+        var rig = new Rig { HoldResumes = true };
+        FakeImage image = rig.Adopt(generation: 1);
+        image.Updates.ShouldBe(1);
+
+        // Completed on the compositor's render thread. Issuing the next one
+        // from there reaches Compositor.PostServerJob, which verifies UI-thread
+        // access.
+        image.CompleteUpdate();
+        image.Updates.ShouldBe(1);
+        rig.PendingResumes.ShouldBe(1);
+
+        rig.ReleaseResumes();
+        image.Updates.ShouldBe(2);
+    }
+
+    [Fact]
+    public void A_retired_import_is_not_disposed_until_the_loop_is_back_on_the_ui_thread()
+    {
+        var rig = new Rig { HoldResumes = true };
+        FakeImage first = rig.Adopt(generation: 1);
+        rig.Observe(generation: 2);
+
+        // The bracket is over, so the dispose is safe - and it is UI-thread
+        // work, and so is the acknowledgement that frees the producer's
+        // resource. Neither may happen from the compositor's thread.
+        first.CompleteUpdate();
+        first.Disposed.ShouldBeFalse();
+        rig.Acknowledged.ShouldBeEmpty();
+
+        rig.ReleaseResumes();
+        first.Disposed.ShouldBeTrue();
+        rig.Acknowledged.ShouldBe([1]);
+    }
+
+    [Fact]
+    public void A_hand_over_that_throws_reports_its_fault_from_the_ui_thread()
+    {
+        var rig = new Rig { HoldResumes = true };
+        FakeImage image = rig.Adopt(generation: 1);
+
+        image.FailUpdate();
+        rig.Faults.ShouldBe(0);
+        rig.Pump.IsStalled.ShouldBeFalse();
+
+        rig.ReleaseResumes();
+        rig.Faults.ShouldBe(1);
+        rig.Pump.IsStalled.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Every_hand_over_costs_exactly_one_resume()
+    {
+        var rig = new Rig();
+        FakeImage image = rig.Adopt(generation: 1);
+
+        // One per completed hand-over and not one per frame: the post is the
+        // loop's own, so a second one per turn would be a second job in the
+        // dispatcher for nothing.
+        rig.Resumes.ShouldBe(0);
+        image.CompleteUpdate();
+        rig.Resumes.ShouldBe(1);
+        image.CompleteUpdate();
+        rig.Resumes.ShouldBe(2);
     }
 }

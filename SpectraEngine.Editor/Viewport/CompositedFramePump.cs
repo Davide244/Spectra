@@ -1,8 +1,10 @@
+using Avalonia.Threading;
 using Microsoft.Extensions.Logging;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Editor.Viewport.Windows;
 using System;
 using System.Collections.Generic;
+using System.Runtime.ExceptionServices;
 using System.Threading.Tasks;
 
 namespace SpectraEngine.Editor.Viewport;
@@ -70,6 +72,40 @@ internal interface ICompositedImageSource : IAsyncDisposable
 /// safe on the producer's side.
 /// </para>
 /// <para>
+/// <b>What that clock COSTS is that this loop sets the engine's frame rate, so
+/// where its resume is scheduled is a rendering decision.</b> Measured with
+/// <c>--pacing-probe</c> against a real second device: the engine's frame rate
+/// equals this side's turn rate exactly, at every cadence - 61 fps at a turn
+/// every 16.7 ms, 40 at every 25 ms, 30 at every 33 ms - while the producer's
+/// own ceiling is about 2,600. The whole difference is the producer sitting in
+/// its acquire, which is why one late turn per frame is one dropped engine
+/// frame and not a fraction of one.
+/// </para>
+/// <para>
+/// <b>So the hand-over is re-issued at <see cref="DispatcherPriority.Send"/>,
+/// and an ordinary <c>await</c> is what this fixes.</b> Avalonia completes the
+/// update's task from the compositor's own render thread with
+/// <c>RunContinuationsAsynchronously</c>, so a bare <c>await</c> hands the
+/// resume to <c>AvaloniaSynchronizationContext</c> - which posts at
+/// <c>DispatcherPriority.Default</c>, documented as "the lowest foreground
+/// dispatcher priority". The job that hands the engine its next turn was
+/// therefore the last thing in the whole application's queue: behind input,
+/// behind layout and render, behind everything the shell posts at Normal. With
+/// an idle queue that is invisible, which is exactly why this design measured
+/// 58 to 60 fps AT REST and dropped to about 40 the moment the shell had work
+/// to do every frame.
+/// </para>
+/// <para>
+/// <b><c>ConfigureAwait(false)</c> alone cannot do it, and that is a fact about
+/// Avalonia rather than a preference.</b> <c>UpdateWithKeyedMutexAsync</c>
+/// reaches <c>Compositor.PostServerJob</c>, which calls
+/// <c>Dispatcher.VerifyAccess()</c>, so the next update MUST be issued from the
+/// UI thread. The await leaves that thread and the resume brings it back at the
+/// top of the queue, which is the smallest change that removes the queue
+/// position from the loop's period. It does NOT make the pump preemptive: a UI
+/// job already running still has to finish.
+/// </para>
+/// <para>
 /// <b>It stops while hidden, deliberately.</b> A minimised window, a closed
 /// session or a viewport nobody can see has nothing to show, and an update loop
 /// left running would go on copying a full-screen texture per vsync for it. The
@@ -104,9 +140,10 @@ internal interface ICompositedImageSource : IAsyncDisposable
 /// same order and for the same reason the imports themselves are held back.
 /// </para>
 /// <para>
-/// <b>Threading:</b> UI thread only, every member. The compositor's import and
-/// update calls verify that themselves, and every continuation here resumes
-/// through the UI thread's synchronization context.
+/// <b>Threading:</b> UI thread only, every member and every field. The
+/// compositor's import and update calls verify that themselves; the one place
+/// this loop leaves that thread is the await on a hand-over, and it is back on
+/// it before any field below is touched.
 /// </para>
 /// </remarks>
 internal sealed class CompositedFramePump
@@ -132,6 +169,7 @@ internal sealed class CompositedFramePump
     private readonly Action? _onFault;
     private readonly Func<nint, nint> _duplicateHandle;
     private readonly Action<nint> _closeHandle;
+    private readonly Action<Action> _resumeOnUiThread;
     private readonly ILogger _logger;
 
     private readonly List<Import> _retired = [];
@@ -164,7 +202,8 @@ internal sealed class CompositedFramePump
         ILogger logger,
         Func<nint, nint>? duplicateHandle = null,
         Action<nint>? closeHandle = null,
-        Action? onFault = null)
+        Action? onFault = null,
+        Action<Action>? resumeOnUiThread = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(acknowledgeRelease);
@@ -181,6 +220,14 @@ internal sealed class CompositedFramePump
         // without a kernel object anywhere in sight.
         _duplicateHandle = duplicateHandle ?? Win32Interop.DuplicateForCaller;
         _closeHandle = closeHandle ?? (handle => Win32Interop.CloseHandle(handle));
+
+        // Send, which is the top of the dispatcher's ordering: the class
+        // remarks say why the default an await would use is the bottom of it.
+        // Injected for the same reason the two handle callbacks are - the whole
+        // loop is then provable with no dispatcher, no compositor and no window
+        // anywhere in sight.
+        _resumeOnUiThread = resumeOnUiThread
+            ?? (action => Dispatcher.UIThread.Post(action, DispatcherPriority.Send));
     }
 
     /// <summary>The generation currently on screen, or zero before the first import.</summary>
@@ -357,17 +404,33 @@ internal sealed class CompositedFramePump
             {
                 import.UpdatesInFlight++;
                 _updateStartedAt = Environment.TickCount64;
+
+                // Captured rather than rethrown from a finally, because the
+                // resume below has to happen either way and has to happen
+                // FIRST: the bookkeeping under it and the catch that reports a
+                // fault are both UI-thread work.
+                ExceptionDispatchInfo? failure = null;
                 try
                 {
+                    // ConfigureAwait(false), so the resume is not handed to
+                    // Avalonia's synchronization context - which posts it at the
+                    // lowest foreground priority there is. See the class remarks.
                     await import.Image.UpdateAsync(
-                        (uint)Renderer.SharedConsumerKey, (uint)Renderer.SharedProducerKey);
+                            (uint)Renderer.SharedConsumerKey, (uint)Renderer.SharedProducerKey)
+                        .ConfigureAwait(false);
                 }
-                finally
+                catch (Exception ex)
                 {
-                    _updateStartedAt = null;
-                    import.UpdatesInFlight--;
-                    SettleIfRetired(import);
+                    failure = ExceptionDispatchInfo.Capture(ex);
                 }
+
+                await ResumeOnUiThreadAsync().ConfigureAwait(false);
+
+                _updateStartedAt = null;
+                import.UpdatesInFlight--;
+                SettleIfRetired(import);
+
+                failure?.Throw();
             }
         }
         catch (Exception ex)
@@ -389,6 +452,24 @@ internal sealed class CompositedFramePump
     }
 
     /// <summary>
+    /// Completes on the UI thread, ahead of whatever the shell has queued.
+    /// </summary>
+    /// <remarks>
+    /// <b>No <c>RunContinuationsAsynchronously</c>, and <c>ConfigureAwait(false)</c>
+    /// at the call site</b>: together those make the loop resume INLINE on
+    /// whichever thread the posted action lands on, which is the UI thread.
+    /// Either one alone would hand the rest of the loop - and the next
+    /// <c>UpdateAsync</c>, which verifies UI-thread access - back to a thread
+    /// pool.
+    /// </remarks>
+    private Task ResumeOnUiThreadAsync()
+    {
+        var resumed = new TaskCompletionSource();
+        _resumeOnUiThread(() => resumed.TrySetResult());
+        return resumed.Task;
+    }
+
+    /// <summary>
     /// Notices a hand-over that is never going to complete. Called once per
     /// pass of the shell's pump, which keeps running when the render thread
     /// does not.
@@ -401,6 +482,14 @@ internal sealed class CompositedFramePump
     /// thread rather than raced against a timer per update, because a timer per
     /// update is sixty allocations a second forever to catch something that
     /// happens once.
+    /// <para>
+    /// <b>It now covers the resume as well as the hand-over</b>, because
+    /// <c>_updateStartedAt</c> is cleared after the loop is back on the UI
+    /// thread. That is deliberate and it is what the watchdog was always for:
+    /// what it reports is that the picture has stopped arriving, and a
+    /// dispatcher that never runs the resume stops it just as completely as a
+    /// producer that never releases the key.
+    /// </para>
     /// </remarks>
     internal void CheckForStall()
     {

@@ -239,4 +239,37 @@ public sealed class DemoStartupOptionsTests
         options.Backend.ShouldBe(GraphicsBackend.D3D11);
         options.FullscreenCycleInterval.ShouldBe(TimeSpan.FromSeconds(1));
     }
+
+    [Fact]
+    public void The_pacing_probe_is_off_unless_it_is_asked_for()
+    {
+        DemoStartupOptions options = DemoStartupOptions.Parse(["d3d11"], selfTestEnvironmentValue: null);
+
+        options.PacingProbe.ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("--pacing-probe")]
+    [InlineData("--pacingprobe")]
+    [InlineData("--pacing-probe=true")]
+    public void The_switch_turns_the_pacing_probe_on(string argument)
+    {
+        DemoStartupOptions options = DemoStartupOptions.Parse(
+            ["d3d11", argument], selfTestEnvironmentValue: null);
+
+        options.PacingProbe.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void The_pacing_probe_refuses_opengl_by_name()
+    {
+        // Refused where the argument is read rather than three layers down in a
+        // renderer: OpenGL has no shared target at all, so there is nothing to
+        // pace and the failure would otherwise be reported as a driver problem.
+        // The default backend is OpenGL, so naming no backend is the same case.
+        Should.Throw<ArgumentException>(
+            () => DemoStartupOptions.Parse(["opengl", "--pacing-probe"], selfTestEnvironmentValue: null));
+        Should.Throw<ArgumentException>(
+            () => DemoStartupOptions.Parse(["--pacing-probe"], selfTestEnvironmentValue: null));
+    }
 }

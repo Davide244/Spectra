@@ -72,7 +72,8 @@ internal sealed record DemoStartupOptions(
     bool DevContentOverlay = false,
     string? ExportEntitySchemaPath = null,
     bool ExitAfterSave = false,
-    bool ViewportCompare = false)
+    bool ViewportCompare = false,
+    bool PacingProbe = false)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -90,7 +91,8 @@ internal sealed record DemoStartupOptions(
         "[--props=<count>] [--map=<bundle.smap>] [--save-map=<bundle.smap>] " +
         "[--project=<folder>] [--save-project=<folder>] [--pack[=true|false]] [--dev[=true|false]] " +
         "[--exit-after-save[=true|false]] " +
-        "[--export-entity-schema=<file.sentdef>] [--viewport-compare[=true|false]].";
+        "[--export-entity-schema=<file.sentdef>] [--viewport-compare[=true|false]] " +
+        "[--pacing-probe[=true|false]].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -134,6 +136,7 @@ internal sealed record DemoStartupOptions(
         string? exportEntitySchemaPath = null;
         bool exitAfterSave = false;
         bool viewportCompare = false;
+        bool pacingProbe = false;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -320,6 +323,14 @@ internal sealed record DemoStartupOptions(
                 case "viewport-compare" or "viewportcompare":
                     viewportCompare = ParseBoolean(value, token);
                     continue;
+
+                // Measure how the engine's frame rate follows the shared
+                // target's consumer, print the table and exit. A composited
+                // surface with no window, like --viewport-compare, and for the
+                // same reason: the hand-over being paced exists nowhere else.
+                case "pacing-probe" or "pacingprobe":
+                    pacingProbe = ParseBoolean(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -370,12 +381,22 @@ internal sealed record DemoStartupOptions(
                 Usage);
         }
 
+        // Refused for exactly the same reason, said separately rather than
+        // folded together: a shared message naming two switches is a message
+        // that names the one the caller did not type.
+        if (pacingProbe && (backend ?? GraphicsBackend.OpenGL) == GraphicsBackend.OpenGL)
+        {
+            throw new ArgumentException(
+                "'--pacing-probe' needs a backend that can share a render target: name d3d11 or d3d12. " +
+                Usage);
+        }
+
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
                 fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
                 loadMapPath, saveMapPath, projectPath, saveProjectPath, bootFromPacks, devContentOverlay,
-                exportEntitySchemaPath, exitAfterSave, viewportCompare);
+                exportEntitySchemaPath, exitAfterSave, viewportCompare, pacingProbe);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -385,14 +406,14 @@ internal sealed record DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
                 fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
                 loadMapPath, saveMapPath, projectPath, saveProjectPath, bootFromPacks, devContentOverlay,
-                exportEntitySchemaPath, exitAfterSave, viewportCompare);
+                exportEntitySchemaPath, exitAfterSave, viewportCompare, pacingProbe);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
             fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
                 loadMapPath, saveMapPath, projectPath, saveProjectPath, bootFromPacks, devContentOverlay,
-                exportEntitySchemaPath, exitAfterSave, viewportCompare);
+                exportEntitySchemaPath, exitAfterSave, viewportCompare, pacingProbe);
     }
 
     // A switch that takes a name needs one: a bare --pipeline says nothing

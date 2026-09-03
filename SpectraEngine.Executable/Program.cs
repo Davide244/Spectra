@@ -296,6 +296,15 @@ try
         return;
     }
 
+    // Beside it and for the same reason: the hand-over it paces only exists on
+    // a composited surface, and the run ends itself once the table is printed.
+    if (options.PacingProbe)
+    {
+        if (!SharedPacingRun.Run(engine, loggerFactory.CreateLogger("SharedPacing")))
+            Environment.ExitCode = 1;
+        return;
+    }
+
     // No renderer disposal here: GPU teardown is thread-affine and happens in
     // Renderer.Shutdown on the render thread (Engine handles the crash path too).
     // A render-thread crash is caught and logged inside Engine, so Run returns

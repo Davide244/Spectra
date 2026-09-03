@@ -1,6 +1,4 @@
 using Microsoft.Extensions.Logging;
-using Silk.NET.Core.Contexts;
-using Silk.NET.Maths;
 using SpectraEngine.Core;
 using SpectraEngine.Core.Diagnostics;
 using SpectraEngine.Core.Graphics;
@@ -131,34 +129,6 @@ internal static class ViewportCompareRun
                 "Viewport compare: the verdict could not be written to {Path}; the editor shell will see " +
                 "no colour measurement for this machine.",
                 ViewportCompareStamp.DefaultPath);
-        }
-    }
-
-    /// <summary>
-    /// A surface with no window, no handle and no GL context: exactly what an
-    /// embedded host that composites the engine's output offers, and the only
-    /// kind that has a shared target to measure.
-    /// </summary>
-    /// <remarks>
-    /// The size never changes, so <see cref="Resized"/> is a real event that
-    /// simply never fires. Removing the member is not an option and neither is
-    /// throwing from it: <see cref="Engine.AttachSurface"/> subscribes and
-    /// unsubscribes on every run.
-    /// </remarks>
-    private sealed class CompositedProbeSurface(int width, int height) : IRenderSurface
-    {
-        public RenderSurfaceKind Kind => RenderSurfaceKind.Composited;
-
-        public nint NativeHandle => 0;
-
-        public IGLContext? GLContext => null;
-
-        public Vector2D<int> PixelSize => new(width, height);
-
-        public event Action<Vector2D<int>>? Resized
-        {
-            add { }
-            remove { }
         }
     }
 }

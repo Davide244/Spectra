@@ -31,6 +31,7 @@ public sealed class Engine
     private readonly ILogger<Engine> _logger;
     private OffscreenProbe? _offscreenProbe;
     private ViewportCompareProbe? _viewportCompare;
+    private SharedPacingProbe? _sharedPacing;
     private readonly FpsCounter _fpsCounter = new();
 
     /// <summary>
@@ -426,6 +427,25 @@ public sealed class Engine
     /// whether the two pictures agreed. A host's exit code.
     /// </summary>
     public bool? ViewportComparePassed { get; private set; }
+
+    /// <summary>
+    /// Whether to measure how the engine's frame rate follows the shared
+    /// target's consumer, once at startup, and then end the session.
+    /// </summary>
+    /// <remarks>
+    /// <b>A measurement rather than a mode</b>, the same shape
+    /// <see cref="RunViewportCompare"/> takes, and it needs a
+    /// <see cref="RenderSurfaceKind.Composited"/> surface for the same reason:
+    /// there is no hand-over to pace without one. See
+    /// <see cref="SharedPacingProbe"/> for what it drives and what is modelled.
+    /// </remarks>
+    public bool RunSharedPacingProbe { get; set; }
+
+    /// <summary>
+    /// Null until <see cref="RunSharedPacingProbe"/>'s probe has reported, then
+    /// whether it produced a measurement at all. A host's exit code.
+    /// </summary>
+    public bool? SharedPacingProbePassed { get; private set; }
 
     /// <summary>
     /// Name of the rendering pipeline to start on, or null for the backend's
@@ -870,6 +890,21 @@ public sealed class Engine
             if (RunViewportCompare)
                 _viewportCompare = new ViewportCompareProbe(_logger);
 
+            // Beside the two above and for the same reason: it needs a real
+            // scene, because a frame that draws nothing is not the frame whose
+            // pacing is in question.
+            if (RunSharedPacingProbe)
+            {
+                _sharedPacing = new SharedPacingProbe(_logger);
+
+                // Subscribed rather than reading the renderer, because the
+                // acquire-wait drain RESETS what it returns and the snapshot
+                // builder below already calls it: a second reader would get
+                // whatever landed in the gap, which is nothing. See
+                // SharedPacingProbe.ObserveSnapshot.
+                Host.FrameCompleted += _sharedPacing.ObserveSnapshot;
+            }
+
             // The change log follows whichever scene is live, so a shell's tree
             // view hears about structure from the frame the scene loads rather
             // than from the first edit after it.
@@ -1203,6 +1238,22 @@ public sealed class Engine
                     {
                         ViewportComparePassed = compare.Passed;
                         _viewportCompare = null;
+                        Host.RequestShutdown();
+                        break;
+                    }
+                }
+
+                // In the same slot, and it ends the run for the same reason:
+                // once it has its table the session is over, and a frame after
+                // it would take the shared key with its modelled consumer torn
+                // down and nobody left to hand the key back.
+                if (_sharedPacing is { } pacing)
+                {
+                    pacing.Update(_renderer);
+                    if (!pacing.Running)
+                    {
+                        SharedPacingProbePassed = pacing.Passed;
+                        _sharedPacing = null;
                         Host.RequestShutdown();
                         break;
                     }
