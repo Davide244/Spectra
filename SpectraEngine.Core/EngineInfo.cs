@@ -77,10 +77,12 @@ namespace SpectraEngine.Core
         /// what a vertex layout is made of. Bump it by hand whenever either can
         /// change, because a pack cooked before the change is unreadable after it and
         /// the failure is a misinterpreted vertex buffer rather than an exception.
-        /// Nothing stamps or checks it yet: its enforcing reader arrives with the
-        /// compiled map format, which is the first artifact that can hold a stale
-        /// geometry blob. It exists now so that no pack is ever unversioned, which is
-        /// what retrofitting it would cost.
+        /// Its first enforcing reader is SmodelReader, which arrived ahead of the
+        /// compiled map format: a cooked model holds a vertex buffer in exactly the
+        /// shape this versions, so it is the first artifact that can carry a stale
+        /// one. .scmap enforces the same constant when it lands. It was declared
+        /// before either existed so that no pack is ever unversioned, which is what
+        /// retrofitting it would have cost.
         /// </summary>
         public const uint GeometryFormatVersion = 1;
 

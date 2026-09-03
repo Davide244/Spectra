@@ -151,9 +151,38 @@ Header — 64 bytes
 0x0C  u32     SectionCount
 0x10  f32[6]  Bounds              model-local AABB (min.xyz, max.xyz) — feeds
                                   Mesh.LocalBounds and SceneBvh with no vertex walk
-0x28  ...     Section table: SectionCount × 24 bytes
+0x28  u32     VertexLayoutId      FNV-1a over the layout — see §4.4
+0x2C  u8[20]  Reserved            written zero
+0x40  ...     Section table: SectionCount × 24 bytes
                 { u32 FourCC, u32 Flags, u64 Offset, u64 Length }
 ```
+
+**AS BUILT (2026-09-03).** The block above said "Header — 64 bytes" over a field list
+that ran to `0x28` and then put the section table there, i.e. 40. Those cannot both be
+true, and §4.4 separately requires a `VertexLayoutId` for which the list had no slot.
+Both resolve the same way, which is why this reading was chosen: **the header is 64
+bytes as the heading says, every field keeps the offset it was given, `VertexLayoutId`
+takes the spare tail at `0x28`, and the section table starts at `0x40`.** The other
+branch (a 40-byte header) forces `VertexLayoutId` to displace the one remaining stated
+offset and lands the 24-byte, `u64`-bearing section records at 4-mod-8.
+
+Three things the spec left open that a reader cannot, settled here because the writer
+has to agree with them byte for byte:
+
+- **`COLL`'s plane array is realigned to 16 within the section.** `4 + hullCount × 8` is
+  not 16-aligned for any odd hull count, so without padding the first `Plane` straddles
+  a boundary and the in-place cast, which is the whole reason the section is shaped this
+  way, stops being legal.
+- **`SKEL`'s `f32[12]` is four rows of three**, dropping the constant fourth *column*
+  `(0,0,0,1)`. Dropping the last *row* instead is the column-vector convention, and under
+  `System.Numerics`'s row-vector layout that discards exactly the translation.
+- **`NAME` records are `u16` length plus UTF-8**, mirroring `.spack`, with `0xFFFFFFFF` as
+  the absent sentinel (the same constant as `PackFormat.NameOffsetAbsent`).
+
+One gap recorded rather than fixed: §4.4 defines `VertexLayoutId` over
+`(semantic, componentCount)` pairs only, so two layouts differing solely in *component
+type* hash identically, leaving `GeometryFormatVersion` as the only thing covering that
+case.
 
 Sections: `VTXL` vertex layout · `VBUF` interleaved vertices · `IBUF` indices · `SUBM` submeshes · `LODS` · `SKEL` skeleton · `COLL` collision hulls · `NAME` string blob. `ANIM` reserved.
 
@@ -669,7 +698,37 @@ The library split is not cosmetic: **the editor must run the cooker in-process**
 
 **The `SC####` prefix collision with `console.md` §4's ConVar generator is settled here, in the cooker's favour, and the console arc renumbers to `CV####`.** The two claims are not symmetric, which is what decided it rather than a coin toss: this prefix is bound into the MSBuild-parseable stderr contract every consumer of `scook` parses, and into a band plan whose 6xxx entry is a **wrap** of another tool's numbers, so renumbering here would break codes that are deliberately not the cooker's to renumber, while the generator is unbuilt and pays nothing for moving.
 
-**AS BUILT (2026-09-02).** The names are `Spectra.Kitchen` (library) and `Spectra.Kitchen.CLI` (producing `scook`), not `SpectraEngine.Cooking`; everything else in this section stands as written. Landed: the four verbs (`cook` and `clean` real, `verify` and `inspect` refusing loudly with `SC0002` and exiting non-zero rather than doing nothing quietly), the full option set above, `SC####` with its bands and a never-reuse list, the `IRule`/`IRuleContext` seam with `Read`/`Probe`/`Emit`/`Report`, the recording `RuleContext`, the content walker, `CookSession` writing through `PackWriter`, the `--manifest` document, and one rule: `RawCopyRule`. Not landed and named as such by the tool itself: the cache, the dependency DAG and its parallelism, `--watch`, and every rule with a cooked format of its own. Oracles: `CookSessionTests` (a cooked project mounts through the engine's own `PackSource`, two cooks are byte-identical), `RuleContextTests` (every `Read` and `Probe` lands in the dependency set, **the miss included**), `ScookCliTests` (exit codes and the canonical stderr line).
+**AS BUILT (2026-09-02).** The names are `Spectra.Kitchen` (library) and `Spectra.Kitchen.CLI` (producing `scook`), not `SpectraEngine.Cooking`; everything else in this section stands as written. Landed: the four verbs (`cook` and `clean` real, `verify` and `inspect` refusing loudly with `SC0002` and exiting non-zero rather than doing nothing quietly), the full option set above, `SC####` with its bands and a never-reuse list, the `IRule`/`IRuleContext` seam with `Read`/`Probe`/`Emit`/`Report`, the recording `RuleContext`, the content walker, `CookSession` writing through `PackWriter`, the `--manifest` document, and one rule: `RawCopyRule`. Not landed and named as such by the tool itself: `--watch`, and every rule with a cooked format of its own. The cache and the scheduler landed after this note was written, each with its own AS BUILT below. Oracles: `CookSessionTests` (a cooked project mounts through the engine's own `PackSource`, two cooks are byte-identical), `RuleContextTests` (every `Read` and `Probe` lands in the dependency set, **the miss included**), `ScookCliTests` (exit codes and the canonical stderr line).
+
+**AS BUILT, the scheduler (2026-09-03).** `CookSession.Run` builds the whole work list on
+the calling thread in walk order, runs one level of it through `Parallel.For` bounded by
+`-j`, and writes results into a pre-sized array indexed by WORK ITEM, never appended in
+completion order. Everything that decides a byte (diagnostics, `PackWriter.Add`, the loose
+tree, the payload counters, the manifest rows) is then applied on the calling thread in
+that index order, so the only thing parallelism can change is how long the cook takes.
+`-j1` goes through the same call rather than a serial twin, because a second
+implementation is a second thing to keep in step.
+
+There is still exactly ONE level, and that is honest rather than provisional: no rule
+declares a dependency on another rule's output yet, so there is nothing to order. A level
+is expressed as a RANGE of the work list, so the day a real DAG exists it sorts the list
+and turns this into a loop without touching an ordering rule.
+
+`CookGraph` and `StatCache` each took one lock. `ContentStore` deliberately took none: its
+temp-file-plus-atomic-rename already survives concurrent writers AND other processes,
+which no in-process lock could, and a lock there would put the payload write inside a
+critical section for nothing.
+
+Oracles (`CookDeterminismTests`), and they run the real `scook` through `Process.Start`
+rather than in process, because .NET's string hash seed is per PROCESS and an in-process
+comparison structurally cannot detect the hash-order dependency they exist to catch: two
+clean cooks in two processes are byte-identical; a cached cook matches a clean one; `-j1`
+matches `-j8`. The fixture is 36 assets across four folders at six sizes whose cycle
+lengths share no factor, so size does not follow from walk position. Oracles 1 and 3
+compare the MANIFEST as well as the pack, because the pack sorts entries by asset id and
+would absorb a scheduling leak in exactly the place one appears first. They were checked
+against a deliberately broken build (results written in completion order) and two of them
+went red, which is the only evidence that an oracle bites.
 
 **AS BUILT, the cache (2026-09-02).** `Spectra.Kitchen/Cache/` landed and `--cache` is the default; `--no-cache` neither reads nor writes it, and `clean` removes it alongside `cooked/` so that "clean then cook" is a clean cook rather than a replay. The layout is this section's: `.spectra-cook/cas/<2 hex>/<30 hex>` for uncompressed payloads, `graph.bin` for the records, and the stat cache beside it as `stat.bin`. Four deliberate departures from the sketch above, each because building it found something the sketch could not know.
 
