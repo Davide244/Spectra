@@ -1,4 +1,4 @@
-using SpectraEngine.Core.Scene;
+﻿using SpectraEngine.Core.Scene;
 using SpectraEngine.Editing.Cameras;
 using SpectraEngine.Editing.Gizmos;
 using SpectraEngine.Editing.Hosting;
@@ -43,6 +43,19 @@ public enum RibbonVerbKind
     /// state, which is exactly why it is a field and not a button.
     /// </summary>
     SnapIncrement,
+
+    /// <summary>
+    /// Place an entity, through <c>EditorSession.InsertEntity</c>.
+    /// </summary>
+    /// <remarks>
+    /// <b>The one verb here that carries no payload and cannot.</b> Every other
+    /// kind names something this build knows at compile time; an entity class
+    /// comes from the project's own <c>.sentdef</c>, so the roster - which is
+    /// compile-time data - can name the CONTROL and not the class. The class is
+    /// session state, resolved when the button is pressed: the split's main
+    /// half places the last one used and its caret opens the list.
+    /// </remarks>
+    InsertEntity,
 }
 
 /// <summary>
@@ -124,4 +137,8 @@ public readonly record struct RibbonVerb(
     /// <summary>The snap increment field.</summary>
     public static RibbonVerb SnapIncrement() =>
         new(RibbonVerbKind.SnapIncrement, default, default, default, default, default, default);
+
+    /// <summary>Place an entity of whichever class the session last used.</summary>
+    public static RibbonVerb InsertEntity() =>
+        new(RibbonVerbKind.InsertEntity, default, default, default, default, default, default);
 }

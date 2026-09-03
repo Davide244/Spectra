@@ -208,6 +208,22 @@ public static class RibbonLayout
                     RibbonItemSize.Large),
                 new RibbonItem("insert.panel", "Panel", RibbonVerb.Of(InsertKind.SurfaceLight)),
                 new RibbonItem("insert.group", "Group", RibbonVerb.Of(InsertKind.Group)),
+
+                // THE ONE SPLIT BUTTON, and the only Office idiom on this
+                // surface that cannot be faked with what was already here: a
+                // main half that places the last class used, and a caret that
+                // opens the list. The caret names no verb and therefore carries
+                // no Tag - it opens something rather than doing something - so
+                // the roster describes one control and the validator sees one.
+                //
+                // Its flyout entries are deliberately NOT roster items. The
+                // roster is compile-time data and an entity class comes from
+                // the project's own .sentdef, so a build cannot know them; a
+                // test says so, because a roster that quietly grew a dynamic
+                // entry would make every claim in this file about a fixed set
+                // untrue.
+                new RibbonItem("insert.entity", "Entity", RibbonVerb.InsertEntity(),
+                    RibbonItemSize.Large, RibbonControlKind.Split),
             ]),
 
             // The live tool is the most-read state on this surface, so it gets

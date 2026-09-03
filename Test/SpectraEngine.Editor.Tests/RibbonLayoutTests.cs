@@ -269,6 +269,70 @@ public sealed class RibbonLayoutTests
     }
 
     [Fact]
+    public void There_is_exactly_one_split_button_and_it_places_an_entity()
+    {
+        // A split button is the one control here with two hit regions, and the
+        // arrangement only stays legible while there is one of them: a row of
+        // them turns a caret from "this one is different" into decoration.
+        List<RibbonItem> splits = AllItems()
+            .Where(i => i.Kind == RibbonControlKind.Split)
+            .ToList();
+
+        splits.Count.ShouldBe(1);
+        splits[0].Verb.Kind.ShouldBe(RibbonVerbKind.InsertEntity);
+        splits[0].Size.ShouldBe(RibbonItemSize.Large);
+    }
+
+    [Fact]
+    public void The_entity_class_list_is_not_in_the_roster()
+    {
+        // THE ONE PLACE THE ROSTER DELIBERATELY DOES NOT NAME WHAT A CONTROL
+        // DOES. Every other verb here names something this build knows at
+        // compile time; an entity class comes from the project's own .sentdef,
+        // so the split names the CONTROL and its caret's entries are built at
+        // open time from the live session's parsed catalogue.
+        //
+        // That is a real weakening of "the roster is the single source of
+        // truth", so it is written down as a test rather than left in a
+        // comment: exactly one item may carry a verb with no payload, and no
+        // item may name a class.
+        AllItems()
+            .Count(i => i.Verb.Kind == RibbonVerbKind.InsertEntity)
+            .ShouldBe(1, "the class is session state, so only the control is in the roster");
+
+        // The built-in classes, which are what a roster entry would most
+        // plausibly have been written as.
+        foreach (string className in new[] { "logic_relay", "logic_timer", "math_counter" })
+        {
+            AllItems()
+                .Any(i => i.Id.Contains(className, StringComparison.Ordinal)
+                       || i.Label.Contains(className, StringComparison.Ordinal))
+                .ShouldBeFalse($"'{className}' is a project's data, not this build's roster");
+        }
+    }
+
+    [Fact]
+    public void The_splits_caret_carries_no_tag_of_its_own()
+    {
+        // It opens a list rather than posting a verb, so it is not a roster
+        // entry - and the page's validator only inspects controls that have a
+        // Tag, which is what lets the split be two Buttons under one id. A Tag
+        // on the caret would make the page draw an id twice and refuse the
+        // window, which is the right failure and worth pinning the shape of.
+        string markup = File.ReadAllText(Path.Combine(RibbonFolder(), "RibbonBuildTab.axaml"));
+
+        int splitStart = markup.IndexOf("Classes=\"rsplit\"", StringComparison.Ordinal);
+        splitStart.ShouldBeGreaterThan(-1, "the split button should be drawn");
+
+        int splitEnd = markup.IndexOf("</Border>", splitStart, StringComparison.Ordinal);
+        string split = markup[splitStart..splitEnd];
+
+        Regex.Matches(split, "Tag=\"([^\"]+)\"")
+            .Select(m => m.Groups[1].Value)
+            .ShouldBe(["insert.entity"], "only the main half names a verb");
+    }
+
+    [Fact]
     public void Finding_an_item_by_its_id_is_how_a_click_resolves()
     {
         // The click handler's only input is the control's Tag, so an id the

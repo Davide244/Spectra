@@ -1227,6 +1227,8 @@
   <Style Selector="Path.spincaret">
     <Setter Property="Width" Value="8" />
     <Setter Property="Height" Value="6" />
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <Setter Property="VerticalAlignment" Value="Center" />
     <Setter Property="Stretch" Value="None" />
     <Setter Property="Stroke" Value="{StaticResource SpectraTextMuted}" />
     <Setter Property="StrokeThickness" Value="1.2" />
@@ -1269,6 +1271,13 @@
   <Style Selector="Border.rsplit Button.rbig">
     <Setter Property="Height" Value="50" />
   </Style>
+  <!-- The glyph keeps the line every large button stands on. Centred inside
+       the 50px main half it would ride four pixels high, and a row of icons
+       where one is nearly aligned is worse than one where none are. -->
+  <Style Selector="Border.rsplit Button.rbig StackPanel.rbigstack">
+    <Setter Property="VerticalAlignment" Value="Top" />
+  </Style>
+
   <!-- One line, because the caret band has taken the second one. -->
   <Style Selector="Border.rsplit Button.rbig TextBlock">
     <Setter Property="MaxLines" Value="1" />
@@ -1276,6 +1285,11 @@
   </Style>
   <Style Selector="Button.rsplitcaret">
     <Setter Property="Height" Value="16" />
+    <!-- The band is the whole width of the split, so the caret sits under
+         the glyph rather than in a corner, and so the hit region is a band
+         rather than a target. Stated rather than left to Stretch: it is the
+         width that makes the two halves read as one control. -->
+    <Setter Property="Width" Value="64" />
     <Setter Property="MinWidth" Value="0" />
     <Setter Property="Padding" Value="0" />
     <Setter Property="Background" Value="Transparent" />

@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 
 namespace SpectraEngine.Editor.Shell.Ribbon;
 
@@ -30,4 +30,19 @@ public partial class RibbonBuildTab : RibbonTabView
     /// while it has focus.
     /// </summary>
     public TextBox SnapField => SnapBox;
+
+    /// <summary>
+    /// The Entity split button's caret half, so the window can hang the class
+    /// list on it.
+    /// </summary>
+    /// <remarks>
+    /// Exposed rather than wired here for the same reason the snap field is:
+    /// the list comes from the live session's parsed schema catalogue, which a
+    /// page has no way to reach and no business reaching. The page draws the
+    /// control; the window knows what a session is.
+    /// </remarks>
+    public Button EntityCaretButton => EntityCaret;
+
+    /// <summary>The split button's main half, whose tooltip names the live class.</summary>
+    public Button EntityInsertButton => EntityInsert;
 }

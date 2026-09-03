@@ -105,6 +105,30 @@
             </StackPanel>
           </Button>
         </StackPanel>
+        <!-- THE SPLIT BUTTON. Two real Buttons in one frame, divided by the
+             caret band's own top hairline, so each half gets its own hover and
+             its own tooltip. Only the main half carries a Tag: the caret names
+             no verb, it opens a list, and the roster describes verbs. -->
+        <Border Classes="rsplit">
+          <Grid RowDefinitions="*,Auto">
+            <Button Grid.Row="0" Classes="rbig" Tag="insert.entity"
+                    x:Name="EntityInsert" Click="OnRibbonItemClick"
+                    IsEnabled="{Binding CanInsertEntity}">
+              <Panel>
+                <Border Classes="sheen" />
+                <StackPanel Classes="rbigstack">
+                  <Path Classes="icon-lg kind-entity" Data="{StaticResource IconLgEntity}" />
+                  <TextBlock Text="Entity" />
+                </StackPanel>
+              </Panel>
+            </Button>
+            <Button Grid.Row="1" Classes="rsplitcaret" x:Name="EntityCaret"
+                    IsEnabled="{Binding CanInsertEntity}"
+                    ToolTip.Tip="Choose which entity class to place.">
+              <Path Classes="spincaret" Data="{StaticResource CaretDown}" />
+            </Button>
+          </Grid>
+        </Border>
       </StackPanel>
       <TextBlock Classes="ribbongroupcaption" Text="Insert" />
     </StackPanel>

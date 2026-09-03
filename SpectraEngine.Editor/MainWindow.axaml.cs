@@ -1090,7 +1090,11 @@ public partial class MainWindow : Window
         // start page's Object menu would offer entities for a project that is
         // closed, and the next project's menu would open showing the previous
         // one's classes until its own session came up.
+        // A class name from one project's .sentdef means nothing in the next,
+        // and a remembered one would survive into a window that cannot place it.
+        _lastEntityClass = null;
         _shell.SetEntityClasses(null);
+        RefreshEntityInsertTip();
         if (_shell.Properties is { } panel)
             panel.Schemas = null;
 
@@ -1148,6 +1152,7 @@ public partial class MainWindow : Window
             // entry is chosen rather than capturing it, exactly as every other
             // verb in this window does.
             _shell.SetEntityClasses(EntityInsertMenu.Build(session.EntitySchemas));
+            RefreshEntityInsertTip();
             if (_shell.Properties is { } panel)
                 panel.Schemas = session.EntitySchemas;
 
@@ -1963,6 +1968,8 @@ public partial class MainWindow : Window
         _buildTab.SnapField.LostFocus += OnSnapFieldBlurred;
         _buildTab.SnapField.KeyDown += OnSnapFieldKeyDown;
 
+        WireEntitySplit();
+
         RibbonFlyout.Closed += OnRibbonFlyoutClosed;
 
         _ribbon = RibbonSurface.Create(_settings.RibbonExpanded);
@@ -2131,8 +2138,120 @@ public partial class MainWindow : Window
                 // The field commits through its own focus and Enter handlers;
                 // there is no click to answer.
                 break;
+
+            case RibbonVerbKind.InsertEntity:
+                // The one verb whose target is resolved HERE rather than named
+                // by the roster: an entity class comes from the project, not
+                // from this build. Nothing at all when a project declares none,
+                // which the button's own IsEnabled has already said.
+                if (ResolveEntityClass() is { } className)
+                    _session?.InsertEntity(className);
+                break;
         }
     }
+
+    /// <summary>
+    /// The entity class the ribbon's split button places, which is whichever
+    /// one was chosen last.
+    /// </summary>
+    /// <remarks>
+    /// <b>Null means "the first the catalogue offers", never "none".</b> A
+    /// split button whose main half does nothing until you have used its caret
+    /// once is a button that is broken on first use and works afterwards, which
+    /// is the hardest kind of report to act on. Cleared when a session ends,
+    /// because a class name from one project's <c>.sentdef</c> means nothing in
+    /// the next.
+    /// </remarks>
+    private string? _lastEntityClass;
+
+    /// <summary>The entity class list the split button's caret opens.</summary>
+    private MenuFlyout? _entityFlyout;
+
+    /// <summary>
+    /// Hangs the entity class list on the split button's caret and re-reads the
+    /// main half's tooltip.
+    /// </summary>
+    /// <remarks>
+    /// The flyout refills on OPEN rather than at construction, exactly as both
+    /// entity submenus do: this window outlives every session, and entries
+    /// built once would still offer the first project's classes in the third
+    /// project's window.
+    /// </remarks>
+    private void WireEntitySplit()
+    {
+        _entityFlyout = new MenuFlyout { Placement = PlacementMode.BottomEdgeAlignedLeft };
+
+        // SHOWN FROM THE CLICK, never left to Button.Flyout. A Button opening
+        // its own Flyout is one line shorter and depends on the framework
+        // choosing to do it; filling the list first and then showing it is the
+        // order this needs anyway, since an empty MenuFlyout has nothing to
+        // draw and no way to say so.
+        _buildTab.EntityCaretButton.Click += OnEntityCaretClicked;
+        RefreshEntityInsertTip();
+    }
+
+    /// <summary>Opens the entity class list under the split button's caret.</summary>
+    /// <remarks>
+    /// Refilled at every open rather than once, exactly as both entity submenus
+    /// are: this window outlives every session, and entries built once would
+    /// still offer the first project's classes in the third project's window.
+    /// </remarks>
+    private void OnEntityCaretClicked(object? sender, RoutedEventArgs e)
+    {
+        if (_entityFlyout is not { } flyout)
+            return;
+
+        FillEntityItems(flyout.Items, static () => null);
+        if (flyout.Items.Count > 0)
+            flyout.ShowAt(_buildTab.EntityCaretButton);
+    }
+
+    /// <summary>
+    /// Names the class the split button's main half will place.
+    /// </summary>
+    /// <remarks>
+    /// The LABEL stays "Entity" and the class goes in the tooltip, which is
+    /// Office's own arrangement for a split button: the word names the family
+    /// and the caret names the member. A label that rewrote itself per class
+    /// would change width under the pointer and would wrap the moment somebody
+    /// shipped a long classname.
+    /// </remarks>
+    private void RefreshEntityInsertTip()
+    {
+        string? className = ResolveEntityClass();
+
+        ToolTip.SetTip(
+            _buildTab.EntityInsertButton,
+            className is null
+                ? "This project declares no entity classes."
+                : $"Place a {className}. The arrow chooses a different class.");
+    }
+
+    /// <summary>
+    /// Which class the main half places: the last one used, or the first the
+    /// catalogue offers.
+    /// </summary>
+    /// <remarks>
+    /// The last choice is checked against the LIVE catalogue rather than
+    /// trusted, because opening a second project replaces it: a remembered name
+    /// no longer in the list would post an insert the editor answers with a
+    /// placeholder, which is a real node in the scene and in the history for a
+    /// class nobody asked for.
+    /// </remarks>
+    private string? ResolveEntityClass()
+    {
+        if (_lastEntityClass is { } remembered)
+        {
+            foreach (EntityInsertItem entry in _shell.EntityClasses)
+            {
+                if (string.Equals(entry.ClassName, remembered, StringComparison.Ordinal))
+                    return remembered;
+            }
+        }
+
+        return _shell.EntityClasses.Count > 0 ? _shell.EntityClasses[0].ClassName : null;
+    }
+
 
     private void OnInsertWorldBrushClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.WorldBrush);
     private void OnInsertPartBrushClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.PartBrush);
@@ -2420,8 +2539,24 @@ public partial class MainWindow : Window
         if (submenu is null)
             return;
 
-        submenu.Items.Clear();
         submenu.IsVisible = _shell.EntityClasses.Count > 0;
+        FillEntityItems(submenu.Items, point);
+    }
+
+    /// <summary>
+    /// Fills one list of menu entries, one per class the session can place.
+    /// </summary>
+    /// <remarks>
+    /// <b>Split out of the method above so the ribbon's split button is a THIRD
+    /// caller rather than a second mechanism.</b> The remarks on that method
+    /// are about exactly this: one list, built in one place, because two ways
+    /// of building it drift and the failure is a submenu that quietly stops
+    /// matching the other one. A MenuFlyout's items and a MenuItem's are the
+    /// same collection type, so the split costs nothing.
+    /// </remarks>
+    private void FillEntityItems(ItemCollection items, Func<System.Numerics.Vector2?> point)
+    {
+        items.Clear();
 
         foreach (EntityInsertItem entry in _shell.EntityClasses)
         {
@@ -2431,8 +2566,18 @@ public partial class MainWindow : Window
             string className = entry.ClassName;
             var item = new MenuItem { Header = entry.Display };
             ToolTip.SetTip(item, entry.Tip);
-            item.Click += (_, _) => _session?.InsertEntity(className, point());
-            submenu.Items.Add(item);
+            item.Click += (_, _) =>
+            {
+                // Remember it for the ribbon's split button. Choosing from ANY
+                // of these lists sets what the split places, which is what "the
+                // last one used" has to mean: a split button that only learned
+                // from its own caret would disagree with the menu the user just
+                // used.
+                _lastEntityClass = className;
+                RefreshEntityInsertTip();
+                _session?.InsertEntity(className, point());
+            };
+            items.Add(item);
         }
     }
 

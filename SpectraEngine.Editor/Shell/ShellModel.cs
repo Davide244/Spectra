@@ -233,6 +233,7 @@ public sealed class ShellModel : ObservableObject
 
             Raise(nameof(PlayTip));
             Raise(nameof(PlayLabel));
+            Raise(nameof(CanInsertEntity));
         }
     }
 
@@ -1225,7 +1226,21 @@ public sealed class ShellModel : ObservableObject
         }
 
         Raise(nameof(HasEntityClasses));
+        Raise(nameof(CanInsertEntity));
     }
+
+    /// <summary>
+    /// Whether the ribbon's Entity split button can do anything.
+    /// </summary>
+    /// <remarks>
+    /// Derived rather than composed in the markup, because Avalonia has no way
+    /// to AND two bindings without a converter and the two halves of a split
+    /// button must agree: a caret that opens a list over a main half that
+    /// refuses is a control disagreeing with itself. Raised from both setters
+    /// it reads, since a derived property nobody raises is a control that
+    /// stops updating and reports nothing.
+    /// </remarks>
+    public bool CanInsertEntity => EntityClasses.Count > 0 && !_isPlaying;
 
     /// <summary>Whether a filter is narrowing the tree, for the clear button.</summary>
     public bool HasFilter => _filterText.Length > 0;
