@@ -404,7 +404,11 @@
     <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
   </Style>
   <Style Selector="Button.seg /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="Transparent" />
+      <!-- #00FFFFFF, never Transparent. Transparent is #00000000, so a fade
+           to a translucent WHITE walks the RGB channels from black to white
+           and the fill passes through grey on the way in. Same hue at zero
+           alpha means the transition moves one number. -->
+    <Setter Property="Background" Value="#00FFFFFF" />
     <Setter Property="BorderThickness" Value="0" />
     <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
     <Setter Property="Transitions">
@@ -540,7 +544,11 @@
     <Setter Property="VerticalContentAlignment" Value="Center" />
   </Style>
   <Style Selector="Button.ghost /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="Transparent" />
+      <!-- #00FFFFFF, never Transparent. Transparent is #00000000, so a fade
+           to a translucent WHITE walks the RGB channels from black to white
+           and the fill passes through grey on the way in. Same hue at zero
+           alpha means the transition moves one number. -->
+    <Setter Property="Background" Value="#00FFFFFF" />
     <Setter Property="BorderThickness" Value="0" />
     <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
     <Setter Property="Transitions">

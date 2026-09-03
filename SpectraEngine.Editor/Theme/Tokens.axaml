@@ -196,11 +196,34 @@
        change on a lighter ground, not more - so carrying the old numbers onto
        the new surfaces would have made every hover in the window quieter than
        it was before. -->
-  <SolidColorBrush x:Key="SpectraRowHover" Color="#FFFFFF" Opacity="0.07" />
-  <SolidColorBrush x:Key="SpectraRowSelected" Color="{DynamicResource SpectraAccentColor}" Opacity="0.22" />
-  <SolidColorBrush x:Key="SpectraControlHover" Color="#FFFFFF" Opacity="0.08" />
-  <SolidColorBrush x:Key="SpectraControlPressed" Color="#FFFFFF" Opacity="0.13" />
-  <SolidColorBrush x:Key="SpectraControlChecked" Color="{DynamicResource SpectraModeColor}" Opacity="0.22" />
+  <!-- TRANSLUCENCY LIVES IN THE COLOUR'S ALPHA, NEVER ON THE BRUSH'S Opacity,
+       and every one of these fills is animated, which is what makes that a
+       correctness rule rather than a style. A BrushTransition interpolates the
+       Color AND the Opacity independently and the renderer then MULTIPLIES
+       them, so a fade from Transparent (opacity 1) to white at opacity 0.08
+       runs effective alpha t*(1 - 0.92t): it peaks at 0.27 a little past the
+       halfway point and settles at 0.08, so every hover flared to roughly three
+       and a half times its intended fill and fell back. Measured tick by tick,
+       not reasoned about. Alpha in the colour makes the ramp a single
+       interpolated quantity and the overshoot arithmetically impossible.
+
+       This is the same mistake the text colours already refuse one section
+       above, for a different reason (opacity on white breaks Windows subpixel
+       gamma). One rule now: a Spectra brush states its own alpha.
+
+       The two washes over a themed hue carry a companion Color rather than an
+       Opacity, which costs the palette its single source of that hue: the pair
+       must move together, and there is no XAML mechanism that would derive one
+       from the other. Called out because a later theme swap that edits only
+       SpectraAccentColor leaves the selection wash behind, silently. -->
+  <Color x:Key="SpectraAccentWashColor">#38E8474A</Color>
+  <Color x:Key="SpectraModeWashColor">#38E5A93F</Color>
+
+  <SolidColorBrush x:Key="SpectraRowHover" Color="#12FFFFFF" />
+  <SolidColorBrush x:Key="SpectraRowSelected" Color="{DynamicResource SpectraAccentWashColor}" />
+  <SolidColorBrush x:Key="SpectraControlHover" Color="#14FFFFFF" />
+  <SolidColorBrush x:Key="SpectraControlPressed" Color="#21FFFFFF" />
+  <SolidColorBrush x:Key="SpectraControlChecked" Color="{DynamicResource SpectraModeWashColor}" />
 
   <!-- The drop-target wash, over the VIEWPORT and nowhere else, and it is a
        third of SpectraControlChecked deliberately rather than by taste. Those
@@ -214,7 +237,8 @@
        has to stay readable through it: what marks the region is the 2px frame
        around the edge, and the wash only stops that frame reading as a stray
        rectangle somebody left on screen. -->
-  <SolidColorBrush x:Key="SpectraDropWash" Color="{DynamicResource SpectraModeColor}" Opacity="0.07" />
+  <Color x:Key="SpectraDropWashColor">#12E5A93F</Color>
+  <SolidColorBrush x:Key="SpectraDropWash" Color="{DynamicResource SpectraDropWashColor}" />
 
   <!-- ___ Axis identity ___________________________________
        X, Y and Z wear the same hues here as the gizmo handles do in the
