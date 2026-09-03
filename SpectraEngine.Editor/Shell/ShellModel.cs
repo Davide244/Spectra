@@ -793,16 +793,26 @@ public sealed class ShellModel : ObservableObject
     /// Whether the producer waited long enough to be worth showing.
     /// </summary>
     /// <remarks>
-    /// A windowed session never waits at all and would otherwise carry a
-    /// permanent "0.0 ms" beside its frame rate, which is a reading nobody
-    /// needs and a slot that then teaches people to ignore it. The floor is a
-    /// fifth of a 60 Hz frame: below that the wait cannot be what anyone is
-    /// feeling.
+    /// <b>The floor is one refresh interval plus a margin, and it was wrong
+    /// first time in the direction that matters.</b> It shipped at 3.3 ms, a
+    /// fifth of a 60 Hz frame, on the reasoning that anything smaller cannot be
+    /// felt. That reads the wait backwards: the mutex IS the clock, so a
+    /// producer paced by a healthy 60 Hz consumer waits most of an interval by
+    /// design. Measured with <c>--pacing-probe</c> against a real consumer at a
+    /// set cadence: a 60 Hz turn costs 15.15 ms average and 15.74 ms peak, a
+    /// 40 Hz turn 23.45 and 24.13, a 30 Hz turn 31.97 and 32.34. So the old
+    /// floor reported every healthy composited session as stalling, which
+    /// teaches people to ignore the one continuous instrument this path has.
+    /// <para>
+    /// 20 ms sits above a healthy 60 Hz peak and below a 40 Hz one, so the chip
+    /// appears when turns are actually being missed and stays hidden when the
+    /// producer is simply waiting its turn.
+    /// </para>
     /// </remarks>
-    public bool SharedAcquireVisible => _sharedAcquirePeakMs >= 3.3f;
+    public bool SharedAcquireVisible => _sharedAcquirePeakMs >= 20f;
 
     /// <summary>The wait, as the status bar shows it.</summary>
-    public string SharedAcquireLabel => $"UI stall {_sharedAcquirePeakMs,4:0.0} ms";
+    public string SharedAcquireLabel => $"turn late {_sharedAcquirePeakMs,4:0.0} ms";
 
     /// <summary>Frame time, formatted.</summary>
     public string FrameTimeLabel => $"{_frameTimeMs,6:0.00} ms";
