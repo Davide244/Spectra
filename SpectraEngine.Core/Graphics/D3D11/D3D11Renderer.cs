@@ -417,6 +417,15 @@ public sealed unsafe class D3D11Renderer : Renderer
             }
 
             ResolveTo(sceneTarget.ColorTexture!, present, scene);
+
+            // The same source, the same pass, the same frame, into an ordinary
+            // sRGB target: whatever the shared write does differently is then
+            // the only thing a byte comparison can find. Inside the bracket
+            // because it costs nothing to be and because leaving it outside
+            // would put a second resolve between the frame's write and the
+            // hand-over for no reason. See Renderer.CompareTarget.
+            if (CompareTarget is { } reference)
+                ResolveTo(sceneTarget.ColorTexture!, reference, scene);
         }
         finally
         {
@@ -446,20 +455,38 @@ public sealed unsafe class D3D11Renderer : Renderer
 
     /// <inheritdoc/>
     /// <remarks>
-    /// <b>The row flip is here, and it is the only place a D3D readback may do
-    /// it.</b> A D3D render target's origin is top-left, so the row a clip
-    /// y = -1 vertex rasterises to is the LAST one; the contract's y counts from
-    /// the bottom of the picture, so the source row is <c>height - 1 - y</c>.
-    /// <para>
-    /// A one-texel staging copy rather than a whole-surface one: this is called
-    /// four times by a diagnostic and never by a frame, and a full staging
-    /// surface for four texels is memory nobody needs. <c>Map</c> on the
-    /// immediate context is what waits for the copy - there is no fence to take.
-    /// </para>
+    /// One texel through the region path, so this backend has exactly one
+    /// staging copy and one row-flip expression rather than two that can drift.
     /// </remarks>
     internal override (byte R, byte G, byte B, byte A) ReadTargetPixel(
         RenderTarget target, int x, int y)
     {
+        Span<byte> one = stackalloc byte[4];
+        ReadTargetPixels(target, x, y, 1, 1, one);
+        return (one[0], one[1], one[2], one[3]);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <b>The row flip is here, and it is the only place a D3D readback may do
+    /// it.</b> A D3D render target's origin is top-left, so the row a clip
+    /// y = -1 vertex rasterises to is the LAST one; the contract's y counts from
+    /// the bottom of the picture, so the region's top edge in resource rows is
+    /// <c>target.Height - y - height</c> and the staging surface arrives
+    /// top-first, which is why the copy below walks the destination backwards.
+    /// <para>
+    /// <b>The staging surface's row pitch is the driver's, never
+    /// <c>width * 4</c>.</b> D3D aligns it however it likes, so a whole-surface
+    /// read that assumed a tight pitch would shear the picture by a few texels
+    /// per row on one machine and be perfectly correct on another - which is
+    /// the worst possible way to find out. <c>Map</c> on the immediate context
+    /// is what waits for the copy; there is no fence to take.
+    /// </para>
+    /// </remarks>
+    internal override void ReadTargetPixels(
+        RenderTarget target, int x, int y, int width, int height, Span<byte> destination)
+    {
+        PixelReadback.ValidateRegion(target, x, y, width, height, destination);
         if (target.ColorTexture is not D3D11Texture color)
             throw new ArgumentException("The target has no colour attachment to read.", nameof(target));
 
@@ -468,8 +495,8 @@ public sealed unsafe class D3D11Renderer : Renderer
 
         var desc = new Texture2DDesc
         {
-            Width = 1,
-            Height = 1,
+            Width = (uint)width,
+            Height = (uint)height,
             MipLevels = 1,
             ArraySize = 1,
             Format = color.DxgiFormat,
@@ -486,14 +513,14 @@ public sealed unsafe class D3D11Renderer : Renderer
 
         try
         {
-            uint top = (uint)(target.Height - 1 - y);
+            uint top = (uint)(target.Height - y - height);
             var box = new Silk.NET.Direct3D11.Box
             {
                 Left = (uint)x,
                 Top = top,
                 Front = 0,
-                Right = (uint)x + 1,
-                Bottom = top + 1,
+                Right = (uint)(x + width),
+                Bottom = top + (uint)height,
                 Back = 1,
             };
             context->CopySubresourceRegion(
@@ -501,10 +528,14 @@ public sealed unsafe class D3D11Renderer : Renderer
 
             MappedSubresource mapped = default;
             SilkMarshal.ThrowHResult(context->Map((ID3D11Resource*)stagingPtr, 0, Map.Read, 0, &mapped));
-            byte* p = (byte*)mapped.PData;
-            var result = (p[0], p[1], p[2], p[3]);
-            context->Unmap((ID3D11Resource*)stagingPtr, 0);
-            return result;
+            try
+            {
+                PixelReadback.CopyRowsBottomFirst((byte*)mapped.PData, mapped.RowPitch, width, height, destination);
+            }
+            finally
+            {
+                context->Unmap((ID3D11Resource*)stagingPtr, 0);
+            }
         }
         finally
         {
@@ -844,6 +875,72 @@ public sealed unsafe class D3D11Renderer : Renderer
         int released = _retirement?.ConsumerReleased(generation) ?? 0;
         if (released > 0)
             _logger.LogDebug("Released {Count} retired shared target generation(s) up to {Generation}.", released, generation);
+    }
+
+    /// <inheritdoc/>
+    internal override bool TakeSharedConsumerTurn(int timeoutMs = 100) =>
+        WithConsumerKey(timeoutMs, static _ => { });
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The present target IS the shared texture on this backend, so this is an
+    /// ordinary readback of it. The bracket is what makes it a measurement of
+    /// the protocol rather than of the resource.
+    /// </remarks>
+    internal override bool TryReadSharedPixels(Span<byte> destination, int timeoutMs = 100)
+    {
+        if (_presentTarget is not { } target) return false;
+
+        // Copied out of the span before the lambda, because a Span cannot be
+        // captured; the array is the probe's own and lives exactly as long as
+        // the call.
+        byte[] scratch = new byte[PixelReadback.ByteCount(target.Width, target.Height)];
+        bool read = WithConsumerKey(timeoutMs, self => self.ReadTargetPixels(target, scratch));
+        if (read) scratch.CopyTo(destination);
+        return read;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> holding <see cref="Renderer.SharedConsumerKey"/>
+    /// and hands <see cref="Renderer.SharedProducerKey"/> back afterwards.
+    /// </summary>
+    /// <remarks>
+    /// <b>The release is in a finally and the timeout is not a failure</b>, for
+    /// the two reasons <see cref="BeginSharedWrite"/> already states: dropping
+    /// the release deadlocks the producer on its next frame with nothing
+    /// reporting a disagreement, and <c>WAIT_TIMEOUT</c> is a SUCCESS-coded
+    /// HRESULT that an <c>hr &lt; 0</c> test reads as an acquisition.
+    /// </remarks>
+    private bool WithConsumerKey(int timeoutMs, Action<D3D11Renderer> work)
+    {
+        if (SharedColor is not { } color) return false;
+
+        int hr = color.KeyedMutex->AcquireSync(SharedConsumerKey, (uint)Math.Max(0, timeoutMs));
+        if (hr == WaitTimeout) return false;
+        if (hr < 0)
+        {
+            _logger.LogError(
+                "Taking the shared target's consumer turn failed: {Code} (0x{Hr:X8}).",
+                DxgiInterop.Describe(hr), hr);
+            return false;
+        }
+
+        try
+        {
+            work(this);
+        }
+        finally
+        {
+            int released = color.KeyedMutex->ReleaseSync(SharedProducerKey);
+            if (released < 0)
+            {
+                _logger.LogError(
+                    "Handing the shared target's key back failed: {Code} (0x{Hr:X8}). The next frame will time out.",
+                    DxgiInterop.Describe(released), released);
+            }
+        }
+
+        return true;
     }
 
     /// <summary>WAIT_TIMEOUT, which AcquireSync returns as a success-coded HRESULT.</summary>

@@ -218,6 +218,17 @@ try
         engine.Host.FrameCompleted += _ => engine.Host.RequestShutdown();
     }
 
+    // Replaces the ordinary session rather than riding along with it: the
+    // shared present target it measures only exists on a composited surface,
+    // and a window would give it a swap chain instead. It ends itself, so the
+    // process gets its answer and its shell prompt back.
+    if (options.ViewportCompare)
+    {
+        if (!ViewportCompareRun.Run(engine, loggerFactory.CreateLogger("ViewportCompare")))
+            Environment.ExitCode = 1;
+        return;
+    }
+
     // No renderer disposal here: GPU teardown is thread-affine and happens in
     // Renderer.Shutdown on the render thread (Engine handles the crash path too).
     // A render-thread crash is caught and logged inside Engine, so Run returns

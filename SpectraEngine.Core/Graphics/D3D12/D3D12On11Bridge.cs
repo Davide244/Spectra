@@ -134,6 +134,86 @@ internal sealed unsafe partial class D3D12On11Bridge : IDisposable
     /// <summary>Whether a shared texture exists to publish into.</summary>
     internal bool HasSurface => _surface is not null;
 
+    /// <summary>Pixel width of the live shared texture, or zero before one exists.</summary>
+    internal int SharedWidth => _surface?.Shared.Width ?? 0;
+
+    /// <summary>Pixel height of the live shared texture, or zero before one exists.</summary>
+    internal int SharedHeight => _surface?.Shared.Height ?? 0;
+
+    /// <summary>
+    /// Copies the whole shared texture back to the CPU as tightly packed 8-bit
+    /// RGBA, rows bottom-first. Called with the shared key held.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is the only way to see what a consumer of THIS backend gets</b>,
+    /// and it has to live here rather than as a readback of some render target,
+    /// because the shared resource belongs to the bridge's own D3D11 device and
+    /// D3D12 never touches it. Reading the present target instead would measure
+    /// the frame before <see cref="Publish"/> copied it, which skips exactly the
+    /// step this backend adds.
+    /// </para>
+    /// <para>
+    /// A staging surface on the bridge's device rather than a map of the shared
+    /// texture: a shared resource lives on the default heap and cannot be
+    /// mapped. Row order and pitch go through
+    /// <see cref="PixelReadback.CopyRowsBottomFirst"/>, so the D3D top-left
+    /// origin is converted here exactly as every other readback in the engine
+    /// converts it.
+    /// </para>
+    /// <para>
+    /// A diagnostic path, never a frame path: it stalls on the immediate
+    /// context's map.
+    /// </para>
+    /// </remarks>
+    internal void ReadShared(Span<byte> destination)
+    {
+        if (_surface is not { } surface) return;
+
+        int width = surface.Shared.Width;
+        int height = surface.Shared.Height;
+        PixelReadback.ValidateSize(width, height, destination);
+
+        var desc = new Texture2DDesc
+        {
+            Width = (uint)width,
+            Height = (uint)height,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = surface.Shared.DxgiFormat,
+            SampleDesc = new SampleDesc(1, 0),
+            Usage = Usage.Staging,
+            BindFlags = 0,
+            CPUAccessFlags = (uint)CpuAccessFlag.Read,
+            MiscFlags = 0,
+        };
+
+        ID3D11Texture2D* stagingPtr = null;
+        SilkMarshal.ThrowHResult(((ID3D11Device*)_device.Handle)->CreateTexture2D(&desc, null, &stagingPtr));
+        ComPtr<ID3D11Texture2D> staging = ComOwnership.Own(stagingPtr);
+        try
+        {
+            var context = (ID3D11DeviceContext*)_context.Handle;
+            context->CopyResource((ID3D11Resource*)stagingPtr, surface.Shared.Resource);
+
+            MappedSubresource mapped = default;
+            SilkMarshal.ThrowHResult(context->Map((ID3D11Resource*)stagingPtr, 0, Map.Read, 0, &mapped));
+            try
+            {
+                PixelReadback.CopyRowsBottomFirst(
+                    (byte*)mapped.PData, mapped.RowPitch, width, height, destination);
+            }
+            finally
+            {
+                context->Unmap((ID3D11Resource*)stagingPtr, 0);
+            }
+        }
+        finally
+        {
+            ComOwnership.Release(ref staging);
+        }
+    }
+
     /// <summary>
     /// Builds the shared texture for a fresh present target and the D3D11 alias
     /// of that target's colour resource.

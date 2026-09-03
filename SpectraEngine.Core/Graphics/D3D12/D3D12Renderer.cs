@@ -776,9 +776,21 @@ public sealed unsafe class D3D12Renderer : Renderer
         // never created: no error, no debug-layer message, and a viewport with
         // no gizmo handles in it.
         if (sceneTarget is null || ReferenceEquals(sceneTarget, present))
+        {
             DrawOverlay(scene, present);
+        }
         else
+        {
             ResolveTo(sceneTarget.ColorTexture!, present, scene);
+
+            // The same source, the same pass, the same command list, into an
+            // ordinary sRGB target - so whatever the shared route does
+            // differently is the only thing a byte comparison can find. On this
+            // backend that route is the bridge's copy, which happens after the
+            // execute below and therefore after this. See Renderer.CompareTarget.
+            if (CompareTarget is { } reference)
+                ResolveTo(sceneTarget.ColorTexture!, reference, scene);
+        }
 
         if (!_composited)
         {
@@ -931,6 +943,24 @@ public sealed unsafe class D3D12Renderer : Renderer
     internal override (byte R, byte G, byte B, byte A) ReadTargetPixel(
         RenderTarget target, int x, int y)
     {
+        Span<byte> one = stackalloc byte[4];
+        ReadTargetPixels(target, x, y, 1, 1, one);
+        return (one[0], one[1], one[2], one[3]);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <b>The row flip is the D3D half of the contract</b>, and the 256-aligned
+    /// row pitch is this backend's half of the pitch rule: the destination
+    /// footprint is padded whatever the region asked for, which is why the
+    /// buffer is sized from <c>GetCopyableFootprints</c> rather than from
+    /// <c>width * height * 4</c> and why the copy out walks rows rather than
+    /// memcpy-ing the block.
+    /// </remarks>
+    internal override void ReadTargetPixels(
+        RenderTarget target, int x, int y, int width, int height, Span<byte> destination)
+    {
+        PixelReadback.ValidateRegion(target, x, y, width, height, destination);
         if (target is not D3D12RenderTarget d3dTarget || target.ColorTexture is not D3D12Texture color)
             throw new ArgumentException("The target has no colour attachment to read.", nameof(target));
         if (_isRecording)
@@ -940,8 +970,8 @@ public sealed unsafe class D3D12Renderer : Renderer
         {
             Dimension = ResourceDimension.Texture2D,
             Alignment = 0,
-            Width = 1,
-            Height = 1,
+            Width = (ulong)width,
+            Height = (uint)height,
             DepthOrArraySize = 1,
             MipLevels = 1,
             Format = color.DxgiFormat,
@@ -978,14 +1008,14 @@ public sealed unsafe class D3D12Renderer : Renderer
             };
             src.Anonymous.SubresourceIndex = 0;
 
-            uint top = (uint)(target.Height - 1 - y);
+            uint top = (uint)(target.Height - y - height);
             var box = new Silk.NET.Direct3D12.Box
             {
                 Left = (uint)x,
                 Top = top,
                 Front = 0,
-                Right = (uint)x + 1,
-                Bottom = top + 1,
+                Right = (uint)(x + width),
+                Bottom = top + (uint)height,
                 Back = 1,
             };
             list->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
@@ -996,11 +1026,16 @@ public sealed unsafe class D3D12Renderer : Renderer
             void* mapped = null;
             var readRange = new Silk.NET.Direct3D12.Range { Begin = 0, End = (nuint)totalBytes };
             SilkMarshal.ThrowHResult(((ID3D12Resource*)readback.Handle)->Map(0, &readRange, &mapped));
-            byte* p = (byte*)mapped;
-            var result = (p[0], p[1], p[2], p[3]);
-            var written = new Silk.NET.Direct3D12.Range { Begin = 0, End = 0 };
-            ((ID3D12Resource*)readback.Handle)->Unmap(0, &written);
-            return result;
+            try
+            {
+                PixelReadback.CopyRowsBottomFirst(
+                    (byte*)mapped, footprint.Footprint.RowPitch, width, height, destination);
+            }
+            finally
+            {
+                var written = new Silk.NET.Direct3D12.Range { Begin = 0, End = 0 };
+                ((ID3D12Resource*)readback.Handle)->Unmap(0, &written);
+            }
         }
         finally
         {
@@ -1652,6 +1687,73 @@ public sealed unsafe class D3D12Renderer : Renderer
         int released = _retirement?.ConsumerReleased(generation) ?? 0;
         if (released > 0)
             _logger.LogDebug("Released {Count} retired shared target generation(s) up to {Generation}.", released, generation);
+    }
+
+    /// <inheritdoc/>
+    internal override bool TakeSharedConsumerTurn(int timeoutMs = 100) =>
+        WithConsumerKey(timeoutMs, static _ => { });
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <b>The bridge's texture, never the present target</b>, and that is the
+    /// whole reason this member exists rather than a readback of some target.
+    /// The frame lands in a private D3D12 resource here and one
+    /// <c>CopyResource</c> carries it into the shared one; reading the private
+    /// side would measure everything except that copy, which is precisely where
+    /// a second encode would live.
+    /// </remarks>
+    internal override bool TryReadSharedPixels(Span<byte> destination, int timeoutMs = 100)
+    {
+        if (_bridge is not { HasSurface: true } bridge) return false;
+
+        // The frame's own list was submitted and the bridge flushed its context
+        // before the key changed hands, so the copy is queued; this is what
+        // waits for it. Nothing else in a composited session does - Present is
+        // where WaitForGpu lives and a probe reads between frames.
+        WaitForGpu();
+
+        byte[] scratch = new byte[PixelReadback.ByteCount(bridge.SharedWidth, bridge.SharedHeight)];
+        bool read = WithConsumerKey(timeoutMs, _ => bridge.ReadShared(scratch));
+        if (read) scratch.CopyTo(destination);
+        return read;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> holding <see cref="Renderer.SharedConsumerKey"/>
+    /// and hands <see cref="Renderer.SharedProducerKey"/> back afterwards. See
+    /// the D3D11 twin for why the release is in a finally and why a timeout is
+    /// not a failure.
+    /// </summary>
+    private bool WithConsumerKey(int timeoutMs, Action<D3D12Renderer> work)
+    {
+        if (_bridge is not { HasSurface: true } bridge) return false;
+
+        int hr = bridge.KeyedMutex->AcquireSync(SharedConsumerKey, (uint)Math.Max(0, timeoutMs));
+        if (hr == WaitTimeout) return false;
+        if (hr < 0)
+        {
+            _logger.LogError(
+                "Taking the shared target's consumer turn failed: {Code} (0x{Hr:X8}).",
+                DxgiInterop.Describe(hr), hr);
+            return false;
+        }
+
+        try
+        {
+            work(this);
+        }
+        finally
+        {
+            int released = bridge.KeyedMutex->ReleaseSync(SharedProducerKey);
+            if (released < 0)
+            {
+                _logger.LogError(
+                    "Handing the shared target's key back failed: {Code} (0x{Hr:X8}). The next frame will time out.",
+                    DxgiInterop.Describe(released), released);
+            }
+        }
+
+        return true;
     }
 
     /// <summary>WAIT_TIMEOUT, which AcquireSync returns as a success-coded HRESULT.</summary>

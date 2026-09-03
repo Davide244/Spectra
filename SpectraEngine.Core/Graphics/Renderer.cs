@@ -579,6 +579,43 @@ public abstract class Renderer
     public RenderTarget? ProbeTarget { get; set; }
 
     /// <summary>
+    /// When set, the frame's resolve is run a SECOND time into this target,
+    /// beside the one that goes to whatever is being presented, in the same
+    /// frame and the same command list.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is the double-sRGB-encode gate, and it exists because that
+    /// failure produces no error of any kind.</b> A shared present target is a
+    /// UNORM resource wearing an <c>_SRGB</c> render-target view, so the write
+    /// encodes exactly once and a consumer that decodes on sample gets the
+    /// picture back. Anything downstream that encodes again washes the frame
+    /// out: no exception, no HRESULT, no debug-layer message, and the only
+    /// witness is somebody looking at it. Resolving the same source into an
+    /// ordinary <see cref="TextureFormat.Rgba8"/> sRGB target - which is
+    /// byte-for-byte what the window's back buffer holds - gives the comparison
+    /// something to be wrong against.
+    /// </para>
+    /// <para>
+    /// <b>Same frame and same command list, deliberately</b>, for the reason
+    /// <see cref="ProbeTarget"/> already states: two executions inside one
+    /// frame is a rehearsal of the shape post-processing needs, and calling
+    /// <see cref="Render"/> twice would reset D3D12's command allocator while
+    /// the GPU may still be reading the list it recorded. It also makes the two
+    /// pictures the SAME picture rather than two frames of an animation, which
+    /// is the whole of what makes a byte comparison meaningful.
+    /// </para>
+    /// <para>
+    /// <b>Needs <see cref="HdrEnabled"/>.</b> With HDR off the pipeline draws
+    /// straight into the presented target and there is no intermediate to
+    /// resolve a second time from, so the second resolve simply does not
+    /// happen; <see cref="ViewportCompareProbe"/> refuses up front rather than
+    /// letting a run report a comparison it never made.
+    /// </para>
+    /// </remarks>
+    public RenderTarget? CompareTarget { get; set; }
+
+    /// <summary>
     /// How many error or corruption messages a graphics debug layer has
     /// reported over this renderer's life. Always zero on backends and builds
     /// that have no debug layer.
@@ -741,6 +778,59 @@ public abstract class Renderer
     {
     }
 
+    // ---- The consumer's half, for a run that has no consumer ----------------
+    //
+    // Both members below stand in for a compositor, and both are internal
+    // because nothing in a game or a shell is on this side of the handshake:
+    // a real consumer owns its own device and does this through the imported
+    // handle. They exist so --viewport-compare can measure what that consumer
+    // WOULD see without needing one, and because with no consumer at all the
+    // producer's second frame simply times out - the key it released is key 1,
+    // and nothing hands key 0 back.
+
+    /// <summary>
+    /// Takes the consumer's turn and immediately gives it back: acquire
+    /// <see cref="SharedConsumerKey"/>, release <see cref="SharedProducerKey"/>.
+    /// False means the turn never arrived, or there is no shared target.
+    /// </summary>
+    /// <remarks>
+    /// <b>A heartbeat, not a read.</b> Without it a headless run writes exactly
+    /// one shared frame and every frame after it skips the write on a
+    /// <c>WAIT_TIMEOUT</c>, which is correct behaviour answering a question
+    /// nobody asked - and would leave the shared texture holding a picture
+    /// several frames older than the one a comparison had just resolved beside
+    /// it, i.e. a guaranteed false failure with a plausible-looking cause.
+    /// </remarks>
+    internal virtual bool TakeSharedConsumerTurn(int timeoutMs = 100) => false;
+
+    /// <summary>
+    /// Reads back what an importer of the shared handle would see, as tightly
+    /// packed 8-bit RGBA in the picture-space row order
+    /// <see cref="ReadTargetPixels"/> defines. False means there is no shared
+    /// target, or its key never came back.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>"What the consumer would see" is the only question with one answer on
+    /// both backends</b>, and that is why this is a member here rather than a
+    /// readback of some target. On D3D11 the present target IS the shared
+    /// texture, so this is <see cref="ReadTargetPixels"/> of it. On D3D12 it is
+    /// not: the frame lands in a private D3D12 target and a D3D11On12 bridge
+    /// copies it into a texture D3D11 created, so reading the present target
+    /// there would measure everything except the copy - which is precisely
+    /// where a second encode would live.
+    /// </para>
+    /// <para>
+    /// <b>The key is held across the read.</b> A keyed-mutex resource WRITTEN
+    /// without its key completes with <c>S_OK</c> and writes nothing, measured;
+    /// what a read without it returns is not defined anywhere, and a
+    /// measurement taken outside the protocol is not a measurement of the
+    /// protocol. Taking the turn here is also what hands key 0 back, so the
+    /// frame after a read is not skipped.
+    /// </para>
+    /// </remarks>
+    internal virtual bool TryReadSharedPixels(Span<byte> destination, int timeoutMs = 100) => false;
+
     // ---- HDR and the resolve -----------------------------------------------
 
     private RenderTarget? _sceneTarget;
@@ -868,6 +958,31 @@ public abstract class Renderer
     /// <summary>The shared clip-space triangle, for tests that drive their own shader over it.</summary>
     internal Mesh EnsureFullscreenTriangleForTest() => EnsureFullscreenTriangle();
 
+    /// <summary>Clears one target outside a frame, for tests that have no scene to render.</summary>
+    /// <remarks>
+    /// <b>The command scope is why this exists at all.</b> D3D11's immediate
+    /// context is always recording, so a test there can drive
+    /// <see cref="BeginPass(RenderTarget?, in PassClear)"/> straight from the
+    /// fixture; on D3D12 a pass outside a frame writes into a closed command
+    /// list and does nothing, silently. Shared rather than per-backend so a
+    /// test cannot prove its own arrangement instead of the engine's.
+    /// </remarks>
+    internal void ClearForTest(RenderTarget target, Vector4 color)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        BeginOutOfFrameCommands();
+        try
+        {
+            BeginPass(target, PassClear.To(color));
+            EndPass();
+        }
+        finally
+        {
+            EndOutOfFrameCommands();
+        }
+    }
+
     // ---- Texture orientation, measured -------------------------------------
 
     private Mesh? _orientationQuadFull;
@@ -965,6 +1080,72 @@ public abstract class Renderer
     /// </para>
     /// </remarks>
     internal abstract (byte R, byte G, byte B, byte A) ReadTargetPixel(RenderTarget target, int x, int y);
+
+    /// <summary>
+    /// Reads a rectangle of <paramref name="target"/>'s colour attachment back
+    /// to the CPU as tightly packed 8-bit RGBA.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The same picture-space contract <see cref="ReadTargetPixel"/> states,
+    /// and the destination follows it too</b>: <paramref name="x"/> counts from
+    /// the left edge, <paramref name="y"/> from the BOTTOM, and row 0 of
+    /// <paramref name="destination"/> is the bottom row of the region. Each
+    /// backend converts from its own row order, because stating the answer in
+    /// memory order would make a comparison between two backends meaningless -
+    /// the disagreement being looked for and the convention used to look would
+    /// be the same quantity.
+    /// </para>
+    /// <para>
+    /// <b>This is the plural form because the singular one cannot be used for a
+    /// whole picture.</b> Every D3D implementation of
+    /// <see cref="ReadTargetPixel"/> creates a staging resource, copies one
+    /// texel and maps it, which is fine for the four corners a diagnostic asks
+    /// about and is 921,600 device round trips for a 1280x720 frame. Every real
+    /// backend therefore overrides this with one copy and one map; the default
+    /// below is correct rather than fast, and exists so a renderer with no GPU
+    /// under it (a test's stand-in) answers this without being taught to.
+    /// </para>
+    /// <para>
+    /// Render thread only, and synchronous: it stalls until the GPU has
+    /// finished whatever wrote the region. A diagnostic and a test path, never
+    /// a frame path.
+    /// </para>
+    /// </remarks>
+    /// <param name="target">The target to read. Must have a colour attachment.</param>
+    /// <param name="x">Left edge of the region, in texels from the left of the picture.</param>
+    /// <param name="y">Bottom edge of the region, in texels from the BOTTOM of the picture.</param>
+    /// <param name="width">Region width in texels.</param>
+    /// <param name="height">Region height in texels.</param>
+    /// <param name="destination">
+    /// Receives <c>width * height * 4</c> bytes, rows bottom-first, RGBA order.
+    /// May be longer; anything past the region is left alone.
+    /// </param>
+    internal virtual void ReadTargetPixels(
+        RenderTarget target, int x, int y, int width, int height, Span<byte> destination)
+    {
+        PixelReadback.ValidateRegion(target, x, y, width, height, destination);
+
+        for (int row = 0; row < height; row++)
+        {
+            for (int column = 0; column < width; column++)
+            {
+                (byte r, byte g, byte b, byte a) = ReadTargetPixel(target, x + column, y + row);
+                int offset = ((row * width) + column) * 4;
+                destination[offset] = r;
+                destination[offset + 1] = g;
+                destination[offset + 2] = b;
+                destination[offset + 3] = a;
+            }
+        }
+    }
+
+    /// <summary>Reads the whole of <paramref name="target"/>. See <see cref="ReadTargetPixels"/>.</summary>
+    internal void ReadTargetPixels(RenderTarget target, Span<byte> destination)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ReadTargetPixels(target, 0, 0, target.Width, target.Height, destination);
+    }
 
     /// <summary>
     /// Opens a command scope for work issued outside a frame, on backends where

@@ -30,6 +30,7 @@ public sealed class Engine
 
     private readonly ILogger<Engine> _logger;
     private OffscreenProbe? _offscreenProbe;
+    private ViewportCompareProbe? _viewportCompare;
     private readonly FpsCounter _fpsCounter = new();
 
     /// <summary>
@@ -339,6 +340,26 @@ public sealed class Engine
     /// targets against.
     /// </remarks>
     public bool RunOffscreenProbe { get; set; }
+
+    /// <summary>
+    /// Whether to run the viewport comparison once at startup and then end the
+    /// session.
+    /// </summary>
+    /// <remarks>
+    /// <b>A measurement rather than a mode</b>, so it ends the run itself: the
+    /// probe answers one question about one frame, and a session left open
+    /// afterwards would go on paying for a composited surface nobody is
+    /// importing. It needs a <see cref="RenderSurfaceKind.Composited"/> surface,
+    /// since a window has no shared target to compare against; see
+    /// <see cref="ViewportCompareProbe"/>.
+    /// </remarks>
+    public bool RunViewportCompare { get; set; }
+
+    /// <summary>
+    /// Null until <see cref="RunViewportCompare"/>'s probe has reported, then
+    /// whether the two pictures agreed. A host's exit code.
+    /// </summary>
+    public bool? ViewportComparePassed { get; private set; }
 
     /// <summary>
     /// Name of the rendering pipeline to start on, or null for the backend's
@@ -777,6 +798,12 @@ public sealed class Engine
             if (RunOffscreenProbe)
                 _offscreenProbe = new OffscreenProbe(_logger);
 
+            // Beside the offscreen probe and for the same reason: it needs the
+            // real scene, because a comparison of two clears would agree
+            // whatever the colour route did to them.
+            if (RunViewportCompare)
+                _viewportCompare = new ViewportCompareProbe(_logger);
+
             // The change log follows whichever scene is live, so a shell's tree
             // view hears about structure from the frame the scene loads rather
             // than from the first edit after it.
@@ -1090,6 +1117,23 @@ public sealed class Engine
                 _offscreenProbe?.Update(_renderer);
                 if (_offscreenProbe is { Running: false })
                     _offscreenProbe = null;
+
+                // In the same slot, because it decides what this frame writes.
+                // When it finishes, the run is OVER rather than merely reported:
+                // it has measured its one frame, and the frame it would open
+                // next would take the shared key with nobody left to hand it
+                // back, spending a timeout to render a picture nobody reads.
+                if (_viewportCompare is { } compare)
+                {
+                    compare.Update(_renderer);
+                    if (!compare.Running)
+                    {
+                        ViewportComparePassed = compare.Passed;
+                        _viewportCompare = null;
+                        Host.RequestShutdown();
+                        break;
+                    }
+                }
 
                 _renderer.Render(_sceneManager.ActiveScene, _renderView, deltaTime);
 

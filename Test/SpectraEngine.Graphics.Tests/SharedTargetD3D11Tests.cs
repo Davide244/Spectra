@@ -245,6 +245,171 @@ public sealed unsafe class SharedTargetD3D11Tests(SharedTargetD3D11Fixture fixtu
     }
 
     [Fact]
+    public void A_whole_target_readback_agrees_with_the_one_texel_form_about_which_way_up_it_is()
+    {
+        // The plural readback carries two things the singular one does not: a
+        // row walk and a driver-chosen row pitch. Both fail the same way - a
+        // picture sheared or flipped, no error anywhere - so they are asserted
+        // against the form that was already pinned, on a picture that is
+        // asymmetric top to bottom.
+        //
+        // The size is deliberately odd on both axes: 37 texels is 148 bytes a
+        // row, which no D3D alignment is a multiple of, so a staging surface
+        // that pads its rows is exercised rather than hoped for.
+        Require();
+
+        const int Width = 37;
+        const int Height = 23;
+
+        RenderTarget target = fixture.Renderer.CreateRenderTarget(new RenderTargetDesc(
+            Width, Height, TextureFormat.Rgba8, TextureColorSpace.Linear, Depth: false));
+        Texture white = fixture.Renderer.CreateTexture(
+            [255, 255, 255, 255], 1, 1, TextureFormat.Rgba8, TextureColorSpace.Linear,
+            TextureFilter.Nearest, TextureWrap.Clamp);
+        try
+        {
+            // Clip y 0..1 only, so the TOP half of the picture is lit and the
+            // bottom is the black clear underneath it.
+            fixture.Renderer.DrawOrientationQuad(white, target, OrientationQuad.Coverage.TopHalf);
+
+            var picture = new byte[Width * Height * 4];
+            fixture.Renderer.ReadTargetPixels(target, picture);
+
+            // Row 0 of the destination is the BOTTOM of the picture, which is
+            // the half the quad did not cover.
+            picture[0].ShouldBeLessThan((byte)80, "the destination's first row must be the bottom of the picture");
+            picture[((Height - 1) * Width * 4)].ShouldBeGreaterThan((byte)120);
+
+            // And texel for texel against the form the orientation probe uses,
+            // which is what rules out a pitch off by a driver's padding.
+            for (int y = 0; y < Height; y++)
+            {
+                for (int x = 0; x < Width; x++)
+                {
+                    (byte r, byte g, byte b, byte a) = fixture.Renderer.ReadTargetPixel(target, x, y);
+                    int offset = ((y * Width) + x) * 4;
+                    picture[offset].ShouldBe(r, $"red at ({x}, {y})");
+                    picture[offset + 1].ShouldBe(g, $"green at ({x}, {y})");
+                    picture[offset + 2].ShouldBe(b, $"blue at ({x}, {y})");
+                    picture[offset + 3].ShouldBe(a, $"alpha at ({x}, {y})");
+                }
+            }
+        }
+        finally
+        {
+            fixture.Renderer.DestroyTexture(white);
+            fixture.Renderer.DestroyRenderTarget(target);
+        }
+    }
+
+    [Fact]
+    public void The_shared_route_and_an_ordinary_srgb_target_encode_a_colour_the_same_way()
+    {
+        // The `--viewport-compare` claim, in a fixture. Both targets are written
+        // the same linear value; one is an ordinary Rgba8 sRGB target, which is
+        // byte-for-byte what a window's back buffer is, and the other is the
+        // shared present target, which is a UNORM resource wearing an _SRGB
+        // render-target view. If those two encode differently the compositor
+        // shows a picture the window would not have, and NOTHING anywhere
+        // reports it.
+        Require();
+
+        var linear = new Vector4(0.5f, 0.25f, 0.75f, 1f);
+        RenderTarget reference = CreateReferenceTarget();
+        try
+        {
+            fixture.Renderer.ClearForTest(reference, linear);
+            WriteSharedTarget(linear);
+
+            ViewportCompare.Reading reading = CompareSharedAgainst(reference);
+
+            reading.MaxDelta.ShouldBeLessThanOrEqualTo(ViewportCompare.Threshold, reading.ToString());
+            reading.Passes.ShouldBeTrue(reading.ToString());
+        }
+        finally
+        {
+            fixture.Renderer.DestroyRenderTarget(reference);
+        }
+    }
+
+    [Fact]
+    public void A_double_encode_on_the_shared_route_is_caught_rather_than_absorbed()
+    {
+        // A gate never seen to fail is not known to work, so the defect is
+        // MANUFACTURED here: the shared target is written the value that has
+        // already been through the transfer function once, so its own sRGB view
+        // applies it a second time - which is exactly what a downstream encode
+        // would do, and exactly what the whole probe exists to detect.
+        //
+        // It is the SHARED side that is spoiled rather than the reference,
+        // because that is where the real defect would live, and the comparison
+        // is symmetric only in arithmetic.
+        Require();
+
+        var linear = new Vector4(0.5f, 0.25f, 0.75f, 1f);
+        Vector3 alreadyEncoded = ColorSpace.LinearToSrgb(new Vector3(linear.X, linear.Y, linear.Z));
+
+        RenderTarget reference = CreateReferenceTarget();
+        try
+        {
+            fixture.Renderer.ClearForTest(reference, linear);
+            WriteSharedTarget(new Vector4(alreadyEncoded, 1f));
+
+            ViewportCompare.Reading reading = CompareSharedAgainst(reference);
+
+            reading.Passes.ShouldBeFalse(
+                "a transfer function applied twice must not be inside the tolerance: " + reading);
+            reading.MaxDelta.ShouldBeGreaterThan(
+                ViewportCompare.Threshold * 10,
+                "the failure this guards is tens of levels, not a rounding difference: " + reading);
+        }
+        finally
+        {
+            fixture.Renderer.DestroyRenderTarget(reference);
+        }
+    }
+
+    /// <summary>
+    /// An ordinary sRGB colour target the size of the shared one: byte for byte
+    /// what the window's back buffer is on this backend.
+    /// </summary>
+    private RenderTarget CreateReferenceTarget() => fixture.Renderer.CreateRenderTarget(new RenderTargetDesc(
+        SharedTargetD3D11Fixture.Width, SharedTargetD3D11Fixture.Height,
+        TextureFormat.Rgba8, TextureColorSpace.Srgb, Depth: false));
+
+    /// <summary>Writes the shared present target under its key, the way a frame does.</summary>
+    private void WriteSharedTarget(Vector4 color)
+    {
+        fixture.Renderer.BeginSharedWrite(1000).ShouldBeTrue();
+        try
+        {
+            fixture.Renderer.ClearForTest(
+                fixture.Renderer.PresentTargetForTest.ShouldNotBeNull(), color);
+        }
+        finally
+        {
+            fixture.Renderer.EndSharedWrite();
+        }
+    }
+
+    /// <summary>
+    /// Reads both pictures back and compares them. The shared read takes the
+    /// consumer's turn and hands key 0 back, which is what every test in this
+    /// class that publishes owes the ones after it.
+    /// </summary>
+    private ViewportCompare.Reading CompareSharedAgainst(RenderTarget reference)
+    {
+        var window = new byte[reference.Width * reference.Height * 4];
+        fixture.Renderer.ReadTargetPixels(reference, window);
+
+        var shared = new byte[window.Length];
+        fixture.Renderer.TryReadSharedPixels(shared, 1000)
+            .ShouldBeTrue("the shared target's key never came back");
+
+        return ViewportCompare.Compare(window, shared);
+    }
+
+    [Fact]
     public void A_shared_target_refuses_to_be_resized_in_place()
     {
         // Every other target in the engine swaps its GPU resource inside the

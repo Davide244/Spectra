@@ -309,6 +309,96 @@ public sealed unsafe class SharedTargetD3D12BridgeTests(SharedTargetD3D12Fixture
         fixture.Renderer.DebugLayerErrorCount.ShouldBe(errorsBefore, fixture.Diagnostics);
     }
 
+    [Fact]
+    public void The_bridged_route_and_an_ordinary_srgb_target_encode_a_colour_the_same_way()
+    {
+        // The `--viewport-compare` claim, and it carries MORE here than on
+        // D3D11: over there the shared texture is the thing the frame is written
+        // into, and here the frame lands in a private D3D12 target that the
+        // bridge copies across. That copy is between an _SRGB-typed resource and
+        // a _UNORM one within one format family, so it must be a bit copy and
+        // not a conversion - and a conversion would produce a washed-out picture
+        // with no error, no HRESULT and nothing on the debug layer.
+        Require();
+
+        var linear = new Vector4(0.5f, 0.25f, 0.75f, 1f);
+        RenderTarget reference = CreateReferenceTarget();
+        try
+        {
+            fixture.Renderer.ClearForTest(reference, linear);
+            fixture.WriteAndPublish(linear);
+
+            ViewportCompare.Reading reading = CompareSharedAgainst(reference);
+
+            reading.MaxDelta.ShouldBeLessThanOrEqualTo(ViewportCompare.Threshold, reading.ToString());
+            reading.Passes.ShouldBeTrue(reading.ToString());
+        }
+        finally
+        {
+            fixture.Renderer.DestroyRenderTarget(reference);
+        }
+    }
+
+    [Fact]
+    public void A_double_encode_on_the_bridged_route_is_caught_rather_than_absorbed()
+    {
+        // A gate never seen to fail is not known to work, so the defect is
+        // MANUFACTURED: the present target is written the value that has already
+        // been through the transfer function once, so its own sRGB view applies
+        // it a second time and the bridge faithfully copies the washed-out
+        // result across. That is precisely the shape of the failure this whole
+        // probe exists for.
+        Require();
+
+        var linear = new Vector4(0.5f, 0.25f, 0.75f, 1f);
+        Vector3 alreadyEncoded = ColorSpace.LinearToSrgb(new Vector3(linear.X, linear.Y, linear.Z));
+
+        RenderTarget reference = CreateReferenceTarget();
+        try
+        {
+            fixture.Renderer.ClearForTest(reference, linear);
+            fixture.WriteAndPublish(new Vector4(alreadyEncoded, 1f));
+
+            ViewportCompare.Reading reading = CompareSharedAgainst(reference);
+
+            reading.Passes.ShouldBeFalse(
+                "a transfer function applied twice must not be inside the tolerance: " + reading);
+            reading.MaxDelta.ShouldBeGreaterThan(
+                ViewportCompare.Threshold * 10,
+                "the failure this guards is tens of levels, not a rounding difference: " + reading);
+        }
+        finally
+        {
+            fixture.Renderer.DestroyRenderTarget(reference);
+        }
+    }
+
+    /// <summary>
+    /// An ordinary sRGB colour target the size of the shared one: byte for byte
+    /// what the window's back buffer holds on this backend.
+    /// </summary>
+    private RenderTarget CreateReferenceTarget() => fixture.Renderer.CreateRenderTarget(new RenderTargetDesc(
+        SharedTargetD3D12Fixture.Width, SharedTargetD3D12Fixture.Height,
+        TextureFormat.Rgba8, TextureColorSpace.Srgb, Depth: false));
+
+    /// <summary>
+    /// Reads both pictures back and compares them. The shared read goes through
+    /// the BRIDGE's texture rather than the present target, which is the only
+    /// place the copy can be observed - and it takes the consumer's turn, which
+    /// is what every test in this class that publishes owes the ones after it.
+    /// </summary>
+    private ViewportCompare.Reading CompareSharedAgainst(RenderTarget reference)
+    {
+        var window = new byte[reference.Width * reference.Height * 4];
+        fixture.Renderer.ReadTargetPixels(reference, window);
+
+        var shared = new byte[window.Length];
+        fixture.Renderer.TryReadSharedPixels(shared, 1000)
+            .ShouldBeTrue("the shared target's key never came back");
+
+        return ViewportCompare.Compare(window, shared);
+    }
+
     /// <summary>
     /// The consumer's half of one frame: acquire key 1, release key 0.
     /// </summary>

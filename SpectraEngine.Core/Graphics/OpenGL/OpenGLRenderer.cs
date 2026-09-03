@@ -349,6 +349,39 @@ public class OpenGLRenderer : Renderer
         return (pixel[0], pixel[1], pixel[2], pixel[3]);
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <b>The whole region in one call, and the row order is free here too.</b>
+    /// A GL framebuffer's origin is bottom-left, so <c>glReadPixels</c> already
+    /// returns rows bottom-first, which is the contract. Rows are tightly packed
+    /// because RGBA8 rows are a multiple of four bytes wide at any width, which
+    /// is what GL's default pack alignment of 4 asks for - a three-channel read
+    /// would need the alignment changed and is why this one names its format.
+    /// </remarks>
+    internal override unsafe void ReadTargetPixels(
+        RenderTarget target, int x, int y, int width, int height, Span<byte> destination)
+    {
+        PixelReadback.ValidateRegion(target, x, y, width, height, destination);
+        if (target.ColorTexture is not OpenGLTexture color)
+            throw new ArgumentException("The target has no colour attachment to read.", nameof(target));
+
+        GL gl = _gl!;
+        uint fbo = gl.GenFramebuffer();
+        gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, fbo);
+        gl.FramebufferTexture2D(
+            FramebufferTarget.ReadFramebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, color.Handle, 0);
+
+        fixed (byte* p = destination)
+        {
+            gl.ReadPixels(
+                x, y, (uint)width, (uint)height, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        }
+
+        gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, 0);
+        gl.DeleteFramebuffer(fbo);
+    }
+
     // The sRGB fallback is what "the back buffer" means on this backend when
     // the window's own framebuffer is linear, so it belongs here rather than
     // around the pipeline: a pipeline asks for the back buffer and gets

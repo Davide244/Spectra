@@ -69,7 +69,8 @@ internal sealed record DemoStartupOptions(
     string? ProjectPath = null,
     string? SaveProjectPath = null,
     string? ExportEntitySchemaPath = null,
-    bool ExitAfterSave = false)
+    bool ExitAfterSave = false,
+    bool ViewportCompare = false)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -86,7 +87,7 @@ internal sealed record DemoStartupOptions(
         "[--debug-layer[=true|false]] [--adapter=<name>] [--size=WxH] [--parts=<grid>] " +
         "[--props=<count>] [--map=<bundle.smap>] [--save-map=<bundle.smap>] " +
         "[--project=<folder>] [--save-project=<folder>] [--exit-after-save[=true|false]] " +
-        "[--export-entity-schema=<file.sentdef>].";
+        "[--export-entity-schema=<file.sentdef>] [--viewport-compare[=true|false]].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -127,6 +128,7 @@ internal sealed record DemoStartupOptions(
         string? saveProjectPath = null;
         string? exportEntitySchemaPath = null;
         bool exitAfterSave = false;
+        bool viewportCompare = false;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -287,6 +289,16 @@ internal sealed record DemoStartupOptions(
                 case "export-entity-schema" or "exportentityschema":
                     exportEntitySchemaPath = ParseName(value, token);
                     continue;
+
+                // Render one frame into the shared present target and into an
+                // ordinary sRGB target at once, compare the two byte for byte,
+                // print a verdict and exit. A measurement rather than a session,
+                // like --interop-probe: it runs on a COMPOSITED surface with no
+                // window at all, because the shared target it exists to check
+                // only exists there, and it ends itself once it has an answer.
+                case "viewport-compare" or "viewportcompare":
+                    viewportCompare = ParseBoolean(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -308,11 +320,24 @@ internal sealed record DemoStartupOptions(
                 $"'--exit-after-save' needs something to save: name --save-map or --save-project. {Usage}");
         }
 
+        // Refused BY NAME rather than attempted, exactly as the editor shell
+        // refuses an embedded GL viewport: a composited surface carries no GL
+        // context and no window handle, so letting the renderer discover that
+        // would report a design boundary as a driver failure. OpenGL also has
+        // no shared-target implementation at all, so there would be nothing to
+        // compare against even with a context.
+        if (viewportCompare && (backend ?? GraphicsBackend.OpenGL) == GraphicsBackend.OpenGL)
+        {
+            throw new ArgumentException(
+                "'--viewport-compare' needs a backend that can share a render target: name d3d11 or d3d12. " +
+                Usage);
+        }
+
         if (selfTest is bool fromCommandLine)
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
                 fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath, exitAfterSave);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath, exitAfterSave, viewportCompare);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -321,13 +346,13 @@ internal sealed record DemoStartupOptions(
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
                 fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath, exitAfterSave);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath, exitAfterSave, viewportCompare);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
             fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath, exitAfterSave);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath, exitAfterSave, viewportCompare);
     }
 
     // A switch that takes a name needs one: a bare --pipeline says nothing
