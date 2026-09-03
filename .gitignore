@@ -82,6 +82,16 @@ StyleCopReport.xml
 *.meta
 *.obj
 *.iobj
+
+# Assets/ is CONTENT, and a Wavefront OBJ is not a C object file. The *.obj
+# pattern above is Visual Studio's and it legitimately catches the native
+# build under build/, but it also swallowed Assets/Models/crate.obj while
+# leaving its crate.mtl sibling tracked, so a fresh clone got half a model:
+# the demo prop (SceneManager's CrateModelPath) and eighteen model tests
+# failed on any machine that had not built the file locally. Ignoring
+# content by extension is how that happens silently, because the file is
+# right there in the working tree of whoever added it.
+!Assets/**/*.obj
 *.pch
 *.pdb
 *.ipdb

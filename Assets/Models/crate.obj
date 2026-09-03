@@ -1,0 +1,51 @@
+# Spectra Engine test prop: a 32-unit crate.
+#
+# Hand-authored on purpose - it is small enough to read, diff, and reason about,
+# which is exactly what a fixture that tests assertions are pinned to should be.
+# Geometry is authored the way a prop should be: centred on X/Z with its base on
+# y = 0, so dropping it on a floor brush needs no offset. Bounds are therefore
+# (-16, 0, -16) .. (16, 32, 16).
+#
+# Two objects, one material each, so the importer has to produce a real node
+# hierarchy AND per-submesh materials:
+#   Crate_Sides -> crate_body  (the four walls)
+#   Crate_Caps  -> crate_trim  (lid and floor)
+#
+# Winding is counter-clockwise seen from outside, matching Primitives.Cube.
+# UVs use the OpenGL convention (v = 0 at the bottom of the image), which is
+# what the engine's texture upload path expects - see ImageDecoder's row flip.
+
+mtllib crate.mtl
+
+v -16.0  0.0 -16.0
+v  16.0  0.0 -16.0
+v  16.0  0.0  16.0
+v -16.0  0.0  16.0
+v -16.0 32.0 -16.0
+v  16.0 32.0 -16.0
+v  16.0 32.0  16.0
+v -16.0 32.0  16.0
+
+vt 0.0 0.0
+vt 1.0 0.0
+vt 1.0 1.0
+vt 0.0 1.0
+
+vn  0.0  0.0 -1.0
+vn  0.0  0.0  1.0
+vn -1.0  0.0  0.0
+vn  1.0  0.0  0.0
+vn  0.0  1.0  0.0
+vn  0.0 -1.0  0.0
+
+o Crate_Sides
+usemtl crate_body
+f 1/1/1 5/4/1 6/3/1 2/2/1
+f 4/1/2 3/2/2 7/3/2 8/4/2
+f 1/1/3 4/2/3 8/3/3 5/4/3
+f 3/1/4 2/2/4 6/3/4 7/4/4
+
+o Crate_Caps
+usemtl crate_trim
+f 8/1/5 7/2/5 6/3/5 5/4/5
+f 1/1/6 2/2/6 3/3/6 4/4/6
