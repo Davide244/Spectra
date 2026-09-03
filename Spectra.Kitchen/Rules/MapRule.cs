@@ -147,6 +147,5 @@ public sealed class MapRule : IRule
     /// spelled it another produces no error anywhere: the runtime simply finds no
     /// compiled map while every log line reads healthy.
     /// </remarks>
-    public static string CookedPath(string bundlePath) =>
-        Path.ChangeExtension(bundlePath, ScmapFormat.FileExtension).Replace('\\', '/');
+    public static string CookedPath(string bundlePath) => CompiledMapPath.For(bundlePath);
 }

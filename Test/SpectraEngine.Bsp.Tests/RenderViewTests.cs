@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Scene;
@@ -83,7 +83,7 @@ public sealed class RenderViewTests
         // material and an identity matrix (chunk vertices are world-space).
         RenderItem item = view.WorldItems.ShouldHaveSingleItem();
         StaticWorldChunkMesh front = scene.StaticWorldChunkMeshes
-            .Single(c => c.Artifact.RenderBounds.Max.Z < 0f);
+            .Single(c => c.RenderBounds.Max.Z < 0f);
         item.Mesh.ShouldBeSameAs(front.SingleMesh());
         item.Material.ShouldBeSameAs(NoopMaterial);
         item.World.ShouldBe(Matrix4x4.Identity);
@@ -130,7 +130,7 @@ public sealed class RenderViewTests
         foreach (StaticWorldChunkMesh chunk in scene.StaticWorldChunkMeshes)
         {
             bool hasVisibleVertex = false;
-            foreach (ChunkSubmesh submesh in chunk.Artifact.Submeshes)
+            foreach (ChunkSubmesh submesh in chunk.Artifact!.Submeshes)
             {
                 float[] vertices = submesh.Vertices;
                 for (int i = 0; i < vertices.Length; i += 8) // 8 floats per vertex, position first
@@ -146,7 +146,7 @@ public sealed class RenderViewTests
             if (hasVisibleVertex)
             {
                 visibleMeshes.Contains(chunk.SingleMesh()).ShouldBeTrue(
-                    $"chunk {chunk.Artifact.Coord} has geometry inside the frustum but was culled");
+                    $"chunk {chunk.Coord} has geometry inside the frustum but was culled");
             }
         }
     }

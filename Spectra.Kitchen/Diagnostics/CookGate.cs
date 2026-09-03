@@ -230,6 +230,8 @@ public static class CookGate
         7005 => CookGateVerdict.WarningUnlessStrict, // SC7005 MapConnectionTargetMissing
         7006 => CookGateVerdict.WarningUnlessStrict, // SC7006 MapEntityClassUnknown
         7007 => CookGateVerdict.Fatal,             // SC7007 MapDocumentMalformed
+        7008 => CookGateVerdict.Fatal,             // SC7008 MapAssetMissing
+        7009 => CookGateVerdict.Fatal,             // SC7009 MapFileUnreadable
 
         // --- 8xxx: script ------------------------------------------------------
         8001 => CookGateVerdict.Fatal,             // SC8001 ScriptSyntaxError

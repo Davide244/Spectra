@@ -5,6 +5,7 @@ using SpectraEngine.Core.Bsp;
 using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Maps;
+using SpectraEngine.Core.Maps.Compiled;
 using SpectraEngine.Core.Physics;
 using SpectraEngine.Core.Projects;
 using System;
@@ -94,6 +95,24 @@ public sealed class SceneManager
     /// exits on a content error is a host nobody can debug a content error in.
     /// </remarks>
     public static string? LoadMapPathOverride { get; set; }
+
+    /// <summary>
+    /// A baked <c>.scmap</c> to run instead of the authored demo scene, named as a
+    /// CONTENT path and resolved through the mounted sources, or null.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This is the shipped game's map path, and it wins over
+    /// <see cref="LoadMapPathOverride"/>.</b> A boot that has both has a project
+    /// running out of its cooked packs and a bundle still sitting in the source
+    /// tree beside them; taking the loose one would be a run that says
+    /// <c>--pack</c> and renders a level nothing cooked.</para>
+    /// <para><b>A content path, not a file path.</b> A compiled map is a pack entry
+    /// like any other and is resolved through the same
+    /// <c>ContentSourceStack</c> as a texture, which is what makes a pure-pack run
+    /// possible at all: the bundle folder need not exist on the shipped machine.
+    /// </para>
+    /// </remarks>
+    public static string? CompiledMapPathOverride { get; set; }
 
     /// <summary>
     /// A <c>.smap</c> bundle to write the finished scene into, or null to write
@@ -656,8 +675,15 @@ public sealed class SceneManager
         // that naming both paths copies one bundle to another through the
         // engine's own reader and writer, which is the cheapest end-to-end check
         // the format has.
-        if (LoadMapPathOverride is { } loadPath)
+        if (CompiledMapPathOverride is { } compiledPath
+            && LoadCompiledMapInto(scene, renderer, assets, compiledPath, out double compiledMs))
+        {
+            worldMs += compiledMs;
+        }
+        else if (LoadMapPathOverride is { } loadPath)
+        {
             worldMs += LoadMapInto(scene, renderer, loadPath);
+        }
 
         if (SaveMapPathOverride is { } savePath)
             SaveMapFrom(scene, savePath);
@@ -696,6 +722,103 @@ public sealed class SceneManager
     /// Replaces the scene's graph with a bundle from disk and recompiles.
     /// </summary>
     /// <returns>Milliseconds spent, so the load line still accounts for it.</returns>
+    /// <summary>
+    /// Replaces the scene's graph and static world with a baked map from the
+    /// mounted content, running no CSG.
+    /// </summary>
+    /// <returns>
+    /// False when there is no compiled map at that path, so the caller can fall
+    /// back to the authored bundle. True when one was found, whether or not every
+    /// node in it survived.
+    /// </returns>
+    /// <remarks>
+    /// <para><b>The carve counter brackets the load, and the line prints the
+    /// delta on every run.</b> The claim a compiled map makes is not that the
+    /// picture is right - a loader that re-carved would draw a plausible frame,
+    /// and every wall twice - it is that the carve never ran, which nothing about
+    /// the resulting scene can be asked. A number on a startup line is how that
+    /// claim stays true in a shipped build rather than only in a test.</para>
+    /// <para><b>A miss is an ERROR and then a fallback, deliberately in that
+    /// order.</b> Falling back silently would make a project cooked without its
+    /// maps look exactly like a passing cooked run, which is the one thing
+    /// <c>--pack</c> exists to tell apart; refusing outright would leave a level
+    /// nobody can look at while they fix the cook.</para>
+    /// <para><b>The demo's two live node references are DROPPED rather than
+    /// rebound.</b> The bob animates a brush to force a recompile per frame and
+    /// the editing self-test drags one and asserts the compile dirtied its cell -
+    /// and an adopted world never compiles, by construction. Rebinding them would
+    /// leave both quietly doing nothing; dropping them says so once.</para>
+    /// </remarks>
+    private bool LoadCompiledMapInto(
+        Scene scene, Renderer renderer, AssetManager assets, string contentPath, out double milliseconds)
+    {
+        var clock = Stopwatch.StartNew();
+        milliseconds = 0;
+
+        if (!assets.Content.TryOpen(contentPath, out Assets.Sources.ContentBlob? file))
+        {
+            _logger.LogError(
+                "No compiled map at '{Path}' in the mounted content. Run 'scook cook <project>' to bake the " +
+                "project's maps; falling back to the authored bundle, which is NOT what a shipped build would " +
+                "load", contentPath);
+
+            return false;
+        }
+
+        long carvesBefore = Csg.CarveInvocationsOnThisThread;
+
+        try
+        {
+            // Ownership of the blob passes here, and it is not disposed on the way
+            // out: the adopted world's BSP nodes are a window into these bytes, and
+            // on a mounted pack that window is a memory-mapped view whose unmapping
+            // under a live span is an access violation with no managed stack.
+            CompiledMapLoadReport report = CompiledMapLoader.Load(scene, renderer, file, contentPath);
+
+            _pillarBob = null;
+            SelfTestNode = null;
+
+            clock.Stop();
+            milliseconds = clock.Elapsed.TotalMilliseconds;
+
+            _logger.LogInformation(
+                "Compiled map '{Path}' loaded in {Ms:0.0} ms: scene '{Name}', {Nodes} node(s), {Chunks} " +
+                "chunk(s) as {Submeshes} GPU mesh(es) and {Triangles} triangle(s), {Trees} BSP tree(s), " +
+                "{Materials} material(s) interned, {Skipped} unknown section(s) skipped; "
+                + "{Carves} carve(s) run",
+                contentPath, milliseconds, scene.Name, report.NodesLoaded, report.ChunksLoaded,
+                report.SubmeshesUploaded, report.TriangleCount, report.BspChunksLoaded,
+                report.MaterialsInterned, report.SkippedSections,
+                Csg.CarveInvocationsOnThisThread - carvesBefore);
+
+            if (report.BakedBrushSourcesSkipped > 0)
+            {
+                _logger.LogInformation(
+                    "Static world guard: {Count} baked brush(es) offered authored planes and were not " +
+                    "re-carved. Carving them would draw those walls twice", report.BakedBrushSourcesSkipped);
+            }
+
+            if (report.Describe() is { } lost)
+                _logger.LogWarning("Compiled map load is incomplete. {What}", lost);
+
+            // Printed every run, like the entity catalogue's class count: what a
+            // build cannot carry is a fact about the BUILD, and a shipped binary
+            // that silently does less than the last one is exactly what a standing
+            // line is for.
+            _logger.LogWarning("Compiled map limits. {Gaps}", CompiledMapLoadReport.DescribeFormatGaps());
+
+            return true;
+        }
+        catch (ScmapFormatException ex)
+        {
+            clock.Stop();
+            _logger.LogError(ex,
+                "Could not load compiled map '{Path}'; falling back to the authored bundle", contentPath);
+
+            return false;
+        }
+    }
+
     private double LoadMapInto(Scene scene, Renderer renderer, string bundlePath)
     {
         var clock = Stopwatch.StartNew();
@@ -1159,7 +1282,7 @@ public sealed class SceneManager
         {
             StaticWorldSubmesh[] submeshes = chunks[i].Submeshes;
             for (int s = 0; s < submeshes.Length; s++)
-                seen.Add(submeshes[s].Source.Material.Id);
+                seen.Add(submeshes[s].SourceMaterial.Id);
         }
         return seen.Count;
     }

@@ -24,6 +24,38 @@ public static class Csg
     private const float NormalEpsilon = 1e-4f;
     private const float OffsetEpsilon = 1e-3f;
 
+    // The instrument behind "a shipped game runs ZERO CSG at load", and the
+    // reason it is thread-static rather than a plain static.
+    //
+    // The claim a compiled map makes is not that the picture is right - a load
+    // that helpfully re-carved would draw a perfectly plausible frame, and every
+    // wall twice. It is that the carve NEVER RAN, which nothing about the
+    // resulting scene can be asked. So the carve counts itself, and a test brackets
+    // a load with a delta.
+    //
+    // Thread-static because the test suite runs in parallel: a process-wide
+    // counter would be moved by any other test compiling a world on any other
+    // thread, so a real regression and an unlucky schedule would look identical
+    // and the oracle would be quietly abandoned as flaky. Carving happens on the
+    // render thread (the synchronous rebuild) and on thread-pool workers (the
+    // async pump); a caller measures the thread it loads on, which is the only
+    // thread its own load could have carved on.
+    [ThreadStatic]
+    private static long _carveInvocations;
+
+    /// <summary>
+    /// How many times a carve has been entered on the CALLING thread, ever.
+    /// </summary>
+    /// <remarks>
+    /// <b>Diagnostics only, and a DELTA is the only meaningful reading.</b> It
+    /// counts entries to the full carve (<c>CarvePerBrush</c>, once per compile)
+    /// and to the single-brush carve the incremental compiler re-runs (once per
+    /// re-carved brush), so it moves for any work the CSG pipeline does and for
+    /// nothing else. It is thread-static: read it on the thread you are measuring,
+    /// and never compare readings taken on two.
+    /// </remarks>
+    public static long CarveInvocationsOnThisThread => _carveInvocations;
+
     /// <summary>
     /// Carves a set of brushes placed by their own <see cref="Brush.Transform"/>,
     /// returning the visible surface polygons of their union in world space.
@@ -122,6 +154,11 @@ public static class Csg
         out int hitCount,
         out int[][] neighborsOut)
     {
+        // Counted before the empty-list early-out below: a carve of nothing is
+        // still the carve having been entered, and a loader that ran one would be
+        // running CSG whatever the placement list happened to hold.
+        _carveInvocations++;
+
         hitCount = 0;
         int n = placements.Count;
         if (n == 0)
@@ -212,6 +249,8 @@ public static class Csg
     internal static Polygon[] CarveSingle(
         IReadOnlyList<BrushPlacement> placements, int b, int[] neighborIndices, CarveScratch scratch)
     {
+        _carveInvocations++;
+
         BrushPlacement placement = placements[b];
 
         // Pre-transform each neighbour into this brush's local frame

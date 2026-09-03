@@ -253,6 +253,7 @@ public static class ScmapReader
             chunks,
             meshBlob,
             bspBlob,
+            sectionPresent[ChunkBspSlot] ? sectionOffset[ChunkBspSlot] : 0,
             brushSource,
             sectionPresent[BrushSourceSlot],
             skipped,

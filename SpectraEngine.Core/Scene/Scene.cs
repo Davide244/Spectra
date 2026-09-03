@@ -798,7 +798,7 @@ public sealed partial class Scene
             for (int i = start; i < end; i++)
             {
                 StaticWorldChunkMesh chunk = _staticWorldChunkList[i];
-                if (!frustum.Intersects(chunk.Artifact.RenderBounds))
+                if (!frustum.Intersects(chunk.RenderBounds))
                     continue;
 
                 visibleChunks++;
@@ -870,13 +870,13 @@ public sealed partial class Scene
         for (int start = 0; start < count; start += ChunkClusterSize)
         {
             int end = Math.Min(start + ChunkClusterSize, count);
-            Aabb bounds = _staticWorldChunkList[start].Artifact.RenderBounds;
+            Aabb bounds = _staticWorldChunkList[start].RenderBounds;
             _staticWorldBatchTotal += _staticWorldChunkList[start].Submeshes.Length;
 
             for (int i = start + 1; i < end; i++)
             {
                 StaticWorldChunkMesh chunk = _staticWorldChunkList[i];
-                Aabb box = chunk.Artifact.RenderBounds;
+                Aabb box = chunk.RenderBounds;
                 bounds = new Aabb(Vector3.Min(bounds.Min, box.Min), Vector3.Max(bounds.Max, box.Max));
                 _staticWorldBatchTotal += chunk.Submeshes.Length;
             }
@@ -996,7 +996,7 @@ public sealed partial class Scene
             for (int s = 0; s < submeshes.Length; s++)
             {
                 StaticWorldSubmesh submesh = submeshes[s];
-                submeshes[s] = submesh with { Material = ResolveWorldMaterial(submesh.Source.Material) };
+                submeshes[s] = submesh with { Material = ResolveWorldMaterial(submesh.SourceMaterial) };
             }
         }
     }
@@ -1408,6 +1408,8 @@ public sealed partial class Scene
     /// </remarks>
     public void MarkStaticWorldDirty()
     {
+        if (RefuseForCompiledWorld("A static-world dirty mark", isRebuild: false)) return;
+
         _staticWorldVersion++;
         _snapshotForceFull = true;
     }
@@ -1429,9 +1431,17 @@ public sealed partial class Scene
     // Render thread only, like the two marks below it.
     internal void MarkAdmissionChanged(SceneNode node)
     {
-        _graphStructureVersion++;
-        _staticWorldVersion++;
-        _snapshotForceFull = true;
+        // The membership half runs either way: the part set mirrors what the
+        // graph SAYS, and leaving it stale would make a node whose kind changed
+        // draw through a lane it no longer belongs to. Only the dirtying is
+        // refused, which is the half a baked world cannot honour.
+        if (!RefuseForCompiledWorld("A brush-kind change", isRebuild: false))
+        {
+            _graphStructureVersion++;
+            _staticWorldVersion++;
+            _snapshotForceFull = true;
+        }
+
         UpdatePartBrushMembership(node);
     }
 
@@ -1441,6 +1451,8 @@ public sealed partial class Scene
     // Render thread only, like MarkStaticWorldDirty.
     internal void MarkBrushSubtreeDirty(SceneNode node)
     {
+        if (RefuseForCompiledWorld("A brush subtree dirty mark", isRebuild: false)) return;
+
         _staticWorldVersion++;
         _dirtyBrushSubtrees.Add(node);
     }
@@ -1448,6 +1460,8 @@ public sealed partial class Scene
     /// <summary>Synchronously rebuilds the static world only if it has been marked dirty.</summary>
     public void RebuildStaticWorldIfDirty(Renderer renderer)
     {
+        if (RefuseForCompiledWorld("A conditional static-world rebuild", isRebuild: true)) return;
+
         if (StaticWorldDirty)
             RebuildStaticWorld(renderer);
     }
@@ -1492,6 +1506,13 @@ public sealed partial class Scene
     /// </summary>
     public void RebuildStaticWorld(Renderer renderer)
     {
+        // The double-geometry guard, on the one path that would draw the level
+        // twice in a single call. It refuses rather than throwing because the
+        // callers are load-time paths that already have a world - a throw would
+        // turn a level somebody can see into a crash - and every refusal is
+        // counted and named so it cannot be a silent no-op.
+        if (RefuseForCompiledWorld("A synchronous static-world rebuild", isRebuild: true)) return;
+
         // A background compile may still be in flight. Wait it out and drop
         // its result: if it stayed parked in _inFlightCompile, the frame pump
         // would later harvest its stale world and overwrite the synchronous
@@ -1572,6 +1593,15 @@ public sealed partial class Scene
     /// </summary>
     public void ProcessStaticWorldCompilation(Renderer renderer, ILogger logger)
     {
+        // Belt and braces, and the place the guard finally speaks: the marks above
+        // already refuse, so nothing should ever have re-armed this pump, and a
+        // world that arrived baked must not compile even if something did.
+        if (_compiledStaticWorld is not null)
+        {
+            ReportCompiledWorldGuard(logger);
+            return;
+        }
+
         // (a) Harvest a finished compile.
         if (_inFlightCompile is { } inFlight)
         {
@@ -1844,7 +1874,7 @@ public sealed partial class Scene
         _staticWorldChunkList.Clear();
         foreach (StaticWorldChunkMesh chunk in replacement)
         {
-            _staticWorldChunkMeshes.Add(chunk.Artifact.Coord, chunk);
+            _staticWorldChunkMeshes.Add(chunk.Coord, chunk);
             _staticWorldChunkList.Add(chunk);
         }
 
@@ -1855,7 +1885,7 @@ public sealed partial class Scene
         // cluster boxes below can reject anything. The incremental path inserts
         // against the same key, so the two agree.
         _staticWorldChunkList.Sort(static (a, b) =>
-            a.Artifact.Coord.MortonKey.CompareTo(b.Artifact.Coord.MortonKey));
+            a.Coord.MortonKey.CompareTo(b.Coord.MortonKey));
 
         RebuildChunkClusters();
         StaticWorld = world;
@@ -1950,7 +1980,7 @@ public sealed partial class Scene
                 Mesh gpuMesh = renderer.CreateMesh(
                     source.Vertices, source.Indices, VertexAttribute.StandardLayout, MeshCpuAccess.None);
                 submeshes[created] = new StaticWorldSubmesh(
-                    source, gpuMesh, ResolveWorldMaterial(source.Material));
+                    source.Material, gpuMesh, ResolveWorldMaterial(source.Material));
             }
         }
         catch
@@ -1978,7 +2008,7 @@ public sealed partial class Scene
         while (lo < hi)
         {
             int mid = (lo + hi) >> 1;
-            if (_staticWorldChunkList[mid].Artifact.Coord.MortonKey < coord.MortonKey)
+            if (_staticWorldChunkList[mid].Coord.MortonKey < coord.MortonKey)
                 lo = mid + 1;
             else
                 hi = mid;

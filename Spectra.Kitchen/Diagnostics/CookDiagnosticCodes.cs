@@ -438,6 +438,29 @@ public static class CookDiagnosticCodes
     /// </remarks>
     public static readonly CookDiagnosticId MapDocumentMalformed = CookDiagnosticId.Cook(7007);
 
+    /// <summary>A compiled map names an asset that is not in the pack it ships in.</summary>
+    /// <remarks>
+    /// <b>The failure this whole verifier exists for, one format over.</b> A
+    /// <c>.scmap</c>'s <c>ASTB</c> rows are the only way a baked chunk names the
+    /// material its surfaces wear, and a row nothing cooked resolves at runtime to
+    /// the engine's default material and a warning: the level loads, every log line
+    /// reads healthy, and the shipped game is grey where the author textured it.
+    /// The cook cannot see it either, because a map rule and a material rule each
+    /// succeed against the author's folder and the entry one of them needed can
+    /// still fail to reach the file.
+    /// </remarks>
+    public static readonly CookDiagnosticId MapAssetMissing = CookDiagnosticId.Cook(7008);
+
+    /// <summary>A compiled map this engine's own reader refuses.</summary>
+    /// <remarks>
+    /// The mirror of <c>ImageFileUnreadable</c> and <c>AudioFileUnreadable</c> in
+    /// the map band, and it catches what the digest cannot: a <c>.scmap</c> baked
+    /// at another format version, another geometry version, another vertex layout
+    /// or on another cell size hashes perfectly and is still a level this build
+    /// refuses at boot. Every one of them has the same answer, which is to recook.
+    /// </remarks>
+    public static readonly CookDiagnosticId MapFileUnreadable = CookDiagnosticId.Cook(7009);
+
     /// <summary>A script the Luau front end refuses.</summary>
     public static readonly CookDiagnosticId ScriptSyntaxError = CookDiagnosticId.Cook(8001);
 

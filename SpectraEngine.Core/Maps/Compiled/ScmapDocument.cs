@@ -29,6 +29,7 @@ public readonly ref struct ScmapDocument
         ReadOnlySpan<ScmapChunkRecord> chunks,
         ReadOnlySpan<byte> chunkMeshBlob,
         ReadOnlySpan<byte> chunkBspBlob,
+        int chunkBspBlobFileOffset,
         ReadOnlySpan<byte> brushSourceSection,
         bool hasBrushSource,
         int skippedSectionCount,
@@ -46,6 +47,7 @@ public readonly ref struct ScmapDocument
         Chunks = chunks;
         ChunkMeshBlob = chunkMeshBlob;
         ChunkBspBlob = chunkBspBlob;
+        ChunkBspBlobFileOffset = chunkBspBlobFileOffset;
         SkippedSectionCount = skippedSectionCount;
         InvalidDeclaredStateCount = invalidDeclaredStateCount;
     }
@@ -85,6 +87,24 @@ public readonly ref struct ScmapDocument
     /// relative to. Empty when no cell has a tree.
     /// </summary>
     public ReadOnlySpan<byte> ChunkBspBlob { get; }
+
+    /// <summary>
+    /// Where <see cref="ChunkBspBlob"/> starts, counted from the first byte of
+    /// the file. Zero when there is no <c>CBSP</c> section.
+    /// </summary>
+    /// <remarks>
+    /// <b>A span cannot say where it came from, and a runtime load needs to
+    /// know.</b> Every other table here is consumed inside the call that parses
+    /// it - a chunk mesh goes straight to the GPU and the bytes are done with -
+    /// but a per-cell BSP is QUERIED for the life of the level, off the mapping
+    /// itself. The thing that owns that mapping is a <c>ContentBlob</c>, which
+    /// hands out its span afresh on every access precisely so a released blob
+    /// throws rather than reads freed address space, and re-deriving a cell's node
+    /// array from that span needs a byte offset into the whole file. Recovering
+    /// one by differencing two spans' addresses would work and would be a pointer
+    /// comparison standing in for a number the reader already had.
+    /// </remarks>
+    public int ChunkBspBlobFileOffset { get; }
 
     /// <summary>
     /// How many section records this reader stepped over because it did not know

@@ -11,6 +11,7 @@ using SpectraEngine.Core.Assets.Packs;
 using SpectraEngine.Core.Assets.Sources;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.Shaders;
+using SpectraEngine.Core.Maps.Compiled;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -295,6 +296,9 @@ public static class PackVerifier
         if (ModelContentPath.IsCooked(name))
             return CheckModel(name, payload, strictStack, diagnostics, packFile);
 
+        if (name.EndsWith(ScmapFormat.FileExtension, StringComparison.OrdinalIgnoreCase))
+            return CheckCompiledMap(name, payload, strictStack, diagnostics, packFile);
+
         if (!name.EndsWith(MaterialParser.FileExtension, StringComparison.OrdinalIgnoreCase))
             return 0;
 
@@ -418,6 +422,101 @@ public static class PackVerifier
 
         return resolved;
     }
+
+    /// <summary>
+    /// Proves a compiled map loads and that every asset it names is here.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Both claims in one pass, for the reason
+    /// <see cref="CheckModel"/> makes them in one: resolving the references means
+    /// parsing the file anyway.</b> The parse is the same <see cref="ScmapReader"/>
+    /// a boot takes, so a verify cannot pass a level the engine would then refuse
+    /// at its version, geometry or compile-constant gates. The reference walk is
+    /// what the digest cannot see, since a level naming a material nobody cooked
+    /// hashes perfectly and binds the engine's default material at runtime, which
+    /// is a grey room and no message anywhere.</para>
+    /// <para><b>Every asset kind resolves through the SAME redirection the engine
+    /// uses.</b> An <c>ASTB</c> row names the authored path forever - identity is
+    /// the source path, exactly as the pack's id hash already assumes - so a model
+    /// row means the cooked <c>.smodel</c> beside it and an image row the cooked
+    /// <c>.simage</c>. Asking for the literal path would report every model in
+    /// every cooked pack as missing, which is a verifier nobody would keep
+    /// running.</para>
+    /// <para><b>A row this build has no cooked lane for is still resolved
+    /// LITERALLY rather than skipped.</b> The kinds are <c>PackEntryKind</c>'s own,
+    /// so a future row type would otherwise be silently unverified from the day it
+    /// is written until somebody remembers this switch.</para>
+    /// </remarks>
+    private static int CheckCompiledMap(
+        string name,
+        ReadOnlySpan<byte> payload,
+        ContentSourceStack strictStack,
+        CookDiagnosticLog diagnostics,
+        string packFile)
+    {
+        ScmapDocument map;
+        try
+        {
+            map = ScmapReader.Read(payload, name);
+        }
+        catch (ScmapFormatException ex)
+        {
+            diagnostics.Add(CookDiagnostic.Error(CookDiagnosticCodes.MapFileUnreadable, ex.Message, packFile));
+            return 0;
+        }
+
+        int resolved = 0;
+        for (int i = 0; i < map.Assets.Length; i++)
+        {
+            PackEntryKind kind = map.Assets[i].AssetKind;
+            string path = map.AssetPath(i);
+            if (path.Length == 0) continue;
+
+            resolved++;
+
+            string wanted = kind switch
+            {
+                PackEntryKind.Model => ModelContentPath.Resolve(strictStack, path),
+                PackEntryKind.Image => ImageContentPath.Resolve(strictStack, path),
+                _ => path,
+            };
+
+            try
+            {
+                if (strictStack.TryOpen(wanted, out ContentBlob? asset))
+                {
+                    asset.Dispose();
+                    continue;
+                }
+            }
+            catch (FileNotFoundException)
+            {
+                // The strict stack's whole job: a miss THROWS here, where the
+                // identical miss degrades to a default material in a frame.
+            }
+
+            diagnostics.Add(CookDiagnostic.Error(
+                CookDiagnosticCodes.MapAssetMissing,
+                $"'{name}' names {Describe(kind)} '{path}', which is not in this pack. The running engine " +
+                "would bind the default material and carry on; a shipped build would ship a grey level.",
+                packFile));
+        }
+
+        return resolved;
+    }
+
+    // The asset kind in the words a person would use about a level, not the enum's
+    // own spelling: a build log that says "Model" where a level names a prop is
+    // asking the reader to translate.
+    private static string Describe(PackEntryKind kind) => kind switch
+    {
+        PackEntryKind.Material => "material",
+        PackEntryKind.Model => "model",
+        PackEntryKind.Image => "texture",
+        PackEntryKind.Shader => "shader",
+        PackEntryKind.Audio => "sound",
+        _ => $"a {kind} asset",
+    };
 
     /// <summary>
     /// Proves a cooked image is one this engine can actually upload.

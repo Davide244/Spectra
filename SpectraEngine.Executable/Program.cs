@@ -10,6 +10,7 @@ using SpectraEngine.Core.Graphics.D3D12;
 using SpectraEngine.Core.Graphics.OpenGL;
 using SpectraEngine.Core.Graphics.Shaders;
 using SpectraEngine.Core.Input;
+using SpectraEngine.Core.Maps.Compiled;
 using SpectraEngine.Core.Projects;
 using SpectraEngine.Core.Scene;
 using SpectraEngine.Entities;
@@ -160,7 +161,19 @@ try
         // An explicit --map wins: naming both means "this project, that level",
         // which is what a level designer testing one map wants.
         if (options.LoadMapPath is null && project.Project.StartupMap is { } startup)
+        {
             SceneManager.LoadMapPathOverride = project.Resolve(startup);
+
+            // The shipped game's map path. A --pack run resolves the BAKED map
+            // through the mounted sources and runs zero CSG; the loose bundle
+            // above stays set as the fallback the load reports out loud when a
+            // project was cooked without its maps. Derived through the one
+            // expression of the redirect, because a boot that spelled it
+            // differently from the cook would find no compiled map and quietly
+            // author the level instead, with every log line reading healthy.
+            if (options.BootFromPacks)
+                SceneManager.CompiledMapPathOverride = CompiledMapPath.For(startup);
+        }
         else if (options.LoadMapPath is null)
             Log.Warning("Project '{Name}' names no startup map; running the demo scene", project.Project.Name);
     }

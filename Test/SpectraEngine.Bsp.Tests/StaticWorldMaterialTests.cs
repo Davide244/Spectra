@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Numerics;
 using Microsoft.Extensions.Logging.Abstractions;
 using SpectraEngine.Core.Assets;
@@ -148,10 +148,11 @@ public sealed class StaticWorldMaterialTests
         for (int s = 0; s < mixed.Submeshes.Length; s++)
         {
             StaticWorldSubmesh entry = mixed.Submeshes[s];
-            entry.Source.ShouldBe(mixed.Artifact.Submeshes[s]);
+            ChunkSubmesh source = mixed.Artifact.ShouldNotBeNull().Submeshes[s];
+            entry.SourceMaterial.ShouldBe(source.Material);
             var uploaded = (FakeMesh)entry.Mesh;
-            uploaded.VertexData.SequenceEqual(entry.Source.Vertices).ShouldBeTrue();
-            uploaded.IndexData.SequenceEqual(entry.Source.Indices).ShouldBeTrue();
+            uploaded.VertexData.SequenceEqual(source.Vertices).ShouldBeTrue();
+            uploaded.IndexData.SequenceEqual(source.Indices).ShouldBeTrue();
         }
     }
 
@@ -182,7 +183,7 @@ public sealed class StaticWorldMaterialTests
 
         scene.TryGetStaticWorldChunkMesh(new ChunkCoord(0, 0, 0), out StaticWorldChunkMesh mixedAfter).ShouldBeTrue();
         mixedAfter.Submeshes.Length.ShouldBe(2);
-        mixedAfter.Submeshes.Select(s => s.Source.Material).ShouldBe(new[] { low, high });
+        mixedAfter.Submeshes.Select(s => s.SourceMaterial).ShouldBe(new[] { low, high });
         for (int s = 0; s < mixedAfter.Submeshes.Length; s++)
             mixedAfter.Submeshes[s].Mesh.ShouldNotBeSameAs(mixedBefore.Submeshes[s].Mesh);
 
@@ -308,9 +309,9 @@ public sealed class StaticWorldMaterialTests
         // The default face falls back to the scene's world material; the
         // materialed face resolves through the asset manager to the very
         // instance a direct load returns (one material object per path).
-        StaticWorldSubmesh plain = cell.Submeshes.Single(s => s.Source.Material.IsDefault);
+        StaticWorldSubmesh plain = cell.Submeshes.Single(s => s.SourceMaterial.IsDefault);
         plain.Material.ShouldBeSameAs(NoopMaterial);
-        StaticWorldSubmesh accented = cell.Submeshes.Single(s => s.Source.Material == accent);
+        StaticWorldSubmesh accented = cell.Submeshes.Single(s => s.SourceMaterial == accent);
         accented.Material.ShouldBeSameAs(assets.LoadMaterial(AccentMaterialPath));
 
         assets.ReleaseGraphicsResources();
@@ -417,7 +418,7 @@ public sealed class StaticWorldMaterialTests
         view.WorldMaterialBatchesTotal.ShouldBe(3);
 
         StaticWorldChunkMesh visible = scene.StaticWorldChunkMeshes
-            .Single(c => c.Artifact.RenderBounds.Max.Z < 0f);
+            .Single(c => c.RenderBounds.Max.Z < 0f);
         for (int i = 0; i < view.WorldItems.Count; i++)
         {
             RenderItem item = view.WorldItems[i];

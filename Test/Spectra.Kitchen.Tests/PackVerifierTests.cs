@@ -1,6 +1,7 @@
-using Spectra.Kitchen.Cooking;
+﻿using Spectra.Kitchen.Cooking;
 using Spectra.Kitchen.Diagnostics;
 using Spectra.Kitchen.Packs;
+using SpectraEngine.Core;
 using SpectraEngine.Core.Assets.Packs;
 using System;
 using System.IO;
@@ -201,6 +202,85 @@ public class PackVerifierTests
 
         result.Succeeded.ShouldBeTrue(Describe(result));
         result.ReferencesChecked.ShouldBeGreaterThan(0);
+    }
+
+    // --- the 7xxx arm: a compiled map's own references -------------------------
+
+    [Fact]
+    public void A_project_with_a_map_in_it_verifies_clean_and_counts_the_levels_references()
+    {
+        using var project = new TempProject();
+        MapFixture fixture = MapFixture.Fresh();
+        fixture.WriteMaterials(project);
+        fixture.WriteBundle(project, "Room.smap");
+
+        PackVerifyResult result = Verify(Cook(project));
+
+        result.Succeeded.ShouldBeTrue(Describe(result));
+
+        // Two materials from the map's own asset table, on top of whatever the
+        // materials themselves name. A zero here would mean the arm never ran and
+        // every case below would be unfalsifiable.
+        result.ReferencesChecked.ShouldBeGreaterThanOrEqualTo(2);
+    }
+
+    [Fact]
+    public void A_compiled_map_naming_assets_nobody_cooked_fails_in_the_MAP_band()
+    {
+        // Hand-written rather than cooked, for the reason the material case above
+        // is: the cook refuses this project before a pack exists. The claim here is
+        // about the ARTIFACT - a level in a pack whose materials are not in the
+        // same pack, however it came to be that way - which is the failure a
+        // shipped build ships as a grey room with every log line reading healthy.
+        using var project = new TempProject();
+        string pack = Path.Combine(project.Root, "holes.spack");
+
+        var writer = new PackWriter();
+        writer.Add("Maps/Room.scmap", PackEntryKind.Map, ScmapFixture.Build());
+        writer.WriteToFile(pack);
+
+        PackVerifyResult result = Verify(pack);
+
+        result.Succeeded.ShouldBeFalse();
+
+        // Every row of the fixture's asset table: two materials, a texture and a
+        // model, each reported in the band that names the failing SUBSYSTEM.
+        CookDiagnostic[] missing = result.Diagnostics.Where(d => d.IsError).ToArray();
+        missing.Length.ShouldBe(ScmapFixture.AssetPaths.Length);
+        missing.ShouldAllBe(d => d.Id.ToString() == "SC7008");
+
+        string all = string.Join(Environment.NewLine, missing.Select(d => d.Message));
+        foreach (string path in ScmapFixture.AssetPaths)
+            all.ShouldContain(path);
+
+        all.ShouldContain("Maps/Room.scmap");
+        all.ShouldContain("material");
+        all.ShouldContain("texture");
+        all.ShouldContain("model");
+    }
+
+    [Fact]
+    public void A_compiled_map_this_engine_would_refuse_at_boot_is_caught_before_it_ships()
+    {
+        // The digest cannot see this: a level baked at another format version
+        // hashes perfectly and is still a map the runtime refuses on frame zero.
+        // Edited BEFORE the pack is written, so the pack's own digest agrees and
+        // the only thing that can complain is the reader.
+        using var project = new TempProject();
+        string pack = Path.Combine(project.Root, "stale.spack");
+
+        byte[] map = ScmapFixture.Build();
+        BitConverter.GetBytes((ushort)(EngineInfo.CompiledMapFormatVersion + 1)).CopyTo(map, 0x04);
+
+        var writer = new PackWriter();
+        writer.Add("Maps/Room.scmap", PackEntryKind.Map, map);
+        writer.WriteToFile(pack);
+
+        PackVerifyResult result = Verify(pack);
+
+        CookDiagnostic refused = result.Diagnostics.Single(d => d.IsError);
+        refused.Id.ToString().ShouldBe("SC7009");
+        refused.Message.ShouldContain("Recook");
     }
 
     private static string Cook(TempProject project)
