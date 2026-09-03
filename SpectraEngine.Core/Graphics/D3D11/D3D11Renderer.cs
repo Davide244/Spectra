@@ -1233,9 +1233,12 @@ public sealed unsafe class D3D11Renderer : Renderer
                     ppDevice: ref _device,
                     pFeatureLevel: ref featureLevel,
                     ppImmediateContext: ref _context));
+
+                EnsureDeviceCreated();
             }
             else
             {
+                EnsureDeviceCreated();
                 DebugLayerActive = true;
                 _logger.LogInformation("D3D11 debug layer active.");
 
@@ -1249,6 +1252,31 @@ public sealed unsafe class D3D11Renderer : Renderer
                 _dxgiMessages = DxgiDebugMessages.Acquire(_dxgi);
             }
         }
+    }
+
+    /// <summary>
+    /// Refuses a device that was reported created and is not there.
+    /// </summary>
+    /// <remarks>
+    /// <b>D3D11CreateDevice can return a non-negative HRESULT and still hand back
+    /// a null device.</b> It happens under driver resource pressure, and in this
+    /// tree it happened whenever a second device or a GL context was coming up in
+    /// another process at the same moment. Unchecked, the very next line asks that
+    /// null for an interface, so the symptom is a NullReferenceException raised
+    /// from inside QueryInterface with nothing anywhere naming the actual cause:
+    /// it reads as a bug in the renderer rather than as the environment refusing a
+    /// device. SilkMarshal.ThrowHResult cannot catch it, because by the driver's
+    /// own account nothing failed.
+    /// </remarks>
+    private void EnsureDeviceCreated()
+    {
+        if (_device.Handle is not null) return;
+
+        throw new GraphicsDeviceLostException(
+            "D3D11CreateDevice reported success and returned no device. That is the driver " +
+            "declining to create one, usually under resource pressure from another device or " +
+            "context coming up at the same moment, and it is not a state this renderer can " +
+            "continue from.");
     }
 
     /// <summary>Creates the swap chain for a window surface, and takes Alt+Enter off DXGI.</summary>
