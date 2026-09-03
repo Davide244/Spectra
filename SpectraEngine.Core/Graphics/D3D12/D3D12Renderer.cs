@@ -158,6 +158,39 @@ public sealed unsafe class D3D12Renderer : Renderer
     // secondary COM failures.
     private bool _deviceLost;
 
+    // True for a surface somebody else presents: no swap chain, no back buffer,
+    // and the frame resolves into _presentTarget instead of into the window.
+    private bool _composited;
+
+    // Where the frame is presented on a composited surface: an ORDINARY private
+    // D3D12 target, deliberately not a shared one. Nothing outside the engine
+    // can import a D3D12-created handle (measured: E_NOINTERFACE inside the
+    // compositor's own import), so the hand-over is a copy through
+    // D3D12On11Bridge and this target is only ever the source of it. Null on a
+    // window surface, which is what keeps every "target null means the back
+    // buffer" call site below meaning what it always meant.
+    private D3D12RenderTarget? _presentTarget;
+
+    // The D3D11 front end over this renderer's own device and queue that owns
+    // the shared texture and does that copy. Null on a window surface.
+    private D3D12On11Bridge? _bridge;
+
+    // The generation _presentTarget was built under, and the retired ones still
+    // held for a consumer that has not let go. See SharedTargetRetirement.
+    private SharedTargetRetirement? _retirement;
+    private int _presentGeneration;
+
+    // Whether the shared key is currently held, so EndSharedWrite is a no-op
+    // after a Begin that timed out rather than a release of a key this side
+    // never took - which the runtime reports and which hands the texture to a
+    // consumer mid-write.
+    private bool _sharedWriteHeld;
+
+    // A consumer that is not being drawn never takes its turn, so the timeout
+    // is a steady state rather than an event: logged the first time and then
+    // once more when it clears, or the log is the frame rate.
+    private bool _sharedTimeoutLogged;
+
     private D3D12LineBatch? _lineBatch;
     private ShaderProgram? _debugShader;
     private D3D12Texture? _fallbackTexture;
@@ -313,9 +346,18 @@ public sealed unsafe class D3D12Renderer : Renderer
         // The engine seeded the latch before this thread started.
         Vector2D<int> size = FramebufferSize;
         _swapChainSize = size;
+        _composited = surface.Kind == RenderSurfaceKind.Composited;
 
         CreateDevice();
-        CreateQueueAndSwapChain(surface, (uint)size.X, (uint)size.Y);
+        CreateQueue();
+
+        // A composited surface is presented by somebody else, so there is no
+        // chain and no back buffer: everything the frame would have written into
+        // the window goes into the present target instead, built on demand from
+        // the same size latch a swap chain would have followed.
+        if (!_composited)
+            CreateSwapChain(surface, (uint)size.X, (uint)size.Y);
+
         CreateFrameResources((uint)size.X, (uint)size.Y);
 
         DefaultShader = BaseShaders.LitPath is { } litPath
@@ -345,8 +387,17 @@ public sealed unsafe class D3D12Renderer : Renderer
         RegisterPipeline(new D3D12ForwardPipeline());
         RegisterPipeline(new D3D12WireframePipeline());
 
+        // Built here rather than on the first frame, because the handle is what
+        // a host wires its consumer up with and it must exist by the time
+        // Initialize returns: a host that has to render a frame before it can be
+        // told where to look has to special-case its own startup, and would
+        // publish a zero handle if it did not.
+        EnsurePresentTarget();
+
         DrainDebugMessages();
-        _logger.LogInformation("Renderer initialized (D3D12, pipeline={Pipeline})", CurrentPipelineName);
+        _logger.LogInformation(
+            "Renderer initialized (D3D12, pipeline={Pipeline}, surface={Surface})",
+            CurrentPipelineName, _composited ? "composited (no swap chain)" : "window");
     }
 
     private void CreateDevice()
@@ -399,17 +450,16 @@ public sealed unsafe class D3D12Renderer : Renderer
             _infoQueue = ComOwnership.Own(infoQueue);
     }
 
-    private void CreateQueueAndSwapChain(IRenderSurface surface, uint width, uint height)
+    /// <summary>
+    /// Creates the direct queue. Knows nothing about presentation.
+    /// </summary>
+    /// <remarks>
+    /// <b>Split from the swap chain because a composited surface has no swap
+    /// chain and still needs a queue</b> - and needs it more than a windowed one
+    /// does, since it is the queue the D3D11On12 bridge records its copy into.
+    /// </remarks>
+    private void CreateQueue()
     {
-        if (surface.Kind != RenderSurfaceKind.Win32 || surface.NativeHandle == 0)
-        {
-            throw new InvalidOperationException(
-                $"The D3D12 backend needs a Win32 surface with an HWND; this one is {surface.Kind}. " +
-                "On another platform, or for a surface that offers only a GL context, use the OpenGL backend.");
-        }
-
-        nint hwnd = surface.NativeHandle;
-
         var queueDesc = new CommandQueueDesc
         {
             Type = CommandListType.Direct,
@@ -421,6 +471,20 @@ public sealed unsafe class D3D12Renderer : Renderer
         Guid queueGuid = ID3D12CommandQueue.Guid;
         SilkMarshal.ThrowHResult(DevicePtr->CreateCommandQueue(&queueDesc, &queueGuid, (void**)&queue));
         _queue = ComOwnership.Own(queue);
+    }
+
+    private void CreateSwapChain(IRenderSurface surface, uint width, uint height)
+    {
+        if (surface.Kind != RenderSurfaceKind.Win32 || surface.NativeHandle == 0)
+        {
+            throw new InvalidOperationException(
+                $"The D3D12 backend needs a Win32 surface with an HWND, or a composited surface it does not " +
+                $"present to; this one is {surface.Kind}. On another platform, or for a surface that offers " +
+                "only a GL context, use the OpenGL backend.");
+        }
+
+        nint hwnd = surface.NativeHandle;
+        ID3D12CommandQueue* queue = (ID3D12CommandQueue*)_queue.Handle;
 
         // The DXGI debug layer is what turns a bare DXGI_ERROR_INVALID_CALL out
         // of ResizeBuffers into a sentence saying which reference is still
@@ -504,7 +568,12 @@ public sealed unsafe class D3D12Renderer : Renderer
         _srvStride = DevicePtr->GetDescriptorHandleIncrementSize(DescriptorHeapType.CbvSrvUav);
         _samplerStride = DevicePtr->GetDescriptorHandleIncrementSize(DescriptorHeapType.Sampler);
 
-        CreateBackBufferViews(width, height);
+        // The heaps above are cheap and unconditional; their CONTENTS are not.
+        // On a composited surface there is no chain to GetBuffer from, and the
+        // window depth buffer this also creates would be a full-screen surface
+        // nothing draws into, because the present target carries its own.
+        if (!_composited)
+            CreateBackBufferViews(width, height);
 
         ID3D12CommandAllocator* allocator = null;
         Guid allocGuid = ID3D12CommandAllocator.Guid;
@@ -656,6 +725,14 @@ public sealed unsafe class D3D12Renderer : Renderer
 
         if (_pipelines.Count == 0 || _surface is null) return;
 
+        // Null on a window surface, which is what keeps every "output null means
+        // the back buffer" decision below byte-for-byte the path it always took.
+        RenderTarget? present = EnsurePresentTarget();
+
+        // A composited surface with no target has nowhere to draw: the pane is
+        // collapsed or mid-layout, which is not an error and not a frame.
+        if (_composited && present is null) return;
+
         var list = (ID3D12GraphicsCommandList*)_commandList.Handle;
         BeginRecording();
 
@@ -671,8 +748,11 @@ public sealed unsafe class D3D12Renderer : Renderer
         ReserveDescriptorRings(view);
         BindDescriptorHeaps();
 
-        Transition(list, (ID3D12Resource*)_backBuffers[_frameIndex].Handle,
-            ResourceStates.Present, ResourceStates.RenderTarget);
+        if (!_composited)
+        {
+            Transition(list, (ID3D12Resource*)_backBuffers[_frameIndex].Handle,
+                ResourceStates.Present, ResourceStates.RenderTarget);
+        }
 
         var context = new D3D12RenderContext
         {
@@ -687,23 +767,70 @@ public sealed unsafe class D3D12Renderer : Renderer
             _pipelines[_pipelineIndex].Execute(context);
         }
 
-        RenderTarget? sceneTarget = HdrEnabled ? EnsureSceneTarget() : null;
+        // With HDR off there is no intermediate to resolve from, so the pipeline
+        // draws straight into whatever is being presented - which on a
+        // composited surface is the present target and on a window is still the
+        // back buffer, which is what `null` has always meant here.
+        RenderTarget? sceneTarget = HdrEnabled ? EnsureSceneTarget() : present;
         FrameTarget = sceneTarget;
         _pipelines[_pipelineIndex].Execute(context);
 
-        if (sceneTarget is null)
-            DrawOverlay(scene);
+        // The overlay follows the resolve's OUTPUT, always. Left pointed at the
+        // window it would draw through a back-buffer RTV a composited surface
+        // never created: no error, no debug-layer message, and a viewport with
+        // no gizmo handles in it.
+        if (sceneTarget is null || ReferenceEquals(sceneTarget, present))
+            DrawOverlay(scene, present);
         else
-            ResolveTo(sceneTarget.ColorTexture!, null, scene);
+            ResolveTo(sceneTarget.ColorTexture!, present, scene);
 
-        Transition(list, (ID3D12Resource*)_backBuffers[_frameIndex].Handle,
-            ResourceStates.RenderTarget, ResourceStates.Present);
+        if (!_composited)
+        {
+            Transition(list, (ID3D12Resource*)_backBuffers[_frameIndex].Handle,
+                ResourceStates.RenderTarget, ResourceStates.Present);
+        }
 
         SilkMarshal.ThrowHResult(list->Close());
         _isRecording = false;
 
         ID3D12CommandList* executeList = (ID3D12CommandList*)list;
         ((ID3D12CommandQueue*)_queue.Handle)->ExecuteCommandLists(1, &executeList);
+
+        // AFTER the execute, deliberately. The bridge records its copy into this
+        // same queue, so submitting the frame first is what orders the copy
+        // behind the draws that produced the picture - there is no fence here
+        // and none is needed, because a queue is already a total order.
+        PublishSharedFrame();
+    }
+
+    /// <summary>
+    /// Hands the finished frame to the consumer through the D3D11On12 bridge.
+    /// A no-op on a window surface.
+    /// </summary>
+    /// <remarks>
+    /// <b>The key bracket is narrow here and wide on D3D11, and that difference
+    /// is the whole shape of this backend's route.</b> Over there the pipeline
+    /// draws straight into the shared texture, so the mutex has to cover the
+    /// pipeline and the resolve; here the frame lands in a private D3D12 target
+    /// and only this copy ever touches the shared one.
+    /// </remarks>
+    private void PublishSharedFrame()
+    {
+        if (_bridge is not { HasSurface: true } bridge) return;
+
+        // A consumer that never took its turn is a hidden pane rather than a
+        // fault: skip this frame's copy and leave it holding the last one it was
+        // given, which is the right picture for something nobody is looking at.
+        if (!BeginSharedWrite()) return;
+
+        try
+        {
+            bridge.Publish();
+        }
+        finally
+        {
+            EndSharedWrite();
+        }
     }
 
     /// <summary>
@@ -910,20 +1037,30 @@ public sealed unsafe class D3D12Renderer : Renderer
 
     public override void Present(IRenderSurface surface)
     {
-        if (_swapChain.Handle is null || _deviceLost) return;
+        if (_deviceLost) return;
 
-        // Present is the other call that reports a lost device, and it reports
-        // it far more often than ResizeBuffers does (a TDR lands here). Same
-        // treatment: a named diagnosis with the removed reason, not an opaque
-        // COMException from deep inside SilkMarshal.
-        int hr = ((IDXGISwapChain3*)_swapChain.Handle)->Present(VSync ? 1u : 0u, 0);
-        if (hr < 0)
+        if (_swapChain.Handle is not null)
         {
-            if (DxgiInterop.IsDeviceLost(hr))
-                throw DeviceLost(hr, "presenting a frame");
-            SilkMarshal.ThrowHResult(hr);
+            // Present is the other call that reports a lost device, and it
+            // reports it far more often than ResizeBuffers does (a TDR lands
+            // here). Same treatment: a named diagnosis with the removed reason,
+            // not an opaque COMException from deep inside SilkMarshal.
+            int hr = ((IDXGISwapChain3*)_swapChain.Handle)->Present(VSync ? 1u : 0u, 0);
+            if (hr < 0)
+            {
+                if (DxgiInterop.IsDeviceLost(hr))
+                    throw DeviceLost(hr, "presenting a frame");
+                SilkMarshal.ThrowHResult(hr);
+            }
         }
 
+        // OUTSIDE the swap-chain guard, and on a composited surface this is the
+        // only thing left that ends the frame. Dropping the wait because there
+        // is nothing to present would corrupt everything below it: the upload
+        // ring rewinds per recording, the mesh buffer pool hands freed buffers
+        // straight back out, and the descriptor rings are swapped for bigger
+        // ones here - all three are safe only because the GPU is idle at this
+        // point, and none of them has anything to do with a swap chain.
         WaitForGpu();
 
         // GPU idle and no list recording: the only safe point to free upload
@@ -932,7 +1069,17 @@ public sealed unsafe class D3D12Renderer : Renderer
         RecycleRetiredMeshBuffers();
         GrowDescriptorRingsIfNeeded();
 
-        _frameIndex = _swapChain.GetCurrentBackBufferIndex();
+        if (_swapChain.Handle is not null)
+            _frameIndex = _swapChain.GetCurrentBackBufferIndex();
+
+        // Outside the guard too, and that placement is the composited path's
+        // whole error gate. A composited surface has no chain, so the Present
+        // above is skipped every frame; it also has no offscreen probe and no
+        // back buffer to read a pixel out of, which leaves the debug layer as
+        // the only continuous detector of a missing barrier or a wrapped
+        // resource acquired from a state it is not in. Draining only when there
+        // is something to present would turn that off exactly where it is the
+        // only thing left.
         DrainDebugMessages();
     }
 
@@ -1105,6 +1252,14 @@ public sealed unsafe class D3D12Renderer : Renderer
         var list = CurrentList;
         if (list is null) return;
 
+        // A composited surface built no back-buffer views, so a null target here
+        // names an RTV descriptor slot that was never written: binding it draws
+        // through whatever the heap happened to contain. D3D11's equivalent is
+        // free, because a null RTV pointer is checkable and the pass simply does
+        // nothing; a descriptor handle carries no such tell, so the same "no-op
+        // rather than draw into garbage" answer has to be stated.
+        if (_composited && target is null) return;
+
         Vector2D<int> size = PassSize;
         SetViewportAndScissor(size.X, size.Y);
 
@@ -1249,6 +1404,265 @@ public sealed unsafe class D3D12Renderer : Renderer
         _renderTargets.Add(target);
         return target;
     }
+
+    // ─── Composited output ───────────────────────────────────
+
+    /// <summary>
+    /// Creates or replaces the target the frame is presented into on a
+    /// composited surface, and the bridge surface that hands it over. Null on a
+    /// window surface, and null while the pane has no size.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Two resources per generation, not one, and that is the price of the
+    /// bridge.</b> The target is an ORDINARY private D3D12 target - nothing
+    /// outside this process can import a D3D12-created handle - and the shared
+    /// texture beside it belongs to the D3D11On12 device. They are minted and
+    /// retired together, because the second is a copy of the first and the
+    /// wrapped alias holds a reference on it.
+    /// </para>
+    /// <para>
+    /// <b>Rebuilt, never resized</b>, exactly as on D3D11: the consumer imported
+    /// the NT handle and a handle is not swappable, so a size change mints a
+    /// fresh generation and retires the old pair rather than freeing it, since
+    /// the consumer may be reading it this instant and freeing it underneath
+    /// raises nothing on either side.
+    /// </para>
+    /// <para>
+    /// <b>The size comes from the same latch a swap chain would follow</b>, so a
+    /// composited host resizes the engine exactly as a windowed one does and
+    /// there is no second size to keep in step.
+    /// </para>
+    /// </remarks>
+    private RenderTarget? EnsurePresentTarget()
+    {
+        if (!_composited) return null;
+
+        Vector2D<int> size = FramebufferSize;
+
+        // Collapsed or mid-layout: null, so the frame is skipped whole. Same
+        // answer EnsureSceneTarget gives at zero, and they have to agree - a
+        // frame that kept the previous target while the HDR one came back null
+        // would resolve nothing and draw the overlay onto last frame's picture.
+        // The existing pair is kept rather than torn down, so the consumer holds
+        // the last good frame and the handle it already imported stays valid for
+        // when the size comes back.
+        if (size.X <= 0 || size.Y <= 0) return null;
+
+        if (_presentTarget is { } existing && existing.Width == size.X && existing.Height == size.Y)
+            return existing;
+
+        _retirement ??= new SharedTargetRetirement(_logger);
+        _bridge ??= D3D12On11Bridge.Create(DevicePtr, (ID3D12CommandQueue*)_queue.Handle);
+
+        if (_presentTarget is { } outgoing)
+        {
+            int retiring = _presentGeneration;
+            _presentTarget = null;
+
+            // The flag names the LIVE surface's key, and the live surface is
+            // changing. Unreachable while this runs at the top of Render, above
+            // every BeginSharedWrite, and stated anyway because it is the
+            // invariant rather than the call order that makes it true.
+            _sharedWriteHeld = false;
+
+            // The GPU may still be reading the outgoing target through the
+            // bridge's alias, and the release below frees both. Every path into
+            // here is between frames (Render, before any recording starts), but
+            // the copy was submitted by the 11On12 device rather than by the
+            // frame's own list, so the frame fence is the only thing that
+            // covers it and this makes that a requirement rather than a
+            // coincidence.
+            WaitForGpu();
+
+            IDisposable? retiredSurface = _bridge.Detach();
+            _retirement.Retire(retiring, () =>
+            {
+                retiredSurface?.Dispose();
+                DestroyRenderTarget(outgoing);
+            });
+        }
+
+        // Srgb, because this is where linear light stops: the resolve writes
+        // linear values and this target's own view encodes them, exactly as the
+        // window's back buffer does. The bridge's shared texture is UNORM so the
+        // consumer does not decode a second time, and the copy between the two
+        // is a bit copy within one format family rather than a conversion.
+        //
+        // Sharing stays None deliberately: on this backend the sharing is the
+        // BRIDGE's, and asking a D3D12 target for a handle nothing can import
+        // would be a claim the format cannot honour.
+        //
+        // Depth, because this stands in for the back buffer and the back buffer
+        // has one. The HDR path never uses it - the scene has already been drawn
+        // and depth-tested into its own target by the time the resolve runs - so
+        // it is a full-screen surface spent on the HdrEnabled = false path,
+        // which renders the scene straight in here and cannot work without it.
+        var fresh = (D3D12RenderTarget)CreateRenderTarget(new RenderTargetDesc(
+            size.X, size.Y, TextureFormat.Rgba8, TextureColorSpace.Srgb,
+            Depth: true, TextureFilter.Linear, TextureWrap.Clamp, Color: true));
+
+        _bridge.Attach(size.X, size.Y, ((D3D12Texture)fresh.ColorTexture!).Resource);
+
+        _presentTarget = fresh;
+        _presentGeneration = _retirement.Next();
+        _sharedTimeoutLogged = false;
+
+        _logger.LogInformation(
+            "Shared present target {Width}x{Height}, generation {Generation}, handle 0x{Handle:X} " +
+            "(through a D3D11On12 bridge).",
+            size.X, size.Y, _presentGeneration, _bridge.SharedHandle);
+
+        return fresh;
+    }
+
+    /// <summary>The present target, for tests that drive a pass into it directly.</summary>
+    /// <remarks>
+    /// Internal because nothing in a game reaches for this: the frame resolves
+    /// into it and the host reads the handle. A test needs it because the thing
+    /// being proved - that a write on this side reaches the handle on another
+    /// device - is not observable from anywhere else.
+    /// </remarks>
+    internal RenderTarget? PresentTargetForTest => _presentTarget;
+
+    /// <summary>Runs the present target's size maintenance, for tests that resize without a scene.</summary>
+    internal RenderTarget? EnsurePresentTargetForTest() => EnsurePresentTarget();
+
+    /// <summary>
+    /// Clears the present target and hands it over exactly as the end of a frame
+    /// does, for tests that have no scene to render.
+    /// </summary>
+    /// <remarks>
+    /// <b>The command scope is why this exists at all.</b> D3D11's equivalent
+    /// test drives <c>BeginPass</c>/<c>EndPass</c> straight from the fixture,
+    /// because an immediate context is always recording; here a pass outside a
+    /// frame writes into a closed command list and does nothing, silently. The
+    /// publish is the renderer's own, key bracket included, so a test cannot
+    /// accidentally prove its own arrangement instead of the engine's.
+    /// </remarks>
+    internal void WriteAndPublishForTest(Vector4 clear)
+    {
+        // Never the back buffer: a null target means "the window" everywhere
+        // else in this file, and a hook that quietly cleared a live window
+        // between frames would be a very confusing thing to have written.
+        if (_presentTarget is null) return;
+
+        BeginOutOfFrameCommands();
+        try
+        {
+            BeginPass(_presentTarget, PassClear.To(clear));
+            EndPass();
+        }
+        finally
+        {
+            EndOutOfFrameCommands();
+        }
+
+        PublishSharedFrame();
+    }
+
+    /// <inheritdoc/>
+    public override bool TryGetSharedHandle(out SharedTargetHandle handle)
+    {
+        if (_bridge is { HasSurface: true } bridge && _presentTarget is { } target)
+        {
+            handle = new SharedTargetHandle(
+                bridge.SharedHandle, target.Width, target.Height, _presentGeneration);
+            return true;
+        }
+
+        handle = default;
+        return false;
+    }
+
+    /// <inheritdoc/>
+    public override bool BeginSharedWrite(int timeoutMs = 100)
+    {
+        if (_bridge is not { HasSurface: true } bridge) return false;
+
+        // Re-entering would take the key twice and release it once, which reads
+        // as a working frame and then deadlocks the consumer forever.
+        if (_sharedWriteHeld)
+            throw new InvalidOperationException("BeginSharedWrite was called while the shared key was already held.");
+
+        int hr = bridge.KeyedMutex->AcquireSync(SharedProducerKey, (uint)Math.Max(0, timeoutMs));
+
+        // WAIT_TIMEOUT is 0x00000102: a SUCCESS-coded HRESULT, so `hr < 0` reads
+        // it as an acquisition, and SilkMarshal.ThrowHResult would let it
+        // through. The copy then writes a texture the consumer owns, and the
+        // ReleaseSync that follows fails because this side never held the key.
+        // Measured, because the value alone does not look like a failure.
+        if (hr == WaitTimeout)
+        {
+            if (!_sharedTimeoutLogged)
+            {
+                _sharedTimeoutLogged = true;
+                _logger.LogInformation(
+                    "Shared target key not available within {Timeout} ms; skipping the shared write while the " +
+                    "consumer is not taking its turn. It keeps the last frame it was given.", timeoutMs);
+            }
+            return false;
+        }
+
+        if (hr < 0)
+        {
+            _logger.LogError(
+                "Acquiring the shared target key failed: {Code} (0x{Hr:X8}). Skipping this frame's shared write.",
+                DxgiInterop.Describe(hr), hr);
+            return false;
+        }
+
+        // WAIT_ABANDONED (0x00000080): the key IS acquired, but whoever held it
+        // last went away without releasing. Worth saying so once - the consumer
+        // has died - and worth carrying on, because the texture is ours.
+        if (hr == WaitAbandoned)
+            _logger.LogWarning("The shared target key was abandoned by its previous holder; taking it anyway.");
+
+        if (_sharedTimeoutLogged)
+        {
+            _sharedTimeoutLogged = false;
+            _logger.LogInformation("Shared target key available again; resuming shared writes.");
+        }
+
+        _sharedWriteHeld = true;
+        return true;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// No flush here, unlike D3D11: the bridge flushes its own immediate context
+    /// at the end of <see cref="D3D12On11Bridge.Publish"/>, which is where the
+    /// work that has to be submitted before the key moves actually is.
+    /// </remarks>
+    public override void EndSharedWrite()
+    {
+        if (!_sharedWriteHeld) return;
+        _sharedWriteHeld = false;
+
+        if (_bridge is not { HasSurface: true } bridge) return;
+
+        int hr = bridge.KeyedMutex->ReleaseSync(SharedConsumerKey);
+        if (hr < 0)
+        {
+            _logger.LogError(
+                "Releasing the shared target key failed: {Code} (0x{Hr:X8}). The consumer will not get this frame.",
+                DxgiInterop.Describe(hr), hr);
+        }
+    }
+
+    /// <inheritdoc/>
+    public override void NotifySharedTargetReleased(int generation)
+    {
+        int released = _retirement?.ConsumerReleased(generation) ?? 0;
+        if (released > 0)
+            _logger.LogDebug("Released {Count} retired shared target generation(s) up to {Generation}.", released, generation);
+    }
+
+    /// <summary>WAIT_TIMEOUT, which AcquireSync returns as a success-coded HRESULT.</summary>
+    private const int WaitTimeout = 0x00000102;
+
+    /// <summary>WAIT_ABANDONED: acquired, but the previous holder never released.</summary>
+    private const int WaitAbandoned = 0x00000080;
 
     /// <summary>A typeless depth resource that can be both written and sampled.</summary>
     internal ComPtr<ID3D12Resource> CreateDepthResource(uint width, uint height)
@@ -1982,6 +2396,23 @@ public sealed unsafe class D3D12Renderer : Renderer
         foreach (var mesh in _meshes) mesh.Dispose();
         _meshes.Clear();
 
+        // Before the target loop below, because releasing a retired generation
+        // calls DestroyRenderTarget, which mutates the very list that loop
+        // walks. Regardless of acknowledgement: the device is going with them,
+        // so there is nothing left for a consumer to hold on to. Nulled so the
+        // second Shutdown Engine's crash handler makes is a no-op.
+        _retirement?.ReleaseAll();
+        _retirement = null;
+        _presentTarget = null;
+        _presentGeneration = 0;
+        _sharedWriteHeld = false;
+
+        // After the retirement, because a retired generation's alias holds a
+        // reference on a resource this releases, and before the target loop for
+        // the same reason: the live surface aliases the live present target.
+        _bridge?.Dispose();
+        _bridge = null;
+
         ReleaseFrameResources();
         ReleaseMeshBufferPool();
 
@@ -2063,6 +2494,26 @@ public sealed unsafe class D3D12Renderer : Renderer
                 string text = Encoding.ASCII.GetString(msg->PDescription, (int)msg->DescriptionByteLength).TrimEnd('\0');
                 switch (msg->Severity)
                 {
+                    // The ONE message this counter forgives, and only while the
+                    // D3D11On12 bridge exists. CreateWrappedResource asks the
+                    // compatibility device to reflect the resource's D3D11
+                    // description, which a resource D3D12 created does not have -
+                    // that is exactly why the call takes a D3D11_RESOURCE_FLAGS
+                    // to fall back to. The probe is reported at ERROR severity
+                    // regardless, once per wrap, and the wrap then succeeds.
+                    // Measured: it survives a shared heap flag, so it is
+                    // structural rather than a missing creation option.
+                    //
+                    // Counted, this would leave every composited D3D12 session
+                    // permanently reporting one debug-layer error in a standing
+                    // status slot, which teaches people to ignore the one
+                    // continuous detector a composited surface has. It is still
+                    // LOGGED, so nothing is hidden - only the arithmetic changes.
+                    case MessageSeverity.Error
+                        when _bridge is not null && msg->ID == MessageID.ReflectsharedpropertiesInvalidobject:
+                        _logger.LogDebug(
+                            "D3D12 debug layer (expected, D3D11On12 wrap): {Message}", text);
+                        break;
                     case MessageSeverity.Corruption:
                     case MessageSeverity.Error:
                         errors++;

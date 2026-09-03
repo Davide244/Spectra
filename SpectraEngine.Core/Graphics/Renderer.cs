@@ -534,13 +534,18 @@ public abstract class Renderer
 
     // ---- Shared colour targets ---------------------------------------------
     //
-    // D3D11 implements all of this; D3D12 and OpenGL do not. Every member is
+    // Both D3D backends implement all of this; OpenGL does not. Every member is
     // virtual with a refusing default rather than abstract, so a backend that
     // has not been taught to share answers "no" instead of failing to compile,
     // and a caller has one answer to check rather than a capability table to
-    // consult first. D3D12 stays refusing on purpose: a D3D12-created handle is
-    // refused by the import this feeds (measured: E_NOINTERFACE), so its route
-    // is a D3D11On12 bridge rather than an implementation of these members.
+    // consult first.
+    //
+    // The two D3D routes are NOT the same shape, and the contract here is what
+    // hides that. D3D11 draws straight into a shared keyed-mutex texture of its
+    // own; a D3D12-created handle is refused by the import this feeds (measured:
+    // E_NOINTERFACE), so D3D12 renders into a private target and copies it into
+    // a texture a D3D11On12 bridge owns. What a host sees is one handle, one
+    // generation and one key protocol either way.
 
     /// <summary>
     /// The keyed-mutex key the PRODUCER acquires and the consumer releases.

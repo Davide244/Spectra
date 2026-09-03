@@ -36,7 +36,7 @@ namespace SpectraEngine.Graphics.Tests;
 /// of the three raises anything on the debug layer.
 /// </para>
 /// </remarks>
-[Collection(SharedTargetD3D11Collection.Name)]
+[Collection(D3DDeviceCollection.Name)]
 public sealed unsafe class SharedTargetD3D11Tests(SharedTargetD3D11Fixture fixture)
 {
     private void Require() => Assert.SkipWhen(
@@ -298,18 +298,27 @@ public sealed unsafe class SharedTargetD3D11Tests(SharedTargetD3D11Fixture fixtu
     }
 }
 
-/// <summary>Serialises every test class in this assembly that brings up a D3D11 device.</summary>
+/// <summary>Serialises every test class in this assembly that brings up a D3D device.</summary>
 /// <remarks>
 /// <para>
 /// <b>Two reasons, and the second one was measured the hard way.</b> The
 /// shared-target tests take turns on a single keyed mutex, so running two of
 /// them at once would have each measuring the other's turn. And <b>two classes
-/// acquiring Silk.NET's D3D11 and D3DCompiler APIs concurrently race</b>: the
+/// acquiring Silk.NET's D3D and D3DCompiler APIs concurrently race</b>: the
 /// full suite intermittently produced a <c>D3D11CreateDevice</c> that reported
 /// success and left the device pointer null, which surfaced as a
 /// <c>NullReferenceException</c> from the next <c>QueryInterface</c>. It
 /// reproduced only with the whole assembly running in parallel, never with the
 /// two classes paired, and never with <c>-parallel none</c>.
+/// </para>
+/// <para>
+/// <b>D3D12 belongs in HERE rather than in a collection of its own</b>, and
+/// that was measured too: giving the D3D11On12 bridge tests their own
+/// collection put a third device-creating class back in parallel with these
+/// two, and the same null device came back at roughly one run in three, taking
+/// thirteen tests with it every time. The race is about the API tables rather
+/// than about which D3D this is, so the serialised set is "brings up a D3D
+/// device", and splitting it by version is the shape that reintroduces the bug.
 /// </para>
 /// <para>
 /// Same remedy <see cref="GlRendererCollection"/> already uses for the GL
@@ -318,9 +327,10 @@ public sealed unsafe class SharedTargetD3D11Tests(SharedTargetD3D11Fixture fixtu
 /// </para>
 /// </remarks>
 [CollectionDefinition(Name)]
-public sealed class SharedTargetD3D11Collection : ICollectionFixture<SharedTargetD3D11Fixture>
+public sealed class D3DDeviceCollection
+    : ICollectionFixture<SharedTargetD3D11Fixture>, ICollectionFixture<SharedTargetD3D12Fixture>
 {
-    public const string Name = "D3D11 device";
+    public const string Name = "D3D device";
 }
 
 /// <summary>
