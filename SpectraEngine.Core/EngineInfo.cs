@@ -93,6 +93,26 @@ namespace SpectraEngine.Core
         public const uint GeometryFormatVersion = 1;
 
         /// <summary>
+        /// Version of the .scmap container a map bake writes, stamped into
+        /// ScmapHeader.FormatVersion and enforced on read as an EXACT MATCH.
+        /// </summary>
+        /// <remarks>
+        /// Cooked, so it versions the strict way the model, image, audio and
+        /// shader formats already do: a reader meeting a number it does not
+        /// implement refuses the file outright and names both values, because a
+        /// compiled map is a build output that can always be regenerated and the
+        /// bytes past the header only mean anything under the version that wrote
+        /// them. It is deliberately NOT a floor like PackHeader.MinReaderVersion,
+        /// which exists because a pack is mounted by readers of many ages; a
+        /// compiled map has nothing to degrade to. Raise it whenever the container
+        /// LAYOUT moves. What the geometry inside it means is versioned separately
+        /// by GeometryFormatVersion, and which attributes a vertex carries by the
+        /// header's VertexLayoutId, so that a stale map can be reported precisely
+        /// rather than as a generic bump.
+        /// </remarks>
+        public const ushort CompiledMapFormatVersion = 1;
+
+        /// <summary>
         /// Version of the .spack container a cook writes. Stamped into
         /// PackHeader.FormatVersion.
         /// </summary>
