@@ -158,4 +158,93 @@
   <StreamGeometry x:Key="IconOpenFolder">M2.5,12.5 L2.5,3.5 L6.5,3.5 L8,5.5 L13.5,5.5 L13.5,12.5 Z M5,8.5 L11,8.5</StreamGeometry>
   <StreamGeometry x:Key="IconMap">M2.5,4 L6.2,2.5 L9.8,4.6 L13.5,3.1 L13.5,12 L9.8,13.5 L6.2,11.4 L2.5,12.9 Z M6.2,2.5 L6.2,11.4 M9.8,4.6 L9.8,13.5</StreamGeometry>
 
+
+  <!-- ___ Selection marks _________________________________
+       A tick and a dot, each drawn to sit inside its own box or ring, because
+       the ribbon's overlay rows and grid-mode column are a Button wearing
+       Classes.active rather than a CheckBox or a RadioButton. That is the same
+       refusal Controls.axaml already makes for every other lit control in this
+       shell: a two-way toggle bound to engine state flickers when the snapshot
+       corrects it, so the box is drawn and the mark is lit.
+
+       The mark is a SEPARATE geometry from its container rather than a second
+       version of it, so lighting one is a brush moving on one element and the
+       two can never disagree about where the box is. -->
+  <StreamGeometry x:Key="IconCheckBox">M3,3 L13,3 L13,13 L3,13 Z</StreamGeometry>
+  <StreamGeometry x:Key="IconCheckTick">M5,8.2 L7.2,10.6 L11.2,5.4</StreamGeometry>
+  <StreamGeometry x:Key="IconRadio">M8,3 A5,5 0 1 1 7.99,3 Z</StreamGeometry>
+  <StreamGeometry x:Key="IconRadioDot">M8,5.6 A2.4,2.4 0 1 1 7.99,5.6 Z</StreamGeometry>
+
+  <!-- ___ The large set ___________________________________
+       A SECOND SIZE, ON ITS OWN 32x32 GRID, ink filling 3.5 to 28.5 - the same
+       proportion of its box that the small set reaches after its shared 1.2
+       scale, authored directly rather than authored small and scaled, because
+       a second shared scale factor is a second thing that can drift from the
+       first. Path.icon-lg therefore carries no transform at all.
+
+       RULE 2 AT THE TOP OF THIS FILE IS NOT BEING BROKEN - ITS OWN PREMISE
+       EXPIRES HERE. It reads "at 16px with a 1.5 stroke, two shapes with the
+       same outline and different insides are the same shape", and that is why
+       the small cubes are told apart by a ground line rather than by anything
+       within them. At 32px with the same stroke, interior detail is legible:
+       a bore really can be drilled through a block, a bulb can have a filament
+       and a frame can have something inside it. So these are new drawings
+       rather than the small ones enlarged, which is the only reason a large
+       button is worth having - an outline scaled to twice its size is a bigger
+       outline, not a better icon.
+
+       Only the twelve verbs that earn a large button are here. Everything else
+       in the ribbon stays on the 16px set, which is untouched. -->
+
+  <!-- A block: a cube resting on the ground it fuses into, with a panel on its
+       top face. The ground rule runs PAST the cube on both sides, because what
+       a block does is join the level rather than sit on it. -->
+  <StreamGeometry x:Key="IconLgBrushWorld">M5,9 L16,3.5 L27,9 L27,21.5 L16,27 L5,21.5 Z M5,9 L16,14.5 L27,9 M16,14.5 L16,27 M16,6.5 L21,9 L16,11.5 L11,9 Z M3.5,28.5 L28.5,28.5</StreamGeometry>
+
+  <!-- A part: the same cube off the ground, over its own shadow. A shorter
+       rule would have been the small set's distinction at twice the size and
+       therefore the same silhouette twice; a cube with a gap and a shadow
+       under it is a thing that is not touching anything, which is what a part
+       IS. -->
+  <StreamGeometry x:Key="IconLgBrushPart">M5,7.5 L16,2.5 L27,7.5 L27,19 L16,24 L5,19 Z M5,7.5 L16,12.5 L27,7.5 M16,12.5 L16,24 M9.5,27.8 A6.5,1.7 0 1 1 9.49,27.8 Z</StreamGeometry>
+
+  <!-- A cut: a cube with a hole DRILLED through it - the mouth on the top
+       face, both walls, and the floor of the bore. The small glyph can only
+       manage a circle on the outline; this is the detail a 32px box buys. -->
+  <StreamGeometry x:Key="IconLgBrushSubtractive">M5,9 L16,3.5 L27,9 L27,21.5 L16,27 L5,21.5 Z M5,9 L16,14.5 L27,9 M16,14.5 L16,27 M11,9.4 A5,2.5 0 1 1 10.99,9.4 Z M11,9.4 L11,17 M21,9.4 L21,17 M11,17 A5,2.5 0 0 0 21,17</StreamGeometry>
+
+  <!-- A light: a bulb with a filament, its base, and the rays it throws. -->
+  <StreamGeometry x:Key="IconLgLight">M16,7 A6.5,6.5 0 1 1 15.99,7 Z M13,17 L13,20.5 L19,20.5 L19,17 M14,23.5 L18,23.5 M15,26.5 L17,26.5 M13.6,13.5 L16,10.5 L18.4,13.5 M16,3.5 L16,5 M3.5,13.5 L5.5,13.5 M28.5,13.5 L26.5,13.5 M6.4,6.4 L7.9,7.9 M25.6,6.4 L24.1,7.9</StreamGeometry>
+
+  <!-- A surface light: a lit panel flush on a surface, washing outward. The
+       rays DIVERGE, which a 16px glyph cannot show - there its three strokes
+       have to be parallel or they read as noise. -->
+  <StreamGeometry x:Key="IconLgSurfaceLight">M3.5,3.5 L28.5,3.5 L28.5,10 L3.5,10 Z M3.5,7 L28.5,7 M9,12.5 L4.5,28 M13.7,12.5 L11.7,28.5 M18.3,12.5 L20.3,28.5 M23,12.5 L27.5,28</StreamGeometry>
+
+  <!-- Move: the four-way arrow, with the pivot it moves drawn at the centre. -->
+  <StreamGeometry x:Key="IconLgMove">M16,3.5 L16,28.5 M3.5,16 L28.5,16 M16,3.5 L11.5,8.5 M16,3.5 L20.5,8.5 M16,28.5 L11.5,23.5 M16,28.5 L20.5,23.5 M3.5,16 L8.5,11.5 M3.5,16 L8.5,20.5 M28.5,16 L23.5,11.5 M28.5,16 L23.5,20.5 M12.8,12.8 L19.2,12.8 L19.2,19.2 L12.8,19.2 Z</StreamGeometry>
+
+  <!-- Rotate: three quarters of a turn with a head, about a centre. -->
+  <StreamGeometry x:Key="IconLgRotate">M27.5,16 A11.5,11.5 0 1 1 16,4.5 M16,4.5 L11.6,2.4 M16,4.5 L11.6,8.6 M14.4,16 A1.6,1.6 0 1 1 14.39,16 Z</StreamGeometry>
+
+  <!-- Size: a box and the corner it is being pulled out to. -->
+  <StreamGeometry x:Key="IconLgResize">M3.5,17.5 L3.5,28.5 L14.5,28.5 L14.5,17.5 Z M13.6,18.4 L28.5,3.5 M28.5,3.5 L19.5,3.5 M28.5,3.5 L28.5,12.5</StreamGeometry>
+
+  <!-- Duplicate: the copy in front, the original behind it. -->
+  <StreamGeometry x:Key="IconLgDuplicate">M10.5,3.5 L28.5,3.5 L28.5,21.5 M3.5,10.5 L21.5,10.5 L21.5,28.5 L3.5,28.5 Z</StreamGeometry>
+
+  <!-- An entity: the diamond, with the point it actually is at its centre. The
+       small glyph is bare by rule; at this size the dot is what says the mark
+       is a POINT entity rather than a decoration. -->
+  <StreamGeometry x:Key="IconLgEntity">M16,3.5 L28.5,16 L16,28.5 L3.5,16 Z M14.3,16 A1.7,1.7 0 1 1 14.29,16 Z</StreamGeometry>
+
+  <!-- Frame the selection: the viewfinder with the thing in it. -->
+  <StreamGeometry x:Key="IconLgFrame">M3.5,10 L3.5,3.5 L10,3.5 M22,3.5 L28.5,3.5 L28.5,10 M28.5,22 L28.5,28.5 L22,28.5 M10,28.5 L3.5,28.5 L3.5,22 M10,14 L16,11 L22,14 L22,20 L16,23 L10,20 Z M10,14 L16,17 L22,14 M16,17 L16,23</StreamGeometry>
+
+  <!-- Frame everything: four arrows opening to the corners, and deliberately
+       NOT the viewfinder with more inside it. These two sit side by side in
+       the Frame group, so they may not share an outline - the same reason the
+       16px pair is drawn the way it is. -->
+  <StreamGeometry x:Key="IconLgFrameAll">M12.5,12.5 L3.5,3.5 M3.5,3.5 L10,3.5 M3.5,3.5 L3.5,10 M19.5,12.5 L28.5,3.5 M28.5,3.5 L22,3.5 M28.5,3.5 L28.5,10 M12.5,19.5 L3.5,28.5 M3.5,28.5 L10,28.5 M3.5,28.5 L3.5,22 M19.5,19.5 L28.5,28.5 M28.5,28.5 L22,28.5 M28.5,28.5 L28.5,22</StreamGeometry>
+
 </ResourceDictionary>

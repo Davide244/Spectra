@@ -1,4 +1,4 @@
-<ResourceDictionary xmlns="https://github.com/avaloniaui"
+﻿<ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="using:System"
                     xmlns:ease="using:Avalonia.Animation.Easings">
@@ -239,6 +239,86 @@
        rectangle somebody left on screen. -->
   <Color x:Key="SpectraDropWashColor">#12E5A93F</Color>
   <SolidColorBrush x:Key="SpectraDropWash" Color="{DynamicResource SpectraDropWashColor}" />
+
+  <!-- ___ Depth ___________________________________________
+       THE SHELL'S FIRST GRADIENTS, and until now there were none of any kind:
+       LinearGradientBrush, GradientStop, BoxShadow and DropShadow all returned
+       zero matches across this project, so every surface in the window was a
+       flat solid fill and a raised control differed from a flat one by one
+       pixel of border. That is the mechanical half of "it reads as grey
+       blobs" - there is nothing in the window for an eye to read as a physical
+       object, only regions of slightly different grey.
+
+       Office 2010 is the reference and its depth is three things: a shallow
+       grade across the ribbon's own ground, a light rim on top of anything
+       raised with a dark one under its foot, and an interior sheen that
+       inverts when the key goes down. All three are here.
+
+       A GRADIENT IS NEVER ASSIGNED TO A TRANSITIONED PROPERTY, and that is a
+       correctness rule rather than a preference. The section above records what
+       a BrushTransition does with a Color and an Opacity it is allowed to
+       interpolate separately; what Avalonia's brush animator does with a PAIR
+       OF GRADIENTS is not written down anywhere and is not something to
+       discover in a shipped build. So depth is a STATIC layer and only solid
+       fills ramp: a sheen appears by moving its element's Opacity, which is one
+       interpolated quantity, and a bevel rim simply snaps - which is also how
+       it should look, since a 1px rim arriving instantly under the cursor reads
+       as the key lifting and a 90ms ramp on it reads as nothing at all.
+       RibbonDepthConventionTests holds both halves from the sources. -->
+
+  <!-- The ribbon body. Lighter where it meets the tab strip, settling to the
+       chrome ground before the viewport, so the surface has a direction. Three
+       steps of value across ~90px, which is a grade you feel and cannot point
+       at. -->
+  <LinearGradientBrush x:Key="SpectraRibbonBodyFill" StartPoint="0%,0%" EndPoint="0%,100%">
+    <GradientStop Offset="0" Color="#1F1B1C" />
+    <GradientStop Offset="1" Color="#181516" />
+  </LinearGradientBrush>
+
+  <!-- The interior sheen of a raised key: light gathered at the top, shadow
+       pooled at the foot, nothing in the middle. Two stops meet at 0.5 rather
+       than one crossing zero, because a single transparent stop between white
+       and black walks the hue through grey on the way past.
+
+       Spent only where it can be SEEN. Across a 66px large button it is a
+       readable curve; across a 22px row it is four stops in twenty-two pixels,
+       which is a flat wash costing two extra elements, so small controls take
+       the bevel and the fill and no sheen. -->
+  <LinearGradientBrush x:Key="SpectraSheenRaised" StartPoint="0%,0%" EndPoint="0%,100%">
+    <GradientStop Offset="0" Color="#16FFFFFF" />
+    <GradientStop Offset="0.44" Color="#05FFFFFF" />
+    <GradientStop Offset="0.5" Color="#00FFFFFF" />
+    <GradientStop Offset="0.5" Color="#00000000" />
+    <GradientStop Offset="1" Color="#1A000000" />
+  </LinearGradientBrush>
+
+  <!-- Pressed: the same key with the light coming from inside the hole. The
+       vertical mirror, deliberately not a separate design. -->
+  <LinearGradientBrush x:Key="SpectraSheenSunken" StartPoint="0%,0%" EndPoint="0%,100%">
+    <GradientStop Offset="0" Color="#24000000" />
+    <GradientStop Offset="0.5" Color="#00000000" />
+    <GradientStop Offset="0.5" Color="#00FFFFFF" />
+    <GradientStop Offset="1" Color="#10FFFFFF" />
+  </LinearGradientBrush>
+
+  <!-- The rim. SpectraBorderControl is #4C4547 and this is one step either side
+       of it, so a bevelled edge and a flat one are the same border at the same
+       weight - only its top and bottom disagree. -->
+  <LinearGradientBrush x:Key="SpectraBevelRaised" StartPoint="0%,0%" EndPoint="0%,100%">
+    <GradientStop Offset="0" Color="#5C5456" />
+    <GradientStop Offset="1" Color="#3A3436" />
+  </LinearGradientBrush>
+
+  <!-- The divider between ribbon groups, and it fades at both ends because a
+       hairline that stops dead reads as a piece of a box somebody failed to
+       finish. SpectraBorderStrong at full alpha in the middle, gone by the
+       caption. -->
+  <LinearGradientBrush x:Key="SpectraGroupRule" StartPoint="0%,0%" EndPoint="0%,100%">
+    <GradientStop Offset="0" Color="#003F393B" />
+    <GradientStop Offset="0.22" Color="#FF3F393B" />
+    <GradientStop Offset="0.78" Color="#FF3F393B" />
+    <GradientStop Offset="1" Color="#003F393B" />
+  </LinearGradientBrush>
 
   <!-- ___ Axis identity ___________________________________
        X, Y and Z wear the same hues here as the gizmo handles do in the
