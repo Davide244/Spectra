@@ -193,7 +193,10 @@ public class ScookCliTests
         using var project = new TempProject();
         project.WriteAsset("Textures/wall_brick.png", TempProject.Bytes(40));
 
-        var run = Invoke("cook", project.Root, "-t", "opengl", "--strict");
+        // --keep-brush-source, because the map rule is genuinely unbuilt.
+        // This case used to be spelled with -t, which stopped being an example
+        // of anything the moment the shader rule landed and started acting on it.
+        var run = Invoke("cook", project.Root, "--keep-brush-source", "--strict");
 
         // A warning rather than an error even under --strict: the request is
         // legitimate and the cook it asked for still happened. It is reported by

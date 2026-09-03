@@ -360,12 +360,8 @@ public sealed unsafe class D3D12Renderer : Renderer
 
         CreateFrameResources((uint)size.X, (uint)size.Y);
 
-        DefaultShader = BaseShaders.LitPath is { } litPath
-            ? CreateShaderFromFile(litPath)
-            : CreateShaderFromSource(BaseShaders.Lit);
-        _debugShader = BaseShaders.DebugLinePath is { } debugPath
-            ? CreateShaderFromFile(debugPath)
-            : CreateShaderFromSource(BaseShaders.DebugLine);
+        DefaultShader = CreateBaseShader(BaseShaders.LitFileName);
+        _debugShader = CreateBaseShader(BaseShaders.DebugLineFileName);
         // Debug overlays draw always-on-top (depth off), matching the OpenGL
         // backend's depth-disabled flush; must be set before the first draw
         // builds a PSO.

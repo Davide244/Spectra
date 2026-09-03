@@ -281,7 +281,8 @@ public sealed class CookSession
             return new RuleOutcome(true, replay.Dependencies, replay.Emissions, null, []);
         }
 
-        var context = new RuleContext(contentRoot, item.File.ContentPath, _settings.Profile);
+        var context = new RuleContext(
+            contentRoot, item.File.ContentPath, _settings.Profile, _settings.Targets);
         CookDiagnostic? failure = null;
 
         try

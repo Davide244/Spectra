@@ -141,10 +141,55 @@ public static class CookDiagnosticCodes
     public static readonly CookDiagnosticId MaterialFileMalformed = CookDiagnosticId.Cook(5002);
 
     // --- 6xxx: shader --------------------------------------------------------
-    // Reserved, and mostly not ours to spend: a diagnostic the shader compiler
-    // produced travels under its own SS#### code via CookDiagnosticId.Wrap, so
-    // this band holds only failures the COOKER owns, such as a shader with no
-    // blob for a requested backend.
+    //
+    // Mostly not ours to spend: a diagnostic the shader compiler produced is
+    // meant to travel under its own SS#### code via CookDiagnosticId.Wrap, so
+    // this band holds failures the COOKER owns.
+    //
+    // SC6001 is the one deliberate exception, and it is a placeholder for a
+    // wrap rather than a decision against one: SpectraShade's Diagnostic carries
+    // a severity, a message and a span and NO number, anywhere in the compiler.
+    // Minting numbers here would put codes on the compiler's behalf that ssc and
+    // the language server do not agree with, which is the precise failure
+    // wrapping exists to avoid. When the compiler numbers its diagnostics, the
+    // shader rule wraps them and SC6001 is retired rather than reused.
+
+    /// <summary>The shader compiler refused a source file. Carries its message verbatim.</summary>
+    public static readonly CookDiagnosticId ShaderCompileFailed = CookDiagnosticId.Cook(6001);
+
+    /// <summary>
+    /// A cooked shader has no blob for a backend it was cooked for.
+    /// </summary>
+    /// <remarks>
+    /// <b>Fatal in the cooker, silent at runtime, which is why it needs a
+    /// code.</b> The engine falls back to compiling that shader from source and
+    /// renders the right picture, so a pack one blob short mounts cleanly, runs
+    /// correctly and pays for a compiler front end on every launch of the build
+    /// that was meant to have left one behind. Nothing on screen and nothing in
+    /// a build log says so unless this is reported.
+    /// </remarks>
+    public static readonly CookDiagnosticId ShaderBackendMissing = CookDiagnosticId.Cook(6002);
+
+    /// <summary>A cooked shader's payload is not a readable <c>.specshadecomp</c> file.</summary>
+    public static readonly CookDiagnosticId ShaderFileUnreadable = CookDiagnosticId.Cook(6003);
+
+    /// <summary>A target backend this toolchain has no code generator for.</summary>
+    /// <remarks>
+    /// Vulkan today: <c>SpirVGenerator</c> throws rather than emitting. Named
+    /// rather than left to arrive as SC1004 "the Shader rule failed", because a
+    /// request the toolchain cannot serve yet is a different thing from a rule
+    /// that broke.
+    /// </remarks>
+    public static readonly CookDiagnosticId ShaderBackendUnsupported = CookDiagnosticId.Cook(6004);
+
+    /// <summary>A shader was cooked with an empty target list, so it produced nothing.</summary>
+    /// <remarks>
+    /// A warning rather than an error: asking for no backends is a legitimate
+    /// thing a caller can express, and the cook it asked for still happened. What
+    /// would not be legitimate is doing it silently, because the pack then has no
+    /// shader in it and looks exactly like a working cook.
+    /// </remarks>
+    public static readonly CookDiagnosticId ShaderNoTargets = CookDiagnosticId.Cook(6005);
 
     // --- 7xxx map and geometry, 8xxx script ----------------------------------
     // Reserved.

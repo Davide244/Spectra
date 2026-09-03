@@ -199,7 +199,11 @@ internal static class Program
         PackVerifyResult result;
         try
         {
-            result = PackVerifier.Verify(opts.Target);
+            // Targets only when the caller actually named some. A pack does not
+            // record what it was cooked for, so an unasked-for default here would
+            // fail every d3d11-only pack for the two backends nobody asked for.
+            result = PackVerifier.Verify(
+                opts.Target, logger: null, targets: opts.TargetsGiven ? opts.Targets : null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -321,9 +325,6 @@ internal static class Program
     // and the cook it asked for still happened.
     private static void ReportUnimplementedOptions(CliOptions opts, DiagnosticWriter writer)
     {
-        if (opts.TargetsGiven)
-            Say(writer, "--target selects nothing yet: the shader cook rule is not built.");
-
         if (opts.ProfileGiven && opts.Profile != CookProfile.Ship)
             Say(writer, $"--profile {CookManifest.ToWire(opts.Profile)} is recorded and no rule varies by profile yet.");
 

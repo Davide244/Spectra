@@ -295,12 +295,8 @@ public sealed unsafe class D3D11Renderer : Renderer
 
         // Build the base shaders. Same source-first / embedded-fallback pattern
         // as the OpenGL backend so hot-reload works in the dev tree.
-        DefaultShader = BaseShaders.LitPath is { } litPath
-            ? CreateShaderFromFile(litPath)
-            : CreateShaderFromSource(BaseShaders.Lit);
-        _debugShader = BaseShaders.DebugLinePath is { } debugPath
-            ? CreateShaderFromFile(debugPath)
-            : CreateShaderFromSource(BaseShaders.DebugLine);
+        DefaultShader = CreateBaseShader(BaseShaders.LitFileName);
+        _debugShader = CreateBaseShader(BaseShaders.DebugLineFileName);
         _lineBatch = new D3D11LineBatch(_device, _context, (D3D11ShaderProgram)_debugShader!);
 
         // Deferred first: see OpenGLRenderer for why it is the default.

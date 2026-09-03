@@ -21,15 +21,22 @@ namespace Spectra.Kitchen.Cooking;
 public sealed class CookRuleSet
 {
     private readonly RawCopyRule _rawCopy = new();
+    private readonly ShaderRule _shader = new();
 
     /// <summary>The rule that cooks <paramref name="contentPath"/>.</summary>
     public IRule Resolve(string contentPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentPath);
 
-        // Every extension falls through to the raw copy today. The switch is here
-        // rather than arriving with the first real rule so that the first real
-        // rule is one case, not a design.
+        // Matched on the EXTENSION through the rule's own predicate rather than
+        // on a string spelled here: the rule already has to name what it cooks in
+        // order to name what it emits, and a second spelling of ".spectrashade"
+        // in this file is a rule that silently stops being reached.
+        if (ShaderRule.Handles(contentPath)) return _shader;
+
+        // Everything else falls through to the raw copy, which is the floor
+        // rather than a placeholder: content with no cooked format of its own
+        // still has to reach the runtime.
         return _rawCopy;
     }
 }

@@ -85,12 +85,8 @@ public class OpenGLRenderer : Renderer
         // Prefer source-on-disk so the dev build hot-reloads on save.
         // Deployed builds (where the source tree isn't present) silently fall
         // back to the embedded resource and keep the shader frozen.
-        DefaultShader = BaseShaders.LitPath is { } litPath
-            ? CreateShaderFromFile(litPath)
-            : CreateShaderFromSource(BaseShaders.Lit);
-        _debugShader = BaseShaders.DebugLinePath is { } debugPath
-            ? CreateShaderFromFile(debugPath)
-            : CreateShaderFromSource(BaseShaders.DebugLine);
+        DefaultShader = CreateBaseShader(BaseShaders.LitFileName);
+        _debugShader = CreateBaseShader(BaseShaders.DebugLineFileName);
         _lineBatch = new OpenGLLineBatch(_gl);
 
         // Deferred FIRST, so it is the default: it is the only path with a

@@ -742,6 +742,12 @@ public sealed class Engine
                 _renderer.EnableDebugLayer = wanted;
             _renderer.PreferredAdapter = PreferredAdapter;
 
+            // Before Initialize, because that is where the backends build their
+            // default and debug programs: set afterwards, a cooked pack would be
+            // ignored for exactly the two shaders every frame binds, and nothing
+            // would report it - the source fallback renders the same picture.
+            _renderer.ShaderContent = _assetManager.Content;
+
             _renderer.Initialize(surface);
 
             _renderer.ShadowsEnabled = ShadowsEnabled;

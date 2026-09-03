@@ -1,9 +1,13 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Spectra.Kitchen.Cache;
 using Spectra.Kitchen.Diagnostics;
+using Spectra.Kitchen.Rules;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Assets.Packs;
 using SpectraEngine.Core.Assets.Sources;
+using SpectraEngine.Core.Graphics;
+using SpectraEngine.Core.Graphics.Shaders;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -89,8 +93,16 @@ public static class PackVerifier
     /// one run rather than the first one. A path the filesystem refuses does
     /// throw, because that is not a fact about the pack.
     /// </remarks>
+    /// <param name="packPath">The <c>.spack</c> to verify.</param>
+    /// <param name="logger">Where the mount reports its own trouble.</param>
+    /// <param name="targets">
+    /// The backends the pack was cooked for, when the caller knows. Null asks
+    /// the pack itself - see <see cref="CheckShaders"/> for what that can and
+    /// cannot prove.
+    /// </param>
     /// <exception cref="IOException">The file could not be opened.</exception>
-    public static PackVerifyResult Verify(string packPath, ILogger? logger = null)
+    public static PackVerifyResult Verify(
+        string packPath, ILogger? logger = null, IReadOnlyList<GraphicsBackend>? targets = null)
     {
         ArgumentNullException.ThrowIfNull(packPath);
 
@@ -129,6 +141,13 @@ public static class PackVerifier
 
         int payloads = 0, tombstones = 0, references = 0;
         long payloadBytes = 0;
+
+        // Collected during the walk and judged after it: the fallback for "which
+        // backends should be here" is the union over the pack's own shaders, and
+        // a union cannot be known until every shader has been seen. One code path
+        // whether or not the caller named a target list, because two would drift
+        // exactly where nobody is looking.
+        var shaders = new List<ShaderEntry>();
 
         using (pack)
         {
@@ -192,12 +211,18 @@ public static class PackVerifier
                     }
 
                     references += CheckReferences(name, blob.Span, strict, diagnostics, file);
+                    CollectShader(name, blob.Span, shaders, diagnostics, file);
                 }
             }
         }
 
+        CheckShaders(shaders, targets, diagnostics, file);
+
         return Finish(file, diagnostics, payloads, tombstones, references, payloadBytes);
     }
+
+    // One cooked shader and the backends its entry table declares.
+    private readonly record struct ShaderEntry(string Name, GraphicsBackend[] Backends);
 
     /// <summary>
     /// Resolves whatever cross-asset references one entry's format expresses.
@@ -221,9 +246,10 @@ public static class PackVerifier
     /// level names, in the 7xxx band. The largest arm, and the one that turns
     /// this from a spot check into a whole-game one.</description></item>
     /// <item><description>a shader blob per requested backend, in the 6xxx band.
-    /// Not here yet because there is no shader cook rule, so every material in
-    /// every project names the built-in <c>lit</c> and there is nothing in a
-    /// pack for a shader reference to point at.</description></item>
+    /// It is <see cref="CheckShaders"/> rather than an arm here, because the
+    /// claim is about the SET of shaders in the pack rather than about one
+    /// entry's contents, and a set cannot be judged from inside a loop over
+    /// it.</description></item>
     /// </list>
     /// </remarks>
     private static int CheckReferences(
@@ -274,6 +300,111 @@ public static class PackVerifier
         }
 
         return resolved;
+    }
+
+    /// <summary>
+    /// Records which backends one cooked shader carries, refusing a payload the
+    /// engine's own reader cannot parse.
+    /// </summary>
+    /// <remarks>
+    /// Read through <see cref="ShaderFileReader.ReadBackends"/> - the same header
+    /// and entry-table parse a load takes - so a verify cannot pass a file the
+    /// engine would then refuse. Only the table is touched: the stage payloads
+    /// are the bulk of a shader and nothing here has a question about them that
+    /// the decode pass above has not already answered.
+    /// </remarks>
+    private static void CollectShader(
+        string name,
+        ReadOnlySpan<byte> payload,
+        List<ShaderEntry> shaders,
+        List<CookDiagnostic> diagnostics,
+        string packFile)
+    {
+        if (!name.EndsWith(ShaderRule.CookedExtension, StringComparison.OrdinalIgnoreCase)) return;
+
+        try
+        {
+            shaders.Add(new ShaderEntry(name, ShaderFileReader.ReadBackends(payload)));
+        }
+        catch (InvalidDataException ex)
+        {
+            // The engine degrades here and compiles from source; the cooker does
+            // not, because a build step whose job is to stop broken data shipping
+            // must not share the runtime's soft landing.
+            diagnostics.Add(CookDiagnostic.Error(
+                CookDiagnosticCodes.ShaderFileUnreadable,
+                $"'{name}' is a cooked shader this engine's reader refuses: {ex.Message}",
+                packFile));
+        }
+    }
+
+    /// <summary>
+    /// Every cooked shader must carry a blob for every backend the pack was
+    /// cooked for.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The failure is silent everywhere else.</b> A shader missing one
+    /// backend's blob mounts, loads and renders: the engine reports the miss and
+    /// compiles that shader from source, so the picture is right and the shipped
+    /// build pays for a compiler front end it was meant to have left behind. This
+    /// is the only place that can say so.</para>
+    /// <para><b>With no target list, the expectation is the UNION over the pack's
+    /// own shaders, and that is a deliberately weaker claim.</b> A pack does not
+    /// record what it was cooked for and inventing a header field to hold it
+    /// would be a format change made for a verify. The union catches the failure
+    /// that actually happens - one shader short of what every other shader in the
+    /// same pack managed - and cannot catch a pack whose shaders are uniformly
+    /// missing a backend, which is why <c>scook verify --target</c> exists and is
+    /// authoritative when given.</para>
+    /// </remarks>
+    private static void CheckShaders(
+        List<ShaderEntry> shaders,
+        IReadOnlyList<GraphicsBackend>? targets,
+        List<CookDiagnostic> diagnostics,
+        string packFile)
+    {
+        if (shaders.Count == 0) return;
+
+        List<GraphicsBackend> expected = targets is { Count: > 0 }
+            ? [.. targets]
+            : UnionOfBackends(shaders);
+
+        // In entry order, then in expected order, so a pack with several holes
+        // reports them the same way every run.
+        for (int i = 0; i < shaders.Count; i++)
+        {
+            ShaderEntry shader = shaders[i];
+            for (int j = 0; j < expected.Count; j++)
+            {
+                if (Array.IndexOf(shader.Backends, expected[j]) >= 0) continue;
+
+                diagnostics.Add(CookDiagnostic.Error(
+                    CookDiagnosticCodes.ShaderBackendMissing,
+                    $"'{shader.Name}' carries no blob for {CookSettingsDigest.ToWire(expected[j])}. " +
+                    "The running engine would compile that shader from source and render correctly; a " +
+                    "shipped build would ship the compiler's cost.",
+                    packFile));
+            }
+        }
+    }
+
+    // First appearance order, never sorted: the expectation is then stated in the
+    // order the pack's own first shader was cooked in, which is the order a
+    // command line asked for, so a diagnostic list does not reorder itself
+    // because an enum's numbering changed.
+    private static List<GraphicsBackend> UnionOfBackends(List<ShaderEntry> shaders)
+    {
+        var union = new List<GraphicsBackend>(4);
+        for (int i = 0; i < shaders.Count; i++)
+        {
+            GraphicsBackend[] backends = shaders[i].Backends;
+            for (int j = 0; j < backends.Length; j++)
+            {
+                if (!union.Contains(backends[j])) union.Add(backends[j]);
+            }
+        }
+
+        return union;
     }
 
     // The claim the writer cannot make on the file's behalf. Strictly ascending

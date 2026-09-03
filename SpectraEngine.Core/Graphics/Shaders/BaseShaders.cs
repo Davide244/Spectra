@@ -14,14 +14,45 @@ namespace SpectraEngine.Core.Graphics.Shaders;
 /// </summary>
 public static class BaseShaders
 {
-    private const string LitFileName = "Lit.spectrashade";
-    private const string DebugLineFileName = "DebugLine.spectrashade";
-    private const string PostResolveFileName = "PostResolve.spectrashade";
-    private const string GBufferFillFileName = "GBufferFill.spectrashade";
-    private const string DeferredLightFileName = "DeferredLight.spectrashade";
-    private const string ShadowDepthFileName = "ShadowDepth.spectrashade";
-    private const string WorldLineFileName = "WorldLine.spectrashade";
-    private const string WorldLineBlendFileName = "WorldLineBlend.spectrashade";
+    /// <summary>The extension a SpectraShade source file is written with.</summary>
+    public const string SourceExtension = ".spectrashade";
+
+    /// <summary>
+    /// The content folder a shader resolves under, so a built-in has one
+    /// identity whether it came from a folder, a pack or the embedded copy.
+    /// </summary>
+    /// <remarks>
+    /// A built-in is an ASSET PATH before it is an embedded resource. Without
+    /// that, a cooked pack has nowhere to put a compiled shader that the engine
+    /// would then look for, and a project could never override one; with it,
+    /// <c>Shaders/Lit.specshadecomp</c> in a pack is what a shipped game binds
+    /// and the embedded copy is the fallback for a build that cooked none.
+    /// </remarks>
+    public const string ContentFolder = "Shaders";
+
+    /// <summary>File name of the built-in lit shader.</summary>
+    public const string LitFileName = "Lit.spectrashade";
+
+    /// <summary>File name of the debug-line shader.</summary>
+    public const string DebugLineFileName = "DebugLine.spectrashade";
+
+    /// <summary>File name of the tone-mapping resolve shader.</summary>
+    public const string PostResolveFileName = "PostResolve.spectrashade";
+
+    /// <summary>File name of the deferred geometry pass.</summary>
+    public const string GBufferFillFileName = "GBufferFill.spectrashade";
+
+    /// <summary>File name of the deferred light pass.</summary>
+    public const string DeferredLightFileName = "DeferredLight.spectrashade";
+
+    /// <summary>File name of the shadow depth pass.</summary>
+    public const string ShadowDepthFileName = "ShadowDepth.spectrashade";
+
+    /// <summary>File name of the depth-tested world line shader.</summary>
+    public const string WorldLineFileName = "WorldLine.spectrashade";
+
+    /// <summary>File name of the world line's deferred, blended half.</summary>
+    public const string WorldLineBlendFileName = "WorldLineBlend.spectrashade";
 
     // The resource name MSBuild computes for Graphics\BaseShaders\<file>: root
     // namespace, then the folder path with separators as dots. Naming it as a
@@ -79,6 +110,30 @@ public static class BaseShaders
 
 
     /// <summary>
+    /// The content-relative path <paramref name="fileName"/> resolves under -
+    /// <c>Shaders/Lit.spectrashade</c> for the built-in lit shader. Any thread.
+    /// </summary>
+    public static string ContentPath(string fileName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        return $"{ContentFolder}/{fileName}";
+    }
+
+    /// <summary>
+    /// The content-relative path the COOKED form of <paramref name="fileName"/>
+    /// resolves under - <c>Shaders/Lit.specshadecomp</c>. Any thread.
+    /// </summary>
+    /// <remarks>
+    /// The same string the shader cook rule emits, derived the same way from the
+    /// source path, so the pack's entry and the engine's lookup cannot be spelled
+    /// differently. A mismatch here is not an error anywhere: the lookup misses,
+    /// the engine falls back to compiling source, and a shipped build silently
+    /// pays for a compiler it was meant to have left behind.
+    /// </remarks>
+    public static string CookedContentPath(string fileName) =>
+        ContentPath(Path.ChangeExtension(fileName, CompiledShaderFile.FileExtension));
+
+    /// <summary>
     /// Resolves the absolute path of <paramref name="fileName"/> on disk if the
     /// engine is running from a developer build (the source tree is present),
     /// or returns null if only the embedded resource is available.
@@ -133,6 +188,15 @@ public static class BaseShaders
                 $"Embedded shader resource '{fileName}' (looked up as '{resourceName}') " +
                 $"not found in {assembly.GetName().Name}.");
     }
+
+    /// <summary>
+    /// The embedded source text for <paramref name="fileName"/> (a bare file
+    /// name). The floor every other shader lookup falls back to. Any thread.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// No resource is embedded under that name.
+    /// </exception>
+    public static string ReadEmbeddedSource(string fileName) => ReadEmbedded(fileName);
 
     private static string ReadEmbedded(string fileName)
     {

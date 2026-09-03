@@ -15,6 +15,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
+    <!--
+      The shader rule runs the SpectraShade compiler IN PROCESS. That is the
+      whole reason this library is bound by AOT-safe dependencies: the editor
+      hosts it for cooked-accurate preview, and shelling out to ssc would need
+      the tool on PATH, a temp file and a process per shader, and would compile
+      against a build of the compiler the editor is not linked to.
+    -->
+    <ProjectReference Include="..\SpectraShade.Compiler\SpectraShade.Compiler.csproj" />
   </ItemGroup>
 
 </Project>

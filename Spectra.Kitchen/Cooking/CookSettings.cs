@@ -25,11 +25,22 @@ public sealed class CookSettings
     public CookProfile Profile { get; init; } = CookProfile.Ship;
 
     /// <summary>
+    /// The backends a cook targets when nobody names any: the three that have a
+    /// working code generator. Vulkan is opt-in until SPIR-V exists, exactly as
+    /// it is in <c>ssc</c>.
+    /// </summary>
+    /// <remarks>
+    /// Named once so the CLI's default, this class's default and a rule context
+    /// built without one cannot drift into three answers to one question.
+    /// </remarks>
+    public static IReadOnlyList<GraphicsBackend> DefaultTargets { get; } =
+        [GraphicsBackend.OpenGL, GraphicsBackend.D3D11, GraphicsBackend.D3D12];
+
+    /// <summary>
     /// Backends shaders are cooked for, in the same grammar and with the same
     /// default as <c>ssc</c>.
     /// </summary>
-    public IReadOnlyList<GraphicsBackend> Targets { get; init; } =
-        [GraphicsBackend.OpenGL, GraphicsBackend.D3D11, GraphicsBackend.D3D12];
+    public IReadOnlyList<GraphicsBackend> Targets { get; init; } = DefaultTargets;
 
     /// <summary>
     /// Worker count. <c>1</c> is the determinism-oracle mode: a cook at <c>-j1</c>

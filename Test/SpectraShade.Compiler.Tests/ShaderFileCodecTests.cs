@@ -135,6 +135,83 @@ public sealed class ShaderFileCodecTests
         partial.VertexData.ShouldBe(StageData(GraphicsBackend.D3D12, "vertex"));
     }
 
+    [Fact]
+    public void The_span_reader_and_the_stream_reader_agree_byte_for_byte()
+    {
+        // Three pipelines, so the comparison covers a blob at a non-zero offset:
+        // the two parsers derive the data section's origin separately, and a
+        // divergence between them cannot move the first blob.
+        CompiledShaderFile file = File(
+            Blob(GraphicsBackend.OpenGL, instanced: false),
+            Blob(GraphicsBackend.D3D11, instanced: true),
+            Blob(GraphicsBackend.D3D12, instanced: true));
+
+        byte[] bytes = WriteToBytes(file);
+
+        foreach (GraphicsBackend backend in new[]
+                 { GraphicsBackend.OpenGL, GraphicsBackend.D3D11, GraphicsBackend.D3D12 })
+        {
+            PipelineBlob stream = ShaderFileReader
+                .ReadPipeline(new MemoryStream(bytes), backend).ShouldNotBeNull();
+            PipelineBlob span = ShaderFileReader
+                .ReadPipeline(bytes.AsSpan(), backend).ShouldNotBeNull();
+
+            // Two parsers over one layout: they exist because a stream seeks and
+            // a mapped pack view is already there, and this is the only thing
+            // keeping them in step. A divergence is a stage read out of the
+            // middle of somebody else's bytes rather than an exception.
+            span.Backend.ShouldBe(stream.Backend);
+            span.Format.ShouldBe(stream.Format);
+            span.Stages.ShouldBe(stream.Stages);
+            span.VertexData.ShouldBe(stream.VertexData);
+            span.FragmentData.ShouldBe(stream.FragmentData);
+            span.GeometryData.ShouldBe(stream.GeometryData);
+            span.ComputeData.ShouldBe(stream.ComputeData);
+            span.VertexInputs.ShouldBe(stream.VertexInputs);
+            span.InstancedVertexData.ShouldBe(stream.InstancedVertexData);
+            span.InstancedVertexInputs.ShouldBe(stream.InstancedVertexInputs);
+        }
+    }
+
+    [Fact]
+    public void The_span_reader_answers_null_for_a_backend_the_file_does_not_carry()
+    {
+        // The same ordinary answer the stream reader gives, because the engine
+        // uses it to decide between a cooked blob and compiling from source: an
+        // exception here would turn a pack cooked for another target list into a
+        // crash rather than a fallback.
+        byte[] bytes = WriteToBytes(File(Blob(GraphicsBackend.D3D11, instanced: true)));
+
+        ShaderFileReader.ReadPipeline(bytes.AsSpan(), GraphicsBackend.OpenGL).ShouldBeNull();
+        ShaderFileReader.ReadPipeline(new MemoryStream(bytes), GraphicsBackend.OpenGL).ShouldBeNull();
+    }
+
+    [Fact]
+    public void The_backend_listing_reads_the_table_and_nothing_else()
+    {
+        CompiledShaderFile file = File(
+            Blob(GraphicsBackend.D3D11, instanced: true),
+            Blob(GraphicsBackend.OpenGL, instanced: false));
+
+        // Table order, not sorted: a verify reports what the file says in the
+        // order the file says it, so its diagnostics do not reorder themselves
+        // because an enum's numbering changed.
+        ShaderFileReader.ReadBackends(WriteToBytes(file))
+            .ShouldBe([GraphicsBackend.D3D11, GraphicsBackend.OpenGL]);
+    }
+
+    [Fact]
+    public void A_truncated_file_is_refused_rather_than_read_short()
+    {
+        byte[] bytes = WriteToBytes(File(Blob(GraphicsBackend.OpenGL, instanced: true)));
+
+        // Half a file. The span parser is looking at a fixed extent, so it can
+        // say so; BinaryReader.ReadBytes would hand back a shorter array and the
+        // caller would build a shader program out of half a stage.
+        Should.Throw<InvalidDataException>(
+            () => ShaderFileReader.ReadPipeline(bytes.AsSpan(0, bytes.Length / 2), GraphicsBackend.OpenGL));
+    }
+
     // --- helpers -------------------------------------------------------------
 
     private static byte[] WriteToBytes(CompiledShaderFile file)

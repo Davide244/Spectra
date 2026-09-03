@@ -2,6 +2,7 @@ using Spectra.Kitchen.Cooking;
 using Spectra.Kitchen.Diagnostics;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Assets.Packs;
+using SpectraEngine.Core.Graphics;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -48,7 +49,16 @@ public sealed class RuleContext : IRuleContext
     /// <param name="contentRoot">Absolute path of the project's content root.</param>
     /// <param name="sourcePath">Content-relative path of the asset being cooked.</param>
     /// <param name="profile">The profile the cook is running under.</param>
-    public RuleContext(string contentRoot, string sourcePath, CookProfile profile)
+    /// <param name="targets">
+    /// The backends this cook was asked for. Defaults to the same list
+    /// <see cref="CookSettings"/> defaults to, so a caller that cooks nothing
+    /// backend-shaped does not have to name one.
+    /// </param>
+    public RuleContext(
+        string contentRoot,
+        string sourcePath,
+        CookProfile profile,
+        IReadOnlyList<GraphicsBackend>? targets = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
@@ -56,6 +66,7 @@ public sealed class RuleContext : IRuleContext
         _contentRoot = Path.GetFullPath(contentRoot);
         SourcePath = ContentRoot.NormalizeRelativePath(sourcePath);
         Profile = profile;
+        Targets = targets ?? CookSettings.DefaultTargets;
     }
 
     /// <inheritdoc/>
@@ -63,6 +74,9 @@ public sealed class RuleContext : IRuleContext
 
     /// <inheritdoc/>
     public CookProfile Profile { get; }
+
+    /// <inheritdoc/>
+    public IReadOnlyList<GraphicsBackend> Targets { get; }
 
     /// <summary>Every path this rule touched, in first-access order.</summary>
     public IReadOnlyList<RuleDependency> Dependencies => _dependencies;

@@ -1,7 +1,9 @@
 using Spectra.Kitchen.Cooking;
 using Spectra.Kitchen.Diagnostics;
 using SpectraEngine.Core.Assets.Packs;
+using SpectraEngine.Core.Graphics;
 using System;
+using System.Collections.Generic;
 
 namespace Spectra.Kitchen.Rules;
 
@@ -35,6 +37,21 @@ public interface IRuleContext
 
     /// <summary>The profile the cook is running under.</summary>
     CookProfile Profile { get; }
+
+    /// <summary>
+    /// The graphics backends this cook was asked for, in the order they were
+    /// asked for.
+    /// </summary>
+    /// <remarks>
+    /// <b>A setting reaches a rule through this interface or not at all</b>, and
+    /// only settings a rule may declare in <see cref="IRule.SettingsRead"/> live
+    /// here - <see cref="Profile"/> and this. Handing a rule the whole
+    /// <c>CookSettings</c> would let it read one it never declared, and the cache
+    /// key is built from the declaration: the artifact would then be stale under
+    /// exactly the setting change that produced it, which is the failure the
+    /// per-rule declaration exists to prevent.
+    /// </remarks>
+    IReadOnlyList<GraphicsBackend> Targets { get; }
 
     /// <summary>
     /// The bytes at <paramref name="contentPath"/>, recording the read.

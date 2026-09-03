@@ -12,6 +12,17 @@ public sealed class CompiledShaderFile
     /// <summary>Magic bytes: "SSCO" (SpectraShade Compiled Object).</summary>
     public static ReadOnlySpan<byte> MagicBytes => "SSCO"u8;
 
+    /// <summary>
+    /// The extension a compiled shader is written with, dot included.
+    /// </summary>
+    /// <remarks>
+    /// Stated here rather than spelled at each call site: <c>ssc</c>, the cook
+    /// rule that emits one, the engine lookup that resolves one out of a pack
+    /// and the verify that checks one all have to name the same string, and a
+    /// typo in any of them is a lookup that quietly finds nothing.
+    /// </remarks>
+    public const string FileExtension = ".specshadecomp";
+
     /// <summary>Format version of this file. Must match EngineInfo.ShaderFormatVersion to be loadable.</summary>
     public ushort FormatVersion { get; init; }
 

@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
+using SpectraEngine.Core.Assets.Sources;
 using SpectraEngine.Core.Graphics.Shaders;
 using System;
 using System.Collections.Generic;
@@ -308,6 +309,69 @@ public abstract class Renderer
         ShaderProgram program = CreateShaderFromSource(source);
         HotReloader.Register(absolutePath, program);
         return program;
+    }
+
+    /// <summary>
+    /// Where shaders come from: the mounted content stack, or null for a
+    /// renderer nobody handed one. Set before <see cref="Initialize"/>.
+    /// </summary>
+    /// <remarks>
+    /// <b>An <see cref="IContentSource"/> rather than the asset manager</b>,
+    /// because a shader is bytes at a content path and nothing about it needs a
+    /// cache, an upload pump or a GPU. Null is an ordinary value and every test
+    /// fixture uses it: the built-ins then come from the copies embedded in this
+    /// assembly, which is what every build did before packs existed.
+    /// </remarks>
+    public IContentSource? ShaderContent { get; set; }
+
+    /// <summary>
+    /// Builds one of the engine's built-in shaders (<see cref="BaseShaders"/>
+    /// file names), preferring a cooked blob from the content stack over
+    /// compiling source.
+    /// </summary>
+    /// <remarks>
+    /// <b>Every built-in goes through here, and that is what makes a cooked
+    /// build cheap.</b> The eight sites that used to spell out
+    /// "source path if there is one, else the embedded copy" each compiled at
+    /// startup no matter what a pack carried, so a shipped game paid for the
+    /// SpectraShade front end on every launch with the answer already in the
+    /// file beside it.
+    /// </remarks>
+    public ShaderProgram CreateBaseShader(string fileName)
+    {
+        ResolvedShader resolved = BaseShaderResolver.ResolveBuiltIn(ShaderContent, fileName, Backend, _logger);
+        if (resolved.Cooked is { } cooked) return CreateShader(cooked);
+
+        ShaderProgram program = CreateShaderFromSource(resolved.Source!);
+
+        // Only where there is a file to watch. A packed source has none, and
+        // registering the path it would have had watches a file that is not
+        // there rather than failing.
+        if (resolved.WatchPath is { } watch) HotReloader.Register(watch, program);
+        return program;
+    }
+
+    /// <summary>
+    /// The instanced twin of a built-in, or null when this shader declares no
+    /// per-instance uniform.
+    /// </summary>
+    /// <remarks>
+    /// A cooked blob already carries the twin (the compiler emits both stages
+    /// from one source), so the cooked path builds it with no compilation at
+    /// all; the source path compiles as before. Null is an ordinary answer that
+    /// disables batching for that pass, never a broken frame.
+    /// </remarks>
+    public ShaderProgram? TryCreateInstancedBaseShader(string fileName)
+    {
+        ResolvedShader resolved = BaseShaderResolver.ResolveBuiltIn(ShaderContent, fileName, Backend, _logger);
+        if (resolved.Cooked is not { } cooked)
+            return TryCreateInstancedShaderFromSource(resolved.Source!);
+
+        if (cooked.InstancedVertexData is null || cooked.FragmentData is null) return null;
+
+        return CreateShader(
+            System.Text.Encoding.UTF8.GetString(cooked.InstancedVertexData),
+            System.Text.Encoding.UTF8.GetString(cooked.FragmentData));
     }
 
     public virtual void Initialize(IRenderSurface surface)
@@ -753,9 +817,7 @@ public abstract class Renderer
     {
         using var measured = Profiler.Measure(Diagnostics.FramePhase.Resolve);
 
-        _resolveShader ??= BaseShaders.PostResolvePath is { } path
-            ? CreateShaderFromFile(path)
-            : CreateShaderFromSource(BaseShaders.PostResolve);
+        _resolveShader ??= CreateBaseShader(BaseShaders.PostResolveFileName);
         _resolvePass ??= new PostPass(_resolveShader);
 
         _resolvePass
@@ -842,9 +904,7 @@ public abstract class Renderer
         // scope opens: on D3D12 a mesh upload and a shader's first pipeline
         // state both execute and wait on their own, which a recording command
         // list cannot survive.
-        _resolveShader ??= BaseShaders.PostResolvePath is { } path
-            ? CreateShaderFromFile(path)
-            : CreateShaderFromSource(BaseShaders.PostResolve);
+        _resolveShader ??= CreateBaseShader(BaseShaders.PostResolveFileName);
         _orientationPass ??= new PostPass(_resolveShader);
 
         Mesh quad = coverage == OrientationQuad.Coverage.TopHalf
@@ -1154,14 +1214,12 @@ public abstract class Renderer
 
         if (!map.Fit(scene.Camera, direction)) return -1;
 
-        _shadowShader ??= BaseShaders.ShadowDepthPath is { } path
-            ? CreateShaderFromFile(path)
-            : CreateShaderFromSource(BaseShaders.ShadowDepth);
+        _shadowShader ??= CreateBaseShader(BaseShaders.ShadowDepthFileName);
 
-        // The instanced twin of the SAME source. Nobody wrote it: the compiler
-        // emits it because ShadowDepth marks uModel [PerInstance].
-        _shadowInstancedShader ??= TryCreateInstancedShaderFromSource(
-            BaseShaders.ShadowDepthPath is { } p ? File.ReadAllText(p) : BaseShaders.ShadowDepth);
+        // The instanced twin of the SAME shader. Nobody wrote it: the compiler
+        // emits it because ShadowDepth marks uModel [PerInstance], and a cooked
+        // blob already carries it.
+        _shadowInstancedShader ??= TryCreateInstancedBaseShader(BaseShaders.ShadowDepthFileName);
 
         // No instanced variant means no batching, not a broken frame: the
         // unbatched path below draws every caster either way.
@@ -1488,9 +1546,7 @@ public abstract class Renderer
     /// renders in both paths with no migration.
     /// </remarks>
     internal ShaderProgram EnsureGBufferShader() =>
-        _gbufferShader ??= BaseShaders.GBufferFillPath is { } path
-            ? CreateShaderFromFile(path)
-            : CreateShaderFromSource(BaseShaders.GBufferFill);
+        _gbufferShader ??= CreateBaseShader(BaseShaders.GBufferFillFileName);
 
     /// <summary>
     /// The instanced twin of the G-buffer program, generated from the same
@@ -1503,10 +1559,7 @@ public abstract class Renderer
         if (_gbufferInstancedShader is not null || !_geometryBatchingAvailable)
             return _gbufferInstancedShader;
 
-        _gbufferInstancedShader = TryCreateInstancedShaderFromSource(
-            BaseShaders.GBufferFillPath is { } path
-                ? File.ReadAllText(path)
-                : BaseShaders.GBufferFill);
+        _gbufferInstancedShader = TryCreateInstancedBaseShader(BaseShaders.GBufferFillFileName);
 
         // Asked for once. Retrying every frame would recompile a shader that
         // has already said no, in the frame loop.
@@ -1705,9 +1758,7 @@ public abstract class Renderer
     {
         using var measured = Profiler.Measure(Diagnostics.FramePhase.Lighting);
 
-        _lightShader ??= BaseShaders.DeferredLightPath is { } path
-            ? CreateShaderFromFile(path)
-            : CreateShaderFromSource(BaseShaders.DeferredLight);
+        _lightShader ??= CreateBaseShader(BaseShaders.DeferredLightFileName);
         _lightPass ??= new PostPass(_lightShader);
 
         // The transform the geometry pass actually used, inverted. Built from
@@ -1907,9 +1958,7 @@ public abstract class Renderer
     private ShaderProgram? _worldLineBlendShader;
 
     private ShaderProgram EnsureWorldLineShader() =>
-        _worldLineShader ??= BaseShaders.WorldLinePath is { } path
-            ? CreateShaderFromFile(path)
-            : CreateShaderFromSource(BaseShaders.WorldLine);
+        _worldLineShader ??= CreateBaseShader(BaseShaders.WorldLineFileName);
 
     /// <summary>
     /// Compiles the deferred (post-light, shader-depth-tested) world-line
@@ -1923,9 +1972,7 @@ public abstract class Renderer
     /// see the pipelines, which call PrepareWorldLines before opening theirs.
     /// </remarks>
     private ShaderProgram EnsureWorldLineBlendShader() =>
-        _worldLineBlendShader ??= BaseShaders.WorldLineBlendPath is { } path
-            ? CreateShaderFromFile(path)
-            : CreateShaderFromSource(BaseShaders.WorldLineBlend);
+        _worldLineBlendShader ??= CreateBaseShader(BaseShaders.WorldLineBlendFileName);
 
     /// <summary>
     /// Compiles whatever the world-line flush will need, before a pass opens.
