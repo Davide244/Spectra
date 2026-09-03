@@ -26,6 +26,7 @@ namespace Spectra.Kitchen.Tests;
 /// an asset table in walk order and a chunk directory sorted by cell, and every one
 /// of those is a place a dictionary could leak into the file.</para>
 /// </remarks>
+[Trait("Suite", "Determinism")]
 public class ScmapDeterminismTests
 {
     // Header, a thirteen-section table, five tables and two geometry sections over

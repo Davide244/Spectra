@@ -31,6 +31,7 @@ namespace Spectra.Kitchen.Tests;
 /// <c>skipped</c> member appearing on every asset there is the point rather than a
 /// difference.</para>
 /// </remarks>
+[Trait("Suite", "Determinism")]
 public class CookDeterminismTests
 {
     private const int AssetCount = 36;

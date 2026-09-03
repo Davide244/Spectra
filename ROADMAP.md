@@ -354,6 +354,8 @@ Two-phase load: construct all entities and parse keyvalues, *then* resolve conne
 
 Two things were wrong with it, and the second is the reason it cannot simply be renamed. It specified a binary *mirror* of the text map containing zero derived data — but the artifact actually wanted is the **baked** one: per-cell welded meshes, per-cell BSP trees and per-cell material runs, so a shipped game runs zero CSG at load. And its pinned test — *binary-load → text-save → byte-identical to the original text map* — **is unsatisfiable for that artifact**: welding, T-junction repair and per-cell carving are not invertible, so `.scmap → .smap` is not a valid operation and must not be attempted. The replacement guard is a **bake oracle**: cook → load → assert the loaded per-cell arrays are element-identical to a fresh `CsgWorld.Build(placements)` of the same source. **`.smap` is the only editable artifact; a lost `.smap` is a lost map.**
 
+**BUILT: the replacement guard is `Test/Spectra.Kitchen.Tests/BakeOracleTests.cs`, over the four-fixture corpus in `BakeCorpus.cs`.** It cooks through the real `MapRule`, loads through `CompiledMapLoader`, and asserts that the per-cell vertex arrays, index arrays, submesh directories **and flattened BSP nodes the runtime received** are bit-identical to a fresh cache-free `CsgWorld.Build` plus `BspFlattener.Flatten` of the same bundle. Bit-identical rather than equal, because the compile cache keys on exact equality and `0f` and `-0f` compare equal and are different numbers. It runs in the named `Suite=Determinism` CI job beside the pack and map determinism oracles, which is the standing statement that a cook is a pure function.
+
 ---
 
 ## 8. Arc S — Shader & material authoring

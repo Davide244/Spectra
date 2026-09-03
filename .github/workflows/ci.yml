@@ -385,7 +385,80 @@ jobs:
         run: dotnet run --project Test/Spectra.Kitchen.Tests
 
   # ---------------------------------------------------------------------------
-  # 4. Windows AOT publish. The engine ships NativeAOT, so this is the gate that
+  # 4. The determinism suite: every oracle that says a cook is a PURE FUNCTION,
+  #    run under one name on both hosts.
+  #
+  #    WHY THIS IS A JOB OF ITS OWN, and it is a reporting reason rather than a
+  #    coverage one. Every test here also runs inside Spectra.Kitchen.Tests in
+  #    the two jobs above, so nothing new is being checked; what is new is that a
+  #    failure arrives as "Cook determinism" instead of as one red name among
+  #    three hundred and forty. These oracles fail for a reason no other test in
+  #    the repo fails for - a dictionary iteration order, a scheduling leak, a
+  #    plane an ulp out of place - and the first thing whoever reads the run
+  #    needs to know is which KIND of failure it is.
+  #
+  #    BOTH HOSTS, because per-host reproducibility is exactly what is claimed:
+  #    docs/formats-and-pipeline.md 4.3 records that the audio resampler defers
+  #    to the platform's libm, so cross-host byte identity of cooked audio is
+  #    unproven while every other cooked artifact keeps the stronger claim. Two
+  #    hosts each proving determinism against themselves is the honest form of
+  #    that, and it is also what would catch a .gitattributes rule being dropped:
+  #    a text asset checking out CRLF on one runner and LF on the other gives the
+  #    two hosts different bytes for one commit.
+  #
+  #    The trait is the suite. `-trait "Suite=Determinism"` is the xUnit v3
+  #    runner's own filter, the same mechanism the OpenGL probe above uses with
+  #    -class, and it is a marker on the CLASS so that a new oracle joins by
+  #    being written rather than by somebody remembering to list it here.
+  # ---------------------------------------------------------------------------
+  determinism:
+    name: Cook determinism (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # Only what the suite needs. The two-process oracles drive the real scook
+      # binary through Process.Start and SKIP themselves when it is not beside
+      # the test assembly, so building the CLI is what makes this job prove
+      # anything at all - a green run over four skipped oracles is exactly the
+      # silently-weakened gate this workflow refuses everywhere else.
+      - name: Build the cook and its tests
+        run: |
+          dotnet build Spectra.Kitchen.CLI
+          dotnet build Test/Spectra.Kitchen.Tests
+
+      # A SKIP here is a gate that stopped gating, so it is failed on rather than
+      # left in the log. These are the only tests in the repo that can self-skip
+      # on a missing build output, and the shape of that failure is the one this
+      # workflow refuses everywhere else: a green run with the oracles unrun.
+      - name: Determinism oracles
+        shell: pwsh
+        run: |
+          $output = dotnet run --project Test/Spectra.Kitchen.Tests -- -trait "Suite=Determinism" 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $output
+          if ($code -ne 0) { exit $code }
+          if ($output -notmatch 'Skipped:\s*(\d+)') {
+            Write-Host '::error title=Determinism summary unreadable::The runner printed no skip count, so this job cannot say whether the oracles ran.'
+            exit 1
+          }
+          if ([int]$Matches[1] -gt 0) {
+            Write-Host "::error title=Determinism oracle skipped::$($Matches[1]) determinism test(s) skipped themselves. scook is build output of Spectra.Kitchen.CLI and was probably not beside the test binary."
+            exit 1
+          }
+
+  # ---------------------------------------------------------------------------
+  # 5. Windows AOT publish. The engine ships NativeAOT, so this is the gate that
   #    catches a reflection pattern the ordinary build tolerates.
   # ---------------------------------------------------------------------------
   aot-windows:
@@ -438,7 +511,7 @@ jobs:
         run: dotnet publish SpectraShade.Compiler.CLI -c Release -r win-x64
 
   # ---------------------------------------------------------------------------
-  # 5. Linux AOT publish. Same two binaries, the other toolchain.
+  # 6. Linux AOT publish. Same two binaries, the other toolchain.
   # ---------------------------------------------------------------------------
   aot-linux:
     name: AOT publish (Linux)
