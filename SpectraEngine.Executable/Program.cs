@@ -3,6 +3,7 @@ using Serilog;
 using SpectraEngine.Core;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Audio;
+using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.D3D11;
 using SpectraEngine.Core.Graphics.D3D12;
@@ -67,6 +68,31 @@ try
     // map naming them loads placeholders that behave as nothing. Before anything
     // reads the catalogue, because the first read freezes it.
     BuiltinEntities.EnsureRegistered();
+
+    // Writes what this build knows and EXITS, before a renderer, a window or a
+    // thread exists. That is the whole shape of the switch: it is a measurement
+    // of the process, not a session, so it must not compete with an engine run
+    // for a GPU and must not leave a window open for somebody to close. It runs
+    // here rather than later because everything below it is a session.
+    //
+    // Reading Schemas freezes the shared catalogue, which is correct: the export
+    // has to describe every class, and one registered after it would be missing
+    // from a file somebody ships.
+    if (options.ExportEntitySchemaPath is { } exportPath)
+    {
+        string destination = Path.GetFullPath(exportPath);
+        if (Path.GetDirectoryName(destination) is { Length: > 0 } directory)
+            Directory.CreateDirectory(directory);
+
+        IReadOnlyList<EntitySchema> exported = EntityCatalog.Shared.Schemas;
+        byte[] sentDef = SentDef.Write(exported);
+        File.WriteAllBytes(destination, sentDef);
+
+        Log.Information(
+            "Exported {Types} entity schema(s) to {Path} ({Bytes} bytes, .sentdef v{Version})",
+            exported.Count, destination, sentDef.Length, SentDef.Version);
+        return;
+    }
 
     var shaderCompiler = new SpectraShadeCompiler();
     Renderer renderer = options.Backend switch

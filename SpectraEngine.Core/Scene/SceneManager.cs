@@ -320,6 +320,26 @@ public sealed class SceneManager
     public EntityCatalog? EntityCatalog { get; set; }
 
     /// <summary>
+    /// What every loaded scene's <see cref="Scene.EntitySchemas"/> is stamped
+    /// with, or null to export the running catalogue and read it back.
+    /// </summary>
+    /// <remarks>
+    /// <b>The default is a round trip through <c>.sentdef</c>, not a shortcut
+    /// past it, and that is the point.</b> An editor reads schemas from that
+    /// file and from nothing else, so anything the writer, the reader or the
+    /// two enums get wrong has to surface where somebody is looking rather than
+    /// the first time a game exports its definitions. Doing it on every scene
+    /// load makes the round trip a thing this engine performs constantly, at a
+    /// cost of a few kilobytes written and parsed once per load.
+    /// <para>
+    /// A host with a file already in hand (a mounted pack, an SDK game's
+    /// export) sets this instead, which is also the seam a test uses to hand in
+    /// exactly the classes it means.
+    /// </para>
+    /// </remarks>
+    public EntitySchemaCatalog? EntitySchemas { get; set; }
+
+    /// <summary>
     /// The live entity runtime, or null when nothing is playing. Render thread
     /// only, like the scene it runs over.
     /// </summary>
@@ -334,6 +354,18 @@ public sealed class SceneManager
     /// (<see cref="OnSceneReplaced"/>).
     /// </remarks>
     public EntityWorld? EntityWorld { get; private set; }
+
+    // Not cached: the two callers run once per scene load, the work is a few
+    // kilobytes, and a cache would go stale the moment a host assigned
+    // EntityCatalog between two loads - which is a wrong answer traded for a
+    // saving nobody can measure.
+    //
+    // Reading Schemas FREEZES the catalogue, which is exactly the contract: every
+    // class must register before the first lookup, and a scene load is well past
+    // that point in both hosts.
+    private EntitySchemaCatalog ResolveEntitySchemas() =>
+        EntitySchemas ?? EntitySchemaCatalog.LoadFromSentDef(
+            SentDef.Write((EntityCatalog ?? Entities.EntityCatalog.Shared).Schemas));
 
     /// <summary>
     /// Builds the entity runtime over the active scene and brings it to life.
@@ -440,6 +472,7 @@ public sealed class SceneManager
 
         var scene = new Scene("Untitled");
         scene.Assets = assets;
+        scene.EntitySchemas = ResolveEntitySchemas();
         scene.Camera.Position = new Vector3(9f, 6f, 11f);
         scene.Camera.LookAt(Vector3.Zero);
 
@@ -524,6 +557,7 @@ public sealed class SceneManager
         // Set before the first compile: the swap resolves each chunk's face
         // materials through this on the render thread, at upload time.
         scene.Assets = assets;
+        scene.EntitySchemas = ResolveEntitySchemas();
 
         var (vertices, indices) = Primitives.Cube();
         var cubeMesh = renderer.CreateMesh(vertices, indices, VertexAttribute.StandardLayout);

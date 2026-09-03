@@ -535,7 +535,8 @@ Mechanism:
 Header
 0x00  u8[4]  "SENT"
 0x04  u16    Version = 1
-0x06  u16    HeaderSize = 16
+0x06  u16    HeaderSize = 20        (this table's fields run to 0x14; 16 would put the
+                              first type record four bytes inside the header)
 0x08  u32    TypeCount
 0x0C  u32    StringTableOffset
 0x10  u32    StringTableSize        (strings: u16 length + UTF-8, addressed by u32 offset)
@@ -553,6 +554,9 @@ Per type (variable length)
 +0x16  u16   OutputCount
 then keyvalue, input and output records in that order
 
+Input record / output record - 4 bytes
++0x00  u32   NameRef
+
 Keyvalue record — 32 bytes + a variable choice list
 +0x00  u32   NameRef
 +0x04  u32   DisplayRef
@@ -566,7 +570,13 @@ Keyvalue record — 32 bytes + a variable choice list
 +0x14  f32   Min
 +0x18  f32   Max           NaN = unbounded
 +0x1C  u32   Flags         bit0 readOnly, bit1 hideInEditor, bit2 requiresRestart
+
+Choice record - 8 bytes, ChoiceCount of them immediately after the keyvalue record
++0x00  u32   ValueRef      the token written into a map, which IS the wire form
++0x04  u32   DisplayRef    the label an editor shows, or 0 to use the value
 ```
+
+**String references are offsets INTO the string table**, not absolute file offsets, so the table can move without rewriting every record. **Offset 0 is the empty string**, which the table always opens with (`00 00`), so every unset display name, tooltip and default shares one reference a reader answers without touching the table at all. **Type records are sorted by class name with `string.CompareOrdinal`** and strictly unique - the same order `EntityCatalog` enumerates in, which is what keeps the loader-dependent order module initializers ran in out of the bytes. A reader enforces that order rather than trusting it, which also refuses a duplicate class name for free.
 
 `DefaultRef` is a **string** reference and not a typed value, because `P5` pinned keyvalues as string-typed on the wire — if the schema's defaults were typed, the editor's "is this still the default?" comparison would become a type-conversion round trip and would drift silently.
 

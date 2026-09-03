@@ -67,7 +67,8 @@ internal sealed record DemoStartupOptions(
     string? LoadMapPath = null,
     string? SaveMapPath = null,
     string? ProjectPath = null,
-    string? SaveProjectPath = null)
+    string? SaveProjectPath = null,
+    string? ExportEntitySchemaPath = null)
 {
     /// <summary>
     /// Environment variable read when no command-line switch names the
@@ -83,7 +84,8 @@ internal sealed record DemoStartupOptions(
         "[--vsync[=true|false]] " +
         "[--debug-layer[=true|false]] [--adapter=<name>] [--size=WxH] [--parts=<grid>] " +
         "[--props=<count>] [--map=<bundle.smap>] [--save-map=<bundle.smap>] " +
-        "[--project=<folder>] [--save-project=<folder>].";
+        "[--project=<folder>] [--save-project=<folder>] " +
+        "[--export-entity-schema=<file.sentdef>].";
 
     /// <summary>
     /// Resolves the command line (and the self-test environment variable) into
@@ -122,6 +124,7 @@ internal sealed record DemoStartupOptions(
         string? saveMapPath = null;
         string? projectPath = null;
         string? saveProjectPath = null;
+        string? exportEntitySchemaPath = null;
         TimeSpan? fullscreenCycle = null;
 
         for (int i = 0; i < args.Count; i++)
@@ -260,6 +263,15 @@ internal sealed record DemoStartupOptions(
                 case "save-project" or "saveproject":
                     saveProjectPath = ParseName(value, token);
                     continue;
+
+                // Write this build's entity schemas out as a .sentdef and exit
+                // without opening a window. A measurement of the process rather
+                // than a session, like --interop-probe: an editor that has never
+                // loaded this assembly reads the file, and there is no scene,
+                // no renderer and no frame involved in producing it.
+                case "export-entity-schema" or "exportentityschema":
+                    exportEntitySchemaPath = ParseName(value, token);
+                    continue;
             }
 
             // Anything else is the positional backend — once. A second one is
@@ -275,7 +287,7 @@ internal sealed record DemoStartupOptions(
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromCommandLine, SelfTestSource.CommandLine,
                 fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath, projectPath, saveProjectPath);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath);
 
         if (!string.IsNullOrWhiteSpace(selfTestEnvironmentValue))
         {
@@ -284,13 +296,13 @@ internal sealed record DemoStartupOptions(
             return new DemoStartupOptions(
                 backend ?? GraphicsBackend.OpenGL, fromEnvironment, SelfTestSource.Environment,
                 fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath, projectPath, saveProjectPath);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath);
         }
 
         return new DemoStartupOptions(
             backend ?? GraphicsBackend.OpenGL, false, SelfTestSource.Default,
             fullscreenCycle, play, offscreenProbe, pipeline, shadows, profile, vsync, debugLayer, adapter, windowSize, scatterGrid, propCount,
-                loadMapPath, saveMapPath, projectPath, saveProjectPath);
+                loadMapPath, saveMapPath, projectPath, saveProjectPath, exportEntitySchemaPath);
     }
 
     // A switch that takes a name needs one: a bare --pipeline says nothing

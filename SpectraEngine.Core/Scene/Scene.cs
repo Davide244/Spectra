@@ -959,6 +959,26 @@ public sealed partial class Scene
     public AssetManager? Assets { get; set; }
 
     /// <summary>
+    /// What the entity classes placed in this scene DECLARE: the schemas parsed
+    /// from a <c>.sentdef</c> image, or null when nothing supplied one.
+    /// </summary>
+    /// <remarks>
+    /// <b>A slot beside <see cref="Assets"/>, and nullable for the same
+    /// reason.</b> A geometry-only scene and a headless test need no schemas at
+    /// all, and an entity whose class is absent from this catalogue is not an
+    /// error: <c>EntityData</c> names a class as text precisely so a map
+    /// authored against a game this build does not have still loads, round-trips
+    /// and saves. What a missing schema costs is the property editor, never the
+    /// authored data.
+    /// <para>
+    /// Description only. Building an entity is <c>EntityCatalog</c>'s, which
+    /// lives in the process that can construct the class; this is what a tool
+    /// holds for a game whose assembly it never loaded.
+    /// </para>
+    /// </remarks>
+    public Entities.EntitySchemaCatalog? EntitySchemas { get; set; }
+
+    /// <summary>
     /// Re-resolves every uploaded chunk's materials from its compiled material
     /// ids, without touching a single GPU mesh. The escape hatch for the two
     /// cases that change what a face should be drawn with while its geometry
