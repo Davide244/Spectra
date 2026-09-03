@@ -6,6 +6,7 @@ using SpectraEngine.Editing.Cameras;
 using SpectraEngine.Editing.Gizmos;
 using SpectraEngine.Editing.Hosting;
 using System;
+using System.Linq;
 using System.Numerics;
 
 namespace SpectraEngine.Editing.Tests;
@@ -349,6 +350,103 @@ public sealed class SceneEditorHostCommandTests
         position.X.ShouldBe(MathF.Round(position.X));
         position.Y.ShouldBe(MathF.Round(position.Y));
         position.Z.ShouldBe(MathF.Round(position.Z));
+    }
+
+    // --- Insert entity -------------------------------------------------------
+
+    [Fact]
+    public void Inserting_an_entity_is_one_history_entry_and_leaves_it_selected()
+    {
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+
+        host.InsertEntity("logic_relay");
+
+        scene.Root.Children.Count.ShouldBe(1);
+        SceneNode node = scene.Root.Children[0];
+        node.Entity.ShouldNotBeNull();
+        node.Entity.ClassName.ShouldBe("logic_relay");
+        scene.Selection.Items.ShouldBe([node]);
+        host.UndoDepth.ShouldBe(1);
+
+        Guid id = node.Id;
+        host.Apply(EditorHostCommand.Undo);
+        scene.Root.Children.ShouldBeEmpty();
+
+        host.Apply(EditorHostCommand.Redo);
+        scene.Root.Children[0].Id.ShouldBe(id);
+        scene.Root.Children[0].Entity.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void A_fresh_entity_carries_no_keyvalues_at_all()
+    {
+        // OMIT AT DEFAULT, which is the rule the map format already keeps. The
+        // panel shows the schema's declared defaults for keys nobody has
+        // authored, and a commit that produces the value the entity already
+        // effectively has records nothing - so a key appears in the file
+        // exactly when somebody changed it. Seeding the declared defaults here
+        // would write the whole schema into every map, and a later change to a
+        // default would then reach no level ever saved.
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+
+        host.InsertEntity("logic_timer");
+
+        scene.Root.Children[0].Entity!.Keyvalues.ShouldBeEmpty();
+        scene.Root.Children[0].Entity!.Connections.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void An_inserted_entity_is_named_after_its_class()
+    {
+        // The name IS the targetname; there is no second identity to invent one
+        // from. Duplicates are legal and MEAN something - firing at a name
+        // fires every match - and every other insert produces a duplicate name
+        // too, so numbering this one alone would make it behave unlike the
+        // other six for no reason a user could predict.
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+
+        host.InsertEntity("logic_relay");
+        host.InsertEntity("logic_relay");
+
+        scene.Root.Children.Select(n => n.Name).ShouldBe(["logic_relay", "logic_relay"]);
+    }
+
+    [Fact]
+    public void An_entity_with_no_class_is_refused()
+    {
+        // A class with no name resolves in no catalogue and would save as an
+        // entity nothing can bind: a node that reads as an entity in the tree
+        // and is not one anywhere else.
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+
+        host.InsertEntity("   ");
+
+        scene.Root.Children.ShouldBeEmpty();
+        host.UndoDepth.ShouldBe(0);
+    }
+
+    [Fact]
+    public void Inserting_an_entity_is_refused_while_play_mode_owns_the_scene()
+    {
+        // The same RefuseEdit gate every other mutating verb goes through: a
+        // shell gates its buttons on a snapshot up to a publish interval old,
+        // so a click landing in that window arrives at a suspended editor.
+        var scene = new Scene("Editor");
+        SceneEditorHost host = NewHost(scene);
+        host.Suspend();
+
+        host.InsertEntity("logic_relay");
+
+        scene.Root.Children.ShouldBeEmpty();
+        host.UndoDepth.ShouldBe(0);
+
+        host.Resume();
+        host.InsertEntity("logic_relay");
+        scene.Root.Children.Count.ShouldBe(1);
     }
 
     // --- Structural verbs ----------------------------------------------------

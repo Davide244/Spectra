@@ -59,6 +59,14 @@
   <!-- A light: a bulb over its base. -->
   <StreamGeometry x:Key="IconLight">M8,2.5 A4.2,4.2 0 1 1 7.99,2.5 Z M5.8,11.6 L10.2,11.6 M6.5,13.5 L9.5,13.5</StreamGeometry>
 
+  <!-- An entity: a diamond. Deliberately the only glyph in the set that is not
+       a cube, a sphere, a folder, a bulb or a cross - an entity has no shape of
+       its own to draw, so the mark has to be an abstract one, and a diamond is
+       what every level editor since Quake has used for a point entity. It is
+       told apart by silhouette alone, which is the rule: no dot, no wire stub,
+       nothing inside it. -->
+  <StreamGeometry x:Key="IconEntity">M8,2.5 L13.5,8 L8,13.5 L2.5,8 Z</StreamGeometry>
+
   <!-- Nothing at all: an empty transform. -->
   <StreamGeometry x:Key="IconEmpty">M8,2.5 L8,13.5 M2.5,8 L13.5,8</StreamGeometry>
 

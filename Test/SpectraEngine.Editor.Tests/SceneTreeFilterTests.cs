@@ -202,6 +202,56 @@ public sealed class SceneTreeFilterTests
     }
 
     [Fact]
+    public void A_type_filter_finds_entities()
+    {
+        // An entity draws nothing in the viewport, so the tree is the only
+        // place one can be found at all - which makes the kind filter the whole
+        // of "show me the logic in this level".
+        SceneTreeModel tree = Populated();
+        var relay = Guid.NewGuid();
+        tree.ApplyChanges(Batch(2, Added(relay, Root, "logic_relay", 2, SceneNodeKind.Entity)));
+
+        tree.ApplyFilter("t:entity");
+
+        Find(tree, "logic_relay").Match.ShouldBe(SceneTreeMatch.Match);
+        Find(tree, "LampWarm").Match.ShouldBe(SceneTreeMatch.None);
+        tree.MatchCount.ShouldBe(1);
+        tree.FilterIsUnknown.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void The_plural_of_entity_resolves_too()
+    {
+        // "entities" is the one plural the TrimEnd('s') rule does not reduce to
+        // its singular, so the alias table carries the stem it DOES produce.
+        SceneTreeModel tree = Populated();
+        tree.ApplyChanges(Batch(2, Added(Guid.NewGuid(), Root, "logic_timer", 2, SceneNodeKind.Entity)));
+
+        tree.ApplyFilter("t:entities");
+
+        tree.MatchCount.ShouldBe(1);
+        tree.FilterIsUnknown.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_type_filter_nobody_recognises_matches_nothing()
+    {
+        // It used to match EVERYTHING: the kind query cleared the text and the
+        // fall-through then ran Name.Contains(""), which is true of every node
+        // in the scene. A typo in a power feature silently reported the whole
+        // level as a result set, with nothing visibly different but a count.
+        SceneTreeModel tree = Populated();
+        tree.ApplyChanges(Batch(2, Added(Guid.NewGuid(), Root, "logic_relay", 2, SceneNodeKind.Entity)));
+
+        tree.ApplyFilter("t:enttiy");
+
+        tree.MatchCount.ShouldBe(0);
+        tree.FilterIsUnknown.ShouldBeTrue();
+        Find(tree, "logic_relay").Match.ShouldBe(SceneTreeMatch.None);
+        Find(tree, "Root").Match.ShouldBe(SceneTreeMatch.None);
+    }
+
+    [Fact]
     public void The_ancestors_of_a_match_are_context_rather_than_dimmed()
     {
         // A match three levels down is invisible if the chain above it is

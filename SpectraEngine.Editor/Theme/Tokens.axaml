@@ -233,6 +233,14 @@
   <SolidColorBrush x:Key="SpectraKindBrushPart" Color="#5FCECE" />
   <SolidColorBrush x:Key="SpectraKindBrushSubtractive" Color="#CE8DE0" />
   <SolidColorBrush x:Key="SpectraKindLight" Color="#E9CA4C" />
+  <!-- The third saturated one, for the same reason a cut is saturated: an
+       entity draws nothing in the viewport at all, so the tree is the only
+       place one can be found. Green is the only hue this palette had not
+       spent - blue, cyan, magenta and yellow are taken, amber is the shell's
+       state colour and red is selection. It is lighter and less saturated than
+       SpectraSuccess (#5DBE7A), which is spent on exactly one thing, the filled
+       play glyph in the far corner of the command row. -->
+  <SolidColorBrush x:Key="SpectraKindEntity" Color="#7FC58F" />
 
   <!-- ___ Fonts ___________________________________________
        $Default is Avalonia's terminal fallback. There is no CSS-style

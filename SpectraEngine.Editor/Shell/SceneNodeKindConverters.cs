@@ -39,6 +39,7 @@ public sealed class SceneNodeKindIconConverter : IValueConverter
                 SceneNodeKind.BrushPart => "IconBrushPart",
                 SceneNodeKind.BrushSubtractive => "IconBrushSubtractive",
                 SceneNodeKind.Light => "IconLight",
+                SceneNodeKind.Entity => "IconEntity",
                 _ => "IconEmpty",
             }
             : "IconEmpty";
@@ -74,6 +75,7 @@ public sealed class SceneNodeKindBrushConverter : IValueConverter
                 SceneNodeKind.BrushPart => "SpectraKindBrushPart",
                 SceneNodeKind.BrushSubtractive => "SpectraKindBrushSubtractive",
                 SceneNodeKind.Light => "SpectraKindLight",
+                SceneNodeKind.Entity => "SpectraKindEntity",
                 _ => "SpectraTextMuted",
             }
             : "SpectraTextMuted";

@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Input;
 using SpectraEngine.Core.Scene;
@@ -1391,6 +1392,80 @@ public sealed class SceneEditorHost : ISceneEditor
         _logger.LogInformation(
             "Insert {Kind}: '{Name}' at ({X:0.##}, {Y:0.##}, {Z:0.##}) (undo {UndoDepth})",
             kind, node.Name, position.X, position.Y, position.Z, _undo.UndoCount);
+    }
+
+    /// <summary>
+    /// Creates one entity of <paramref name="className"/> where the user is
+    /// looking, as one history entry, and selects it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A payload-carrying verb rather than an <see cref="InsertKind"/>
+    /// member</b>, for the same reason <c>SetSnapIncrement</c> is a method: the
+    /// kinds are a closed vocabulary the engine decides, and which entity
+    /// classes exist is a fact about the game, read out of a <c>.sentdef</c> at
+    /// runtime. A kind per class cannot be written down here at all.
+    /// </para>
+    /// <para>
+    /// <b>The keyvalues start EMPTY, and that is the omit-at-default rule the
+    /// map format already keeps.</b> The panel shows the schema's declared
+    /// defaults for keys nobody has authored, and
+    /// <c>PropertyEditor.BuildEntityKeyvalue</c> records nothing for a commit
+    /// that produces the value the entity already effectively has - so a key
+    /// appears in the file exactly when somebody changed it. Seeding every
+    /// declared default here would write the whole schema into every map, and
+    /// a later change to a default would then reach no level ever saved.
+    /// </para>
+    /// <para>
+    /// <b>The name is the classname, because the name IS the targetname.</b>
+    /// There is no second identity to invent one from, and duplicates are legal
+    /// and MEAN something - <c>TargetNameIndex</c> documents firing at a name
+    /// as firing every match, which is how a level says "all the lights in this
+    /// room". Auto-numbering would also make this one insert behave unlike the
+    /// other six, which all produce nodes named "Part", "Hole", "Light" or
+    /// "Group" however many already exist.
+    /// </para>
+    /// </remarks>
+    /// <param name="className">The class to place. Blank is refused.</param>
+    /// <param name="viewportPoint">Where to aim, in viewport pixels; null is the view centre.</param>
+    public void InsertEntity(string className, Vector2? viewportPoint = null)
+    {
+        if (RefuseEdit("Insert entity"))
+            return;
+
+        // A class with no name cannot be resolved by any catalogue and would
+        // save as an entity nothing can bind. Refused rather than placed,
+        // because the alternative is a node that looks like an entity in the
+        // tree and is not one anywhere else.
+        if (string.IsNullOrWhiteSpace(className))
+        {
+            _logger.LogWarning("Insert entity: refused, no class name");
+            return;
+        }
+
+        _viewport.Reset();
+
+        // A point, like a group: an entity carries no geometry, so there is no
+        // half extent to lift it clear of the surface it was aimed at.
+        Vector3 position = FindInsertPosition(0f, viewportPoint);
+
+        var node = new SceneNode(className)
+        {
+            Entity = new EntityData(className),
+            LocalPosition = position,
+        };
+
+        _undo.Execute(new AddNodesCommand(
+            [new NodePlacement(node, _scene.Root.Id, _scene.Root.Children.Count)])
+        {
+            Name = $"Insert {className}",
+        });
+
+        _scene.Selection.Select(node);
+
+        _logger.LogInformation(
+            "Insert entity '{Class}' at ({X:0.##}, {Y:0.##}, {Z:0.##}) (undo {UndoDepth})",
+            className, position.X, position.Y, position.Z, _undo.UndoCount);
     }
 
     private Vector3 FindInsertPosition(float clearance, Vector2? viewportPoint)

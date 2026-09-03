@@ -271,6 +271,22 @@
             <MenuItem Header="Insert surface light" Click="OnInsertSurfaceLightClicked" IsEnabled="{Binding !IsPlaying}"
                       ToolTip.Tip="A lit panel flat on the surface you are looking at, parented to it."><MenuItem.Icon><Path Classes="icon menuicon kind-light" Data="{StaticResource IconLight}" /></MenuItem.Icon></MenuItem>
             <MenuItem Header="Insert empty group" Click="OnInsertGroupClicked" IsEnabled="{Binding !IsPlaying}"><MenuItem.Icon><Path Classes="icon menuicon" Data="{StaticResource IconGroup}" /></MenuItem.Icon></MenuItem>
+
+            <!-- The one insert whose entries cannot be written down here: which
+                 entity classes exist is read out of the session's .sentdef, so
+                 the entries are BUILT IN CODE when the submenu opens, exactly
+                 as the viewport's own "Insert here > Entity" builds them. One
+                 mechanism rather than an ItemsSource here and a loop there:
+                 binding the entries would need a ControlTheme over Fluent's
+                 MenuItem theme, which this shell has no other instance of and
+                 whose failure mode is a submenu of blank rows. Hidden entirely
+                 when the catalogue is empty, rather than opening onto nothing. -->
+            <MenuItem x:Name="InsertEntityMenu" Header="Insert entity"
+                      IsVisible="{Binding HasEntityClasses}"
+                      IsEnabled="{Binding !IsPlaying}"
+                      SubmenuOpened="OnInsertEntityMenuOpened">
+              <MenuItem.Icon><Path Classes="icon menuicon kind-entity" Data="{StaticResource IconEntity}" /></MenuItem.Icon>
+            </MenuItem>
             <Separator />
             <MenuItem Header="Duplicate" InputGesture="Ctrl+D" Click="OnDuplicateClicked" IsEnabled="{Binding HasSelection}"><MenuItem.Icon><Path Classes="icon menuicon" Data="{StaticResource IconDuplicate}" /></MenuItem.Icon></MenuItem>
             <MenuItem Header="Delete" InputGesture="Delete" Click="OnDeleteClicked" IsEnabled="{Binding HasSelection}"><MenuItem.Icon><Path Classes="icon menuicon" Data="{StaticResource IconDelete}" /></MenuItem.Icon></MenuItem>

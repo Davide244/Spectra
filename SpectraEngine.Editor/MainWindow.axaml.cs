@@ -724,6 +724,15 @@ public partial class MainWindow : Window
 
         _tree = null;
         _shell.Tree = null;
+
+        // The classes belonged to the session's catalogue: left standing, the
+        // start page's Object menu would offer entities for a project that is
+        // closed, and the next project's menu would open showing the previous
+        // one's classes until its own session came up.
+        _shell.SetEntityClasses(null);
+        if (_shell.Properties is { } panel)
+            panel.Schemas = null;
+
         _shell.HasSession = false;
         RefreshDocumentIdentity();
         _shell.HasProject = false;
@@ -762,6 +771,16 @@ public partial class MainWindow : Window
             // top-level nodes and never changes again.
             _tree = new SceneTreeModel(session.Host, _loggerFactory.CreateLogger<SceneTreeModel>());
             _shell.Tree = _tree;
+
+            // The session's PARSED catalogue, and the same instance the render
+            // thread stamps every scene with - so the Insert menu offers what
+            // the panel can describe, and neither can drift from the .sentdef
+            // the other read. The insert lambda resolves the session when the
+            // entry is chosen rather than capturing it, exactly as every other
+            // verb in this window does.
+            _shell.SetEntityClasses(EntityInsertMenu.Build(session.EntitySchemas));
+            if (_shell.Properties is { } panel)
+                panel.Schemas = session.EntitySchemas;
 
             _surface = surface;
             _shell.SetViewportSize(surface.PixelSize.X, surface.PixelSize.Y);
@@ -1557,6 +1576,7 @@ public partial class MainWindow : Window
     // "insert here" means the spot that was right-clicked rather than wherever
     // the camera is pointing by the time the item is picked.
     private ContextMenu? _viewportMenu;
+    private MenuItem? _viewportEntityMenu;
     private System.Numerics.Vector2 _viewportMenuPoint;
 
     /// <summary>
@@ -1577,6 +1597,7 @@ public partial class MainWindow : Window
         _session.SelectAtPoint(_viewportMenuPoint);
 
         _viewportMenu ??= BuildViewportMenu();
+        RefreshViewportEntityItems();
 
         // Client pixels are physical; Avalonia placement wants logical units.
         double scaling = (VisualRoot as TopLevel)?.RenderScaling ?? 1.0;
@@ -1616,6 +1637,13 @@ public partial class MainWindow : Window
         insert.Items.Add(Item("Surface light", null, () => _session?.Insert(InsertKind.SurfaceLight, _viewportMenuPoint)));
         insert.Items.Add(Item("Empty group", null, () => _session?.Insert(InsertKind.Group, _viewportMenuPoint)));
 
+        // Entities go under their own submenu rather than into this list: the
+        // six above are a fixed vocabulary and the classes are a project's, so
+        // one flat list would grow without bound and put "Block" beside forty
+        // logic classes.
+        _viewportEntityMenu = new MenuItem { Header = "Entity" };
+        insert.Items.Add(_viewportEntityMenu);
+
         var menu = new ContextMenu();
         menu.Items.Add(insert);
         menu.Items.Add(new Separator());
@@ -1632,6 +1660,67 @@ public partial class MainWindow : Window
         // back to the engine's HWND or the tool keys go dead until a click.
         menu.Closed += (_, _) => _viewport?.FocusEngine();
         return menu;
+    }
+
+    /// <summary>
+    /// Refills the viewport menu's entity submenu, placing at the right-click
+    /// point.
+    /// </summary>
+    private void RefreshViewportEntityItems() =>
+        FillEntityMenu(_viewportEntityMenu, () => _viewportMenuPoint);
+
+    /// <summary>
+    /// Refills the Object menu's entity submenu, placing at the view centre.
+    /// </summary>
+    /// <remarks>
+    /// On <c>SubmenuOpened</c> rather than at construction, for the same reason
+    /// the viewport's is rebuilt per open: the window outlives every session,
+    /// and entries built once would still offer the first project's classes in
+    /// the third project's window.
+    /// </remarks>
+    private void OnInsertEntityMenuOpened(object? sender, RoutedEventArgs e) =>
+        FillEntityMenu(InsertEntityMenu, static () => null);
+
+    /// <summary>
+    /// Rebuilds one entity submenu from the live session's classes, and hides
+    /// it when there are none.
+    /// </summary>
+    /// <remarks>
+    /// <b>Built in code, in ONE place, for both menus.</b> The alternative is
+    /// an <c>ItemsSource</c> plus an <c>ItemContainerTheme</c> deriving from
+    /// Fluent's own MenuItem theme, which this shell has no other instance of
+    /// and whose failure mode is a submenu of correctly-sized blank rows -
+    /// exactly the class of silent styling failure the shell's own notes on
+    /// Avalonia style priority are about. The context menu could not use that
+    /// route anyway, since it is assembled in code, so binding the other one
+    /// would be two mechanisms for one list.
+    /// </remarks>
+    /// <param name="submenu">The parent item to refill, or null before it exists.</param>
+    /// <param name="point">
+    /// Where an entry places, evaluated at CLICK time rather than captured
+    /// here: the viewport's point is written by the press that opened the menu,
+    /// and reading it while building would freeze the first right-click's
+    /// position into every later one.
+    /// </param>
+    private void FillEntityMenu(MenuItem? submenu, Func<System.Numerics.Vector2?> point)
+    {
+        if (submenu is null)
+            return;
+
+        submenu.Items.Clear();
+        submenu.IsVisible = _shell.EntityClasses.Count > 0;
+
+        foreach (EntityInsertItem entry in _shell.EntityClasses)
+        {
+            // The class NAME is captured, never the item, because the item's
+            // own ICommand carries the Object menu's placement and this may be
+            // the viewport's.
+            string className = entry.ClassName;
+            var item = new MenuItem { Header = entry.Display };
+            ToolTip.SetTip(item, entry.Tip);
+            item.Click += (_, _) => _session?.InsertEntity(className, point());
+            submenu.Items.Add(item);
+        }
     }
 
 

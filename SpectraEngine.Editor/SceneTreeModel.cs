@@ -727,6 +727,13 @@ public sealed class SceneTreeModel
         "part" or "brushpart" => SceneNodeKind.BrushPart,
         "cut" or "hole" or "subtractive" or "brushsubtractive" => SceneNodeKind.BrushSubtractive,
         "light" or "lamp" => SceneNodeKind.Light,
+        // "logic" because that is what the classes are called and what a person
+        // filtering for them is thinking. "entitie" is not a typo: the plural
+        // rule above is a TrimEnd('s'), which turns "entities" into that rather
+        // than into "entity" - and a filter that silently returns nothing
+        // because somebody typed the plural is exactly what that rule exists to
+        // prevent.
+        "entity" or "entitie" or "logic" => SceneNodeKind.Entity,
         "mesh" or "model" or "prop" => SceneNodeKind.Mesh,
         "group" or "folder" => SceneNodeKind.Group,
         "empty" or "node" => SceneNodeKind.Empty,

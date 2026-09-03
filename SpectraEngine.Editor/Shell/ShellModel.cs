@@ -1074,6 +1074,45 @@ public sealed class ShellModel : ObservableObject
     /// <summary>Whether the panel is wired up at all.</summary>
     public bool HasProperties => _properties is not null;
 
+    /// <summary>
+    /// The entity classes the Insert menu offers, in catalogue order.
+    /// </summary>
+    /// <remarks>
+    /// <b>A list rather than six more Click handlers</b>, because which classes
+    /// exist is a fact about the open project rather than about this build:
+    /// they are read out of a <c>.sentdef</c> at session start and cannot be
+    /// written into XAML at all. See <see cref="EntityInsertMenu"/> for why the
+    /// source has to be the PARSED catalogue.
+    /// </remarks>
+    public ObservableCollection<EntityInsertItem> EntityClasses { get; } = [];
+
+    /// <summary>
+    /// Whether there is anything to put in the entity submenu, so an empty one
+    /// is hidden rather than opened onto nothing.
+    /// </summary>
+    public bool HasEntityClasses => EntityClasses.Count > 0;
+
+    /// <summary>
+    /// Replaces the entity submenu's entries. Called when a session opens with
+    /// its catalogue, and with null when one closes.
+    /// </summary>
+    /// <remarks>
+    /// Patched by replacement rather than reused, unlike the tree's rows and
+    /// the panel's: this list changes exactly twice per session and holds no
+    /// state a user can be halfway through.
+    /// </remarks>
+    public void SetEntityClasses(IReadOnlyList<EntityInsertItem>? items)
+    {
+        EntityClasses.Clear();
+        if (items is not null)
+        {
+            foreach (EntityInsertItem item in items)
+                EntityClasses.Add(item);
+        }
+
+        Raise(nameof(HasEntityClasses));
+    }
+
     /// <summary>Whether a filter is narrowing the tree, for the clear button.</summary>
     public bool HasFilter => _filterText.Length > 0;
 

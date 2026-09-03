@@ -155,6 +155,18 @@
       <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
+    <!-- A standing warning about the SUBJECT, not about something that just
+         happened: amber, which is this shell's state colour, in a slot of its
+         own under the header rather than on the last-writer-wins message line. -->
+    <Style Selector="Border.classwarn">
+      <Setter Property="Background" Value="{StaticResource SpectraControlChecked}" />
+      <Setter Property="BorderBrush" Value="{StaticResource SpectraWarning}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+      <Setter Property="Padding" Value="8,5" />
+      <Setter Property="Margin" Value="12,8,12,0" />
+    </Style>
+
     <Style Selector="Border.swatch">
       <Setter Property="Width" Value="24" />
       <Setter Property="Height" Value="{StaticResource SpectraFieldHeight}" />
@@ -195,6 +207,19 @@
                      Foreground="{StaticResource SpectraTextBody}" />
         </Border>
       </Grid>
+    </Border>
+
+    <!-- ___ Unknown entity class _________________________
+         The rows below are still this map's own data, editable and preserved
+         byte for byte; what is missing is the schema that would say which
+         properties EXIST and what their defaults are. Without this the reader
+         cannot tell a mistyped class name from a class with nothing declared. -->
+    <Border DockPanel.Dock="Top" Classes="classwarn"
+            IsVisible="{Binding Properties.HasUnknownClass}">
+      <TextBlock Text="{Binding Properties.UnknownClassLabel}"
+                 TextWrapping="Wrap"
+                 FontSize="{StaticResource SpectraFontSecondary}"
+                 Foreground="{StaticResource SpectraTextBody}" />
     </Border>
 
     <!-- ___ Empty state __________________________________

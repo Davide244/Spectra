@@ -2,6 +2,7 @@
 using SpectraEngine.Core;
 using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Audio;
+using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Graphics;
 using SpectraEngine.Core.Graphics.D3D11;
 using SpectraEngine.Core.Graphics.D3D12;
@@ -91,6 +92,28 @@ public sealed class EditorSession : IDisposable
         // stays uncapped because it is the measurement instrument.
         _renderer.VSync = true;
 
+        // THE ROUND TRIP IS THE POINT, and it happens once here rather than
+        // once per scene load.
+        //
+        // The editor reads entity schemas from a .sentdef image and from
+        // nothing else, which is what makes parity between a generated C# class
+        // and a Luau definition structural instead of something to keep
+        // checking. Handing the shell EntityCatalog.Shared's own EntitySchema
+        // objects would satisfy every panel today and silently fork that
+        // property: the in-process editor would read the catalogue directly,
+        // the out-of-process one would read the file, and the two would drift
+        // with nothing failing.
+        //
+        // It is built HERE, rather than left to SceneManager's per-load
+        // default, because the shell needs the same catalogue on the UI thread
+        // - the Insert menu is a list of what a session can place, and a menu
+        // built from a different source than the panel reads is exactly the
+        // drift this exists to prevent. One instance, assigned to the manager
+        // so every scene it loads is stamped with it: the catalogue is
+        // immutable once loaded and documented as free to share.
+        EntitySchemas = EntitySchemaCatalog.LoadFromSentDef(
+            SentDef.Write(EntityCatalog.Shared.Schemas));
+
         var sceneManager = new SceneManager(loggerFactory.CreateLogger<SceneManager>())
         {
             // The shell edits projects; the authored demo belongs to the demo
@@ -98,6 +121,7 @@ public sealed class EditorSession : IDisposable
             // it should show is opened through OpenMap, where a bad bundle
             // reports instead of logging and falling back.
             Startup = StartupSceneKind.Baseplate,
+            EntitySchemas = EntitySchemas,
         };
         var assetManager = contentRoot is null
             ? new AssetManager(loggerFactory.CreateLogger<AssetManager>())
@@ -127,6 +151,18 @@ public sealed class EditorSession : IDisposable
 
     /// <summary>The scene manager, for the panels that report on it.</summary>
     public SceneManager SceneManager { get; }
+
+    /// <summary>
+    /// What entity classes this session can place and describe, parsed from a
+    /// <c>.sentdef</c> image of the running catalogue.
+    /// </summary>
+    /// <remarks>
+    /// <b>The same instance every scene this session loads is stamped with</b>,
+    /// so the Insert menu, the property panel's unknown-class badge and the
+    /// render thread's row derivation cannot disagree about which classes
+    /// exist. Immutable, so reading it from the UI thread is sound.
+    /// </remarks>
+    public EntitySchemaCatalog EntitySchemas { get; }
 
     /// <summary>The surface a UI thread drives this engine through.</summary>
     public EngineHost Host => _engine.Host;
@@ -184,6 +220,14 @@ public sealed class EditorSession : IDisposable
     /// </summary>
     public void Insert(InsertKind kind, Vector2? viewportPoint = null) =>
         Host.EnqueueCommand(_ => Editor?.Insert(kind, viewportPoint));
+
+    /// <summary>
+    /// Creates one entity of a named class where the user is looking - the
+    /// Insert menu's entity submenu, whose entries come from
+    /// <see cref="EntitySchemas"/>.
+    /// </summary>
+    public void InsertEntity(string className, Vector2? viewportPoint = null) =>
+        Host.EnqueueCommand(_ => Editor?.InsertEntity(className, viewportPoint));
 
     /// <summary>
     /// Selects the node with this id. An id the scene no longer has is

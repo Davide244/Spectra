@@ -1,4 +1,5 @@
 ﻿using Avalonia.Media;
+using SpectraEngine.Core.Entities;
 using SpectraEngine.Core.Inspection;
 using SpectraEngine.Editing.Commands;
 using System;
@@ -25,6 +26,7 @@ public sealed class PropertyRowModel : ObservableObject
     internal PropertyRowModel(PropertyRow row, Action<PropertyEdit> apply)
     {
         Id = row.Id;
+        Key = row.Key ?? string.Empty;
         Group = row.Group;
         Name = row.Name;
         Kind = row.Kind;
@@ -58,6 +60,35 @@ public sealed class PropertyRowModel : ObservableObject
     }
 
     public PropertyId Id { get; }
+
+    /// <summary>
+    /// Which keyvalue this row is, for the ids whose <see cref="Id"/> alone
+    /// does not name one. Empty on every other row.
+    /// </summary>
+    /// <remarks>
+    /// <b>A row's identity is the PAIR, so every edit this row emits carries
+    /// both halves.</b> Every keyvalue an entity declares wears one id
+    /// (<see cref="PropertyId.EntityKeyvalue"/>) and is told apart only by this
+    /// string; an edit sent without it names no property at all, and
+    /// <c>PropertyEditor</c> refuses it rather than guessing.
+    /// </remarks>
+    public string Key { get; }
+
+    /// <summary>
+    /// Whether this row edits an entity keyvalue, whose value crosses as WIRE
+    /// TEXT whatever widget the schema asked for.
+    /// </summary>
+    /// <remarks>
+    /// <b>The one place the panel's typed cells are serialised, and it has to
+    /// be one place.</b> A keyvalue's storage is its wire string, so a number
+    /// cell over an <c>Int</c> property and a checkbox over a <c>Bool</c> one
+    /// both commit text: the command writes the string it is handed and does no
+    /// conversion, which is exactly what lets an unparseable authored value
+    /// survive being looked at. Formatting through <c>KeyvalueWire</c> rather
+    /// than through the panel's own <c>Format</c> keeps the text the panel
+    /// writes and the text the reader parses one vocabulary.
+    /// </remarks>
+    public bool IsEntityKeyvalue => Id == PropertyId.EntityKeyvalue;
 
     /// <summary>
     /// This row's index in the published list.
@@ -218,7 +249,9 @@ public sealed class PropertyRowModel : ObservableObject
                 return;
 
             // A checkbox has no typing to finish, so the click IS the commit.
-            Apply(new PropertyEdit { Id = Id, Flag = value });
+            Apply(IsEntityKeyvalue
+                ? new PropertyEdit { Id = Id, Key = Key, Text = KeyvalueWire.Format(value) }
+                : new PropertyEdit { Id = Id, Flag = value });
         }
     }
 
@@ -231,7 +264,11 @@ public sealed class PropertyRowModel : ObservableObject
             if (!Set(ref _choice, value) || _applyingRefresh || string.IsNullOrEmpty(value))
                 return;
 
-            Apply(new PropertyEdit { Id = Id, Text = value });
+            // A choice's value is already its wire token - NodeInspector hands
+            // the dropdown the schema's TOKENS rather than its display names,
+            // for exactly this reason - so an entity choice needs no
+            // conversion, only its key.
+            Apply(new PropertyEdit { Id = Id, Key = Key, Text = value });
         }
     }
 
@@ -348,34 +385,65 @@ public sealed class PropertyRowModel : ObservableObject
 
         if (Kind == PropertyKind.Number)
         {
-            Apply(new PropertyEdit { Id = Id, Number = value });
+            Apply(IsEntityKeyvalue
+                ? new PropertyEdit { Id = Id, Key = Key, Text = KeyvalueWire.Format(value) }
+                : new PropertyEdit { Id = Id, Number = value });
             return;
         }
 
-        Apply(new PropertyEdit
-        {
-            Id = Id,
-            Axes = field.Axis,
-            Vector = new Vector3(value, value, value),
-        });
+        Apply(IsEntityKeyvalue
+            ? new PropertyEdit { Id = Id, Key = Key, Axes = field.Axis, Text = WireTriple(value) }
+            : new PropertyEdit
+            {
+                Id = Id,
+                Axes = field.Axis,
+                Vector = new Vector3(value, value, value),
+            });
     }
+
+    /// <summary>
+    /// One value written into all three components of a wire triple, for a
+    /// per-axis entity edit.
+    /// </summary>
+    /// <remarks>
+    /// <b>Three components, because the merge needs three on both sides.</b>
+    /// <c>PropertyEditor</c> splices the masked component at the TOKEN level and
+    /// refuses anything that is not exactly three whitespace-separated parts,
+    /// falling back to writing the value whole - which for a one-token string
+    /// would replace a whole vector with a single number. The two unmasked
+    /// components are copied from the STORED text rather than from these, so
+    /// what is sent for them is never what is written and an author's "1.0"
+    /// beside an edited y survives verbatim.
+    /// </remarks>
+    private static string WireTriple(float value) =>
+        KeyvalueWire.Format(new Vector3(value, value, value));
 
     private void CommitField(PropertyFieldModel field, string typed)
     {
         switch (Kind)
         {
             case PropertyKind.Text:
-                Apply(new PropertyEdit { Id = Id, Text = typed });
+                // A text row's typed value IS its wire form, entity or not, so
+                // this arm needs only the key.
+                Apply(new PropertyEdit { Id = Id, Key = Key, Text = typed });
                 break;
 
             case PropertyKind.Number:
                 if (!PropertyFieldModel.TryParseNumber(typed, out float number)) { field.Revert(); return; }
-                Apply(new PropertyEdit { Id = Id, Number = number });
+                Apply(IsEntityKeyvalue
+                    ? new PropertyEdit { Id = Id, Key = Key, Text = KeyvalueWire.Format(number) }
+                    : new PropertyEdit { Id = Id, Number = number });
                 break;
 
             case PropertyKind.Color:
                 if (!TryParseHex(typed, out Vector3 rgb)) { field.Revert(); return; }
-                Apply(new PropertyEdit { Id = Id, Axes = PropertyAxes.All, Vector = rgb });
+                Apply(IsEntityKeyvalue
+                    ? new PropertyEdit
+                    {
+                        Id = Id, Key = Key, Axes = PropertyAxes.All,
+                        Text = KeyvalueWire.FormatColor(rgb),
+                    }
+                    : new PropertyEdit { Id = Id, Axes = PropertyAxes.All, Vector = rgb });
                 break;
 
             case PropertyKind.Vector3:
@@ -383,12 +451,17 @@ public sealed class PropertyRowModel : ObservableObject
 
                 // One axis per cell, so typing into y is a bulk edit that leaves
                 // every node's own x and z alone.
-                Apply(new PropertyEdit
-                {
-                    Id = Id,
-                    Axes = field.Axis,
-                    Vector = new Vector3(component, component, component),
-                });
+                Apply(IsEntityKeyvalue
+                    ? new PropertyEdit
+                    {
+                        Id = Id, Key = Key, Axes = field.Axis, Text = WireTriple(component),
+                    }
+                    : new PropertyEdit
+                    {
+                        Id = Id,
+                        Axes = field.Axis,
+                        Vector = new Vector3(component, component, component),
+                    });
                 break;
         }
     }
@@ -468,6 +541,7 @@ public sealed class PropertyPanelModel : ObservableObject
     private readonly PropertyRowShape _shape = new();
     private int _selectionCount;
     private string _headerKind = string.Empty;
+    private string _unknownClass = string.Empty;
     private bool _isMultiple;
 
     public PropertyPanelModel(
@@ -549,6 +623,55 @@ public sealed class PropertyPanelModel : ObservableObject
         }
     }
 
+    /// <summary>Whether the selection names an entity class nothing declares.</summary>
+    public bool HasUnknownClass => _unknownClass.Length > 0;
+
+    /// <summary>
+    /// The standing warning shown for an entity whose class this session has no
+    /// schema for.
+    /// </summary>
+    /// <remarks>
+    /// <b>Amber, which is STATE, not the accent and not the danger colour.</b>
+    /// An unknown class is not an error: <c>EntityData</c> is strings precisely
+    /// so a map authored against another game round-trips byte for byte, and
+    /// the rows below this badge are that map's own data, editable and
+    /// preserved. What the reader needs to know is that the schema is missing,
+    /// so the properties they can see are only the ones somebody wrote down and
+    /// there are no declared defaults behind them.
+    /// <para>
+    /// Standing, in a slot of its own, rather than on the status line, which is
+    /// last-writer-wins and would lose it to the next thing that happens.
+    /// </para>
+    /// </remarks>
+    public string UnknownClassLabel
+    {
+        get => _unknownClass;
+        private set
+        {
+            if (Set(ref _unknownClass, value))
+                Raise(nameof(HasUnknownClass));
+        }
+    }
+
+    /// <summary>
+    /// What entity classes the session knows, or null when none is open.
+    /// </summary>
+    /// <remarks>
+    /// <b>The same catalogue the Insert menu is built from, and deliberately
+    /// so.</b> The panel already shows an unknown class's authored keyvalues as
+    /// text - that is what makes a map from a game this build does not have
+    /// worth opening at all - but nothing on screen said WHY the properties
+    /// looked like that, so a class name with a typo in it was indistinguishable
+    /// from a class with no declared properties. Asking the session's own
+    /// catalogue means the badge and the menu cannot disagree about which
+    /// classes exist.
+    /// <para>
+    /// Assigned rather than taken in the constructor, because the panel is
+    /// built with the window and a catalogue exists only once a session does.
+    /// </para>
+    /// </remarks>
+    public EntitySchemaCatalog? Schemas { get; set; }
+
     /// <summary>Opens one history entry to hold a drag across a field.</summary>
     internal void BeginGesture(string name) => _beginGesture(name);
 
@@ -591,6 +714,7 @@ public sealed class PropertyPanelModel : ObservableObject
         if (selectionCount == 0)
         {
             HeaderKind = string.Empty;
+            UnknownClassLabel = string.Empty;
             return;
         }
 
@@ -598,9 +722,12 @@ public sealed class PropertyPanelModel : ObservableObject
         bool nameMixed = false;
         string brushKind = string.Empty;
         string brushOperation = string.Empty;
+        string className = string.Empty;
+        bool classMixed = false;
         bool hasLight = false;
         bool hasMesh = false;
         bool hasBrush = false;
+        bool hasEntity = false;
 
         foreach (PropertyRow row in rows)
         {
@@ -623,16 +750,36 @@ public sealed class PropertyPanelModel : ObservableObject
                 case PropertyId.MeshModel:
                     hasMesh = true;
                     break;
+                case PropertyId.EntityClassname:
+                    hasEntity = true;
+                    className = row.Text;
+                    classMixed = row.IsMixed;
+                    break;
             }
         }
 
         NameField.Refresh(name, nameMixed);
 
-        HeaderKind = DescribeKind(hasBrush, brushKind, brushOperation, hasLight, hasMesh);
+        HeaderKind = DescribeKind(hasBrush, brushKind, brushOperation, hasEntity, hasLight, hasMesh);
+
+        // A MIXED classname is several classes at once, and naming one of them
+        // as the missing schema would be a lie about the other four. The rows
+        // themselves are still shown and still edited; what is withheld is a
+        // badge that could only be right for part of the selection.
+        UnknownClassLabel =
+            hasEntity && !classMixed && className.Length > 0 && !Knows(className)
+                ? $"Unknown class '{className}' - properties preserved as text"
+                : string.Empty;
     }
 
+    // Null catalogue means no session, which is not the same as "this class does
+    // not exist": every class would be unknown, and the panel would badge a map
+    // it has simply not been told about yet.
+    private bool Knows(string className) =>
+        Schemas is null || Schemas.TryGetSchema(className, out _);
+
     private static string DescribeKind(
-        bool hasBrush, string kind, string operation, bool hasLight, bool hasMesh)
+        bool hasBrush, string kind, string operation, bool hasEntity, bool hasLight, bool hasMesh)
     {
         if (hasBrush)
         {
@@ -649,6 +796,12 @@ public sealed class PropertyPanelModel : ObservableObject
             };
         }
 
+        // Entity above light and mesh, and below the brush cases, which is
+        // exactly SceneNodeClassifier's order: a node with behaviour is what it
+        // does, but a brush is still what a level editor sees. Two answers to
+        // one question would put a different word in the chip from the one in
+        // the tree row that is selected beside it.
+        if (hasEntity) return "Entity";
         if (hasLight) return "Light";
         if (hasMesh) return "Mesh";
         return string.Empty;

@@ -175,6 +175,9 @@
   <Style Selector="Path.icon.kind-light">
     <Setter Property="Stroke" Value="{StaticResource SpectraKindLight}" />
   </Style>
+  <Style Selector="Path.icon.kind-entity">
+    <Setter Property="Stroke" Value="{StaticResource SpectraKindEntity}" />
+  </Style>
   <Style Selector="Path.icon.kind-mesh">
     <Setter Property="Stroke" Value="{StaticResource SpectraKindMesh}" />
   </Style>
