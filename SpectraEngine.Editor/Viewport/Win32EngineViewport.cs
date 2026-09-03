@@ -107,6 +107,22 @@ public sealed class Win32EngineViewport : NativeControlHost, IEngineViewport
     /// </remarks>
     public void PumpCursorMode() => _window?.PumpCursorMode();
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <b>Nothing to do, and that is the whole of the native child's answer.</b>
+    /// The surface here IS the HWND: destroying the control destroys it, and
+    /// <see cref="DestroyNativeControlCore"/> already raises
+    /// <see cref="SurfaceDestroying"/> at the one moment the render thread must
+    /// be off it. Raising anything here would put the engine's stop a step
+    /// earlier for no gain and make the two paths disagree about which event
+    /// ends a session. There is no re-parent to tell apart either: a native
+    /// viewport is pinned in its own cell, because moving it is exactly what
+    /// takes the session with it.
+    /// </remarks>
+    public void Shutdown()
+    {
+    }
+
     /// <summary>
     /// Hands the keyboard to the engine's native child window.
     /// </summary>

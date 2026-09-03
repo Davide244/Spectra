@@ -15,14 +15,19 @@
   <!--
     Four rows, none of which overlaps the viewport.
 
-    THE AIRSPACE RULE, RESTATED, BECAUSE IT IS NARROWER THAN IT USED TO BE.
-    The viewport is a native child window and composites above everything
-    Avalonia draws INTO THIS WINDOW: an overlay, an adorner, a drop shadow or a
-    dock float drawn in the managed layer is invisible wherever it crosses the
-    viewport's cell. A POPUP is a different thing. On Windows an Avalonia popup
-    is a real OS window, so context menus, menu flyouts, combo dropdowns,
-    tooltips and modal dialogs all composite ABOVE the native child - measured,
-    with a tree row's context menu opening 300px out over live 3D.
+    THE AIRSPACE RULE BINDS A NATIVE SESSION AND IS VOID FOR A COMPOSITED ONE.
+    A native viewport is a child window and composites above everything Avalonia
+    draws INTO THIS WINDOW: an overlay, an adorner, a drop shadow or a dock float
+    drawn in the managed layer is invisible wherever it crosses the viewport's
+    cell. A POPUP is a different thing, and this was measured rather than
+    reasoned about. On Windows an Avalonia popup is a real OS window, so context
+    menus, menu flyouts, combo dropdowns, tooltips and modal dialogs all
+    composite ABOVE the native child - proven with a tree row's context menu
+    opening 300px out over live 3D. A composited viewport has no child window at
+    all: it is a control over a CompositionSurfaceVisual, so nothing in this
+    paragraph applies to it and the layout below simply stops constraining
+    itself. Which one a session got is never guessed at twice - see
+    ViewportLayout.
 
     That is why this window has five menus. The previous shell had one, and
     retired Edit and View on the reasoning that their flyouts would open past
@@ -565,19 +570,23 @@
 
     <!-- ============ Start page | editor ================
          Two states of one row. The start page shows while NO engine session
-         exists, which is the only time free layout is possible at all: the
-         viewport's native child window is created when a session launches and
-         composites above anything Avalonia draws from then on. The code behind
-         switches the two explicitly, because the viewport must leave the tree
-         BEFORE the editor view hides, never after. -->
+         exists, which for a native session is the only time free layout is
+         possible at all: its child window is created when the session launches
+         and composites above anything Avalonia draws from then on. The code
+         behind switches the two explicitly, because the viewport must leave the
+         tree BEFORE the editor view hides, never after. -->
     <Panel Grid.Row="2">
 
       <shell:StartPage x:Name="StartView" />
 
       <!-- ============ Panels | viewport ================
-           DOCKED, all of it. Every panel owns its own grid cell and none of
-           them intersect the viewport's, because a NativeControlHost's child
-           composites above anything Avalonia draws in this window. -->
+           DOCKED, all of it, and the cells below are the NATIVE session's
+           shape: every panel owns its own and none of them intersects the
+           viewport's, because a NativeControlHost's child composites above
+           anything Avalonia draws in this window. A composited session lifts
+           the viewport out of its cell into the fourth dock and that
+           constraint stops applying, which is the only thing about this grid
+           that varies. -->
       <!-- THE ROWS ARE NEW, AND THEIR ABSENCE IS WHY NOTHING HORIZONTAL HAD A
            HOME. This grid was columns-only, so a content browser, an output log
            and a console had nowhere to be but a fourth vertical column - which
@@ -606,19 +615,25 @@
           <RowDefinition Height="236" MinHeight="90" />
         </Grid.RowDefinitions>
 
-        <!-- Two DockControls, one per side, with the viewport PINNED between
-             them in a plain grid cell. That pinning is not taste: the viewport
-             is a NativeControlHost, and any dock arrangement that re-parents it
-             destroys the HWND and the whole engine session with it, so it never
-             enters a dock. The panels do: they can be re-stacked, tabbed and
+        <!-- Four DockControls now: one per side, one under the centre column,
+             and one IN the centre cell, which only a composited session ever
+             shows. The panels have always docked, re-stacked, tabbed and
              floated (a floated panel is a real OS window, which is exactly why
-             it may cross the viewport). -->
+             it may cross a native viewport). What changed is the viewport: it
+             stays PINNED for a native session, because a NativeControlHost's
+             HWND is destroyed by any re-parent and the engine session goes with
+             it, and joins them for a composited one, which has no window to
+             destroy. -->
         <dock:DockControl x:Name="LeftDock" Grid.Column="0" Grid.RowSpan="3"
                           InitializeLayout="True" InitializeFactory="True">
-          <!-- Native floats, never the managed in-window layer: a managed float
-               is drawn in THIS window's Avalonia layer, which the viewport's
-               native child composites over - the float would be invisible
-               exactly where people drop panels. -->
+          <!-- Native floats, never the managed in-window layer, on every root
+               and in both placements. Beside a native child it is the only
+               thing that works at all: a managed float is drawn in THIS
+               window's Avalonia layer, which the child composites over, so the
+               float would be invisible exactly where people drop panels.
+               Beside a composited pane it is merely a z-order question, and it
+               is still the right answer - a panel dragged out of the window
+               belongs to the desktop, not to a rectangle inside the editor. -->
           <dm:RootDock x:Name="LeftRoot" Id="LeftRoot" IsCollapsable="False"
                        FloatingWindowHostMode="Native"
                        DefaultDockable="{Binding #LeftLayout}">
@@ -632,11 +647,14 @@
               <!-- 0.11, down from 0.16: a project has one or two levels for
                    most of its life, and the pane was spending a seventh of the
                    tallest column in the window on a single 24px row while the
-                   scene tree below it scrolled 253 nodes. CanPin is off on
-                   every tool here: Dock's pinned flyout is drawn in the managed
-                   Avalonia layer, so unpinning a pane would make it invisible
-                   the moment it crossed the viewport - the most inviting glyph
-                   in the header would be a trap. -->
+                   scene tree below it scrolled 253 nodes. CanPin is WRITTEN
+                   FROM CODE on every tool in this window, because it is the
+                   airspace rule wearing another name: Dock's pinned flyout is
+                   drawn in the managed Avalonia layer, so beside a native child
+                   unpinning a pane makes it invisible the moment it crosses the
+                   viewport and the most inviting glyph in the header is a trap.
+                   Beside a composited pane the flyout draws correctly, so it
+                   comes back. -->
               <dm:ToolDock Id="MapsDock" Alignment="Top" Proportion="0.085">
                 <dm:Tool x:Name="MapsTool" Id="Maps" Title="Levels" CanClose="False" CanPin="False" />
               </dm:ToolDock>
@@ -671,23 +689,76 @@
         <Border x:Name="LeftSplitInk" Grid.Column="1" Grid.RowSpan="3" Width="1" Classes="splitink"
                 HorizontalAlignment="Center" />
 
-        <!-- MinWidth is not cosmetic: dragging the splitter to zero can leave
-             the swap chain unable to recover. The viewport control itself is
-             created in code when a session launches and removed when it closes,
-             because a NativeControlHost's child window lives exactly as long as
-             the control is in the visual tree.
+        <!-- ============ The viewport's two homes ===========
+             The pane below lives in ONE of them per session, and which one is
+             a consequence of which viewport the session got rather than a
+             preference.
+
+             PINNED is this grid cell, and it is today's shape unchanged. A
+             NativeControlHost's child window is destroyed by any re-parent and
+             the engine session goes with it, so a native viewport sits in a
+             cell nothing can dock and the airspace rule binds this window:
+             nothing Avalonia draws may cross it.
+
+             DOCKED is the DockControl below. A composited pane is an ordinary
+             control over a CompositionSurfaceVisual - there is no window to
+             destroy - so it docks, tabs and floats like every other panel, and
+             airspace stops applying to this window entirely.
+
+             ViewportLayout.For decides, off the SAME decision that built the
+             viewport and never a second guess: the way a disagreement presents
+             is a native child dragged into a tool, which destroys the HWND and
+             takes the session with it.
+
+             The fourth dock is on the SAME factory as the other three, for the
+             reason written on the third: a per-control factory makes a drag's
+             target list that factory's own controls, so a panel could never
+             cross between regions - silently. Hidden until a composited session
+             asks for it. -->
+        <dock:DockControl x:Name="CenterDock" Grid.Column="2" Grid.Row="0" IsVisible="False"
+                          InitializeLayout="True" InitializeFactory="True">
+          <dm:RootDock x:Name="CenterRoot" Id="CenterRoot" IsCollapsable="False"
+                       FloatingWindowHostMode="Native"
+                       DefaultDockable="{Binding #CenterLayout}">
+            <dm:ProportionalDock x:Name="CenterLayout" Id="CenterLayout" Orientation="Vertical">
+              <dm:ToolDock Id="ViewportDock" Alignment="Top" Proportion="1">
+                <!-- CanClose stays false in both placements: there is no Window
+                     menu and no reopen verb, so a closed viewport is a session
+                     with a running engine and no way to see it. CanPin is
+                     written from code, because it is the airspace rule wearing
+                     another name - Dock draws a pinned flyout in the main
+                     window's own Avalonia layer, which a native child
+                     composites over. -->
+                <dm:Tool x:Name="ViewportTool" Id="Viewport" Title="Viewport" CanClose="False" />
+              </dm:ToolDock>
+            </dm:ProportionalDock>
+          </dm:RootDock>
+        </dock:DockControl>
+
+        <!-- The pane itself: the header strip and the bezel, ONE control that
+             travels between the two homes together, still in this cell for a
+             native session and lifted out of it into the tool for a composited
+             one. The header goes WITH it rather than staying behind, because a
+             float that left the camera readout and the overlay chips in the
+             main window would leave them describing a viewport that is
+             somewhere else.
 
              The bezel is the darkest surface in the window and the only place
              allowed near-black: chrome, then bezel, then render, so the picture
              is framed rather than butted straight against a panel. -->
-        <Grid Grid.Column="2" Grid.Row="0" RowDefinitions="Auto,*">
+        <Grid x:Name="ViewportPane" Grid.Column="2" Grid.Row="0" RowDefinitions="Auto,*">
 
           <!-- ============ Viewport header ==================
                View-scoped state ABOVE the picture - the strip every engine
                editor puts here, and the one row the airspace rule never
-               blocked: chrome beside the native child shrinks it, it does not
-               cross it. Everything on it wires to a verb or snapshot field
-               that already existed; nothing here is decoration. -->
+               blocked even when it bound: chrome BESIDE a native child shrinks
+               it, it does not cross it, which is why this strip could ship
+               while an overlay could not. Beside a composited pane nothing
+               about it needs to change, which is the point - it was built to
+               the constraint rather than around it, so it is still simply the
+               row above the picture and it travels with the pane into a float.
+               Everything on it wires to a verb or snapshot field that already
+               existed; nothing here is decoration. -->
           <Border Grid.Row="0" Height="28"
                   Background="{StaticResource SpectraBgApp}"
                   BorderBrush="{StaticResource SpectraBorderStrong}"
@@ -766,7 +837,11 @@
           <!-- Padding is what makes the bezel EXIST: a Border's background
                shows only through its padding ring, and with none the
                documented chrome-bezel-render framing painted zero pixels. The
-               ring is beside the native child, never over it. -->
+               ring is beside the native child, never over it.
+
+               MinWidth is not cosmetic either: dragging a splitter to zero can
+               leave the swap chain unable to recover, and a floated pane has no
+               column MinWidth behind it at all. -->
           <Border x:Name="ViewportHost" Grid.Row="1" MinWidth="360" Padding="2"
                   Background="{StaticResource SpectraViewportBezel}" />
         </Grid>

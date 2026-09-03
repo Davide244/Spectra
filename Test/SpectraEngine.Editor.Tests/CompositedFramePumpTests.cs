@@ -90,12 +90,24 @@ public sealed class CompositedFramePumpTests
 
         internal FakeImage Latest => Images[^1];
 
+        /// <summary>
+        /// The real one disposes the drawing surface every import snapshots
+        /// into, which is why the pump may not do it under a live hand-over.
+        /// </summary>
+        internal bool Disposed { get; private set; }
+
         public ICompositedImage Import(nint ntHandle, int width, int height)
         {
             ImportedHandles.Add(ntHandle);
             var image = new FakeImage();
             Images.Add(image);
             return image;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
         }
     }
 
@@ -380,5 +392,104 @@ public sealed class CompositedFramePumpTests
         image.CompleteUpdate();
         image.Disposed.ShouldBeTrue();
         rig.Acknowledged.ShouldBe([1]);
+    }
+
+    // --- The compositor half, which a re-parent takes with it ----------------
+
+    /// <summary>
+    /// The drawing surface goes with the pump, and not one instant sooner.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is the defect a dockable viewport is most likely to ship
+    /// with.</b> The pane is detached and re-attached by every dock drag, and
+    /// the viewport used to dispose its drawing surface at the moment of
+    /// detach - which was safe while a detach only ever meant a session ending,
+    /// and is a disposal under a live keyed-mutex bracket once it can also mean
+    /// a re-dock. The pending hand-over then faults and the fault is reported as
+    /// the composited viewport having failed, on every re-dock, on a viewport
+    /// that is working perfectly.
+    /// </remarks>
+    [Fact]
+    public void The_source_is_released_only_after_the_last_hand_over_has_finished()
+    {
+        var rig = new Rig();
+        FakeImage image = rig.Adopt(generation: 2);
+        image.UpdateInFlight.ShouldBeTrue();
+
+        rig.Pump.Stop();
+        rig.Source.Disposed.ShouldBeFalse();
+        rig.Pump.SourceReleased.ShouldBeFalse();
+
+        image.CompleteUpdate();
+
+        rig.Source.Disposed.ShouldBeTrue();
+        rig.Pump.SourceReleased.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_pump_that_never_imported_anything_releases_its_source_at_once()
+    {
+        // A viewport detached before the first frame arrived: there is nothing
+        // to wait for, and leaving the surface alive would leak one per launch
+        // of a session that was closed immediately.
+        var rig = new Rig();
+
+        rig.Pump.Stop();
+
+        rig.Source.Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_superseded_generation_does_not_release_the_source_under_the_live_one()
+    {
+        // A resize retires an import while the pump keeps running on the next
+        // one. The source outlives every import by construction, so settling a
+        // retired one must not take it: the live import is still snapshotting
+        // into that very surface.
+        var rig = new Rig();
+        FakeImage first = rig.Adopt(generation: 1);
+
+        rig.Observe(generation: 2);
+        first.CompleteUpdate();
+
+        first.Disposed.ShouldBeTrue();
+        rig.Source.Disposed.ShouldBeFalse();
+        rig.Pump.LiveGeneration.ShouldBe(2);
+    }
+
+    /// <summary>
+    /// The source waits for EVERY import, not merely for the live one.
+    /// </summary>
+    /// <remarks>
+    /// A detach that lands mid-resize has a retired generation still inside its
+    /// hand-over and a fresh one already imported. Releasing the surface when
+    /// the live import settles would free it under the retired one, which is
+    /// the same crash one level down and is invisible from either side.
+    /// </remarks>
+    [Fact]
+    public void The_source_waits_for_a_retired_import_as_well_as_the_live_one()
+    {
+        var rig = new Rig();
+        FakeImage first = rig.Adopt(generation: 1);
+
+        // A resize: the second import is adopted while the first is still
+        // inside the hand-over it started.
+        rig.Observe(generation: 2);
+        FakeImage second = rig.Source.Latest;
+        second.CompleteImport();
+        first.UpdateInFlight.ShouldBeTrue();
+
+        // The live import settles immediately - it never got a loop of its own,
+        // because the first one's is still running - and the retired one does
+        // not.
+        rig.Pump.Stop();
+        second.Disposed.ShouldBeTrue();
+        rig.Source.Disposed.ShouldBeFalse();
+
+        first.CompleteUpdate();
+
+        first.Disposed.ShouldBeTrue();
+        rig.Source.Disposed.ShouldBeTrue();
+        rig.Acknowledged.ShouldBe([2, 1]);
     }
 }

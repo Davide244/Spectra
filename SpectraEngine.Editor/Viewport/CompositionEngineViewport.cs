@@ -76,7 +76,13 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
     private EngineHost? _host;
     private IPointer? _pointer;
     private bool _releasingCapture;
-    private bool _surfacePublished;
+
+    // Whether the shell has a surface from this viewport with an engine on it,
+    // and whether the shell has said the viewport is finished. Two bits, and the
+    // distinction between them is the whole of what makes this viewport
+    // dockable, so they live in a type with a test on them rather than as fields
+    // nothing without a GPU can reach.
+    private readonly ViewportSurfaceLifetime _lifetime = new();
 
     // What the last layout pass left behind, so a move, a resize and a DPI
     // change are one comparison each rather than three subscriptions.
@@ -187,6 +193,17 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
     // --- Lifetime ------------------------------------------------------------
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// <b>This runs again every time the pane is dragged into another dock or
+    /// out into a float window</b>, which is the whole difference between a
+    /// dockable viewport and a pinned one. Everything here is therefore written
+    /// to be true the second time as well: the top level and the window are
+    /// re-read because a float is a different window with a different
+    /// compositor, and the compositor half is rebuilt from scratch because a
+    /// visual belongs to the compositor that made it. What is NOT redone is the
+    /// surface: the engine is still running against it, still resolving into
+    /// its shared target, and has no idea any of this happened.
+    /// </remarks>
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
@@ -198,20 +215,54 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
         // The window state is here for the same reason - a minimised window's
         // controls keep their layout bounds, so nothing about the LAYOUT ever
         // says the viewport cannot be seen.
+        //
+        // PositionChanged is the third, and it is the one nothing else would
+        // report: a window that MOVES re-lays out nothing at all, so the pane's
+        // screen origin changes with no layout pass behind it and a live cursor
+        // lock keeps differencing against where the pane used to be.
         _window = _topLevel as Window;
         if (_window is { } window)
         {
             window.Deactivated += OnWindowDeactivated;
             window.PropertyChanged += OnWindowPropertyChanged;
+            window.PositionChanged += OnWindowPositionChanged;
         }
 
         LayoutUpdated += OnLayoutUpdated;
         ReadGeometry();
 
         _ = InitializeAsync();
+
+        // A re-parent, not the first attach: the keyboard went wherever the
+        // dock drag left it, and a viewport that came back with no focus takes
+        // every tool key with it until somebody clicks in the scene.
+        if (_lifetime.IsPublished)
+            Focus();
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// <b>A detach is a RE-PARENT until the shell says otherwise, and getting
+    /// that backwards is the one defect a dockable viewport is most likely to
+    /// ship with.</b> Dragging the pane into another dock detaches and
+    /// re-attaches the control; answered as a teardown it raises
+    /// <see cref="SurfaceDestroying"/>, the shell stops the engine, the
+    /// re-attach publishes a fresh surface and a SECOND session is built on it -
+    /// a new scene, an empty undo history, and the level gone, with nothing
+    /// anywhere reporting an error. So the surface is published exactly once per
+    /// session and <see cref="Shutdown"/> is the only thing that ends it.
+    /// </para>
+    /// <para>
+    /// <b>What genuinely does go is the compositor half</b>, because a
+    /// composition visual belongs to the compositor that created it and a float
+    /// is a different window. The pump takes the drawing surface with it, for
+    /// the ordering reason written on <c>CompositedFramePump.Stop</c>: disposing
+    /// it here would dispose it under whatever hand-over was in flight, and the
+    /// fault that produced would be reported as the composited viewport
+    /// failing, on every re-dock.
+    /// </para>
+    /// </remarks>
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         LayoutUpdated -= OnLayoutUpdated;
@@ -228,32 +279,47 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
         {
             window.Deactivated -= OnWindowDeactivated;
             window.PropertyChanged -= OnWindowPropertyChanged;
+            window.PositionChanged -= OnWindowPositionChanged;
         }
 
-        // Before anything is torn down: the shell has to have stopped the
-        // engine by the time this returns, exactly as the native child's
-        // teardown demands, and for the mirror-image reason - there the driver
-        // would be handed a dead window, here the pump would be left waiting on
-        // a key nothing is going to release.
-        if (_surfacePublished)
-        {
-            _surfacePublished = false;
+        // Only when the shell has said this viewport is finished. The engine has
+        // to be off the surface by the time this returns, exactly as the native
+        // child's teardown demands and for the mirror-image reason - there the
+        // driver would be handed a dead window, here the pump would be left
+        // waiting on a key nothing is going to release.
+        if (_lifetime.Detached())
             SurfaceDestroying?.Invoke();
-        }
 
+        // Stopped either way: this pump's compositor objects are about to stop
+        // being reachable, and a re-parent builds a fresh one on the other side.
+        // Safe on the re-parent path precisely because the producer is still
+        // running and will answer whatever hand-over is outstanding.
         _pump?.Stop();
         _pump = null;
 
         ElementComposition.SetElementChildVisual(this, null);
         _visual = null;
 
-        _drawingSurface?.Dispose();
+        // NOT disposed here: ownership went to the pump with Stop, which lets go
+        // of it once no import is still snapshotting into it.
         _drawingSurface = null;
 
         _window = null;
         _topLevel = null;
 
         base.OnDetachedFromVisualTree(e);
+    }
+
+    /// <inheritdoc/>
+    public void Shutdown()
+    {
+        // A viewport that never reached the tree, or one the shell is closing
+        // while it is floated: the surface is published once and ended once, and
+        // the detach that follows must not be able to end it a second time.
+        if (_lifetime.Shutdown())
+            SurfaceDestroying?.Invoke();
+
+        _pump?.Stop();
     }
 
     /// <summary>
@@ -314,11 +380,30 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
                 _logger,
                 onFault: OnPumpFaulted);
 
-            _logger.LogInformation(
-                "Composited viewport ready on the compositor's own adapter; the native child is not in use.");
+            // The engine is started ONCE per session. A re-parent has rebuilt
+            // everything above it and disturbed nothing below: the renderer has
+            // gone on resolving into its shared target throughout, its own
+            // acquire timing out and skipping while there was no consumer, and
+            // the fresh pump imports whatever generation the next frame names.
+            switch (_lifetime.Attached())
+            {
+                case ViewportAttach.Publish:
+                    _logger.LogInformation(
+                        "Composited viewport ready on the compositor's own adapter; the native child is " +
+                        "not in use.");
+                    SurfaceCreated?.Invoke(_surface);
+                    break;
 
-            _surfacePublished = true;
-            SurfaceCreated?.Invoke(_surface);
+                case ViewportAttach.Resume:
+                    _logger.LogInformation(
+                        "Composited viewport re-attached; the session's shared target will be re-imported.");
+                    break;
+
+                default:
+                    _logger.LogDebug(
+                        "Composited viewport attached after shutdown; publishing nothing.");
+                    break;
+            }
         }
         catch (Exception ex)
         {
@@ -334,7 +419,27 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
         _logger.LogError("Composited viewport unavailable: {Reason}", reason);
         _onUnavailable?.Invoke(
             $"The composited viewport is not available here: {reason} Relaunch with --viewport=native.");
+
+        // A session that was already running when this happened did not merely
+        // fail to start: it stopped showing a picture, which is the one thing
+        // the green history exists to count. Without this a viewport that
+        // re-attached into a window whose compositor refused it would still be
+        // recorded as a clean session and go on earning the flip to composition.
+        if (_lifetime.IsPublished)
+            _onFailure?.Invoke(ViewportChoiceReason.FirstUpdateFaulted);
     }
+
+    /// <summary>
+    /// The window moved on screen. Layout reports nothing at all for this.
+    /// </summary>
+    /// <remarks>
+    /// <b>The gap <see cref="OnLayoutUpdated"/> structurally cannot see.</b> A
+    /// window that is dragged, snapped, moved by a keyboard chord or shifted by
+    /// a display change re-lays out none of its contents, so every bound in the
+    /// tree is unchanged and the pane's SCREEN origin is not - which is exactly
+    /// the value a live cursor lock differences against.
+    /// </remarks>
+    private void OnWindowPositionChanged(object? sender, PixelPointEventArgs e) => ReadGeometry();
 
     /// <summary>
     /// The hand-over stopped while the session was running.
@@ -819,6 +924,24 @@ internal sealed class CompositionEngineViewport : Control, IEngineViewport, IVie
                 });
 
             return new CompositorImage(image, surface);
+        }
+
+        /// <summary>
+        /// Lets go of the drawing surface every import snapshots into.
+        /// </summary>
+        /// <remarks>
+        /// <b>The pump calls this, and only once its last import has settled.</b>
+        /// The viewport used to dispose the surface itself at the moment it left
+        /// the visual tree, which was safe while a detach only ever meant a
+        /// session ending and is not once the pane can be dragged into another
+        /// dock: there the disposal lands under whatever hand-over was still in
+        /// flight, the pending update faults, and the fault is reported as the
+        /// composited viewport having failed.
+        /// </remarks>
+        public ValueTask DisposeAsync()
+        {
+            surface.Dispose();
+            return ValueTask.CompletedTask;
         }
     }
 

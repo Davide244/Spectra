@@ -47,7 +47,7 @@ internal interface ICompositedImage
 /// Creates imports. The compositor half of <see cref="CompositedFramePump"/>'s
 /// world.
 /// </summary>
-internal interface ICompositedImageSource
+internal interface ICompositedImageSource : IAsyncDisposable
 {
     /// <summary>Imports the shared texture named by an NT handle this process owns.</summary>
     ICompositedImage Import(nint ntHandle, int width, int height);
@@ -92,6 +92,18 @@ internal interface ICompositedImageSource
 /// and only then is the generation acknowledged back to the renderer.
 /// </para>
 /// <para>
+/// <b>The pump owns the SOURCE, and that ownership is what makes a re-parent
+/// survivable.</b> The compositor half is one drawing surface every import
+/// snapshots into, and a viewport that is dragged into another dock tears its
+/// compositor objects down and builds fresh ones on the other side. Disposing
+/// that surface from the outside, at the moment of detach, means disposing it
+/// while a hand-over may still be inside the keyed-mutex bracket: the pending
+/// update faults, the pump reports a fault, and every re-dock becomes a session
+/// that says the composited viewport failed. So <see cref="Stop"/> takes the
+/// source with it and disposes it after the last import has settled, in the
+/// same order and for the same reason the imports themselves are held back.
+/// </para>
+/// <para>
 /// <b>Threading:</b> UI thread only, every member. The compositor's import and
 /// update calls verify that themselves, and every continuation here resumes
 /// through the UI thread's synchronization context.
@@ -129,6 +141,11 @@ internal sealed class CompositedFramePump
     private bool _stopped;
     private bool _looping;
     private bool _stalled;
+
+    // Imports that exist and have not finished being released. The source
+    // outlives every one of them, because each snapshots into its surface.
+    private int _outstanding;
+    private bool _sourceReleased;
 
     // When the outstanding hand-over started, or null when there is none. See
     // CheckForStall.
@@ -171,6 +188,12 @@ internal sealed class CompositedFramePump
 
     /// <summary>How many superseded imports are still waiting to be let go of.</summary>
     internal int RetiredCount => _retired.Count;
+
+    /// <summary>
+    /// Whether the compositor half has been let go of. See
+    /// <see cref="ReleaseSourceIfSettled"/>.
+    /// </summary>
+    internal bool SourceReleased => _sourceReleased;
 
     /// <summary>Whether an update loop is running.</summary>
     internal bool IsPumping => _looping;
@@ -222,6 +245,7 @@ internal sealed class CompositedFramePump
 
         var import = new Import(
             handle.Generation, owned, _source.Import(owned, handle.Width, handle.Height));
+        _outstanding++;
         _live = import;
 
         _logger.LogInformation(
@@ -246,15 +270,26 @@ internal sealed class CompositedFramePump
     }
 
     /// <summary>
-    /// Stops scheduling for good and lets go of every import.
+    /// Stops scheduling for good and lets go of every import, then of the
+    /// source they were snapshotting into.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// <b>Called while the engine is still running, never after it stops.</b>
     /// An update already in flight is waiting on a key only the producer can
     /// release; stopping the producer first leaves the compositor's render
     /// thread waiting for a frame that will never come. The shell's teardown
     /// clears the viewport's host - which lands here - before it stops the
     /// session, and that order is the whole safety argument.
+    /// </para>
+    /// <para>
+    /// <b>A pump is stopped for a re-parent as well as for a teardown</b>, and
+    /// the two are the same call because they are the same requirement: this
+    /// pump is finished with, the producer is still there to answer whatever is
+    /// outstanding, and a fresh pump built on the other side of the move starts
+    /// from no import at all and re-imports the generation it is next told
+    /// about.
+    /// </para>
     /// </remarks>
     internal void Stop()
     {
@@ -265,6 +300,8 @@ internal sealed class CompositedFramePump
             _live = null;
             Retire(live);
         }
+
+        ReleaseSourceIfSettled();
     }
 
     // --- The loop ------------------------------------------------------------
@@ -430,6 +467,42 @@ internal sealed class CompositedFramePump
         // below this one - which is exactly right, because a generation the
         // shell never saw is a generation it never imported.
         _acknowledgeRelease(import.Generation);
+
+        _outstanding--;
+        ReleaseSourceIfSettled();
+    }
+
+    /// <summary>
+    /// Lets go of the compositor half, once nothing is still reading through
+    /// it.
+    /// </summary>
+    /// <remarks>
+    /// <b>Only after <see cref="Stop"/>, and only with no import left.</b> The
+    /// drawing surface is what every hand-over snapshots into, so disposing it
+    /// with one outstanding is the same crash the per-import retirement exists
+    /// to avoid, one level up. A pump that never settles simply never releases
+    /// it, which is a leak the window's own teardown ends and is strictly better
+    /// than a free under a live bracket.
+    /// </remarks>
+    private void ReleaseSourceIfSettled()
+    {
+        if (!_stopped || _sourceReleased || _outstanding > 0)
+            return;
+
+        _sourceReleased = true;
+        _ = DisposeSourceAsync();
+    }
+
+    private async Task DisposeSourceAsync()
+    {
+        try
+        {
+            await _source.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Releasing the composited viewport's drawing surface failed.");
+        }
     }
 
     private sealed class Import(int generation, nint handle, ICompositedImage image)

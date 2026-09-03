@@ -114,6 +114,21 @@ public partial class MainWindow : Window
     // on purpose.
     private IEngineViewport? _viewport;
 
+    // Where the viewport pane is living right now. Reset at every session close
+    // so a launch always starts from the same place, whichever way the last one
+    // went.
+    private ViewportPlacement _placement = ViewportPlacement.PinnedCell;
+
+    // The viewport tool's content for the window's whole life; the pane moves
+    // into it for a composited session and back out at the close. A Border
+    // rather than the pane itself, so Dock is never handed a content change
+    // after its layout is built.
+    private readonly Border _viewportDockHost = new();
+
+    // Where the pane sits among the editor grid's children, so a session that
+    // docked it puts it back in its own slot rather than on top of everything.
+    private readonly int _viewportPaneIndex;
+
     // What the next OnSurfaceCreated should build: the project (if any), the
     // asset content root, and the map to open once the engine is up. Set by
     // LaunchSession, consumed by the surface callback.
@@ -168,18 +183,37 @@ public partial class MainWindow : Window
         StartView.RecentProjectRevealRequested += recent => RevealInExplorer(recent.Path);
         RefreshRecents();
 
-        // ONE factory, shared by both dock controls, assigned before the
+        // ONE factory, shared by every dock control, assigned before the
         // window attaches. All three clauses are load-bearing: without any
-        // factory, DockControl.Initialize returns before InitLayout and both
+        // factory, DockControl.Initialize returns before InitLayout and the
         // dock columns render EMPTY with every docking gesture dead (proven
         // with a headless repro against the shipped package); with one
         // factory per control, a drag's target list is that factory's own
         // DockControls, so a panel could never cross from the left dock to
-        // the right one.
+        // the right one. The centre dock is the fourth and joins the same one,
+        // or a composited viewport could be dragged nowhere and nothing could
+        // be dragged beside it.
         var dockFactory = new Dock.Model.Avalonia.Factory();
         LeftDock.Factory = dockFactory;
         RightDock.Factory = dockFactory;
         BottomDock.Factory = dockFactory;
+        CenterDock.Factory = dockFactory;
+
+        // The viewport tool's content is a Border this window owns for its whole
+        // life, and the PANE moves in and out of it. Dock never sees a content
+        // change, which is the same reason every other tool's content is
+        // assigned once as a live instance: a Tool whose Content is reassigned
+        // after its layout has been built is a shape nothing here has tested,
+        // and the failure mode of guessing wrong is a blank pane with a running
+        // engine behind it.
+        ViewportTool.Content = _viewportDockHost;
+        _viewportPaneIndex = EditorView.Children.IndexOf(ViewportPane);
+
+        // The resting layout, written rather than assumed: XAML sets CanPin on
+        // the six panel tools and the viewport tool has no attribute to set, so
+        // without this the one tool nobody may pin beside a native child would
+        // be the only one offering the glyph.
+        ApplyPlacement(ViewportPlacement.PinnedCell);
 
         // The panels are built HERE and handed to the dock tools as live
         // controls: the dock's builder returns a Control content instance
@@ -755,19 +789,25 @@ public partial class MainWindow : Window
             _launchInFlight = false;
         }
 
-        // Named in the log whichever way it went. A composited pane and a native
-        // child render the same picture, so a fallback nobody announced only
-        // shows up weeks later as an overlay that mysteriously does not draw.
+        // Named in the log whichever way it went, and so is the layout that
+        // follows from it. A composited pane and a native child render the same
+        // picture, so a fallback nobody announced only shows up weeks later as
+        // an overlay that mysteriously does not draw - and a pane that silently
+        // got the pinned layout shows up as a tab that refuses to be dragged.
+        ViewportPlacement placement = ViewportLayout.For(decision);
+
         _logger.LogInformation(
-            "Viewport: {Choice} ({Reason}) - {Explanation}",
+            "Viewport: {Choice} ({Reason}) - {Explanation} Layout: {Placement} - {Rule}",
             decision.UseComposition ? "composition" : "native child",
             decision.Reason,
-            decision.Explanation);
+            decision.Explanation,
+            placement,
+            ViewportLayout.Describe(placement));
 
-        StartViewport(launch, decision.UseComposition);
+        StartViewport(launch, decision.UseComposition, placement);
     }
 
-    private void StartViewport(SessionLaunch launch, bool composited)
+    private void StartViewport(SessionLaunch launch, bool composited, ViewportPlacement placement)
     {
         _pendingLaunch = launch;
         _sessionIsComposited = composited;
@@ -797,6 +837,11 @@ public partial class MainWindow : Window
         _shell.HasSession = true;
         RefreshDocumentIdentity();
 
+        // The pane goes to its home BEFORE the viewport control attaches, so the
+        // first surface is created at the size it will actually be rather than
+        // at whatever the other home measured.
+        ApplyPlacement(placement);
+
         // Attach last: creating the native child is what eventually raises
         // SurfaceCreated, and everything above must be in place by then. The
         // engine focus makes the tool keys live from the first frame instead
@@ -804,6 +849,68 @@ public partial class MainWindow : Window
         ViewportHost.Child = viewport.Control;
         viewport.FocusEngine();
     }
+
+    /// <summary>
+    /// Moves the viewport pane between its two homes and sets what the dock
+    /// tools may do.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The pane is one control and it is moved, never duplicated.</b> Avalonia
+    /// refuses a control with two parents, so it leaves the old home first; the
+    /// pinned home is the editor grid itself, where its <c>Grid.Column</c> and
+    /// <c>Grid.Row</c> ride on the control and survive the round trip, so
+    /// putting it back is an <c>Add</c> and nothing else.
+    /// </para>
+    /// <para>
+    /// <b>CanPin travels with the placement because it IS the airspace rule.</b>
+    /// Dock draws a pinned flyout in this window's own Avalonia layer, which a
+    /// native child composites over, so beside one the pin glyph is an invitation
+    /// to make a panel invisible. Beside a composited pane the flyout draws like
+    /// anything else, so it comes back - on every tool, not only on the viewport,
+    /// because the constraint was never about the viewport's own header.
+    /// </para>
+    /// </remarks>
+    private void ApplyPlacement(ViewportPlacement placement)
+    {
+        ViewportPlacementRules rules = ViewportLayout.RulesFor(placement);
+
+        if (_placement != placement)
+        {
+            if (rules.Docked)
+            {
+                EditorView.Children.Remove(ViewportPane);
+                _viewportDockHost.Child = ViewportPane;
+            }
+            else
+            {
+                _viewportDockHost.Child = null;
+
+                // Back at the index it was declared at, never appended. A Grid
+                // draws its children in list order, and the splitters below the
+                // pane in the XAML overhang into its cell by a pixel on purpose
+                // - appended, the pane would be painted over the top of that
+                // overhang and take a strip of the grab area with it, on a
+                // control whose hit band has already been tuned twice.
+                if (!EditorView.Children.Contains(ViewportPane))
+                    EditorView.Children.Insert(_viewportPaneIndex, ViewportPane);
+            }
+
+            CenterDock.IsVisible = rules.Docked;
+            _placement = placement;
+        }
+
+        ViewportTool.CanPin = rules.CanPin;
+        ViewportTool.CanFloat = rules.CanFloat;
+        ViewportTool.CanClose = ViewportLayout.ViewportCanClose;
+
+        foreach (Dock.Model.Avalonia.Controls.Tool tool in PanelTools)
+            tool.CanPin = rules.CanPin;
+    }
+
+    /// <summary>Every tool in the window that is not the viewport.</summary>
+    private Dock.Model.Avalonia.Controls.Tool[] PanelTools =>
+        [MapsTool, SceneTool, PropertiesTool, ContentTool, OutputTool, ConsoleTool];
 
     /// <summary>
     /// A composited viewport that was already running has stopped working.
@@ -870,7 +977,16 @@ public partial class MainWindow : Window
         // that ran.
         RecordSessionOutcome();
 
-        // The child leaves the tree FIRST: destroying the native window raises
+        // FIRST, and this is what tells a composited viewport that the detach
+        // about to happen is the end rather than a re-dock. Without it the two
+        // are indistinguishable from inside the control, and a dock drag would
+        // stop the engine and build a second session on the re-attach - a new
+        // scene, an empty history and the level gone, with nothing reporting an
+        // error. The native child answers this with nothing at all: its surface
+        // IS the HWND and the destroy below is what ends it.
+        viewport.Shutdown();
+
+        // The child leaves the tree: destroying the native window raises
         // SurfaceDestroying, which stops the engine before the HWND dies. The
         // explicit stop after it covers a viewport that never got a surface.
         ViewportHost.Child = null;
@@ -890,12 +1006,22 @@ public partial class MainWindow : Window
         _viewport = null;
         _pendingLaunch = null;
 
+        // The pane comes home BEFORE the floats are closed, so a viewport that
+        // was floated is back in this window rather than inside a window that is
+        // about to be destroyed. Back to pinned whichever way the session went,
+        // because the next one decides its own layout from its own measurement
+        // and a leftover docked pane would be a native child in a tool.
+        ApplyPlacement(ViewportPlacement.PinnedCell);
+
         // A panel floated into its own OS window is not inside EditorView, so
         // hiding the grid would leave it standing over the start page showing
-        // a dead session's data. The root docks close their own windows.
+        // a dead session's data. Every root closes its own windows - all four,
+        // because a viewport dragged out of the centre dock leaves its float
+        // exactly as a properties panel does.
         LeftRoot.ExitWindows?.Execute(null);
         RightRoot.ExitWindows?.Execute(null);
         BottomRoot.ExitWindows?.Execute(null);
+        CenterRoot.ExitWindows?.Execute(null);
 
         _tree = null;
         _shell.Tree = null;
@@ -1036,6 +1162,12 @@ public partial class MainWindow : Window
             // so recording only in CloseSessionView would mean the history
             // almost never moved.
             RecordSessionOutcome();
+
+            // The same signal CloseSessionView gives, for the same reason: a
+            // composited viewport treats every detach as a re-parent unless it
+            // has been told otherwise, and the window going away is the one
+            // detach that is not.
+            _viewport?.Shutdown();
             StopSession();
         }
 

@@ -99,6 +99,32 @@ public interface IEngineViewport
     /// </remarks>
     void PumpCursorMode();
 
+    /// <summary>
+    /// Ends this viewport for good. Called on the UI thread by the shell,
+    /// BEFORE the control leaves the tree.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is what separates a re-parent from a teardown, and without it a
+    /// dockable viewport cannot exist.</b> A control that is dragged into
+    /// another dock or out into a float window is detached and re-attached, and
+    /// detachment is the only signal a control gets: answered as a teardown it
+    /// raises <see cref="SurfaceDestroying"/>, the shell stops the engine, the
+    /// re-attach publishes a fresh surface and the shell builds a SECOND
+    /// session on it - a new scene, an empty undo history and the user's level
+    /// gone, with nothing anywhere reporting an error.
+    /// </para>
+    /// <para>
+    /// <b>The native child's answer is to do nothing</b>, deliberately: its
+    /// surface IS the HWND, destroying the control is what destroys it, and
+    /// that path already raises <see cref="SurfaceDestroying"/> at exactly the
+    /// right moment. A native viewport is never re-parented, because its
+    /// placement refuses it (<see cref="ViewportPlacement.PinnedCell"/>), so
+    /// there is no ambiguity for this call to resolve.
+    /// </para>
+    /// </remarks>
+    void Shutdown();
+
     /// <summary>Hands the keyboard to whatever the engine is listening through.</summary>
     /// <remarks>
     /// The two implementations mean genuinely different things by this. A
