@@ -19,6 +19,7 @@ using SpectraEngine.Editing.Gizmos;
 using SpectraEngine.Editing.Commands;
 using SpectraEngine.Editing.Hosting;
 using SpectraEngine.Editor.Shell;
+using SpectraEngine.Editor.Shell.Ribbon;
 using SpectraEngine.Editor.Viewport;
 using System;
 using System.Collections.Concurrent;
@@ -141,6 +142,25 @@ public partial class MainWindow : Window
     private readonly ScenePanel _sceneView;
     private readonly PropertiesPanel _propertiesView;
     private readonly MapsPanel _mapsView;
+
+    // ─── The ribbon ──────────────────────────────────────
+    //
+    // One live instance per page for the window's whole life, moved between
+    // the inline host and the flyout's rather than rebuilt: a page carries an
+    // event-wired snap field and a DataContext, and a template would rebuild
+    // both on every collapse.
+    private readonly RibbonBuildTab _buildTab = new();
+    private readonly RibbonViewTab _viewTab = new();
+    private readonly Dictionary<string, RibbonTabView> _ribbonPages = new(StringComparer.Ordinal);
+
+    // The collapse state machine's current value. Pure transitions live in
+    // RibbonSurface; this window holds the value and mirrors it into controls.
+    private RibbonSurfaceState _ribbon;
+
+    // Applying the state closes the popup, which raises Closed, which would
+    // apply the state again. One flag rather than a subtler dance, because the
+    // re-entry is real and its symptom is a flyout that will not open.
+    private bool _applyingRibbonState;
 
     /// <summary>Creates the window and wires the viewport's lifetime to the engine's.</summary>
     public MainWindow()
@@ -316,11 +336,13 @@ public partial class MainWindow : Window
         // whichever session is live.
         _shell.PipelineRequested += name => _session?.Host.RequestPipeline(name);
 
-        // The command bar carries ONE snap field, and it belongs to whichever
-        // tool is live, so a tool switch has to re-read the increment into it.
+        // The ribbon carries ONE snap field, and it belongs to whichever tool
+        // is live, so a tool switch has to re-read the increment into it.
         // Without this the box keeps showing the previous tool's number beside
         // the new tool's unit, which is a worse lie than showing nothing.
         _shell.GizmoModeChanged += () => RefreshSnapField(_latest);
+
+        BuildRibbon();
 
         // Document chords as real key bindings, so they also work while an
         // Avalonia control has focus - the tree, the filter, a property field.
@@ -1073,6 +1095,14 @@ public partial class MainWindow : Window
             panel.Schemas = null;
 
         _shell.HasSession = false;
+
+        // The ribbon hides with the session, but its FLYOUT is a popup and
+        // does not: a page left flown out would hang over the start page as a
+        // floating strip of verbs that no longer reach anything. It closes
+        // rather than collapsing, so the pin state a user chose survives.
+        _ribbon = RibbonSurface.Dismiss(_ribbon);
+        ApplyRibbonState();
+
         RefreshDocumentIdentity();
         _shell.HasProject = false;
         _shell.ProjectMaps.Clear();
@@ -1401,12 +1431,13 @@ public partial class MainWindow : Window
         // A focused field is being typed into; writing the published value
         // back would delete characters as they arrive, which reads as a broken
         // keyboard. The blur or Enter that ends the edit commits it.
-        if (SnapBox.IsFocused)
+        TextBox box = _buildTab.SnapField;
+        if (box.IsFocused)
             return;
 
         string text = PropertyFieldModel.Format(IncrementFor(snapshot, LiveSnapTool));
-        if (SnapBox.Text != text)
-            SnapBox.Text = text;
+        if (box.Text != text)
+            box.Text = text;
     }
 
     private static float IncrementFor(FrameSnapshot snapshot, GizmoMode tool) => tool switch
@@ -1881,6 +1912,226 @@ public partial class MainWindow : Window
             _shell.SetError(report.Describe());
         else
             _shell.SetMessage(report.Describe());
+    }
+
+    // --- The ribbon ----------------------------------------------------------
+
+    /// <summary>
+    /// Builds the tab strip from the roster, wires both pages, and applies the
+    /// persisted collapse state.
+    /// </summary>
+    /// <remarks>
+    /// <b>The strip is built from <see cref="RibbonLayout.Tabs"/> rather than
+    /// written in the markup</b>, so a page in the roster with no button, or a
+    /// button naming a page nobody built, cannot happen. Two buttons is nothing
+    /// to build by hand and it removes a whole class of drift for the price.
+    /// </remarks>
+    private void BuildRibbon()
+    {
+        _ribbonPages[RibbonLayout.DefaultTabId] = _buildTab;
+        _ribbonPages[RibbonLayout.ViewTabId] = _viewTab;
+
+        foreach (RibbonTab tab in RibbonLayout.Tabs)
+        {
+            if (!_ribbonPages.TryGetValue(tab.Id, out RibbonTabView? page))
+            {
+                throw new InvalidOperationException(
+                    $"The ribbon roster names a '{tab.Id}' page this window does not build.");
+            }
+
+            // Explicitly, not inherited: a page spends part of its life inside
+            // a popup, which is a separate visual root, and the shell has been
+            // caught once already by a content host that assumed inheritance.
+            page.DataContext = _shell;
+            page.Invoked += OnRibbonVerb;
+
+            var button = new Button
+            {
+                Classes = { "ribbontab" },
+                Tag = tab.Id,
+                Content = new TextBlock { Text = tab.Title },
+            };
+            button.Click += OnRibbonTabClicked;
+            RibbonTabs.Children.Add(button);
+        }
+
+        // The snap field keeps its commit rule in this window - parse, refuse
+        // zero and negatives rather than clamping, revert anything
+        // unparseable, and stop taking refreshes while it has focus - so the
+        // page exposes the box and the handlers stay here.
+        _buildTab.SnapField.GotFocus += OnSnapFieldFocused;
+        _buildTab.SnapField.LostFocus += OnSnapFieldBlurred;
+        _buildTab.SnapField.KeyDown += OnSnapFieldKeyDown;
+
+        RibbonFlyout.Closed += OnRibbonFlyoutClosed;
+
+        _ribbon = RibbonSurface.Create(_settings.RibbonExpanded);
+        ApplyRibbonState();
+    }
+
+    private void OnRibbonTabClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { Tag: string tabId })
+            return;
+
+        _ribbon = RibbonSurface.SelectTab(_ribbon, tabId);
+        ApplyRibbonState();
+    }
+
+    private void OnRibbonPinClicked(object? sender, RoutedEventArgs e)
+    {
+        _ribbon = RibbonSurface.SetExpanded(_ribbon, !_ribbon.Expanded);
+        ApplyRibbonState();
+
+        // A surface whose size resets every launch is a preference nobody
+        // keeps. The ACTIVE TAB deliberately does not go with it.
+        _settings.SetRibbonExpanded(_ribbon.Expanded);
+        _settings.Save(_logger);
+    }
+
+    /// <summary>The flyout was light-dismissed by a click outside it.</summary>
+    private void OnRibbonFlyoutClosed(object? sender, EventArgs e)
+    {
+        // Applying the state is what closed it; without this guard that
+        // re-entry writes the state a second time and the next tab click
+        // reads a value the machine never produced.
+        if (_applyingRibbonState)
+            return;
+
+        _ribbon = RibbonSurface.Dismiss(_ribbon);
+        ApplyRibbonState();
+    }
+
+    /// <summary>
+    /// Mirrors the state machine's value onto the controls: which tab is lit,
+    /// where the active page lives, and which way the pin points.
+    /// </summary>
+    private void ApplyRibbonState()
+    {
+        _applyingRibbonState = true;
+        try
+        {
+            foreach (Control child in RibbonTabs.Children)
+            {
+                child.Classes.Set(
+                    "active",
+                    child.Tag is string id && string.Equals(id, _ribbon.ActiveTabId, StringComparison.Ordinal));
+            }
+
+            RibbonBodyHost host = RibbonSurface.HostFor(_ribbon);
+            _ribbonPages.TryGetValue(_ribbon.ActiveTabId, out RibbonTabView? page);
+
+            // A control has one parent, so the loser is cleared before the
+            // winner is assigned - in that order, always.
+            if (host != RibbonBodyHost.Inline)
+                RibbonInlineHost.Content = null;
+            if (host != RibbonBodyHost.Flyout)
+                RibbonFlyoutHost.Content = null;
+
+            switch (host)
+            {
+                case RibbonBodyHost.Inline:
+                    RibbonInlineHost.Content = page;
+                    break;
+                case RibbonBodyHost.Flyout:
+                    RibbonFlyoutHost.Content = page;
+                    break;
+            }
+
+            RibbonBody.IsVisible = host == RibbonBodyHost.Inline;
+            RibbonFlyout.IsOpen = host == RibbonBodyHost.Flyout;
+
+            RibbonPin.Classes.Set("collapsed", !_ribbon.Expanded);
+            ToolTip.SetTip(
+                RibbonPin,
+                _ribbon.Expanded ? "Collapse the ribbon to its tabs" : "Pin the ribbon open");
+        }
+        finally
+        {
+            _applyingRibbonState = false;
+        }
+    }
+
+    /// <summary>
+    /// One ribbon control was clicked. Resolves to the verb the roster names
+    /// and hands it to the SAME handler a key chord and a menu item use.
+    /// </summary>
+    /// <remarks>
+    /// <b>Nothing here is a second command path.</b> Undo, redo, the tool
+    /// verbs and the three two-way choices go through the window's own
+    /// optimistic handlers rather than posting directly, or the ribbon would
+    /// light a frame later than the menu does for the same verb.
+    /// </remarks>
+    private void OnRibbonVerb(RibbonVerb verb)
+    {
+        // A command posted out of a flown-out page closes the page, which is
+        // what makes a collapsed ribbon usable rather than sticky.
+        if (RibbonSurface.HostFor(_ribbon) == RibbonBodyHost.Flyout)
+        {
+            _ribbon = RibbonSurface.Invoke(_ribbon);
+            ApplyRibbonState();
+        }
+
+        var args = new RoutedEventArgs();
+        switch (verb.Kind)
+        {
+            case RibbonVerbKind.Insert:
+                _session?.Insert(verb.Insert);
+                break;
+
+            case RibbonVerbKind.Camera:
+                _session?.Post(verb.Camera);
+                break;
+
+            case RibbonVerbKind.Debug:
+                RequestDebug(verb.Debug, !_shell.IsDebugEnabled(verb.Debug));
+                break;
+
+            case RibbonVerbKind.Host when verb.Host == EditorHostCommand.Undo:
+                OnUndoClicked(this, args);
+                break;
+
+            case RibbonVerbKind.Host when verb.Host == EditorHostCommand.Redo:
+                OnRedoClicked(this, args);
+                break;
+
+            case RibbonVerbKind.Host:
+                _session?.Post(verb.Host);
+                break;
+
+            case RibbonVerbKind.Gizmo when verb.Gizmo == GizmoCommand.UseTranslate:
+                UseTool("move", GizmoCommand.UseTranslate);
+                break;
+
+            case RibbonVerbKind.Gizmo when verb.Gizmo == GizmoCommand.UseRotate:
+                UseTool("rotate", GizmoCommand.UseRotate);
+                break;
+
+            case RibbonVerbKind.Gizmo when verb.Gizmo == GizmoCommand.UseScale:
+                UseTool("resize", GizmoCommand.UseScale);
+                break;
+
+            case RibbonVerbKind.Gizmo:
+                _session?.Post(verb.Gizmo);
+                break;
+
+            case RibbonVerbKind.Toggle when verb.Toggle == RibbonToggle.Axes:
+                OnOrientationClicked(this, args);
+                break;
+
+            case RibbonVerbKind.Toggle when verb.Toggle == RibbonToggle.Handles:
+                OnStyleClicked(this, args);
+                break;
+
+            case RibbonVerbKind.Toggle when verb.Toggle == RibbonToggle.Snap:
+                OnSnapClicked(this, args);
+                break;
+
+            case RibbonVerbKind.SnapIncrement:
+                // The field commits through its own focus and Enter handlers;
+                // there is no click to answer.
+                break;
+        }
     }
 
     private void OnInsertWorldBrushClicked(object? sender, RoutedEventArgs e) => _session?.Insert(InsertKind.WorldBrush);

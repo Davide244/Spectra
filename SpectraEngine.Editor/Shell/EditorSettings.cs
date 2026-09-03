@@ -168,6 +168,41 @@ public sealed class EditorSettings
         _viewportRecordedUtc = DateTime.UtcNow;
     }
 
+    // --- The ribbon's persisted half -----------------------------------------
+
+    private bool _ribbonExpanded = true;
+    private DateTime _ribbonRecordedUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// Whether the command ribbon is pinned open.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A surface whose size resets every launch is a preference nobody
+    /// keeps.</b> Collapsing the ribbon gives about seventy pixels back to the
+    /// viewport, which is a choice somebody makes once about how they work, not
+    /// per session.
+    /// </para>
+    /// <para>
+    /// <b>Open by default, and the ACTIVE TAB is deliberately not stored beside
+    /// it.</b> A shell that reopened on the View page would start every session
+    /// with Insert hidden behind a click, which is precisely the failure that
+    /// retired the previous tab strip; every launch therefore opens on
+    /// <c>RibbonLayout.DefaultTabId</c>.
+    /// </para>
+    /// </remarks>
+    public bool RibbonExpanded => _ribbonExpanded;
+
+    /// <summary>Records the pin state for next time.</summary>
+    public void SetRibbonExpanded(bool expanded)
+    {
+        if (_ribbonExpanded == expanded)
+            return;
+
+        _ribbonExpanded = expanded;
+        _ribbonRecordedUtc = DateTime.UtcNow;
+    }
+
     /// <summary>Loads the settings, or returns empty ones when there is nothing to load.</summary>
     public static EditorSettings Load(ILogger logger) => Load(DefaultPath, logger);
 
@@ -196,6 +231,11 @@ public sealed class EditorSettings
             // machine" the next time the adapter happens to match nothing.
             settings._viewport = ViewportPreference.Default;
             settings._viewportRecordedUtc = DateTime.MinValue;
+
+            // And the ribbon, back to open: the state that shows what the
+            // surface can do is the right one to fall back to.
+            settings._ribbonExpanded = true;
+            settings._ribbonRecordedUtc = DateTime.MinValue;
         }
 
         return settings;
@@ -287,6 +327,15 @@ public sealed class EditorSettings
             _viewport = onDisk._viewport;
             _viewportRecordedUtc = onDisk._viewportRecordedUtc;
         }
+
+        // The ribbon's pin merges by recency for the same reason: it is one
+        // state rather than a set of entries, and the shell that touched it
+        // last is the one the user was looking at.
+        if (onDisk._ribbonRecordedUtc > _ribbonRecordedUtc)
+        {
+            _ribbonExpanded = onDisk._ribbonExpanded;
+            _ribbonRecordedUtc = onDisk._ribbonRecordedUtc;
+        }
     }
 
     private void Write(Utf8JsonWriter writer)
@@ -299,6 +348,11 @@ public sealed class EditorSettings
         writer.WriteString("adapterLuid", _viewport.AdapterLuid);
         writer.WriteString("driverVersion", _viewport.DriverVersion);
         writer.WriteString("recordedUtc", _viewportRecordedUtc.ToString("O"));
+        writer.WriteEndObject();
+
+        writer.WriteStartObject("ribbon");
+        writer.WriteBoolean("expanded", _ribbonExpanded);
+        writer.WriteString("recordedUtc", _ribbonRecordedUtc.ToString("O"));
         writer.WriteEndObject();
 
         writer.WriteStartArray("recentProjects");
@@ -330,6 +384,10 @@ public sealed class EditorSettings
             else if (reader.ValueTextEquals("viewport"))
             {
                 ReadViewport(ref reader);
+            }
+            else if (reader.ValueTextEquals("ribbon"))
+            {
+                ReadRibbon(ref reader);
             }
             else
             {
@@ -402,6 +460,49 @@ public sealed class EditorSettings
 
         _viewport = new ViewportPreference(mode, green, luid, driver);
         _viewportRecordedUtc = recorded;
+    }
+
+    /// <summary>
+    /// Reads the ribbon block, leaving anything it cannot make sense of at its
+    /// default.
+    /// </summary>
+    /// <remarks>
+    /// Open is the conservative fallback: a collapsed ribbon read out of a
+    /// damaged file would hide the command surface with no explanation on
+    /// screen, while an open one merely takes space somebody can take back with
+    /// one click.
+    /// </remarks>
+    private void ReadRibbon(ref Utf8JsonReader reader)
+    {
+        if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+            throw new JsonException("'ribbon' must be an object.");
+
+        bool expanded = true;
+        DateTime recorded = DateTime.MinValue;
+
+        while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+        {
+            if (reader.ValueTextEquals("expanded"))
+            {
+                reader.Read();
+                expanded = reader.GetBoolean();
+            }
+            else if (reader.ValueTextEquals("recordedUtc"))
+            {
+                reader.Read();
+                DateTime.TryParse(
+                    reader.GetString(), null,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out recorded);
+            }
+            else
+            {
+                reader.Read();
+                reader.Skip();
+            }
+        }
+
+        _ribbonExpanded = expanded;
+        _ribbonRecordedUtc = recorded;
     }
 
     private void ReadRecentProjects(ref Utf8JsonReader reader)

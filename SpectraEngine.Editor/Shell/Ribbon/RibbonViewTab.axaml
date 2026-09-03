@@ -1,0 +1,126 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shell="clr-namespace:SpectraEngine.Editor.Shell"
+             x:Class="SpectraEngine.Editor.Shell.Ribbon.RibbonViewTab"
+             x:DataType="shell:ShellModel">
+
+  <!--
+    THE VIEW PAGE: everything that changes how you LOOK at the level and
+    nothing that changes the level.
+
+    That is the axis the two pages divide on, and it is what makes switching
+    between them worth a click: not one verb is shared, and the ten controls
+    here replace twenty completely different ones. The previous tab strip died
+    partly of the opposite - two of its three pages carried the same six verbs.
+
+    SIX OF THESE TEN WERE REACHABLE ONLY FROM A MENU, and one from nothing at
+    all: Frame everything is a verb the editor camera has always had with no
+    control anywhere in the shell. The five overlays are the ones worth having
+    here most - a latched overlay is a viewport that looks broken to whoever
+    fat-fingered F1, and until now the only switch was four levels into a menu.
+
+    Text, not glyphs. Five overlay icons would be five ambiguous outlines in one
+    row, which is a grey texture rather than five icons; the viewport's own
+    standing chips are text for the same reason.
+  -->
+
+  <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Top">
+
+    <StackPanel>
+      <Border Classes="ribbongroup">
+        <StackPanel Spacing="2">
+          <StackPanel Orientation="Horizontal">
+            <Button Classes="seg" Tag="camera.frame" Click="OnRibbonItemClick"
+                    IsEnabled="{Binding HasSelection}"
+                    ToolTip.Tip="Fit the selection in the view.  F">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <Path Classes="icon" Data="{StaticResource IconFrame}" />
+                <TextBlock Text="Selection" VerticalAlignment="Center" />
+              </StackPanel>
+            </Button>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal">
+            <Button Classes="seg" Tag="camera.frameall" Click="OnRibbonItemClick"
+                    ToolTip.Tip="Fit every spatial node in the scene in the view.">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <Path Classes="icon" Data="{StaticResource IconFrameAll}" />
+                <TextBlock Text="Everything" VerticalAlignment="Center" />
+              </StackPanel>
+            </Button>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+      <TextBlock Classes="ribbongroupcaption" Text="Frame" />
+    </StackPanel>
+
+    <StackPanel>
+      <Border Classes="ribbongroup">
+        <StackPanel Spacing="2">
+          <!-- Three SET verbs, never a cycle: a cycle sent against a snapshot
+               one publish stale lands on the wrong mode exactly when the user
+               clicks fastest. The lit one follows the engine's echo. -->
+          <StackPanel Orientation="Horizontal">
+            <Button Classes="seg" Tag="grid.auto" Classes.active="{Binding GridAuto}"
+                    Click="OnRibbonItemClick"
+                    ToolTip.Tip="Show the ground grid during move and resize gestures only.">
+              <TextBlock Text="Auto" VerticalAlignment="Center" />
+            </Button>
+            <Border Classes="segsep" />
+            <Button Classes="seg" Tag="grid.on" Classes.active="{Binding GridOn}"
+                    Click="OnRibbonItemClick" ToolTip.Tip="Always draw the ground grid.">
+              <TextBlock Text="Always" VerticalAlignment="Center" />
+            </Button>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal">
+            <Button Classes="seg" Tag="grid.off" Classes.active="{Binding GridOff}"
+                    Click="OnRibbonItemClick" ToolTip.Tip="Never draw the ground grid.">
+              <TextBlock Text="Off" VerticalAlignment="Center" />
+            </Button>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+      <TextBlock Classes="ribbongroupcaption" Text="Ground grid" />
+    </StackPanel>
+
+    <StackPanel>
+      <Border Classes="ribbongroup">
+        <StackPanel Spacing="2">
+          <StackPanel Orientation="Horizontal">
+            <Button Classes="seg" Tag="overlay.wireframe" Classes.active="{Binding DebugWireframe}"
+                    Click="OnRibbonItemClick"
+                    ToolTip.Tip="Draw every triangle as line edges.  F1">
+              <TextBlock Text="Wireframe" VerticalAlignment="Center" />
+            </Button>
+            <Border Classes="segsep" />
+            <Button Classes="seg" Tag="overlay.vertices" Classes.active="{Binding DebugVertices}"
+                    Click="OnRibbonItemClick"
+                    ToolTip.Tip="Mark every CSG polygon vertex, which surfaces welds and snaps.  F2">
+              <TextBlock Text="Vertices" VerticalAlignment="Center" />
+            </Button>
+            <Border Classes="segsep" />
+            <Button Classes="seg" Tag="overlay.bounds" Classes.active="{Binding DebugAabbs}"
+                    Click="OnRibbonItemClick"
+                    ToolTip.Tip="Box every brush and mesh in its world bounds.  F3">
+              <TextBlock Text="Bounds" VerticalAlignment="Center" />
+            </Button>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal">
+            <Button Classes="seg" Tag="overlay.normals" Classes.active="{Binding DebugNormals}"
+                    Click="OnRibbonItemClick"
+                    ToolTip.Tip="Draw an arrow along every outward face normal.  F4">
+              <TextBlock Text="Normals" VerticalAlignment="Center" />
+            </Button>
+            <Border Classes="segsep" />
+            <Button Classes="seg" Tag="overlay.axes" Classes.active="{Binding DebugSceneGraph}"
+                    Click="OnRibbonItemClick"
+                    ToolTip.Tip="Draw each node's axes and its line to its parent.  F5">
+              <TextBlock Text="Node axes" VerticalAlignment="Center" />
+            </Button>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+      <TextBlock Classes="ribbongroupcaption" Text="Overlays" />
+    </StackPanel>
+
+  </StackPanel>
+</UserControl>

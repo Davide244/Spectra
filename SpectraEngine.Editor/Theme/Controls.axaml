@@ -652,6 +652,177 @@
     <Setter Property="Foreground" Value="{StaticResource SpectraMode}" />
   </Style>
 
+  <!-- A chip on a ribbon row, which is 26 tall rather than the command
+       height. A style setter, never a Height attribute at the call site: a
+       local value outranks every style, and this shell has already lost two
+       hover states to exactly that. Declared after Button.chip so it wins the
+       tie on order. -->
+  <Style Selector="Button.chip.compact">
+    <Setter Property="Height" Value="26" />
+  </Style>
+
+  <!-- ___ The ribbon ______________________________________
+       APP-SCOPED, and that is load-bearing rather than tidiness: a collapsed
+       ribbon flies its page out in a POPUP, which on Windows is a real OS
+       window with its own visual root, so a rule declared in Window.Styles
+       would style the page inline and not style it flown out. Everything the
+       ribbon draws is therefore here.
+
+       THE STRIP WAS RETIRED ONCE AND IS BACK BY DECISION. See RibbonLayout for
+       the three findings that killed it and what now prevents each. -->
+
+  <!-- The tab strip: the one part of the surface a collapse never takes away,
+       so it also carries undo, redo and the pin. -->
+  <Style Selector="Border.ribbonstrip">
+    <Setter Property="Height" Value="{StaticResource SpectraMenuBarHeight}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Padding" Value="10,0" />
+  </Style>
+
+  <!-- An active tab is NEITHER selection NOR machine state, which is the
+       question the palette has already had to answer once. Dock's own tabs in
+       this window answer it as a raised surface plus a 2px accent indicator -
+       DockTokens.axaml says so in as many words - and a window that answered
+       "which page am I on" two different ways would be worse than a 2px rule
+       spent on the accent. So: the tab that is open is RAISED out of the strip
+       and underlined at the edge it opens onto; the accent is a hairline, never
+       a fill, and the budget holds.
+
+       The resting bottom border is the same 2px at zero alpha, so lighting it
+       moves a colour rather than the layout. -->
+  <Style Selector="Button.ribbontab">
+    <Setter Property="Height" Value="26" />
+    <Setter Property="MinWidth" Value="0" />
+    <Setter Property="Padding" Value="12,0" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSecondary}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button.ribbontab /template/ ContentPresenter#PART_ContentPresenter">
+    <!-- #00FFFFFF, never Transparent: a fade to a translucent white from
+         transparent BLACK walks the hue through grey. -->
+    <Setter Property="Background" Value="#00FFFFFF" />
+    <Setter Property="BorderBrush" Value="#00E8474A" />
+    <Setter Property="BorderThickness" Value="0,0,0,2" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+        <BrushTransition Property="BorderBrush"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
+  </Style>
+  <Style Selector="Button.ribbontab:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraControlHover}" />
+  </Style>
+  <Style Selector="Button.ribbontab:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraControlPressed}" />
+  </Style>
+  <!-- The word needs its own rule beside every state that recolours text: the
+       global bare-TextBlock Foreground style beats the value a label would
+       inherit from its button, so the setters above recolour nothing on their
+       own. Half a control changing is what "hover feels buggy" looks like. -->
+  <Style Selector="Button.ribbontab:pointerover TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextBody}" />
+  </Style>
+  <Style Selector="Button.ribbontab.active /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
+  </Style>
+  <Style Selector="Button.ribbontab.active:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{StaticResource SpectraBgRaised}" />
+  </Style>
+  <Style Selector="Button.ribbontab.active TextBlock">
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextEmphasis}" />
+  </Style>
+
+  <!-- The pin. A chevron pointing up puts the page away; pointing down brings
+       it back, which is the one rotation this shell animates - it answers a
+       click, so it is interaction motion and sits inside the 130ms budget.
+       TransformOperationsTransition, never TransformTransition, for a value
+       that parses as rotate(); and the icon's own Stroke transition has to be
+       re-declared here, because assigning Transitions replaces the collection
+       rather than adding to it. -->
+  <Style Selector="Button.ribbonpin Path.icon">
+    <Setter Property="RenderTransform" Value="rotate(-90deg) scale(1.2)" />
+    <Setter Property="Transitions">
+      <Transitions>
+        <TransformOperationsTransition Property="RenderTransform"
+                                       Duration="{StaticResource SpectraMotionFast}"
+                                       Easing="{StaticResource SpectraEaseOut}" />
+        <BrushTransition Property="Stroke"
+                         Duration="{StaticResource SpectraMotionFast}"
+                         Easing="{StaticResource SpectraEaseOut}" />
+      </Transitions>
+    </Setter>
+  </Style>
+  <Style Selector="Button.ribbonpin.collapsed Path.icon">
+    <Setter Property="RenderTransform" Value="rotate(90deg) scale(1.2)" />
+  </Style>
+
+  <!-- The page itself. Chrome, so it sits on the chrome ground rather than the
+       panel one: the picture stays the brightest thing in the window.
+
+       IT DOES NOT ANIMATE ITS HEIGHT, and that is a decision rather than an
+       omission. This row sizes the viewport, so a 130ms height ramp is eight
+       swap-chain resizes per collapse on a composited session and eight child
+       window moves on a native one - the same reasoning that keeps every
+       transition off the drag path. The motion budget is spent on the tabs and
+       the pin, where it costs nothing. -->
+  <Style Selector="Border.ribbonbody">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Padding" Value="10,6,10,4" />
+  </Style>
+
+  <!-- A group is the command bar's cluster grown to two rows. The capsule is
+       what says the things inside it are pressable (rule 3 in Tokens.axaml);
+       a ribbon of flat buttons on the chrome ground would have no raised
+       affordance at rest at all. -->
+  <Style Selector="Border.ribbongroup">
+    <Setter Property="Background" Value="{StaticResource SpectraBgControl}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusControl}" />
+    <Setter Property="Padding" Value="2" />
+    <Setter Property="VerticalAlignment" Value="Top" />
+  </Style>
+
+  <!-- The caption NAMES the box above it, exactly as the status bar's labels
+       name their values, so it is a label: sentence case, label size, muted.
+       Never letter-spaced uppercase - a ribbon group caption is the single
+       place a designer reaches for small caps, and uppercase destroys the word
+       shape a reader recognises before reading any letters. Centred, which is
+       the one place this shell centres a label: it belongs to the box above it
+       rather than starting a column. -->
+  <Style Selector="TextBlock.ribbongroupcaption">
+    <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
+    <Setter Property="Foreground" Value="{StaticResource SpectraTextMuted}" />
+    <Setter Property="HorizontalAlignment" Value="Center" />
+    <Setter Property="Margin" Value="0,2,0,0" />
+  </Style>
+
+  <!-- The flown-out page. A floating surface, so it is properly rounded and
+       carries a real border: it is the only part of the ribbon that ever
+       crosses the viewport, and it may only because a popup is a real OS
+       window. -->
+  <Style Selector="Border.ribbonflyout">
+    <Setter Property="Background" Value="{StaticResource SpectraBgApp}" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderStrong}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="{StaticResource SpectraRadiusFloat}" />
+    <!-- The inline page takes its padding from Border.ribbonbody; flown out it
+         has to bring its own, or the first group is butted against the frame. -->
+    <Setter Property="Padding" Value="10,6,10,6" />
+  </Style>
+
   <!-- ___ Text input ______________________________________
        Sunken, per rule 3 in Tokens.axaml. One recipe, three sizes.
 
@@ -712,6 +883,30 @@
     <Setter Property="FontFamily" Value="{StaticResource SpectraFontMono}" />
     <Setter Property="FontSize" Value="{StaticResource SpectraFontSmall}" />
     <Setter Property="TextAlignment" Value="Right" />
+  </Style>
+
+  <!-- A field that lives INSIDE a raised capsule: sunken fill so it still reads
+       as somewhere you type, no resting border because the capsule around it
+       already draws one, and an accent border while focused.
+
+       APP-SCOPED rather than window-scoped, because its one consumer - the
+       ribbon's snap increment - can end up inside the collapsed ribbon's
+       flyout, which is a popup and therefore a separate visual root that a
+       Window.Styles rule does not reach. -->
+  <Style Selector="TextBox.field.inline">
+    <Setter Property="Height" Value="22" />
+    <Setter Property="MinHeight" Value="22" />
+    <Setter Property="Padding" Value="5,0" />
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBgInput}" />
+  </Style>
+  <Style Selector="TextBox.field.inline /template/ Border#PART_BorderElement">
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBgInput}" />
+  </Style>
+  <Style Selector="TextBox.field.inline:pointerover /template/ Border#PART_BorderElement">
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
+  </Style>
+  <Style Selector="TextBox.field.inline:focus /template/ Border#PART_BorderElement">
+    <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
   </Style>
 
   <!-- ___ Checkbox ________________________________________

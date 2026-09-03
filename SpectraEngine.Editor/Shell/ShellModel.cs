@@ -274,6 +274,18 @@ public sealed class ShellModel : ObservableObject
     /// <summary>Whether the scene-graph overlay is on.</summary>
     public bool DebugSceneGraph => (_debugFlags & DebugVisualization.SceneGraph) != 0;
 
+    /// <summary>
+    /// Whether one overlay is on, for a caller holding the FLAG rather than the
+    /// name.
+    /// </summary>
+    /// <remarks>
+    /// The ribbon's overlay buttons carry their flag in the roster, so they ask
+    /// this rather than switching over five named properties: a sixth overlay
+    /// would otherwise need a case here as well as a row there, and the one
+    /// that got forgotten would silently always request "turn it on".
+    /// </remarks>
+    public bool IsDebugEnabled(DebugVisualization flag) => (_debugFlags & flag) != 0;
+
     private IReadOnlyList<string> _pipelineNames = Array.Empty<string>();
     private string? _pipelineName;
 

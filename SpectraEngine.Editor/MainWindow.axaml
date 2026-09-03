@@ -285,24 +285,10 @@
       <Setter Property="Margin" Value="0,4,0,0" />
     </Style>
 
-    <!-- A field that lives INSIDE a raised cluster: sunken fill so it still
-         reads as somewhere you type, no resting border because the capsule
-         around it already draws one, and an accent border while focused. -->
-    <Style Selector="TextBox.field.inline">
-      <Setter Property="Height" Value="22" />
-      <Setter Property="MinHeight" Value="22" />
-      <Setter Property="Padding" Value="5,0" />
-      <Setter Property="BorderBrush" Value="{StaticResource SpectraBgInput}" />
-    </Style>
-    <Style Selector="TextBox.field.inline /template/ Border#PART_BorderElement">
-      <Setter Property="BorderBrush" Value="{StaticResource SpectraBgInput}" />
-    </Style>
-    <Style Selector="TextBox.field.inline:pointerover /template/ Border#PART_BorderElement">
-      <Setter Property="BorderBrush" Value="{StaticResource SpectraBorderControl}" />
-    </Style>
-    <Style Selector="TextBox.field.inline:focus /template/ Border#PART_BorderElement">
-      <Setter Property="BorderBrush" Value="{StaticResource SpectraAccent}" />
-    </Style>
+    <!-- TextBox.field.inline moved to Theme/Controls.axaml when the snap field
+         moved onto the ribbon: a collapsed ribbon flies its page out in a
+         popup, which is a separate visual root, and a Window.Styles rule does
+         not reach one. -->
   </Window.Styles>
 
   <Grid RowDefinitions="Auto,Auto,*,Auto">
@@ -516,157 +502,114 @@
       </Grid>
     </Border>
 
-    <!-- ============ Command bar ========================
-         One row of raised clusters. A cluster is one bordered capsule holding
-         the controls of one decision, which is what makes grouping visible
-         instead of implied by a hairline nobody notices. -->
+    <!-- ============ Command ribbon =====================
+         A COLLAPSIBLE TABBED SURFACE, and the tab strip it is built on was
+         retired once, on evidence. The three findings that killed the old
+         Home / Model / View strip were: two of its pages carried the same six
+         verbs, Frame was written out three times, and Insert - the one thing a
+         first session needs - sat on the tab nobody opened. The owner reopened
+         the decision, so each finding is now a property of the code rather than
+         a warning in a comment.
+
+         1. NO VERB IS ON TWO TABS. The roster is data (RibbonLayout), a verb is
+            a value that compares equal to itself, and RibbonLayoutTests fails
+            the build over a duplicate. Every control's Tag is its roster id;
+            the page checks its own tree against the roster when it is built.
+         2. INSERT IS THE FIRST GROUP OF THE DEFAULT PAGE, and the active page
+            is not persisted, so every launch opens on it.
+         3. TWO PAGES, NOT THREE, and they divide on a real axis: Build changes
+            the level, View changes only how you look at it. Nothing is shared,
+            and a thin third page padded out of the File menu would be the
+            retired strip again.
+
+         WHAT A COLLAPSE MAY NOT TAKE AWAY stays outside the pages. Play is in
+         the menu row's far corner, where it has always been, because stopping a
+         run must never be two clicks away. Undo and redo are on the strip
+         itself, visible in both states: undo is the recovery verb for the
+         destructive verbs the Build page carries, and hiding it behind the same
+         click that hides them is the one arrangement that is worse than no
+         ribbon at all.
+
+         The menus stay, all five, with every shortcut printed beside every
+         verb. This is a third route onto verbs that already had two, never a
+         replacement for either. -->
     <Border Grid.Row="1" Classes="cmdbar" Classes.playing="{Binding IsPlaying}"
-            Height="{StaticResource SpectraToolbarHeight}"
             Background="{StaticResource SpectraBgApp}"
             BorderBrush="{StaticResource SpectraBorderStrong}"
             BorderThickness="0,1"
             IsVisible="{Binding HasSession}">
-      <Grid ColumnDefinitions="Auto,*,Auto" Margin="10,0">
+      <Grid RowDefinitions="Auto,Auto">
 
-        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+        <!-- The strip. Collapsed, this row IS the ribbon - 32px against the
+             40px single row it replaces, so the collapsed state costs less than
+             what was here before. -->
+        <Border x:Name="RibbonStrip" Grid.Row="0" Classes="ribbonstrip">
+          <Grid ColumnDefinitions="Auto,*,Auto">
 
-          <!-- Tools. Labelled, not icon-only: this is the row a first session
-               reads, and an icon-only strip is fast for the hand and mute for
-               the eye. Roblox Studio labels every button in its ribbon and is
-               right to. -->
-          <Border Classes="cluster">
-            <StackPanel Orientation="Horizontal">
-              <Button Classes="seg" Classes.active="{Binding IsMoveActive}"
-                      Click="OnMoveClicked" ToolTip.Tip="Move the selection.  2">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Path Classes="icon" Data="{StaticResource IconMove}" />
-                  <TextBlock Text="Move" VerticalAlignment="Center" />
+            <!-- Filled from RibbonLayout.Tabs in code, so the strip and the
+                 roster cannot disagree about which pages exist. Two buttons is
+                 not much to build by hand, and it removes a whole class of
+                 drift for the price. -->
+            <StackPanel x:Name="RibbonTabs" Grid.Column="0" Orientation="Horizontal"
+                        Spacing="2" VerticalAlignment="Center" />
+
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
+                        VerticalAlignment="Center">
+              <Border Classes="cluster">
+                <StackPanel Orientation="Horizontal">
+                  <!-- Tagged with their roster ids like every ribbon control,
+                       so RibbonLayoutTests can hold the always-visible pair
+                       against the markup as well as against the data - the
+                       claim being made is that these two are HERE and on no
+                       page. -->
+                  <Button Classes="seg" Width="26" Padding="0" Tag="history.undo" Click="OnUndoClicked"
+                          IsEnabled="{Binding CanUndo}" ToolTip.Tip="{Binding UndoTip}">
+                    <Path Classes="icon" Data="{StaticResource IconUndo}" />
+                  </Button>
+                  <Border Classes="segsep" />
+                  <Button Classes="seg" Width="26" Padding="0" Tag="history.redo" Click="OnRedoClicked"
+                          IsEnabled="{Binding CanRedo}" ToolTip.Tip="{Binding RedoTip}">
+                    <Path Classes="icon" Data="{StaticResource IconRedo}" />
+                  </Button>
                 </StackPanel>
-              </Button>
-              <Border Classes="segsep" />
-              <Button Classes="seg" Classes.active="{Binding IsRotateActive}"
-                      Click="OnRotateClicked" ToolTip.Tip="Rotate the selection.  4">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Path Classes="icon" Data="{StaticResource IconRotate}" />
-                  <TextBlock Text="Rotate" VerticalAlignment="Center" />
-                </StackPanel>
-              </Button>
-              <Border Classes="segsep" />
-              <Button Classes="seg" Classes.active="{Binding IsResizeActive}"
-                      Click="OnResizeClicked" ToolTip.Tip="Change the selection's size.  3">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Path Classes="icon" Data="{StaticResource IconResize}" />
-                  <TextBlock Text="Size" VerticalAlignment="Center" />
-                </StackPanel>
+              </Border>
+              <!-- The pin. One geometry for both states, rotated, so the two
+                   cannot drift in weight - the same trick the tree's expander
+                   uses. -->
+              <Button x:Name="RibbonPin" Classes="tool ribbonpin" Click="OnRibbonPinClicked">
+                <Path Classes="icon" Data="{StaticResource IconChevronRight}" />
               </Button>
             </StackPanel>
+          </Grid>
+        </Border>
+
+        <!-- The page, inline, while the ribbon is pinned open. ONE live
+             instance per page for the window's life, moved between this host
+             and the flyout's - never a template, for the reason every dock tool
+             takes a live control: an instance keeps its wiring. -->
+        <Border x:Name="RibbonBody" Grid.Row="1" Classes="ribbonbody">
+          <ContentControl x:Name="RibbonInlineHost" />
+        </Border>
+
+        <!-- Collapsed, a tab click flies its page out HERE. A popup, and that
+             is the airspace rule rather than a style choice: on Windows an
+             Avalonia popup is a real OS window, so it composites above a native
+             viewport exactly as the menus and the context menus do. An overlay
+             drawn in this window's own layer would be painted and composited
+             away over a native child, which is the one thing a flyout must
+             never be.
+
+             Light dismiss, so clicking anywhere else puts it away; the click
+             that dismisses does not pass through, which is also what makes
+             clicking the open tab close it exactly once. -->
+        <Popup x:Name="RibbonFlyout" Grid.Row="0"
+               PlacementTarget="{Binding #RibbonStrip}"
+               Placement="BottomEdgeAlignedLeft"
+               IsLightDismissEnabled="True">
+          <Border Classes="ribbonflyout">
+            <ContentControl x:Name="RibbonFlyoutHost" />
           </Border>
-
-          <!-- Snap. ONE field, not three: it holds the increment of whichever
-               tool is live and says which unit that is, so the number in front
-               of you always means the drag you are about to make. Three boxes
-               labelled mv / rot / sz asked the user to keep a mapping in their
-               head and abbreviated the three words that would have made it
-               unnecessary. -->
-          <Border Classes="cluster">
-            <StackPanel Orientation="Horizontal">
-              <Button Classes="seg" Classes.active="{Binding SnapEnabled}" Width="26" Padding="0"
-                      Click="OnSnapClicked" ToolTip.Tip="Snap drags to the grid.  G">
-                <Path Classes="icon" Data="{StaticResource IconGrid}" />
-              </Button>
-              <Border Classes="segsep" />
-              <TextBox x:Name="SnapBox" Classes="field num inline" Width="54"
-                       Margin="4,0,0,0" VerticalAlignment="Center"
-                       GotFocus="OnSnapFieldFocused"
-                       LostFocus="OnSnapFieldBlurred" KeyDown="OnSnapFieldKeyDown"
-                       ToolTip.Tip="Grid size for the live tool. [ and ] step it." />
-              <TextBlock Classes="label" Text="{Binding SnapUnitLabel}"
-                         Margin="5,0,8,0" MinWidth="20" />
-            </StackPanel>
-          </Border>
-
-          <!-- Two-way choices. A chip carries its SUBJECT and its VALUE, because
-               "world" is not the enabled state of "local" and a box containing
-               only the word "Studio" is a word with nothing to attach it to. -->
-          <StackPanel Orientation="Horizontal" Spacing="4">
-            <Button Classes="chip" Click="OnOrientationClicked"
-                    ToolTip.Tip="Which axes a drag resolves against.  X">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <TextBlock Classes="chipsubject" Text="Axes" />
-                <TextBlock Classes="chipvalue" Text="{Binding Orientation}" />
-              </StackPanel>
-            </Button>
-            <Button Classes="chip" Click="OnStyleClicked"
-                    ToolTip.Tip="Studio puts a handle on every face and anchors a resize to the opposite one. Classic puts three handles on the pivot and resizes about it.  Y">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <TextBlock Classes="chipsubject" Text="Handles" />
-                <TextBlock Classes="chipvalue" Text="{Binding GizmoStyle}" />
-              </StackPanel>
-            </Button>
-          </StackPanel>
-
-          <Border Classes="cluster">
-            <StackPanel Orientation="Horizontal">
-              <Button Classes="seg" Width="26" Padding="0" Click="OnUndoClicked"
-                      IsEnabled="{Binding CanUndo}" ToolTip.Tip="{Binding UndoTip}">
-                <Path Classes="icon" Data="{StaticResource IconUndo}" />
-              </Button>
-              <Border Classes="segsep" />
-              <Button Classes="seg" Width="26" Padding="0" Click="OnRedoClicked"
-                      IsEnabled="{Binding CanRedo}" ToolTip.Tip="{Binding RedoTip}">
-                <Path Classes="icon" Data="{StaticResource IconRedo}" />
-              </Button>
-            </StackPanel>
-          </Border>
-
-          <!-- Insert. On the ONE command row, and first among equals for a new
-               user: this is the group that answers "how do I put something in
-               the world", and it used to live on a tab that opened to a
-               different set of buttons. Each lands on the surface at the centre
-               of the view, snapped to the grid, selected, one undo entry. -->
-          <Border Classes="cluster">
-            <StackPanel Orientation="Horizontal">
-              <Button Classes="seg" Click="OnInsertWorldBrushClicked" IsEnabled="{Binding !IsPlaying}"
-                      ToolTip.Tip="Solid geometry. Merges with the rest of the level and can be cut.  Ctrl+1">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Path Classes="icon kind-world" Data="{StaticResource IconBrushWorld}" />
-                  <TextBlock Text="Block" VerticalAlignment="Center" />
-                </StackPanel>
-              </Button>
-              <Border Classes="segsep" />
-              <Button Classes="seg" Click="OnInsertPartBrushClicked" IsEnabled="{Binding !IsPlaying}"
-                      ToolTip.Tip="Moves and animates freely, and never merges. Use it for anything that has to move.  Ctrl+2">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Path Classes="icon kind-part" Data="{StaticResource IconBrushPart}" />
-                  <TextBlock Text="Part" VerticalAlignment="Center" />
-                </StackPanel>
-              </Button>
-              <Border Classes="segsep" />
-              <Button Classes="seg" Click="OnInsertSubtractiveBrushClicked" IsEnabled="{Binding !IsPlaying}"
-                      ToolTip.Tip="Carves a hole out of the blocks it overlaps. Doorways and windows.  Ctrl+3">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Path Classes="icon kind-cut" Data="{StaticResource IconBrushSubtractive}" />
-                  <TextBlock Text="Cut" VerticalAlignment="Center" />
-                </StackPanel>
-              </Button>
-              <Border Classes="segsep" />
-              <Button Classes="seg" Click="OnInsertLightClicked" IsEnabled="{Binding !IsPlaying}"
-                      ToolTip.Tip="A point light.  Ctrl+4">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Path Classes="icon kind-light" Data="{StaticResource IconLight}" />
-                  <TextBlock Text="Light" VerticalAlignment="Center" />
-                </StackPanel>
-              </Button>
-            </StackPanel>
-          </Border>
-        </StackPanel>
-
-        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-          <Button Classes="tool" Click="OnFrameClicked" IsEnabled="{Binding HasSelection}"
-                  ToolTip.Tip="Frame the selection.  F">
-            <Path Classes="icon" Data="{StaticResource IconFrame}" />
-          </Button>
-        </StackPanel>
+        </Popup>
       </Grid>
     </Border>
 

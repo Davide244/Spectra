@@ -59,6 +59,13 @@
   <!-- A light: a bulb over its base. -->
   <StreamGeometry x:Key="IconLight">M8,2.5 A4.2,4.2 0 1 1 7.99,2.5 Z M5.8,11.6 L10.2,11.6 M6.5,13.5 L9.5,13.5</StreamGeometry>
 
+  <!-- A surface light: a lit panel flush on a surface, washing downward. It
+       needs its own glyph rather than borrowing the bulb, because the two sit
+       side by side in the ribbon's Insert group and two identical silhouettes
+       in one row are one shape, not two - which is rule 2 at the top of this
+       file. -->
+  <StreamGeometry x:Key="IconSurfaceLight">M2.5,2.5 L13.5,2.5 L13.5,5.5 L2.5,5.5 Z M4.5,7.6 L4.5,13.5 M8,7.6 L8,13.5 M11.5,7.6 L11.5,13.5</StreamGeometry>
+
   <!-- An entity: a diamond. Deliberately the only glyph in the set that is not
        a cube, a sphere, a folder, a bulb or a cross - an entity has no shape of
        its own to draw, so the mark has to be an abstract one, and a diamond is
@@ -106,6 +113,12 @@
 
   <!-- Frame the selection: a viewfinder closing on a point. -->
   <StreamGeometry x:Key="IconFrame">M2.5,5.5 L2.5,2.5 L5.5,2.5 M10.5,2.5 L13.5,2.5 L13.5,5.5 M13.5,10.5 L13.5,13.5 L10.5,13.5 M5.5,13.5 L2.5,13.5 L2.5,10.5 M8,6.5 A1.5,1.5 0 1 0 8,9.5 A1.5,1.5 0 1 0 8,6.5</StreamGeometry>
+
+  <!-- Frame everything: four arrows opening to the corners. Deliberately NOT
+       the viewfinder with something else inside it - "the selection" and "the
+       whole scene" sit next to each other in the ribbon's Frame group, and two
+       glyphs that share an outline are the same glyph. -->
+  <StreamGeometry x:Key="IconFrameAll">M7,7 L2.5,2.5 M2.5,2.5 L5.4,2.5 M2.5,2.5 L2.5,5.4 M9,7 L13.5,2.5 M13.5,2.5 L10.6,2.5 M13.5,2.5 L13.5,5.4 M7,9 L2.5,13.5 M2.5,13.5 L5.4,13.5 M2.5,13.5 L2.5,10.6 M9,9 L13.5,13.5 M13.5,13.5 L10.6,13.5 M13.5,13.5 L13.5,10.6</StreamGeometry>
 
   <!-- ___ Chrome __________________________________________
        The expander is drawn pointing right and rotated 90 degrees when open,
