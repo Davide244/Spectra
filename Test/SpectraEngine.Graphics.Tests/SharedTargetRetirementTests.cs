@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging.Abstractions;
+﻿using Microsoft.Extensions.Logging.Abstractions;
 using SpectraEngine.Core.Graphics;
 using System;
 using System.Collections.Generic;
@@ -205,5 +205,68 @@ public sealed class SharedTargetRetirementTests
         var retirement = New();
 
         Should.Throw<ArgumentNullException>(() => retirement.Retire(retirement.Next(), null!));
+    }
+
+    // --- Answering a turn that is still queued against a retired generation ---
+    //
+    // Retirement means two things and used to mean one. "The consumer may still
+    // be READING this, so hold it" was there from the start; "the consumer may
+    // still be WAITING on this, so answer it" was not, and its absence froze the
+    // whole editor on the third resize of a composited window - the consumer
+    // waits on its own render thread with a deadline of about 24 days, so a turn
+    // nobody will ever answer is not a dropped frame, it is the interface
+    // stopping. Both end at the same acknowledgement, which is why one list
+    // carries both.
+
+    [Fact]
+    public void Every_retired_generation_is_offered_its_key_each_time_turns_are_offered()
+    {
+        var offered = new List<int>();
+        var retirement = New();
+
+        int first = retirement.Next();
+        retirement.Retire(first, () => { }, () => offered.Add(first));
+        int second = retirement.Next();
+        retirement.Retire(second, () => { }, () => offered.Add(second));
+
+        retirement.OfferTurns();
+        offered.ShouldBe([first, second]);
+
+        // Every frame, not once: the consumer's turn may be queued behind
+        // another one and arrive several frames after the retirement.
+        retirement.OfferTurns();
+        offered.ShouldBe([first, second, first, second]);
+    }
+
+    [Fact]
+    public void An_acknowledged_generation_is_no_longer_offered_anything()
+    {
+        // The offer's whole termination condition. Left running past the
+        // acknowledgement it would be reaching for a mutex on a texture the
+        // release just destroyed.
+        var offered = new List<int>();
+        var retirement = New();
+
+        int generation = retirement.Next();
+        retirement.Retire(generation, () => { }, () => offered.Add(generation));
+
+        retirement.ConsumerReleased(generation);
+        retirement.OfferTurns();
+
+        offered.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_generation_retired_without_an_offer_is_simply_not_offered_one()
+    {
+        // A window surface retires nothing and a backend that has no key to
+        // hand over must not be made to invent one. Absence is legal; silence
+        // when one WAS supplied is not, which is the test above.
+        var retirement = New();
+        int generation = retirement.Next();
+
+        retirement.Retire(generation, () => { });
+
+        Should.NotThrow(retirement.OfferTurns);
     }
 }

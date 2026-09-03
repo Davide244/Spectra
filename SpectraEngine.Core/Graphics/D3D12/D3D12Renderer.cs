@@ -825,6 +825,12 @@ public sealed unsafe class D3D12Renderer : Renderer
     /// </remarks>
     private void PublishSharedFrame()
     {
+        // Before the live surface's own bracket, so a turn queued against a
+        // generation a resize just retired is answered rather than left waiting
+        // for a release that is never coming. See
+        // SharedTargetRetirement.OfferTurns.
+        _retirement?.OfferTurns();
+
         if (_bridge is not { HasSurface: true } bridge) return;
 
         // A consumer that never took its turn is a hidden pane rather than a
@@ -1507,12 +1513,22 @@ public sealed unsafe class D3D12Renderer : Renderer
             // coincidence.
             WaitForGpu();
 
+            // Read BEFORE the detach, because the bridge only reports the
+            // live surface's mutex. It belongs to the surface the closure
+            // below disposes, so it is valid for exactly as long as the offer
+            // can be called: the retirement holds both and drops them
+            // together.
+            IDXGIKeyedMutex* retiredMutex = _bridge.KeyedMutex;
+
             IDisposable? retiredSurface = _bridge.Detach();
-            _retirement.Retire(retiring, () =>
-            {
-                retiredSurface?.Dispose();
-                DestroyRenderTarget(outgoing);
-            });
+            _retirement.Retire(
+                retiring,
+                () =>
+                {
+                    retiredSurface?.Dispose();
+                    DestroyRenderTarget(outgoing);
+                },
+                () => SharedTargetTurn.Offer(retiredMutex, _logger, retiring));
         }
 
         // Srgb, because this is where linear light stops: the resolve writes

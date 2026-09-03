@@ -390,6 +390,12 @@ public sealed unsafe class D3D11Renderer : Renderer
         // draws straight into whatever is being presented - which on a
         // composited surface is the shared texture itself, and is why the
         // bracket has to cover the pipeline as well as the resolve.
+        // Before the live target's own bracket, so a turn queued against a
+        // generation this frame's resize just retired is answered rather than
+        // left waiting for a release that is never coming. See
+        // SharedTargetRetirement.OfferTurns.
+        _retirement?.OfferTurns();
+
         RenderTarget? sceneTarget = HdrEnabled ? EnsureSceneTarget() : present;
 
         if (present is not null && !BeginSharedWrite())
@@ -731,7 +737,17 @@ public sealed unsafe class D3D11Renderer : Renderer
             // invariant rather than the call order that makes it true.
             _sharedWriteHeld = false;
 
-            _retirement.Retire(retiring, () => DestroyRenderTarget(outgoing));
+            // The mutex belongs to the target this closure frees, so it is
+            // valid for exactly as long as the offer can be called: the
+            // retirement holds both and drops them together.
+            IDXGIKeyedMutex* retiredMutex = outgoing.Color is { IsShared: true } retiredColor
+                ? retiredColor.KeyedMutex
+                : null;
+
+            _retirement.Retire(
+                retiring,
+                () => DestroyRenderTarget(outgoing),
+                () => SharedTargetTurn.Offer(retiredMutex, _logger, retiring));
         }
 
         // Srgb, because this is where linear light stops: the resolve writes

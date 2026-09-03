@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 
@@ -56,7 +56,7 @@ internal sealed class SharedTargetRetirement
     /// </remarks>
     internal const int Cap = 8;
 
-    private readonly record struct Retired(int Generation, Action Release);
+    private readonly record struct Retired(int Generation, Action Release, Action? OfferTurn);
 
     private readonly ILogger _logger;
     private readonly List<Retired> _retired = [];
@@ -91,10 +91,17 @@ internal sealed class SharedTargetRetirement
     /// Holds <paramref name="release"/> until the consumer acknowledges
     /// <paramref name="generation"/>, or until <see cref="Cap"/> forces it.
     /// </summary>
-    internal void Retire(int generation, Action release)
+    /// <param name="generation">The generation being retired.</param>
+    /// <param name="release">Frees the resources. Called exactly once.</param>
+    /// <param name="offerTurn">
+    /// Hands this generation's key to the consumer if the consumer is not
+    /// already holding it. Called by <see cref="OfferTurns"/> once per frame
+    /// until the acknowledgement arrives. See that method for why it exists.
+    /// </param>
+    internal void Retire(int generation, Action release, Action? offerTurn = null)
     {
         ArgumentNullException.ThrowIfNull(release);
-        _retired.Add(new Retired(generation, release));
+        _retired.Add(new Retired(generation, release, offerTurn));
 
         while (_retired.Count > Cap)
         {
@@ -135,6 +142,49 @@ internal sealed class SharedTargetRetirement
     /// never saw forever, and it genuinely is done with it: it never imported
     /// it.
     /// </remarks>
+    /// <summary>
+    /// Offers every retired generation's key to the consumer, so a turn still
+    /// queued against one of them can be taken and completed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A retired target has to stay SERVICEABLE for exactly as long as it
+    /// stays alive, and leaving that out deadlocks the whole UI.</b> The
+    /// consumer keeps more than one turn queued at the compositor (see
+    /// <c>CompositedFramePump.HandOverDepth</c>), and the producer's last act on
+    /// a target before retiring it is to hand the key over once. That satisfies
+    /// the first queued turn. The second one then acquires a key nobody will
+    /// ever release, on a texture the producer has moved on from - and the
+    /// consumer waits for it on its own render thread with a deadline of about
+    /// 24 days, so the editor's entire interface stops. Reproduced by resizing a
+    /// composited window: three generations in, the log goes quiet, the producer
+    /// times out every frame at 10 fps and the window never repaints again.
+    /// </para>
+    /// <para>
+    /// <b>It is the same handshake as the release, said fully.</b> Retirement
+    /// already means "the consumer may still be reading this, so hold it"; it
+    /// now also means "the consumer may still be waiting on this, so answer
+    /// it". Both end at the acknowledgement, which is why one list carries both
+    /// and there is no second lifetime to keep in step.
+    /// </para>
+    /// <para>
+    /// <b>Self-limiting rather than timed.</b> The offer acquires with a zero
+    /// timeout, so it costs nothing when the key is not free, and once it has
+    /// handed the key over the next offer simply fails to acquire until a
+    /// consumer takes and returns it. That also makes it independent of how deep
+    /// the consumer queues: this answers turns until there are none left to
+    /// answer, whatever the number is.
+    /// </para>
+    /// </remarks>
+    internal void OfferTurns()
+    {
+        // Indexed rather than foreach: an offer touches only a keyed mutex and
+        // cannot reach back into this list, and the loop runs every frame of
+        // every composited session.
+        for (int i = 0; i < _retired.Count; i++)
+            _retired[i].OfferTurn?.Invoke();
+    }
+
     internal int ConsumerReleased(int generation)
     {
         int released = 0;
