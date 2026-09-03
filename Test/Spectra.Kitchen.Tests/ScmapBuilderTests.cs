@@ -299,6 +299,51 @@ public class ScmapBuilderTests
     }
 
     [Fact]
+    public void One_cell_added_twice_is_refused()
+    {
+        // One cell owns one entry: a duplicate makes a binary search answer
+        // whichever of the two it happens to land on. Pinned because the check
+        // became a SET when the bake benchmark measured the linear scan it used to
+        // be as quadratic in the size of the world, and a membership structure
+        // beside a list is exactly the kind of thing that stops being consulted.
+        var builder = new ScmapBuilder("Twice");
+        var cell = new ChunkCoord(3, -1, 7);
+        var bounds = new Aabb(Vector3.Zero, Vector3.One);
+
+        builder.AddChunk(new ScmapChunkSource(cell, bounds));
+
+        Should.Throw<InvalidOperationException>(
+                () => builder.AddChunk(new ScmapChunkSource(cell, bounds)))
+            .Message.ShouldContain("already in the chunk directory");
+
+        builder.ChunkCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public void A_cell_the_builder_REFUSED_may_still_be_added()
+    {
+        // The set is the list's membership and nothing else. Recording a coord
+        // before the later refusals ran would make one rejected cell permanently
+        // unaddable, and the message a cook then gets names a duplicate that is
+        // not there - a refusal blaming the wrong thing, which is worse than the
+        // one it replaced.
+        var builder = new ScmapBuilder("Rejected");
+        var cell = new ChunkCoord(2, 2, 2);
+        var bounds = new Aabb(Vector3.Zero, Vector3.One);
+
+        Should.Throw<InvalidOperationException>(() => builder.AddChunk(new ScmapChunkSource(
+            cell,
+            bounds,
+            [
+                new ScmapSubmeshSource(3, new float[8], [0, 0, 0]),
+                new ScmapSubmeshSource(1, new float[8], [0, 0, 0]),
+            ])));
+
+        builder.AddChunk(new ScmapChunkSource(cell, bounds));
+        builder.ChunkCount.ShouldBe(1);
+    }
+
+    [Fact]
     public void A_cell_whose_submeshes_are_out_of_ascending_asset_order_is_refused()
     {
         // The builder places every blob itself, so a caller can no longer point a

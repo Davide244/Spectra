@@ -1,7 +1,12 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
+using Spectra.Kitchen.Maps;
+using SpectraEngine.Core;
+using SpectraEngine.Core.Assets;
 using SpectraEngine.Core.Bsp;
+using SpectraEngine.Core.Maps.Compiled;
+using SpectraEngine.Core.Scene;
 
 // ============================================================================
 // CsgBench — static-world compile and BSP query benchmark.
@@ -28,14 +33,19 @@ using SpectraEngine.Core.Bsp;
 // fallback floor of ADDING one part (a placement-count change takes the
 // validated caching path, whose all-hit validation cost is O(world) by
 // design and must stay visible to the perf gate), plus the routed
-// point->cell / ray->DDA query rates over the 10k world.
+// point->cell / ray->DDA query rates over the 10k world. The BAKE scenario is
+// the cook's side of the same question: it splits a clean map cook into the
+// compile (cache-free CsgWorld.Build plus the BSP flatten) and the serialize
+// (the ScmapBuilder tables and the CMSH/CBSP blobs), times the two halves
+// independently, and asserts that the serializer stays a small fraction of the
+// compile it writes out.
 //
 // Usage:
 //   dotnet run -c Release --project Benchmarks/CsgBench                # all scenarios
 //   dotnet run -c Release --project Benchmarks/CsgBench -- grid query  # a subset
 //
 // Filters match scenario-name prefixes: grid | floorplan | tower | query |
-// incremental | openworld (so "floor" and "incr" work too).
+// incremental | openworld | bake (so "floor" and "incr" work too).
 // ============================================================================
 
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
@@ -45,7 +55,7 @@ CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 // baselines are apples-to-apples with gate runs.
 const int TimedReps = 3;
 
-string[] scenarios = ["grid", "floorplan", "tower", "query", "incremental", "openworld"];
+string[] scenarios = ["grid", "floorplan", "tower", "query", "incremental", "openworld", "bake"];
 foreach (string arg in args)
 {
     if (!scenarios.Any(s => s.StartsWith(arg, StringComparison.OrdinalIgnoreCase)))
@@ -97,6 +107,9 @@ if (ShouldRun("incremental"))
 
 if (ShouldRun("openworld"))
     RunOpenWorldBench();
+
+if (ShouldRun("bake"))
+    RunBakeBench();
 
 return 0;
 
@@ -946,6 +959,300 @@ static OpenWorld MakeOpenWorld(int partCount)
 }
 
 // =====================================================================
+// Bake benchmark - what a CLEAN cook of a map costs, split into the two
+// halves a cook pays and timed independently. The deliverable is the
+// verdict: the serializer must stay a small fraction of the compile.
+// =====================================================================
+
+static void RunBakeBench()
+{
+    Console.WriteLine();
+    Console.WriteLine("BAKE - one clean cook of a map, split into COMPILE and SERIALIZE.");
+    Console.WriteLine("COMPILE   = cache-free CsgWorld.Build (the overload ScmapBake calls: no previous world, no carve cache,");
+    Console.WriteLine("            because a bake must be a pure function of its source) plus BspFlattener.Flatten per cell.");
+    Console.WriteLine("SERIALIZE = ScmapBuilder staging (AddNode per brush, AddChunk per cell) plus Build, which emits");
+    Console.WriteLine("            STRT/ASTB/META/NODE/CHDR/CMSH/CBSP. The bake's own glue is counted HERE deliberately: it is");
+    Console.WriteLine("            bookkeeping paid only because a file is being written, and putting it on this side can only");
+    Console.WriteLine("            make the serializer look worse than it is.");
+    Console.WriteLine("NEITHER HALF IS INFERRED BY SUBTRACTION. The compile's own cost swings by two orders of magnitude across");
+    Console.WriteLine("these content sets, so a serialize time taken as total-minus-compile would be flattered by exactly the");
+    Console.WriteLine("content that compiles slowest. A clean cook is legitimately O(world) and nothing here argues otherwise -");
+    Console.WriteLine("the incremental story belongs to the cook cache and its own no-op-cook test. What this guards is the SHARE.");
+    Console.WriteLine("content     | brushes | cells | surfaces | build ms | flat ms | compile ms | node ms | cell ms | emit ms | serial ms | file MiB | share");
+    Console.WriteLine("------------|---------|-------|----------|----------|---------|------------|---------|---------|---------|-----------|----------|------");
+
+    var results = new List<BakeResult>();
+
+    foreach (int k in new[] { 4, 8, 13 })
+        results.Add(RunBakeConfig($"grid k={k}", MakeGrid(k)));
+
+    foreach (int parts in new[] { 1_000, 10_000, 50_000 })
+        results.Add(RunBakeConfig($"open {parts / 1_000}k", MakeOpenWorld(parts).Placements));
+
+    // The verdict, and it is deliberately NOT about the cook's absolute cost.
+    // A clean cook is O(world) by design; what would be a defect is the writer
+    // growing into a cost of its own beside the compile whose output it writes.
+    // One third is the ceiling because the claim worth holding is that the
+    // COMPILE STAYS AT LEAST THREE TIMES THE WRITER; the worst content set
+    // measured on the development machine sits at 16 to 22% over five runs, so
+    // the band is about 1.5x, which is the shape the openworld verdict uses too.
+    // Two things break it and only one is a defect: a serializer that got
+    // slower, and a compile that got faster without the writer following, which
+    // is a real success and still wants a look.
+    const double ShareCeiling = 0.33;
+
+    BakeResult worst = results[0];
+    foreach (BakeResult result in results)
+        if (result.Share > worst.Share) worst = result;
+
+    Console.WriteLine(
+        $"  verdict (SERIALIZE share): worst case {worst.Name} at {worst.Share:P1} of its own compile -> " +
+        (worst.Share <= ShareCeiling
+            ? $"a small fraction of the compile (ceiling {ShareCeiling:P0})"
+            : $"NOT a small fraction (ceiling {ShareCeiling:P0}) - the map writer has become a cost centre in its " +
+              "own right, investigate before accepting this as a baseline"));
+
+    // The second verdict, and it exists because the first one cannot see the
+    // failure that actually happened here. A SHARE stays healthy while one of
+    // its halves grows quadratically, as long as the compile beside it is
+    // growing too - which over these content sets it is. So the per-CELL staging
+    // cost is asserted directly against the two LARGEST worlds: a term that
+    // scales with the world is loudest there, and the small-N configurations
+    // measure a couple of microseconds in total and are mostly Stopwatch noise.
+    // A pure per-call O(cells) term would make the per-cell cost track the cell
+    // COUNT's own growth, which is printed beside it, so the two numbers
+    // together say which shape it is. The ceiling sits between the two measured
+    // worlds: 0.7 to 1.6x over five runs of the fixed writer, against 4.7x for
+    // the linear scan `ScmapBuilder.AddChunk` used to do (1.5 to 7.0 us per cell
+    // over this same pair) and 4.9x for the cell growth a pure per-world term
+    // would reproduce exactly.
+    const double CellCostCeiling = 2.5;
+
+    BakeResult[] bySize = [.. results.OrderByDescending(r => r.Cells)];
+    BakeResult largest = bySize[0], next = bySize[1];
+
+    double costGrowth = largest.CostPerCellUs / next.CostPerCellUs;
+    double cellGrowth = (double)largest.Cells / next.Cells;
+    Console.WriteLine(
+        $"  verdict (CELL staging): {largest.CostPerCellUs:F2} us per cell at {largest.Cells} cells = " +
+        $"{costGrowth:F2}x the cost at {next.Cells}, over a {cellGrowth:F2}x bigger world -> " +
+        (costGrowth <= CellCostCeiling
+            ? $"flat per cell (ceiling {CellCostCeiling:F1}x), no term scaling with the world"
+            : $"NOT flat per cell (ceiling {CellCostCeiling:F1}x) - the writer has a term that scales with the " +
+              "world rather than with the cell, which a share cannot show while the compile grows too"));
+
+    // Attribution, in the shape the openworld scenario reports its own. EMIT is
+    // the byte-producing pass, so it is reported per MiB and is expected to be
+    // flat; cell staging is per cell, and is what the verdict above asserts.
+    Console.WriteLine(
+        "  attribution: emit " +
+        string.Join(" / ", results.Select(r => $"{r.FileMib / (r.EmitMs / 1000.0):F0}")) +
+        " MiB/s; cell staging " +
+        string.Join(" / ", results.Select(r => $"{r.CostPerCellUs:F2}")) +
+        " us per cell, over " +
+        string.Join(" / ", results.Select(r => r.Cells.ToString())) +
+        " cells");
+}
+
+static BakeResult RunBakeConfig(string name, List<BrushPlacement> placements)
+{
+    // Node identity, name and local transform are gathered ONCE, outside every
+    // timed section. A real bake reads them off scene nodes the binder already
+    // built, so producing them here is fixture cost rather than cook cost. Ids
+    // are derived from the index rather than drawn from Guid.NewGuid, so two
+    // runs of this benchmark write the same bytes.
+    var ids = new Guid[placements.Count];
+    var names = new string[placements.Count];
+    var transforms = new Transform[placements.Count];
+    for (int i = 0; i < placements.Count; i++)
+    {
+        ids[i] = new Guid(i, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1);
+        names[i] = $"brush{i}";
+        transforms[i] = new Transform { Position = placements[i].Transform.Translation };
+    }
+
+    // Warmup: both halves, twice and untimed, for the same reason RunConfig
+    // warms twice - the compile's Parallel.For phases need the thread pool spun
+    // up, and one round is not always enough on a wide machine.
+    for (int warm = 0; warm < 2; warm++)
+    {
+        CsgWorld warmWorld = CsgWorld.Build(placements);
+        ScmapBuilder warmBuilder = new(name);
+        StageNodes(warmBuilder, ids, names, transforms);
+        StageCells(warmBuilder, warmWorld, FlattenCells(warmWorld));
+        _ = warmBuilder.Build(UInt128.Zero, EngineInfo.MapFormatVersion);
+    }
+
+    const int reps = TimedReps;
+    var build = new double[reps];
+    var flatten = new double[reps];
+    var node = new double[reps];
+    var cell = new double[reps];
+    var emit = new double[reps];
+    int cells = 0, surfaces = 0;
+    long fileBytes = 0;
+
+    for (int r = 0; r < reps; r++)
+    {
+        Collect();
+
+        var sw = Stopwatch.StartNew();
+        CsgWorld world = CsgWorld.Build(placements);
+        sw.Stop(); build[r] = sw.Elapsed.TotalMilliseconds;
+
+        sw.Restart();
+        FlatCell[] flat = FlattenCells(world);
+        sw.Stop(); flatten[r] = sw.Elapsed.TotalMilliseconds;
+
+        // The halves are separated by a collection so the writer is not timed
+        // while paying off the compile's garbage, and so neither half's number
+        // depends on where a gen0 happened to land in the other.
+        Collect();
+
+        ScmapBuilder builder = new(name);
+
+        sw.Restart();
+        StageNodes(builder, ids, names, transforms);
+        sw.Stop(); node[r] = sw.Elapsed.TotalMilliseconds;
+
+        sw.Restart();
+        StageCells(builder, world, flat);
+        sw.Stop(); cell[r] = sw.Elapsed.TotalMilliseconds;
+
+        sw.Restart();
+        byte[] file = builder.Build(UInt128.Zero, EngineInfo.MapFormatVersion);
+        sw.Stop(); emit[r] = sw.Elapsed.TotalMilliseconds;
+
+        cells = world.Chunks.Count;
+        surfaces = world.Surfaces.Count;
+        fileBytes = file.Length;
+        GC.KeepAlive(file);
+    }
+
+    Collect();
+
+    double buildMed = Median(build), flatMed = Median(flatten);
+    double nodeMed = Median(node), cellMed = Median(cell), emitMed = Median(emit);
+    double compile = buildMed + flatMed;
+    double serialize = nodeMed + cellMed + emitMed;
+    double fileMib = fileBytes / (1024.0 * 1024.0);
+
+    Console.WriteLine(
+        $"{name,-11} | {placements.Count,7} | {cells,5} | {surfaces,8} | {buildMed,8:F2} | {flatMed,7:F2} | " +
+        $"{compile,10:F2} | {nodeMed,7:F2} | {cellMed,7:F2} | {emitMed,7:F2} | {serialize,9:F2} | " +
+        $"{fileMib,8:F2} | {serialize / compile,5:P1}");
+
+    return new BakeResult(name, cells, serialize / compile, cellMed, emitMed, fileMib);
+}
+
+// The BSP flatten, counted as COMPILE: it turns a live tree into the array the
+// format stores, and the array it produces is a function of the TREE rather
+// than of the file. Mirrors the flatten inside ScmapBake.WriteChunks, in the
+// same OrderedChunks order the directory is laid out in, so the index it
+// returns at is the index the staging pass reads it back at.
+static FlatCell[] FlattenCells(CsgWorld world)
+{
+    IReadOnlyList<WorldChunk> cells = world.Chunks.OrderedChunks;
+    var flat = new FlatCell[cells.Count];
+
+    for (int i = 0; i < cells.Count; i++)
+    {
+        // A cell with no tree gets a null array and keeps the empty-leaf code,
+        // which is a different answer from an empty array (a tree that is one
+        // bare leaf) and the format tells them apart.
+        flat[i] = cells[i].Bsp is { } tree
+            ? new FlatCell(BspFlattener.Flatten(tree, out int root), root)
+            : new FlatCell(null, FlatBspNode.EmptyLeaf);
+    }
+
+    return flat;
+}
+
+// The two staging passes MIRROR ScmapBake.WriteNodes/WriteChunks rather than
+// calling them: the bake's own walk wants a MapDocument and a bound Scene,
+// which these synthetic content sets do not have. Every builder call under them
+// is the production one, and the two details that decide bytes are kept - a
+// submesh row is an ASSET index and never a MaterialRef.Id, and the submeshes
+// are sorted into ascending asset order rather than the ascending material id a
+// ChunkMesh arrives in. They are separate functions so the table can report
+// them separately: one is per brush and the other is per cell, and a single
+// staging number would hide which of the two a change moved.
+//
+// Every placement here is a world brush, so every node is a brush baked into
+// the chunks and no BRSH section is written: the default cook, without
+// --keep-brush-source. All roots, because the content sets are flat lists,
+// which also makes the pre-order invariant ParentIndex < SelfIndex trivial.
+static void StageNodes(ScmapBuilder builder, Guid[] ids, string[] names, Transform[] transforms)
+{
+    for (int i = 0; i < ids.Length; i++)
+    {
+        builder.AddNode(new ScmapNodeSource(
+            ids[i], names[i], -1, transforms[i], ScmapPayloadKind.StaticWorldBrush));
+    }
+}
+
+static void StageCells(ScmapBuilder builder, CsgWorld world, FlatCell[] flat)
+{
+    var materials = new Dictionary<int, uint>();
+
+    var meshes = new Dictionary<ChunkCoord, ChunkMesh>(world.ChunkMeshes.Count);
+    for (int i = 0; i < world.ChunkMeshes.Count; i++)
+        meshes[world.ChunkMeshes[i].Coord] = world.ChunkMeshes[i];
+
+    IReadOnlyList<WorldChunk> cells = world.Chunks.OrderedChunks;
+    for (int i = 0; i < cells.Count; i++)
+    {
+        WorldChunk cell = cells[i];
+        meshes.TryGetValue(cell.Coord, out ChunkMesh? mesh);
+
+        builder.AddChunk(new ScmapChunkSource(
+            cell.Coord,
+
+            // The cell's TRUE render bounds where there is geometry to bound;
+            // a cell with no mesh is never culled and gets its own cube.
+            mesh?.RenderBounds ?? cell.Coord.Bounds,
+            BakeSubmeshes(mesh, materials, builder),
+            flat[i].Nodes,
+            flat[i].RootIndex));
+    }
+}
+
+// ScmapBake.SubmeshesOf. Every face in these content sets names the default
+// material, which has no asset row at all, so every submesh takes the
+// NoAssetIndex sentinel and each cell emits exactly one - the shape a default
+// brush world produces, and the reason the strict ascending-asset check inside
+// AddChunk is never tripped here.
+static ScmapSubmeshSource[]? BakeSubmeshes(
+    ChunkMesh? mesh, Dictionary<int, uint> materials, ScmapBuilder builder)
+{
+    if (mesh is null || mesh.Submeshes.Count == 0) return null;
+
+    var submeshes = new ScmapSubmeshSource[mesh.Submeshes.Count];
+    for (int i = 0; i < submeshes.Length; i++)
+    {
+        ChunkSubmesh submesh = mesh.Submeshes[i];
+        submeshes[i] = new ScmapSubmeshSource(
+            BakeMaterialIndex(submesh.Material, materials, builder), submesh.Vertices, submesh.Indices);
+    }
+
+    Array.Sort(submeshes, static (a, b) => a.AssetIndex.CompareTo(b.AssetIndex));
+    return submeshes;
+}
+
+// ScmapBake.AssetTable.Material: the default material names no path, so it has
+// no row and the file says so with a sentinel rather than with row 0, which is
+// a real asset.
+static uint BakeMaterialIndex(MaterialRef material, Dictionary<int, uint> lookup, ScmapBuilder builder)
+{
+    if (material.IsDefault) return ScmapFormat.NoAssetIndex;
+    if (lookup.TryGetValue(material.Id, out uint existing)) return existing;
+
+    uint index = builder.AddMaterial(material);
+    lookup[material.Id] = index;
+    return index;
+}
+
+// =====================================================================
 // Helpers
 // =====================================================================
 
@@ -965,6 +1272,30 @@ static double Median(double[] values)
 
 /// <summary>Structural shape of a BSP tree, from one full walk.</summary>
 internal readonly record struct TreeStats(int Nodes, int Leaves, int MaxDepth, double AvgLeafDepth);
+
+/// <summary>
+/// One cell's flattened solid-leaf tree, on its way from the compile half of a
+/// bake to the serialize half. A null <paramref name="Nodes"/> means the cell
+/// has no tree at all; an EMPTY array is a tree that is one bare leaf, and the
+/// format tells the two apart, so the distinction is carried rather than
+/// normalised away.
+/// </summary>
+internal readonly record struct FlatCell(FlatBspNode[]? Nodes, int RootIndex);
+
+/// <summary>
+/// One bake configuration's verdict inputs. <paramref name="CellMs"/> and
+/// <paramref name="EmitMs"/> are carried separately from the share because they
+/// scale against different quantities (cells and bytes), and a per-unit cost is
+/// the only form in which a super-linear term is visible at all - a share can
+/// stay flat while one of its halves is growing quadratically, as long as the
+/// compile beside it is growing too.
+/// </summary>
+internal readonly record struct BakeResult(
+    string Name, int Cells, double Share, double CellMs, double EmitMs, double FileMib)
+{
+    /// <summary>Microseconds of cell staging per cell.</summary>
+    public double CostPerCellUs => CellMs * 1000.0 / Cells;
+}
 
 /// <summary>
 /// One generated scattered-parts world: the placements, the index of the

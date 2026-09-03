@@ -15,6 +15,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\SpectraEngine.Core\SpectraEngine.Core.csproj" />
+    <!--
+      The BAKE scenario times the map serializer, and pack/map writers live in
+      the cooker rather than in Core on purpose: a shipped game reads a .scmap
+      and writes none. Measuring the writer therefore means referencing the
+      cooker, which a benchmark may do and the engine may not.
+    -->
+    <ProjectReference Include="..\..\Spectra.Kitchen\Spectra.Kitchen.csproj" />
   </ItemGroup>
 
 </Project>

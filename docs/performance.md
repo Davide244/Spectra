@@ -592,6 +592,91 @@ Where to look first, in order of what the numbers say:
 - **`GCSettings.LatencyMode` / server GC** change when the pauses happen, not
   how much garbage there is. Reach for them after the rate, not instead of it.
 
+## 9c. What a clean cook costs: the map bake
+
+Offline rather than per frame, and it belongs here because §9's streaming answer
+blocks on the cook pipeline: whatever ships that will be cooking maps, and how
+much of that cost is the *writer* rather than the compile decides whether the
+format is worth the machinery.
+
+`dotnet run -c Release --project Benchmarks/CsgBench -- bake` splits a clean cook
+in two and times each half **directly**, never one by subtraction from a total:
+
+- **COMPILE**, the cache-free `CsgWorld.Build` (the overload `ScmapBake` calls:
+  no previous world, no carve cache, because a bake must be a pure function of
+  its source) plus `BspFlattener.Flatten` over every cell.
+- **SERIALIZE**, `ScmapBuilder` staging (`AddNode` per brush, `AddChunk` per
+  cell) plus `Build`, which emits `STRT`/`ASTB`/`META`/`NODE`/`CHDR`/`CMSH`/
+  `CBSP`. The bake's own glue is counted on this side deliberately: it is
+  bookkeeping paid only because a file is being written, so putting it here can
+  only make the writer look worse than it is.
+
+Timing the halves independently is not fussiness. Compile cost swings by two
+orders of magnitude across these content sets, so a serialize time taken as
+total-minus-compile would be flattered by exactly the content that compiles
+slowest.
+
+Measured 2026-09-03, i9-13900K (24 cores / 32 threads), Windows 11, median of 3
+timed reps after 2 warmups, tiered compilation off:
+
+| content | brushes | cells | surfaces | compile ms | serialize ms | file MiB | share |
+|---|---|---|---|---|---|---|---|
+| grid k=4 | 64 | 8 | 186 | 2.0 | 0.03 | 0.04 | 1.6% |
+| grid k=8 | 512 | 8 | 818 | 8.5 | 0.26 | 0.17 | 3.0% |
+| grid k=13 | 2,197 | 8 | 2,238 | 20.8 | 0.80 | 0.52 | 3.9% |
+| open 1k | 1,000 | 369 | 6,388 | 12.1 | 2.56 | 1.34 | 21.1% |
+| open 10k | 10,000 | 3,666 | 63,622 | 210.1 | 20.98 | 13.24 | 10.0% |
+| open 50k | 50,000 | 17,992 | 319,016 | 1,310.4 | 98.84 | 66.74 | 7.5% |
+
+**The verdict: the serializer is a small fraction of the compile, at 16 to 22%
+worst case over five runs.** The ceiling is 33%, and the claim worth holding is
+the plain form of it: *the compile must stay at least three times the writer*.
+Two things break that and only one is a defect: a writer that got slower, and a
+compile that got faster without the writer following, which is a real success and
+still wants a look. A clean cook is legitimately O(world) and nothing here argues
+otherwise; the incremental story belongs to the cook cache and its own no-op-cook
+test.
+
+**The two content sets bracket the answer on purpose, and the grid alone would
+have proved nothing.** A grid is a solid block, so the union skin is just its
+outer shell: 2,197 brushes produce 2,238 surfaces and 8 cells, which is a heavy
+compile against almost no bytes and gives a flattering 3.9%. The openworld sets
+are where the writer has real work (319,016 surfaces and a 67 MiB file) and are
+the ones the verdict is decided on.
+
+### The defect this found on its first run
+
+**A share can stay healthy while one of its halves is quadratic**, as long as the
+compile beside it is growing too, and that is exactly what was happening.
+`ScmapBuilder.AddChunk` refused a duplicate cell by scanning every cell already
+added, which is O(cells²) over a cook: invisible on any hand-written fixture and
+precisely what a chunked open world produces most of. Measured, per cell:
+
+| cells | before (µs/cell) | after (µs/cell) |
+|---|---|---|
+| 369 | 0.2 | 0.11 |
+| 3,666 | 1.5 | 0.19 |
+| 17,992 | 7.0 | 0.25 |
+
+Per-cell cost rising in step with the cell count is the signature. At 50k parts
+the staging pass was 126 ms against the emit's 85 ms, already the larger half of
+the writer, and on track to dominate the whole cook. A `HashSet<ChunkCoord>`
+beside the list took it to 4.5 ms (28x), and the 50k share from 18.1% to 7.5%.
+
+So the scenario prints **two** verdicts, because the first structurally cannot
+see this one: the share, and the per-cell staging cost measured across the two
+largest worlds. A pure per-call O(cells) term makes the per-cell cost track the
+cell count's own growth, so both numbers are printed together: today 0.7 to
+1.6x against a 4.91x bigger world, against 4.7x for the linear scan. The ceiling
+is 2.5x, between the two.
+
+**Emit throughput is flat and is the honest floor of the format**: 540 to 890
+MiB/s across the openworld sets, which is a `MemoryStream` and `MemoryMarshal`
+copy of vertex and index arrays that are already laid out. There is nothing to
+win there without changing what the file is.
+
+---
+
 ## 10. Know which of the above to do: measurement
 
 ### 10.1 GPU timing

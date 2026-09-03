@@ -49,6 +49,7 @@ public sealed class ScmapBuilder
     private readonly Dictionary<string, uint> _assetLookup = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ScmapNodeSource> _nodes = [];
     private readonly List<ScmapChunkSource> _chunks = [];
+    private readonly HashSet<ChunkCoord> _chunkCoords = [];
     private readonly List<ScmapSpawnSource> _spawns = [];
     private readonly List<ScmapBrushSourceEntry> _brushes = [];
 
@@ -200,6 +201,13 @@ public sealed class ScmapBuilder
     /// Order is free here and canonical in the file: the directory is sorted at
     /// build time, because a cook walks its cells out of a dictionary and two
     /// cooks of one map must produce one file.
+    /// <para><b>The duplicate check is a SET, and it was a linear scan.</b> A cook
+    /// calls this once per cell, so a scan over what is already there is quadratic
+    /// in the size of the world - which is invisible on any hand-written fixture and
+    /// is exactly what a chunked open world produces most of. Measured by the
+    /// benchmark's <c>bake</c> scenario before it was a set: 0.2 microseconds per
+    /// cell over 369 cells, 1.5 over 3,666 and 7.0 over 17,992, the per-cell cost
+    /// rising in step with the cell count. See <c>docs/performance.md</c> 9c.</para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">
     /// The cell is already in the directory, its submeshes are not in ascending
@@ -208,10 +216,8 @@ public sealed class ScmapBuilder
     /// </exception>
     public void AddChunk(ScmapChunkSource chunk)
     {
-        for (int i = 0; i < _chunks.Count; i++)
+        if (_chunkCoords.Contains(chunk.Coord))
         {
-            if (_chunks[i].Coord != chunk.Coord) continue;
-
             throw new InvalidOperationException(
                 $"Cell ({chunk.Coord.X}, {chunk.Coord.Y}, {chunk.Coord.Z}) is already in the chunk directory. " +
                 "One cell owns one entry, and a duplicate makes a binary search answer whichever it lands on.");
@@ -228,7 +234,11 @@ public sealed class ScmapBuilder
                 "nor a leaf code. A root out of range is a query that walks off the end of the block.");
         }
 
+        // Added together, and only once every refusal above has passed: the set
+        // is the list's membership and nothing else, so a cell that was rejected
+        // must not be able to make a later honest add report a duplicate.
         _chunks.Add(chunk);
+        _chunkCoords.Add(chunk.Coord);
     }
 
     /// <summary>Adds one authored brush's planes and faces to <c>BRSH</c>.</summary>
