@@ -1,7 +1,10 @@
 using Spectra.Kitchen.CLI;
+using Spectra.Kitchen.Packs;
+using SpectraEngine.Core.Assets.Packs;
 using System;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Spectra.Kitchen.Tests;
@@ -107,17 +110,43 @@ public class ScookCliTests
         passed.Stderr.ShouldBeEmpty();
         passed.Stdout.ShouldContain("1 reference(s) resolved");
 
-        // Remove the texture and recook: the cook is still happy, because there is
-        // no material rule and nothing in a cook reads what a raw-copied
-        // .spectramat names. Verify is the step that notices - and it resolves the
-        // slot through the same .simage redirection the engine uses, so what it
-        // reports is what a running game would actually fail to find.
+        // Remove the texture and recook: the COOK is now the first thing that
+        // refuses it, under the same SC5001 the verify reports below, because the
+        // material rule reads what a material names instead of copying it unread.
+        // One code at one loudness from both verbs, because CookGate decides it
+        // once for both.
         File.Delete(Path.Combine(project.Layout.AssetsPath, "Textures", "wall_brick.png"));
-        Invoke("cook", project.Root, "-q").ExitCode.ShouldBe(ExitSuccess);
 
-        var failed = Invoke("verify", pack);
+        var recooked = Invoke("cook", project.Root, "-q");
+        recooked.ExitCode.ShouldBe(ExitCookError);
+        MatchSingleDiagnostic(recooked.Stderr).Groups["code"].Value.ShouldBe("SC5001");
+
+        // And the pack on disk is still the good one, untouched, because a failed
+        // cook writes nothing - which is the reason the verify half below needs a
+        // pack built by hand rather than one the cook was talked into producing.
+        Invoke("verify", pack).ExitCode.ShouldBe(ExitSuccess);
+
+        var failed = Invoke("verify", WriteHolePack(project));
         failed.ExitCode.ShouldBe(ExitCookError);
         MatchSingleDiagnostic(failed.Stderr).Groups["code"].Value.ShouldBe("SC5001");
+    }
+
+    // A pack carrying a material and not the texture it names: the artifact a cook
+    // now refuses to produce, and exactly the artifact `verify` exists for -
+    // somebody's older build, an edited file, or two rules that each succeeded
+    // while the entry one of them needed never reached the container.
+    private static string WriteHolePack(TempProject project)
+    {
+        string path = Path.Combine(project.Root, "hole.spack");
+
+        var writer = new PackWriter();
+        writer.Add(
+            "Materials/wall.spectramat",
+            PackEntryKind.Material,
+            Encoding.UTF8.GetBytes("shader = lit\ntexture uDiffuse = Textures/wall_brick.png\n"));
+        writer.WriteToFile(path);
+
+        return path;
     }
 
     [Fact]

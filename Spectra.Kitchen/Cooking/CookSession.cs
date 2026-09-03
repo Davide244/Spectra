@@ -39,6 +39,13 @@ namespace Spectra.Kitchen.Cooking;
 /// <para><b>A failed cook writes no pack.</b> The runtime degrades and the cooker
 /// does not: a half-written pack that mounts is worse than none, because it ships.
 /// </para>
+/// <para><b>What "failed" MEANS is <see cref="CookGate"/>'s answer, not this
+/// class's.</b> Every diagnostic goes into a <see cref="CookDiagnosticLog"/> that
+/// applies the gate on the way in, so a rule's chosen severity is normalised
+/// rather than merely accepted and <c>--strict</c> is honoured in one place
+/// instead of at each reporting site. The gate is the same table
+/// <c>PackVerifier</c> reads, which is what keeps the cook and the verify from
+/// being two opinions about what a valid pack is.</para>
 /// <para><b>The pack is named after the manifest FILE, not after the project's
 /// display name.</b> A display name is free text that may contain characters no
 /// filesystem accepts, and a cook that fails on a project called "Kirby: Ex" would
@@ -86,7 +93,7 @@ public sealed class CookSession
     /// <summary>Runs the cook.</summary>
     public CookResult Run()
     {
-        var diagnostics = new List<CookDiagnostic>();
+        var diagnostics = new CookDiagnosticLog(_settings.Strict);
         var assets = new List<CookedAsset>();
         var emitted = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var writer = new PackWriter();
@@ -154,8 +161,13 @@ public sealed class CookSession
             // makes this a correctness requirement of the output format.
             if (outcome.Failure is not null) diagnostics.Add(outcome.Failure);
 
-            foreach (CookDiagnostic diagnostic in outcome.Reports)
-                diagnostics.Add(_settings.Strict ? diagnostic.AsError() : diagnostic);
+            // Straight in: the log applies CookGate, which is the ONE place a
+            // severity is decided. The strict promotion used to be spelled here,
+            // beside a dozen reporting sites that each chose their own severity,
+            // and two answers to one question drift the moment a second reporter
+            // of the same code appears - which is exactly what the material rule
+            // and the verifier's material arm now are.
+            diagnostics.AddRange(outcome.Reports);
 
             var outputs = new List<CookedOutput>(outcome.Emissions.Count);
             foreach (RuleEmission emission in outcome.Emissions)
@@ -199,14 +211,14 @@ public sealed class CookSession
         // attempt to fix it.
         CloseCache(cache, cookedPaths, diagnostics);
 
-        if (CountErrors(diagnostics) > 0)
+        if (diagnostics.Failed)
             return Finish(assets, diagnostics, cache, null, 0, 0, workers);
 
         string? output = _settings.Loose
             ? WriteLoose(looseFiles, diagnostics)
             : WritePack(writer, diagnostics);
 
-        if (output is null || CountErrors(diagnostics) > 0)
+        if (output is null || diagnostics.Failed)
             return Finish(assets, diagnostics, cache, null, 0, 0, workers);
 
         WriteManifest(assets, diagnostics);
@@ -318,7 +330,7 @@ public sealed class CookSession
 
     // Opening the cache is allowed to fail into "no cache": a hidden folder that
     // cannot be read is a reason to do the work, never a reason to refuse to.
-    private CookCache? OpenCache(List<CookDiagnostic> diagnostics)
+    private CookCache? OpenCache(CookDiagnosticLog diagnostics)
     {
         if (!_settings.UseCache) return null;
 
@@ -347,7 +359,7 @@ public sealed class CookSession
         return cache;
     }
 
-    private void CloseCache(CookCache? cache, IReadOnlyCollection<string> cooked, List<CookDiagnostic> diagnostics)
+    private void CloseCache(CookCache? cache, IReadOnlyCollection<string> cooked, CookDiagnosticLog diagnostics)
     {
         if (cache is null) return;
 
@@ -369,7 +381,7 @@ public sealed class CookSession
     // A project's maps are not under the content root and have no rule yet, so a
     // cook silently leaves them out. Said out loud, because a pack that mounts and
     // has no level in it looks like a working cook.
-    private void ReportUncookedMaps(List<CookDiagnostic> diagnostics)
+    private void ReportUncookedMaps(CookDiagnosticLog diagnostics)
     {
         IReadOnlyList<string> maps = _layout.DiscoverMaps();
         if (maps.Count == 0) return;
@@ -381,7 +393,7 @@ public sealed class CookSession
             _layout.ManifestPath));
     }
 
-    private string? WritePack(PackWriter writer, List<CookDiagnostic> diagnostics)
+    private string? WritePack(PackWriter writer, CookDiagnosticLog diagnostics)
     {
         string packPath = Path.Combine(
             OutputDirectory, Path.GetFileNameWithoutExtension(_layout.ManifestPath) + PackExtension);
@@ -407,7 +419,7 @@ public sealed class CookSession
         }
     }
 
-    private string? WriteLoose(List<RuleEmission> emissions, List<CookDiagnostic> diagnostics)
+    private string? WriteLoose(List<RuleEmission> emissions, CookDiagnosticLog diagnostics)
     {
         try
         {
@@ -432,7 +444,7 @@ public sealed class CookSession
         }
     }
 
-    private void WriteManifest(List<CookedAsset> assets, List<CookDiagnostic> diagnostics)
+    private void WriteManifest(List<CookedAsset> assets, CookDiagnosticLog diagnostics)
     {
         if (_settings.ManifestPath is null) return;
 
@@ -453,36 +465,24 @@ public sealed class CookSession
         }
     }
 
-    private static int CountErrors(List<CookDiagnostic> diagnostics)
-    {
-        int errors = 0;
-        for (int i = 0; i < diagnostics.Count; i++)
-            if (diagnostics[i].IsError) errors++;
-        return errors;
-    }
-
     private static CookResult Finish(
         List<CookedAsset> assets,
-        List<CookDiagnostic> diagnostics,
+        CookDiagnosticLog diagnostics,
         CookCache? cache,
         string? output,
         int entryCount,
         long payloadBytes,
         int workers)
     {
-        int warnings = 0;
-        for (int i = 0; i < diagnostics.Count; i++)
-            if (diagnostics[i].Severity == CookDiagnosticSeverity.Warning) warnings++;
-
         return new CookResult
         {
             Assets = assets,
-            Diagnostics = diagnostics,
+            Diagnostics = diagnostics.Entries,
             OutputPath = output,
             EntryCount = entryCount,
             PayloadBytes = payloadBytes,
-            ErrorCount = CountErrors(diagnostics),
-            WarningCount = warnings,
+            ErrorCount = diagnostics.ErrorCount,
+            WarningCount = diagnostics.WarningCount,
             CacheHits = cache?.Hits ?? 0,
             CacheMisses = cache?.Misses ?? 0,
             Workers = workers,

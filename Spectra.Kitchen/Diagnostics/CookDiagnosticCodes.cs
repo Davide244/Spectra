@@ -143,13 +143,13 @@ public static class CookDiagnosticCodes
 
     // --- 5xxx: material ------------------------------------------------------
     //
-    // Issued by the VERIFIER rather than by a material rule, which does not
-    // exist yet, and that is the band's rule working rather than an exception to
-    // it: a code names the subsystem that failed, and a texture nobody cooked is
-    // a material problem however it was found. When the material rule lands it
-    // reports the same failure under the same code.
+    // Issued by BOTH the material rule and the verifier, which is the band's rule
+    // working rather than two answers to one question: a code names the subsystem
+    // that failed, and a texture nobody cooked is a material problem whether it
+    // was found in the project folder or in a written pack. The severity is not
+    // chosen at either site - CookGate decides it once for both.
 
-    /// <summary>A cooked material names a texture the pack does not hold.</summary>
+    /// <summary>A material names a texture that is not there.</summary>
     /// <remarks>
     /// The single failure cooked-only validation exists to catch. In the running
     /// engine it is a magenta placeholder and a warning; here it is fatal,
@@ -160,13 +160,28 @@ public static class CookDiagnosticCodes
     /// </remarks>
     public static readonly CookDiagnosticId MaterialTextureMissing = CookDiagnosticId.Cook(5001);
 
-    /// <summary>A cooked material has a line the parser could not use.</summary>
+    /// <summary>A material has a line the parser could not use.</summary>
     /// <remarks>
     /// A warning, matching the parser: an unknown key is deliberately tolerated
     /// so material files stay forward-compatible, and turning that into an error
-    /// here would refuse every file written ahead of the engine.
+    /// here would refuse every file written ahead of the engine. It is the soft
+    /// half of 4.2, so <c>--strict</c> does promote it.
     /// </remarks>
     public static readonly CookDiagnosticId MaterialFileMalformed = CookDiagnosticId.Cook(5002);
+
+    /// <summary>A material names a shader that nothing in the content provides.</summary>
+    /// <remarks>
+    /// <b>Fatal, and silent at runtime, which is the whole reason it has a
+    /// code.</b> <c>AssetManager.ResolveShader</c> falls back to the built-in lit
+    /// program and logs a warning, so a shipped game draws the surface with a
+    /// program its author did not choose and renders a picture that is merely
+    /// wrong. What the cooker can see is CONTENT: the built-in name, and a
+    /// shader asset in the project. A name only a host's
+    /// <c>AssetManager.ShaderResolver</c> claims is invisible from here and is
+    /// reported, because a gate that passed everything it could not see would be
+    /// no gate at all.
+    /// </remarks>
+    public static readonly CookDiagnosticId MaterialShaderMissing = CookDiagnosticId.Cook(5003);
 
     // --- 6xxx: shader --------------------------------------------------------
     //
@@ -219,8 +234,66 @@ public static class CookDiagnosticCodes
     /// </remarks>
     public static readonly CookDiagnosticId ShaderNoTargets = CookDiagnosticId.Cook(6005);
 
-    // --- 7xxx map and geometry, 8xxx script ----------------------------------
-    // Reserved.
+    // --- 7xxx: map and geometry, 8xxx: script --------------------------------
+    //
+    // Declared ahead of the rules that issue them, which is not the same thing as
+    // reserving a band. These are the codes docs/formats-and-pipeline.md 4.2
+    // names on either side of its fatal line, and CookGate classifies every one
+    // of them today: what a cook refuses is decided once, in one table, rather
+    // than by whichever rule reports it first and however that rule's author
+    // happened to feel about it. A number is cheap; a map rule that lands next
+    // year and quietly makes a non-rigid brush a warning is not.
+
+    /// <summary>A brush node's world transform is not rigid.</summary>
+    /// <remarks>
+    /// Report <c>Scene.DescribeNonRigidDefect</c>'s message and NAME THE NODE:
+    /// the defect is a scale or a shear somewhere up an ancestor chain, so the
+    /// brush that fails is rarely the node somebody edited. In the running editor
+    /// this is a standing status warning and the last good world keeps rendering;
+    /// in a cook it is a level that cannot be compiled.
+    /// </remarks>
+    public static readonly CookDiagnosticId MapBrushNonRigid = CookDiagnosticId.Cook(7001);
+
+    /// <summary>A plane set <c>Brush</c>'s own constructor rejects.</summary>
+    public static readonly CookDiagnosticId MapBrushRefused = CookDiagnosticId.Cook(7002);
+
+    /// <summary>Two scene nodes in one map claim the same Guid.</summary>
+    /// <remarks>
+    /// Every editor command addresses a node by id, so a duplicate makes undo,
+    /// selection and every reference into the graph ambiguous - and the ambiguity
+    /// resolves by traversal order, which means it presents as an edit landing on
+    /// the wrong object rather than as anything that fails.
+    /// </remarks>
+    public static readonly CookDiagnosticId MapNodeIdDuplicate = CookDiagnosticId.Cook(7003);
+
+    /// <summary>A brush record's face count does not match its plane count.</summary>
+    /// <remarks>
+    /// One <c>FaceSurface</c> per plane is the invariant the whole per-face
+    /// material path rests on. A mismatch is not a rendering problem, it is an
+    /// indexing one, so it is fatal here rather than degraded to the default
+    /// surface.
+    /// </remarks>
+    public static readonly CookDiagnosticId MapFaceCountMismatch = CookDiagnosticId.Cook(7004);
+
+    /// <summary>An entity connection names a target no node carries.</summary>
+    /// <remarks>
+    /// A warning by design, and the one soft case that is soft for a POSITIVE
+    /// reason rather than for forward compatibility: a mapper who renames a door
+    /// must not silently lose the wiring to it, so the connection is kept and
+    /// said out loud.
+    /// </remarks>
+    public static readonly CookDiagnosticId MapConnectionTargetMissing = CookDiagnosticId.Cook(7005);
+
+    /// <summary>An entity names a classname this build has no schema for.</summary>
+    /// <remarks>
+    /// A warning, matching the entity store's own decision: an entity is strings
+    /// on the node and an unknown class is lossless by construction, so refusing
+    /// one would refuse every map written ahead of the game's own code.
+    /// </remarks>
+    public static readonly CookDiagnosticId MapEntityClassUnknown = CookDiagnosticId.Cook(7006);
+
+    /// <summary>A script the Luau front end refuses.</summary>
+    public static readonly CookDiagnosticId ScriptSyntaxError = CookDiagnosticId.Cook(8001);
 
     // --- 9xxx: pack writing and integrity ------------------------------------
 

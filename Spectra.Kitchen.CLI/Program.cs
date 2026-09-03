@@ -203,7 +203,14 @@ internal static class Program
             // record what it was cooked for, so an unasked-for default here would
             // fail every d3d11-only pack for the two backends nobody asked for.
             result = PackVerifier.Verify(
-                opts.Target, logger: null, targets: opts.TargetsGiven ? opts.Targets : null);
+                opts.Target,
+                logger: null,
+                targets: opts.TargetsGiven ? opts.Targets : null,
+
+                // Forwarded, because --strict names the RUN rather than the verb:
+                // a CI step that asks a cook to treat warnings as failures means
+                // the same thing when it asks a verify.
+                strict: opts.Strict);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

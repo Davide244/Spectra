@@ -84,6 +84,18 @@ public sealed class PackVerifyResult
 /// <para><b>It uses <see cref="PackSource"/>, the reader a shipped game uses.</b>
 /// Verifying through a tool-side reader would prove a tool can read the file.
 /// </para>
+/// <para><b>This verb and the COOK overlap on purpose, and
+/// <see cref="CookGate"/> is authoritative for both.</b> A material naming a
+/// texture nobody cooked is caught twice now - once by <c>MaterialRule</c>
+/// against the project folder, once here against the written pack - and that is
+/// not a redundancy to remove, because they are different claims: the cook says
+/// the AUTHOR's content is consistent, this says the ARTIFACT is, which also
+/// covers a pack somebody edited, a pack another build produced, and the case a
+/// cook structurally cannot see, where two rules each succeed and the entry one
+/// of them needed never reached the file. What must never differ is the VERDICT,
+/// so neither site chooses a severity: both report a code and the gate decides,
+/// which is why a texture missing in a project and the same texture missing in a
+/// pack are one code at one loudness.</para>
 /// </remarks>
 public static class PackVerifier
 {
@@ -101,14 +113,27 @@ public static class PackVerifier
     /// the pack itself - see <see cref="CheckShaders"/> for what that can and
     /// cannot prove.
     /// </param>
+    /// <param name="strict">
+    /// Whether this run is the gate: promotes the warn-by-default half of
+    /// <see cref="CookGate"/> to errors, exactly as it does in a cook. Carried
+    /// here rather than left to the cook alone because <c>scook verify</c> is the
+    /// CI step, and a switch meaning one thing under one verb and nothing under
+    /// the other is a switch nobody can rely on.
+    /// </param>
     /// <exception cref="IOException">The file could not be opened.</exception>
     public static PackVerifyResult Verify(
-        string packPath, ILogger? logger = null, IReadOnlyList<GraphicsBackend>? targets = null)
+        string packPath,
+        ILogger? logger = null,
+        IReadOnlyList<GraphicsBackend>? targets = null,
+        bool strict = false)
     {
         ArgumentNullException.ThrowIfNull(packPath);
 
         string file = Path.GetFullPath(packPath);
-        var diagnostics = new List<CookDiagnostic>();
+
+        // The same collector the cook uses, so the gate is applied by the shape
+        // rather than by every site here remembering to ask for it.
+        var diagnostics = new CookDiagnosticLog(strict);
 
         PackContents contents;
         try
@@ -155,8 +180,8 @@ public static class PackVerifier
             // The pack ALONE. See the class remarks: a stack that also carried the
             // loose tree would resolve a missing cooked texture out of the source
             // folder and report a pass for a pack that ships a hole.
-            var strict = new ContentSourceStack(strict: true);
-            strict.Mount(pack);
+            var strictStack = new ContentSourceStack(strict: true);
+            strictStack.Mount(pack);
 
             for (int i = 0; i < contents.Entries.Count; i++)
             {
@@ -211,7 +236,7 @@ public static class PackVerifier
                         continue;
                     }
 
-                    references += CheckReferences(name, blob.Span, strict, diagnostics, file);
+                    references += CheckReferences(name, blob.Span, strictStack, diagnostics, file);
                     CheckImage(name, blob.Span, diagnostics, file);
                     CollectShader(name, blob.Span, shaders, diagnostics, file);
                 }
@@ -259,8 +284,8 @@ public static class PackVerifier
     private static int CheckReferences(
         string name,
         ReadOnlySpan<byte> payload,
-        ContentSourceStack strict,
-        List<CookDiagnostic> diagnostics,
+        ContentSourceStack strictStack,
+        CookDiagnosticLog diagnostics,
         string packFile)
     {
         if (!name.EndsWith(MaterialParser.FileExtension, StringComparison.OrdinalIgnoreCase))
@@ -289,8 +314,8 @@ public static class PackVerifier
                 // of that rule and both callers go through it, which is what
                 // makes this check a claim about what the engine would actually
                 // resolve rather than about what the table happens to spell.
-                string imagePath = ImageContentPath.Resolve(strict, slot.TexturePath);
-                if (strict.TryOpen(imagePath, out ContentBlob? texture))
+                string imagePath = ImageContentPath.Resolve(strictStack, slot.TexturePath);
+                if (strictStack.TryOpen(imagePath, out ContentBlob? texture))
                 {
                     texture.Dispose();
                     continue;
@@ -303,6 +328,11 @@ public static class PackVerifier
                 // visibly different behaviours over identical inputs.
             }
 
+            // Same code and the same gate verdict as MaterialRule's cook-time
+            // report, differing only in what "not there" was measured against:
+            // "not in this pack" rather than "not in the content root". A build
+            // log that said one thing when a cook caught it and another when a
+            // verify did would be describing two failures where there is one.
             diagnostics.Add(CookDiagnostic.Error(
                 CookDiagnosticCodes.MaterialTextureMissing,
                 $"'{name}' binds sampler '{slot.Name}' to '{slot.TexturePath}', which is not in this pack. " +
@@ -327,7 +357,7 @@ public static class PackVerifier
     /// has the same answer, which is to recook.
     /// </remarks>
     private static void CheckImage(
-        string name, ReadOnlySpan<byte> payload, List<CookDiagnostic> diagnostics, string packFile)
+        string name, ReadOnlySpan<byte> payload, CookDiagnosticLog diagnostics, string packFile)
     {
         if (!ImageContentPath.IsCooked(name)) return;
 
@@ -356,7 +386,7 @@ public static class PackVerifier
         string name,
         ReadOnlySpan<byte> payload,
         List<ShaderEntry> shaders,
-        List<CookDiagnostic> diagnostics,
+        CookDiagnosticLog diagnostics,
         string packFile)
     {
         if (!name.EndsWith(ShaderRule.CookedExtension, StringComparison.OrdinalIgnoreCase)) return;
@@ -399,7 +429,7 @@ public static class PackVerifier
     private static void CheckShaders(
         List<ShaderEntry> shaders,
         IReadOnlyList<GraphicsBackend>? targets,
-        List<CookDiagnostic> diagnostics,
+        CookDiagnosticLog diagnostics,
         string packFile)
     {
         if (shaders.Count == 0) return;
@@ -451,7 +481,7 @@ public static class PackVerifier
     // that a binary search's answer depends on where it happened to land, and a
     // descending pair is an unsorted table, whose harm is that the search misses
     // entries entirely. Both present as content that is intermittently absent.
-    private static void CheckEntryOrder(PackContents contents, List<CookDiagnostic> diagnostics)
+    private static void CheckEntryOrder(PackContents contents, CookDiagnosticLog diagnostics)
     {
         for (int i = 1; i < contents.Entries.Count; i++)
         {
@@ -478,29 +508,22 @@ public static class PackVerifier
 
     private static PackVerifyResult Finish(
         string file,
-        List<CookDiagnostic> diagnostics,
+        CookDiagnosticLog diagnostics,
         int entriesChecked,
         int tombstones,
         int references,
         long payloadBytes)
     {
-        int errors = 0, warnings = 0;
-        for (int i = 0; i < diagnostics.Count; i++)
-        {
-            if (diagnostics[i].IsError) errors++;
-            else if (diagnostics[i].Severity == CookDiagnosticSeverity.Warning) warnings++;
-        }
-
         return new PackVerifyResult
         {
             PackPath = file,
-            Diagnostics = diagnostics,
+            Diagnostics = diagnostics.Entries,
             EntriesChecked = entriesChecked,
             TombstonesSkipped = tombstones,
             ReferencesChecked = references,
             PayloadBytes = payloadBytes,
-            ErrorCount = errors,
-            WarningCount = warnings,
+            ErrorCount = diagnostics.ErrorCount,
+            WarningCount = diagnostics.WarningCount,
         };
     }
 }

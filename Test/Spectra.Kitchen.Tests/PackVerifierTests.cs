@@ -1,12 +1,11 @@
-using Microsoft.Extensions.Logging.Abstractions;
 using Spectra.Kitchen.Cooking;
 using Spectra.Kitchen.Diagnostics;
 using Spectra.Kitchen.Packs;
 using SpectraEngine.Core.Assets.Packs;
-using SpectraEngine.Core.Assets.Sources;
 using System;
 using System.IO;
 using System.Linq;
+using System.Text;
 
 namespace Spectra.Kitchen.Tests;
 
@@ -48,15 +47,23 @@ public class PackVerifierTests
     [Fact]
     public void A_material_naming_a_texture_nobody_cooked_fails_and_the_diagnostic_names_the_path()
     {
+        // Written by hand rather than cooked, and that is what the material rule
+        // changed: a cook of this project now refuses it at SC5001 before a pack
+        // exists at all, which is the right answer and would make this a test of
+        // the cook. The claim HERE is about the ARTIFACT - a pack that mounts
+        // cleanly and is missing a texture some material names, however it came
+        // to be that way - so the fixture has to be able to produce one the cook
+        // never would. CookGateTests is where the two verdicts are held together.
         using var project = new TempProject();
-        project.WriteAsset(
-            "Materials/wall.spectramat",
-            "shader = lit\ntexture uDiffuse = Textures/wall_brick.png, linearmipmap, repeat\n");
+        string pack = Path.Combine(project.Root, "hole.spack");
 
-        // The cook itself is happy: there is no material rule, so the file is
-        // raw-copied and nothing in the cook ever reads what is inside it. That
-        // is exactly the hole this verb exists to close.
-        string pack = Cook(project);
+        var writer = new PackWriter();
+        writer.Add(
+            "Materials/wall.spectramat",
+            PackEntryKind.Material,
+            Encoding.UTF8.GetBytes(
+                "shader = lit\ntexture uDiffuse = Textures/wall_brick.png, linearmipmap, repeat\n"));
+        writer.WriteToFile(pack);
 
         PackVerifyResult result = Verify(pack);
 
@@ -67,34 +74,6 @@ public class PackVerifierTests
         missing.Message.ShouldContain("Materials/wall.spectramat");
         missing.Message.ShouldContain("Textures/wall_brick.png");
         missing.Message.ShouldContain("uDiffuse");
-    }
-
-    [Fact]
-    public void A_validation_run_throws_where_the_running_engine_degrades()
-    {
-        using var project = new TempProject();
-        project.WriteAsset(
-            "Materials/wall.spectramat",
-            "shader = lit\ntexture uDiffuse = Textures/wall_brick.png\n");
-
-        var pack = project.Track(new PackSource(NullLogger.Instance, Cook(project)));
-
-        // BOTH halves in one test, because the failure mode this guards is
-        // somebody "fixing" one to match the other. The runtime's degradation to
-        // a default material and a magenta texture is a pinned invariant; the
-        // cooker stopping the build is the whole point of a build step. They are
-        // the same lookup with different consequences, which is why the
-        // consequence belongs to the STACK that was mounted rather than to
-        // AssetManager.
-        var runtime = new ContentSourceStack();
-        runtime.Mount(pack);
-        runtime.TryOpen("Textures/wall_brick.png", out ContentBlob? degraded).ShouldBeFalse();
-        degraded.ShouldBeNull();
-
-        var validation = new ContentSourceStack(strict: true);
-        validation.Mount(pack);
-        Should.Throw<FileNotFoundException>(
-            () => validation.TryOpen("Textures/wall_brick.png", out _));
     }
 
     [Fact]

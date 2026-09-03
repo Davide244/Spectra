@@ -39,6 +39,9 @@ public class CookDeterminismTests
     // assertion cannot drift from the fixture.
     private const int ImageCount = 3;
 
+    // And the one material over them, counted for the same reason.
+    private const int MaterialCount = 1;
+
     private static readonly string[] Folders = ["Textures", "Models", "Materials", "Audio"];
 
     // Out of step with the folder cycle deliberately: four folders and six sizes
@@ -80,7 +83,7 @@ public class CookDeterminismTests
         // Asserted rather than assumed: without this the oracle silently degrades
         // into a second copy of the one above the moment anything stops the cache
         // hitting, and it would keep passing.
-        cached.Stdout.ShouldContain($"{AssetCount + ImageCount} from cache");
+        cached.Stdout.ShouldContain($"{AssetCount + ImageCount + MaterialCount} from cache");
 
         cached.Pack.ShouldBe(clean.Pack);
     }
@@ -166,6 +169,15 @@ public class CookDeterminismTests
 
         for (int i = 0; i < ImageCount; i++)
             project.WriteAsset($"Textures/tile_{i}.png", TempProject.Png(16, 16, seed: (byte)(i * 40)));
+
+        // One real material over one of those textures, so the oracles cover a
+        // rule that READS a second asset. Its record carries an input the asset's
+        // own path is not, which is why it joins this fixture and not the pairing
+        // one, whose whole assertion is that a raw copy's three paths are one
+        // string.
+        project.WriteAsset(
+            "Materials/tile.spectramat",
+            "shader = lit\ntexture uDiffuse = Textures/tile_0.png, linearmipmap, repeat\n");
     }
 
     private static CookRun Cook(TempProject project, string label, params string[] extra)
